@@ -202,6 +202,26 @@ safe list in `.claude/LESSONS.md` §3 (mirrored in `.claude/agents/live-ops.md`)
 6. **Use `--paper-trading`** when testing live trading changes.
 7. **Check for existing branches** before creating new ones to avoid duplicates.
 8. **Verify database connection** before running integration tests.
+9. **Rebuilt the venv? Re-run `make shim`.** See below.
+
+### Worktrees and the shared venv (GH #1070)
+
+All worktrees share `/Users/alex/Sites/ai-trading-bot/.venv`. `pip install -e .` hardcodes the
+absolute path of the checkout it was run from, so `atb` and `python experiments/*.py` used to
+silently execute **that** checkout's code from inside any other worktree — producing plausible,
+completely invalid results (a 365d backtest returned `+114.69%` and `-28.29%` on consecutive runs).
+
+`make install` now also installs `tools/atb_worktree_shim.py` into site-packages, which pins
+`src`/`cli` to the checkout enclosing your **cwd**. This is transparent — no `PYTHONPATH` needed.
+
+- The shim lives in site-packages, which is **not** version-controlled. After any venv rebuild:
+  `make shim` (or `python tools/install_worktree_shim.py`).
+- Verify at any time: `python tools/install_worktree_shim.py --check`.
+- If the shim is missing, the run fails loudly instead of producing a wrong answer: `src/__init__.py`
+  calls `verify_source_root()`, so every entry point that imports `src` is covered — `atb`, `pytest`,
+  `python experiments/x.py`, ad-hoc scripts — with no opt-in required.
+- Sanity check before trusting any number: `python -c "import src; print(src.__file__)"` must print
+  a path under your worktree.
 
 ## What To Read For Your Task
 

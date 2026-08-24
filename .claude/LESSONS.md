@@ -88,9 +88,13 @@ guard); the alerting-budget comment now lives at `engine.py:302`.
 Three separate instances this week, one meta-class: a run produced numbers, but not from the source
 it claimed.
 - **(a) Shared-venv `atb` staleness.** The `atb` console script is an editable install pinned to
-  ONE worktree; bare `atb` from any *other* worktree silently executes that pinned worktree's code
+  ONE checkout; bare `atb` from any *other* worktree silently executed that checkout's code
   (workaround + detail in §3). Sibling filed as GH #999 (script-path `sys.path` shadowing of the
-  main checkout's stale `src/`).
+  main checkout's stale `src/`). **Escalated to P0 and fixed 2026-08-13 (GH #1070)** after the same
+  365d HyperGrowth backtest returned **+114.69%** and **−28.29%** on consecutive runs from the same
+  cwd — the first silently executing the primary checkout, then 131 commits behind on `main` and
+  pre-#1020 (shorts still enabled). Sign-flipped headline risk numbers, no warning, no error. The
+  precise mechanism and the structural fix are in §3.
 - **(b) cwd-relative registry path.** `DEFAULT_MODEL_REGISTRY_PATH = "src/ml/models"`
   (`constants.py:25`) resolves against *process cwd* — an exam launched from the wrong directory
   silently resolved to an empty registry and produced an all-HOLD / 0-trade result that looked like
@@ -390,12 +394,28 @@ no owner and no refill procedure. Two costs, and the second is worse:
   it persisted). **Rule:** never persist a secret to disk, scratchpad, or a logged env-var — pipe it
   in one command: `aws ecr get-login-password --region <r> | docker login --username AWS
   --password-stdin <registry>`. No intermediate file, no echo, no copy.
-- **Shared-venv `atb` staleness** (bug-class §1.10a): `make install` registers the `atb` console
-  script as an editable install pinned to **whichever worktree ran it** — bare `atb` from any
-  *other* worktree silently executes that pinned worktree's `src/`, not your cwd's. When running the
-  CLI from a non-primary worktree, invoke it as `PYTHONPATH=<worktree-root> python3 -m cli.__main__`
-  (or re-`make install` in the worktree, but that repins it for everyone). A warn-on-mismatch fix
-  (cwd repo-root ≠ installed source root) is GH #1024; sibling GH #999 covers the script-path variant.
+- **Shared-venv `atb` staleness — FIXED 2026-08-13, GH #1070** (bug-class §1.10a). Worth knowing the
+  mechanism, because the obvious diagnosis is wrong. `pip install -e .` writes
+  `site-packages/__editable___ai_trading_bot_0_1_0_finder.py`, whose `MAPPING` hardcodes the
+  **absolute path of the checkout `make install` was run from**, and appends it to `sys.meta_path`.
+  It is *not* a `sys.path` entry. Since `sys.meta_path` is consulted after `PathFinder`, the stale
+  mapping loses only when some `sys.path` entry already contains `src`/`cli`. That is true for
+  `python -c` and `python <repo-root>/x.py` (cwd/script dir *is* the root) and **false** for:
+  - the `atb` console script (`sys.path[0]` is `.venv/bin`), and
+  - `python experiments/x.py` (`sys.path[0]` is `experiments/`, which has no `src/`).
+  Hence "it worked when I checked it interactively" and broke for every real run. **Fix:**
+  `tools/atb_worktree_shim.py`, copied into site-packages by `make install` and executed from a
+  `.pth` on every interpreter start; it resolves the checkout enclosing the **cwd** and inserts a
+  meta-path finder at position 0 binding top-level `src`/`cli` there. Backstop:
+  `src/__init__.py` calls `src.utils.source_root.verify_source_root()`, which hard-errors with a
+  copy-pasteable remedy when imported-root ≠ cwd-root. It lives in the package `__init__` on
+  purpose — an entry-point-by-entry-point guard would have missed `python experiments/x.py`,
+  which is precisely the shape that produced the bad numbers. **If you ever rebuild the
+  venv, re-run `python tools/install_worktree_shim.py`** (or `make shim`) — the shim lives in
+  site-packages, which is not version-controlled. `python tools/install_worktree_shim.py --check`
+  verifies it. `PYTHONPATH="$(pwd)"` remains a valid one-off override. Sibling GH #999 covers the
+  script-path shadowing variant; GH #1024 (the "just add a warning" P3 framing) is superseded — a
+  warning would have been ignored exactly like the wrong number was.
 - **`ls ~/.claude/scheduled-tasks` is NOT the task list — the scheduler registry is.** The directory
   holds a `SKILL.md` per task and **keeps it after the task is deregistered**, so a dead task looks
   installed forever. On 2026-08-10: 19 directories, **13 registered tasks**. `alert-monitor`,

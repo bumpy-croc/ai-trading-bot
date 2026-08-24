@@ -9,6 +9,16 @@ project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+# * Importing `src` runs the source-root guard (src/__init__.py, GH #1070), which refuses to run
+# * when the venv resolved `src` to a different checkout than our cwd. Must precede every other
+# * `src` import: a mismatch means the whole codebase below is the wrong branch.
+try:
+    import src  # noqa: F401,E402
+except RuntimeError as exc:  # SourceRootMismatchError, defined in the package that just failed
+    # A traceback would bury the remedy; the operator needs the instructions, not the frames.
+    print(exc, file=sys.stderr)
+    raise SystemExit(2) from None
+
 
 # * Apply gevent monkey patching BEFORE any other imports if needed
 def _apply_very_early_gevent_patching() -> None:

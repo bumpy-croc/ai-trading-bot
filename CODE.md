@@ -6,6 +6,22 @@
 
 ## Before You Start Coding
 
+### Verify you are running the code you edited
+
+Worktrees share one venv, and an editable install pins imports to the checkout it was created
+from. Before trusting any backtest, experiment, or test result:
+
+```bash
+python -c "import src; print(src.__file__)"   # must be under YOUR worktree
+```
+
+`make install` wires this up automatically (`tools/atb_worktree_shim.py`); re-run `make shim`
+after any venv rebuild. As a backstop, importing `src` at all runs
+`src.utils.source_root.verify_source_root()`, which hard-errors on a mismatch — so `atb`, `pytest`
+and `python experiments/x.py` all fail loudly rather than returning a wrong number, and standalone
+scripts need no opt-in. **Do not** set `ATB_ALLOW_SOURCE_ROOT_MISMATCH=1` to silence it on a run
+whose numbers you intend to act on. Background: GH #1070, `.claude/LESSONS.md` §1.10a / §3.
+
 ### Planning Complex Features
 
 For features involving exchange interaction, crash recovery, or position state mutation: enumerate all failure scenarios BEFORE writing code:

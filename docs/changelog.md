@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Worktree commands no longer silently execute another checkout's code** (#1070,
+  P0; supersedes #1024). `pip install -e .` writes a `sys.meta_path` finder whose
+  `MAPPING` hardcodes the absolute path of the checkout `make install` was run
+  from. Because `sys.meta_path` is consulted *after* `PathFinder`, that stale
+  mapping only loses when a `sys.path` entry already contains `src`/`cli` — true
+  for `python -c` and `python <repo-root>/x.py`, and **false** for the `atb`
+  console script (`sys.path[0]` is `.venv/bin`) and for `python experiments/x.py`
+  (`sys.path[0]` is `experiments/`). Every worktree shares one venv, so those two
+  shapes silently ran the primary checkout's branch. Observed impact: the same
+  365d HyperGrowth backtest returned `+114.69%` and `-28.29%` on consecutive runs
+  from the same directory, with no warning. Two layers now close this:
+  `tools/atb_worktree_shim.py`, installed into site-packages by `make install`
+  (also `make shim`) and executed from a `.pth` on every interpreter start, binds
+  top-level `src`/`cli` to the checkout enclosing the **cwd**; and `src/__init__.py`
+  calls `src.utils.source_root.verify_source_root()`, which raises
+  `SourceRootMismatchError` with a copy-pasteable remedy whenever the imported
+  source root differs from the invoking checkout. The guard sits in the package
+  `__init__` rather than in each entry point so that `atb`, `pytest`,
+  `python experiments/*.py` and ad-hoc scripts are all covered without opting in.
+  It is a deliberate no-op for non-editable site-packages installs (production
+  containers) and when the cwd is outside any checkout. Escape hatches:
+  `ATB_DISABLE_WORKTREE_SHIM=1` (skip the shim), `ATB_ALLOW_SOURCE_ROOT_MISMATCH=1`
+  (downgrade the guard to a stderr warning). **The shim lives in site-packages,
+  which is not version-controlled — re-run `make shim` after any venv rebuild;
+  `python tools/install_worktree_shim.py --check` verifies it.**
+
 ### Added
 - **HyperGrowth/ETHUSDT is long-only by explicit configuration** (#1020,
   board-approved proposal 2026-07-12-01): `MLBasicSignalGenerator` gains an
