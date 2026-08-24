@@ -93,7 +93,7 @@ class LiveEntryEngineState(Protocol):
 
     def _send_alert(self, message: str) -> bool: ...
 
-    def _enter_close_only_mode(self) -> None: ...
+    def _enter_close_only_mode(self, reason: str | None = None) -> None: ...
 
     def _refresh_drawdown_gate(self) -> bool: ...
 
@@ -722,7 +722,10 @@ class LiveEntryCoordinator:
                                         "MANUAL INTERVENTION REQUIRED.",
                                         symbol,
                                     )
-                                    state._enter_close_only_mode()
+                                    state._enter_close_only_mode(
+                                        f"emergency close for {symbol} UNCONFIRMED after a "
+                                        "balance-update failure"
+                                    )
                                 else:
                                     logger.warning(
                                         "Emergency close placed for %s due to balance "
@@ -806,7 +809,9 @@ class LiveEntryCoordinator:
                                     "until restart reconciles. MANUAL INTERVENTION REQUIRED.",
                                     symbol,
                                 )
-                                state._enter_close_only_mode()
+                                state._enter_close_only_mode(
+                                    f"emergency close for orphaned position {symbol} " "UNCONFIRMED"
+                                )
                             else:
                                 emergency_close_confirmed = True
                                 logger.info(
@@ -928,7 +933,10 @@ class LiveEntryCoordinator:
                     symbol,
                     position.order_id,
                 )
-                state._enter_close_only_mode()
+                state._enter_close_only_mode(
+                    f"ambiguous order submission for {symbol} "
+                    f"(order_id={position.order_id}) — phantom position untracked"
+                )
                 return
 
             # Place server-side stop-loss order for protection with retry logic

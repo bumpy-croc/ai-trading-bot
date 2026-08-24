@@ -166,6 +166,48 @@ atb live-control resume --env production --reason "root cause fixed"
   out-of-process CLI would race the running engine's order tracking, so unfilled entries are
   left to the engine's own timeout/cancel logic while the halt guarantees no new ones start.
 
+## Latched conditions are re-announced until cleared (#1095/#1096)
+
+Close-only mode, the manual system halt and `FEATURE_ENTRY_PAUSE` all block new entries until
+a human acts. Each used to announce itself exactly once, at minute zero. On 2026-08-20
+production latched close-only after a stop-loss re-placement failure, paged Slack correctly,
+and then sat halted for four days: nothing re-raised it, and the daily standup's "engine
+alive" check greps `Decision:` log lines, which keep flowing at normal cadence because signal
+generation runs *before* the close-only gate (#1094).
+
+`LatchedConditionMonitor` (`engines/live/monitoring/latched_condition_monitor.py`) runs once
+per trading-loop iteration, before the data-freshness `continue` paths, and produces two
+things for every condition that is still active:
+
+- **A durable heartbeat row** in `system_events` every hour (`alert=false`, severity
+  `warning`, `error_code` one of `CLOSE_ONLY_LATCHED`, `SYSTEM_HALT_LATCHED`,
+  `ENTRY_PAUSE_LATCHED`). The close-only latch is an in-process bool that is never persisted
+  to `system_control_flags`, so these rows are what makes "the bot is currently unable to
+  trade" observable from the database at all. A monitor asserts on them like this:
+
+  ```sql
+  SELECT error_code, message, timestamp
+  FROM system_events
+  WHERE error_code LIKE '%\_LATCHED' AND timestamp > now() - interval '2 hours'
+  ORDER BY timestamp DESC;
+  ```
+
+  Any row returned means entries are blocked right now; the message carries the elapsed time
+  and the recorded reason. A matching `*_LATCH_CLEARED` row records the resolution.
+- **A bounded operator page** (`alert=true`, severity `critical`) at 1h, 4h and 12h after the
+  latch, then once every 24h for as long as it holds — at most three re-pages in the first
+  day and one a day after that (~31 in a month, not ~720). The webhook is delivered on a
+  short-lived daemon thread so a slow POST can never stall the trading loop, and the whole
+  check is fault-isolated: observability never propagates into the loop.
+
+`_enter_close_only_mode(reason=...)` records *why* the latch tripped (reconciliation
+CRITICAL findings, drawdown breach, circuit breaker, DB outage, unconfirmed emergency close,
+ambiguous order submission) so the message four days later still explains itself, long after
+the log line that carried the detail has rotated out of the platform's retention.
+
+Entry-pause is only reported when no macro-event window in `config/macro_events.json` covers
+the current time — a deliberate pause during an FOMC window is not a finding.
+
 ## Position management features
 
 - Dynamic risk adjustment (`DynamicRiskManager`) tapers exposure after drawdowns and relaxes limits during recoveries. Configure

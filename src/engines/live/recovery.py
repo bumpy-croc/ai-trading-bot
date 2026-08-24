@@ -90,7 +90,7 @@ class RecoveryEngineState(Protocol):
 
     def _strategy_name(self) -> str: ...
 
-    def _enter_close_only_mode(self) -> None: ...
+    def _enter_close_only_mode(self, reason: str | None = None) -> None: ...
 
     def _log_trade(self, trade: Trade) -> None: ...
 
@@ -559,7 +559,10 @@ class LiveSessionRecoverer:
                         # Route through the guarded helper so the CLOSE_ONLY event
                         # fires — this path previously entered close-only SILENTLY,
                         # unlike the reconcile_startup path below. #853
-                        state._enter_close_only_mode()
+                        state._enter_close_only_mode(
+                            f"{critical_count} CRITICAL reconciliation issues while "
+                            "resolving pending orders"
+                        )
                     # One bounded, deduped, paged-on-critical summary — this
                     # resolve_pending path is where the 714 UNKNOWN-order storm arose.
                     self._emit_reconcile_summary(
@@ -599,7 +602,9 @@ class LiveSessionRecoverer:
                     )
                     # Route through the guarded helper so the CLOSE_ONLY event is
                     # emitted on this startup-critical path too, not just runtime.
-                    state._enter_close_only_mode()
+                    state._enter_close_only_mode(
+                        f"{critical_count} CRITICAL startup reconciliation issues"
+                    )
                 self._emit_reconcile_summary(results, critical_count, high_count, "reconciliation")
 
                 # Log HIGH severity auto-corrections (cancelled entries, SL fills)

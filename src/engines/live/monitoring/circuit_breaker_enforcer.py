@@ -98,7 +98,7 @@ class CircuitBreakerEngineState(Protocol):
     db_manager: DatabaseManager
     _close_only_mode: bool
 
-    def _enter_close_only_mode(self) -> None: ...
+    def _enter_close_only_mode(self, reason: str | None = None) -> None: ...
 
     def _record_event(
         self,
@@ -226,7 +226,7 @@ class CircuitBreakerEnforcer:
         if self._halt_notified and state._close_only_mode:
             return
         try:
-            state._enter_close_only_mode()
+            state._enter_close_only_mode(f"account circuit breaker tripped: {decision.reason}")
             self._halt_notified = True
             message = (
                 f"ACCOUNT CIRCUIT BREAKER TRIPPED: {decision.reason} ({measurement}). "
