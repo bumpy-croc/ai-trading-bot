@@ -611,6 +611,10 @@ class TestPlaceStopLossOrder:
         With no symbol_info there is no step size, so the capped quantity is sent
         without lot-rounding — but it is still capped to holdings, so no -2010.
         The base asset is derived via the fallback suffix-strip.
+
+        The shortfall is a fee-rounding sliver (0.2%): a larger gap now refuses the
+        order outright rather than placing an undersized stop that would be recorded
+        as full protection (#1104/#1109).
         """
         mock_config_obj = Mock()
         mock_config_obj.get_required.return_value = "fake_key"
@@ -620,7 +624,7 @@ class TestPlaceStopLossOrder:
         mock_client.create_order.return_value = {"orderId": "sl3"}
         provider = BinanceProvider()
         provider.get_symbol_info = Mock(return_value=None)  # transient API failure
-        provider.get_balance = Mock(return_value=Mock(free=0.004))
+        provider.get_balance = Mock(return_value=Mock(free=0.00499))
 
         result = provider.place_stop_loss_order(
             symbol="ETHUSDT", side=OrderSide.SELL, quantity=0.005, stop_price=1900.0
@@ -629,7 +633,7 @@ class TestPlaceStopLossOrder:
         assert result == "sl3"
         provider.get_balance.assert_called_once_with("ETH")
         assert mock_client.create_order.call_args.kwargs["quantity"] == pytest.approx(
-            0.004, abs=1e-9
+            0.00499, abs=1e-9
         )
 
     @patch("src.data_providers.binance_provider.Client")

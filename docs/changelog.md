@@ -12,6 +12,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Stop-loss re-placement loop that left a live ETHUSDT position repeatedly unprotected**
+  (#1104, #1109; incident #1094). On 2026-08-19 thirteen stop-loss orders were placed and
+  killed ~66s apart while the position stayed open. The cadence was the **trading loop**
+  (`DEFAULT_CHECK_INTERVAL`, 60s), not the reconciler (120s): the 15:00 hourly candle's low
+  dipped through the trailing stop, so the strategy re-emitted exit reason `"Stop loss"` on
+  every iteration until the candle rolled at 16:00. The user-stream degradation was not the
+  cause — `USER_WS_RECOVERED` fired four seconds after the first alert and twelve of the
+  thirteen events happened with the stream healthy. Three defects compounded:
+  1. `LiveStopLossManager.cancel` gave `OrderTracker` no way to tell our own pre-close cancel
+     from an unexpected one. Binance emits the terminal `executionReport` on the open user
+     socket before the DELETE response returns, so the tracker escalated our cancel as an
+     unexpected termination — a false UNPROTECTED page — and that handler nulls
+     `position.stop_loss_order_id`, which made the reconciler stack a **duplicate** stop on
+     one still resting and orphan it. Fixed with `OrderTracker.mark_self_cancelled`, which
+     suppresses only the escalation; the order stays **tracked** across the cancel, because a
+     stop is cancelled at the exact moment price is touching it and a genuine fill in that
+     window must still be processed.
+  2. The orphaned stop locked the position's base inventory, so the free-base cap in
+     `LiveExecutionEngine._close_live_order` silently shrank every close to the leftover dust
+     (0.00009419 of 0.0087 ETH — 1.1%). Since the caller books a **full** close on success,
+     a filled partial would have abandoned the remainder untracked and unprotected; it only
+     failed safe because $0.196 is under Binance's `MIN_NOTIONAL`. The cap now compares the
+     **submitted** quantity (after both the holdings cap and the lot floor) against the
+     intended one, aborts below `HOLDINGS_CAP_MIN_RATIO`, records `CLOSE_INVENTORY_LOCKED`
+     in `system_events`, pages the operator, and latches close-only after
+     `CLOSE_ABORT_CLOSE_ONLY_STREAK` consecutive aborts on a symbol so it cannot become an
+     alert storm of its own shape.
+  3. Under that same condition `BinanceProvider.place_stop_loss_order` would place a stop
+     covering only the dust and return an id, which is then recorded and audited as full
+     protection — the reconciler's SL check reads order *status*, never *quantity*. It now
+     refuses and returns `None`, so the honest UNPROTECTED escalation fires instead (#1109).
+
+  Full investigation with the prod evidence:
+  `agents/research/1104-sl-replacement-loop-investigation.md`.
 - **Backtests no longer silently truncate at the drawdown cap with no marker** (#1102). PR
   #1073 made `RiskParameters()` default-hydrate `max_drawdown` from the ratified
   `src/config/risk-limits.json` (0.20); the backtest engine has always early-stopped a run once

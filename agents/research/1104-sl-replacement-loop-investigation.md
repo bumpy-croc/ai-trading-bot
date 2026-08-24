@@ -435,92 +435,76 @@ not by a misread.
 
 ---
 
-## 7. Recommended fixes
+## 7. Fixes — as shipped in PR #1108
 
-Ordered by capital risk, not by proximity to the reported symptom.
+> **Amended after review.** My first draft of R2 recommended untracking the order *before*
+> issuing the cancel. That is wrong and the architecture review caught it: `cancel()` runs at the
+> exact moment price is touching the stop, so a genuine **FILL** landing in the untracked window is
+> the *likely* case. `process_execution_event` early-returns on unknown ids
+> (`order_tracker.py:695-696`), and `disable_polling()` is called whenever the WS is active
+> (`ws_health.py:756`) — the dominant state, and the state 12 of the 13 incident events occurred
+> in — so nothing would re-deliver it. That design trades a false-escalation bug for a missed-fill
+> bug. The shipped fix keeps the order tracked throughout. A regression test now pins this:
+> `test_stop_that_fills_during_the_cancel_is_still_processed`.
 
-### R1 (P0-adjacent, latent in prod now) — never silently shrink a close
+### F1 — never submit a materially shrunk close
 
-`src/engines/live/execution/execution_engine.py:1178-1200`. The free-base cap must not discard an
-arbitrary fraction of the intended close. Require the capped quantity to be within a tight tolerance
-of the requested quantity (the cap exists only to shave a fee-rounding sliver); otherwise **abort the
-close, escalate, and let the reconciler resolve exchange truth** rather than submitting a partial the
-caller will book as a full close.
+`src/engines/live/execution/execution_engine.py`. The free-base cap and the lot floor are both
+mechanical adjustments that may only shave a sliver. The gate compares the **submitted** quantity —
+after *both* — against the intended one, and aborts below `HOLDINGS_CAP_MIN_RATIO` (0.98).
 
-```suggestion
-            if order_side == OrderSide.SELL:
-                free_base = self._free_base_for_close(symbol)
-                if free_base is not None and free_base < quantity * CLOSE_HOLDINGS_CAP_TOLERANCE:
-                    logger.critical(
-                        "Close sell qty %.8f for %s exceeds free base %.8f by more than the "
-                        "fee-rounding tolerance — inventory is locked (orphaned stop?); "
-                        "ABORTING close rather than selling a fraction.",
-                        quantity, symbol, free_base,
-                    )
-                    return None
-```
+Gating on `free_base` alone (my first draft) does not enforce its own invariant: the lot floor can
+shrink a few-lot position by 25% on its own, entirely downstream of the check. Covered by
+`test_lot_floor_alone_can_trigger_the_abort`.
 
-Independently, `exit_handler.execute_exit` must not call `position_tracker.close_position(...)` at
-full size when the executed quantity is materially below the intended quantity. `ExecutionResult`
-already carries both `quantity` and `requested_quantity` (`execution_engine.py:88-89`) — compare
-them and convert a short fill into a partial-exit adjustment or a hard escalation, never a full
-close.
+The abort records `CLOSE_INVENTORY_LOCKED` in `system_events`, **pages the operator**
+(`alert_dispatcher`, wired to the engine's `_send_alert`), and latches close-only after
+`CLOSE_ABORT_CLOSE_ONLY_STREAK` (3) consecutive aborts on a symbol — because the exit signal
+re-fires every ~66 s and an un-latched abort would reproduce #1104's own alert-storm shape under a
+new error code.
 
-### R2 (P1) — make the deliberate SL cancel race-free
+### F2 — distinguish our own cancel from an unexpected one, without untracking
 
-`src/engines/live/execution/stop_loss_manager.py:129-165`. Capture the id **once**, and untrack
-**before** issuing the cancel; re-track on a failed cancel so the "order may still rest → keep
-watching" invariant is preserved.
+`OrderTracker.mark_self_cancelled(order_id)` is called before the cancel is issued;
+`_process_order_status` consumes the mark in the terminal branch and skips **only** the `on_cancel`
+escalation. The order stays tracked, so `FILLED` and any partial-fill delta carried by a terminal
+status are processed exactly as before. Marks expire after
+`SELF_CANCEL_SUPPRESSION_TTL_SECONDS` (60 s) so an abandoned mark cannot silence a genuine
+cancellation later, and an unconfirmed cancel clears the mark (the order may still rest, so a later
+terminal status *is* unexpected).
 
-```suggestion
-        sl_id = position.stop_loss_order_id
-        if state.order_tracker:
-            state.order_tracker.stop_tracking(sl_id)
-        cancelled = False
-        try:
-            cancelled = bool(state.exchange_interface.cancel_order(sl_id, position.symbol))
-```
+This also avoids `track_order`'s re-registration resetting `last_filled_qty` to 0.0 and the
+`MAX_API_ERROR_RETRIES` / callback counters (`order_tracker.py:166-170`).
 
-with a `if not cancelled and state.order_tracker: state.order_tracker.track_order(sl_id, position.symbol)`
-on the failure path. This removes the false `STOP_LOSS_CANCELLED` alert, removes the
-`stop_tracking(None)` no-op, and — most importantly — stops the alert handler from nulling
-`stop_loss_order_id` out from under a live resting order.
+### F3 — refuse to place an undersized stop (#1109)
 
-Belt-and-braces: `order_tracker._check_orders` should re-check `_pending_orders` membership *after*
-`get_order` returns and before firing `on_cancel` (it already re-checks before; see
-`order_tracker.py:244-248`).
+`binance_provider.place_stop_loss_order` applies the same ratio gate and returns `None`. This is
+**not** an independent site: under exactly the condition F1's abort fires, `exit_coordinator.py:466`
+calls reprotect → `position_still_held` returns True (it sums `free + locked`, so the orphan's own
+lock counts) → `place_stop_loss_order(full size)` → the provider caps to the same locked-out dust →
+returns an id that is logged and tracked as "Re-protected", overwriting `stop_loss_order_id`. The
+reconciler's SL audit reads order *status*, never *quantity*, so that dust stop reads as full
+protection forever. F1's safety premise ("the position is still protected") is false without F3.
 
-### R3 (P1) — never place a second stop while one may still rest
+### F4 — corrected the docstrings that encoded the broken assumptions
 
-`reconciliation._place_missing_stop_loss` (`reconciliation.py:4249`), the step-2 re-placement
-(`reconciliation.py:3949`) and `stop_loss_manager.reprotect` (`stop_loss_manager.py:293`) all place
-unconditionally. Each should first consult the fail-closed
-`has_open_orders` accessor (`binance_provider.py:1161-1176`, the LESSONS §1.8-compliant one) for the
-symbol and, on `None` (unknown) or `True`, **adopt or cancel the existing protective order rather
-than stacking a second**. Stacking is what locked the base and starved every close.
+- `order_fill_coordinator.py` — claimed deliberate cancels cannot reach the handler.
+- `execution_engine._free_base_for_close` — claimed the resting stop is always cancelled first.
+- `reconciliation.PeriodicReconciler` — said "default 60s"; the constant is 120 s.
 
-### R4 (P2) — close the observability gap #1097 left
+### Deferred (filed separately, not in this PR)
 
-`_record_order_error` is wired into `place_stop_loss_order` only. The rejection that actually
-mattered here was on the **close** path. Wire the same durable capture into
-`execution_engine._close_live_position` so the next occurrence records the Binance code for the
-close, not just for the stop.
-
-### R5 (P2) — re-register reconciler-placed stops with the OrderTracker
-
-`src/engines/live/reconciliation.py` has zero `order_tracker` references, so a reconciler-replaced
-stop is invisible to fill detection until the next 120 s cycle. Additionally
-`ws_health.check_user_stream_health` returns early when `get_tracked_count() == 0`
-(`ws_health.py:416-417`), so if the only live orders are reconciler-placed the user-stream watchdog
-goes permanently idle. Not causal here, but it is a real hole on the same code path.
-
-### R6 (P3) — fix the false docstrings that encode the broken assumptions
-
-- `order_fill_coordinator.py:202-204` — claims deliberate cancels cannot reach the handler.
-- `execution_engine.py:1294-1302` — claims the resting stop is always cancelled before the close.
-- `reconciliation.py:3130` — says "default 60s"; the constant is 120 s.
-
----
+- Pre-check `has_open_orders` before any stop placement, so a replacement can never stack on a
+  resting one. This is what created the orphan; F1–F3 make its consequences loud and safe rather
+  than silent, but they do not stop the stacking itself.
+- Register reconciler-placed stops with the `OrderTracker` (`reconciliation.py` has zero
+  `order_tracker` references, so a reconciler-replaced stop is invisible to fill detection until
+  the next 120 s cycle; and `ws_health.check_user_stream_health` returns early when
+  `get_tracked_count() == 0`, so the user-stream watchdog goes idle if the only live orders are
+  reconciler-placed).
+- Extend #1097's durable `ExchangeOrderError` capture to the close path — the rejection that
+  actually mattered here was on the close, and `_record_order_error` is wired only into
+  `place_stop_loss_order`.
 
 ## 8. Relationship to #723/#724
 

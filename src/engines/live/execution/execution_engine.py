@@ -20,9 +20,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.config.constants import (
-    CLOSE_HOLDINGS_CAP_MIN_RATIO,
+    CLOSE_ABORT_CLOSE_ONLY_STREAK,
     DEFAULT_FEE_RATE,
     DEFAULT_SLIPPAGE_RATE,
+    HOLDINGS_CAP_MIN_RATIO,
 )
 from src.data_providers.exchange_interface import (
     ExchangeOrderError,
@@ -148,6 +149,13 @@ class LiveExecutionEngine:
         self.db_manager: Any = None
         self.session_id: int | None = None
         self.strategy_name: str = "unknown"
+        # Operator page dispatcher (the engine's _send_alert) and the close-only
+        # escalation hook (_enter_close_only_mode). Set by the trading engine after
+        # construction, like db_manager; duck-typed and optional so the execution
+        # engine never hard-depends on either. "We cannot exit this position" must
+        # page, not merely land in a table nobody reads (#1096 / #853).
+        self.alert_dispatcher: Callable[[str], object] | None = None
+        self.on_critical: Callable[[str], None] | None = None
 
         # Optional callback returning open positions, used to enrich
         # short-guard rejection events. Set by the trading engine after
@@ -159,6 +167,10 @@ class LiveExecutionEngine:
         # guards the dict only; event writes happen outside it.
         self._short_guard_lock = threading.Lock()
         self._short_guard_episodes: dict[str, _ShortGuardEpisode] = {}
+        # Consecutive close aborts per symbol (#1104 P2 latch). The exit signal that
+        # triggers a close re-fires every trading-loop iteration, so an un-latched
+        # abort would page once per ~66s — the very alert-storm shape #1104 was.
+        self._close_abort_streaks: dict[str, int] = {}
         # Injectable clock for deterministic episode-gap tests.
         self._monotonic: Callable[[], float] = time.monotonic
 
@@ -196,6 +208,60 @@ class LiveExecutionEngine:
             )
         except Exception as e:  # pragma: no cover - defensive; never break execution
             logger.warning("Failed to log execution event %s: %s", error_code, e)
+
+    def _record_close_inventory_locked(
+        self,
+        *,
+        symbol: str,
+        intended_quantity: float,
+        sellable_quantity: float,
+        free_base: float | None,
+    ) -> None:
+        """Page, persist and latch a close aborted because the inventory is not sellable.
+
+        Fully fault-isolated: the abort decision is already made and observability must
+        never turn a refused close into a raised exception.
+        """
+        with self._short_guard_lock:
+            streak = self._close_abort_streaks.get(symbol, 0) + 1
+            self._close_abort_streaks[symbol] = streak
+        sellable_pct = (sellable_quantity / intended_quantity * 100.0) if intended_quantity else 0.0
+        message = (
+            f"Close of {symbol} ABORTED: only {sellable_quantity:.8f} of the intended "
+            f"{intended_quantity:.8f} ({sellable_pct:.1f}%) is sellable — base asset is "
+            f"locked by an untracked order or cannot be lot-sized. Position remains OPEN. "
+            f"Consecutive aborts: {streak}."
+        )
+        self._log_execution_event(
+            EventType.ERROR,
+            message,
+            "CLOSE_INVENTORY_LOCKED",
+            severity="critical",
+            details={
+                "symbol": symbol,
+                "intended_quantity": float(intended_quantity),
+                "sellable_quantity": float(sellable_quantity),
+                "free_base_balance": float(free_base) if free_base is not None else None,
+                "min_ratio": HOLDINGS_CAP_MIN_RATIO,
+                "consecutive_aborts": streak,
+            },
+        )
+        if self.alert_dispatcher is not None:
+            try:
+                self.alert_dispatcher(f"\U0001f6a8 {message}")
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("Failed to dispatch close-abort alert for %s: %s", symbol, e)
+        # A repeating abort means the position is stuck open and unexitable. Stop
+        # paging once per iteration and latch the condition instead, which the
+        # latched-condition monitor then re-announces on its bounded schedule (#1096).
+        if streak >= CLOSE_ABORT_CLOSE_ONLY_STREAK and self.on_critical is not None:
+            try:
+                self.on_critical(
+                    f"{symbol} close aborted {streak} times in a row — inventory is not "
+                    "sellable and the position cannot be exited"
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("Failed to escalate repeated close abort for %s: %s", symbol, e)
 
     def attach_exchange_error_sink(self, exchange: Any) -> None:
         """Route exchange-layer order failures into ``system_events``.
@@ -1178,43 +1244,14 @@ class LiveExecutionEngine:
             # BinanceProvider.place_stop_loss_order). A closing BUY (short cover) is
             # funded from quote and must repay the full base borrow, so it keeps the
             # nearest snap: flooring it would strand interest-accruing borrow dust.
+            # The quantity we intend to close. Every reduction below is a mechanical
+            # adjustment (holdings cap, lot snap) that must only ever shave a sliver;
+            # the gate after them enforces that against what is actually submitted.
+            intended_quantity = quantity
+            free_base: float | None = None
             if order_side == OrderSide.SELL:
                 free_base = self._free_base_for_close(symbol)
                 if free_base is not None and free_base < quantity:
-                    # The cap exists to shave a fee-rounding sliver. A shortfall
-                    # bigger than that means the base is LOCKED by an order we do
-                    # not know about — in #1104 an orphaned stop-loss held the whole
-                    # position, and the cap silently shrank a full close to 1.1% of
-                    # its size. Submitting that partial is the dangerous branch: the
-                    # caller books a FULL close on success and abandons the rest of
-                    # the inventory untracked and unprotected. Fail loudly instead
-                    # and let the reconciler resolve exchange truth.
-                    if free_base < quantity * CLOSE_HOLDINGS_CAP_MIN_RATIO:
-                        logger.critical(
-                            "ABORTING close of %s: free base balance %.8f is far below the "
-                            "intended close quantity %.8f — inventory is locked (orphaned "
-                            "stop-loss?). Refusing to sell a fraction and book a full close.",
-                            symbol,
-                            free_base,
-                            quantity,
-                        )
-                        self._log_execution_event(
-                            EventType.ERROR,
-                            (
-                                f"Close of {symbol} aborted: free base {free_base:.8f} is "
-                                f"below {CLOSE_HOLDINGS_CAP_MIN_RATIO:.0%} of the intended "
-                                f"{quantity:.8f} — base asset is locked by an untracked order; "
-                                "position remains OPEN for the reconciler to resolve."
-                            ),
-                            "CLOSE_INVENTORY_LOCKED",
-                            severity="critical",
-                            details={
-                                "symbol": symbol,
-                                "requested_quantity": float(quantity),
-                                "free_base_balance": float(free_base),
-                            },
-                        )
-                        return None
                     logger.warning(
                         "Close sell qty %.8f for %s exceeds free base balance %.8f "
                         "— capping to holdings to avoid -2010.",
@@ -1233,6 +1270,35 @@ class LiveExecutionEngine:
                     symbol,
                 )
                 return None
+            # Gate on the SUBMITTED quantity, after both the holdings cap and the lot
+            # snap. Gating on free_base alone would miss the lot-floor case, where a
+            # position only a few lots wide floors away a quarter of itself. In #1104 an
+            # orphaned stop-loss locked the whole position and the cap silently shrank a
+            # full close to 1.1% of its size. Submitting that partial is the dangerous
+            # branch: the caller books a FULL close on success and abandons the rest of
+            # the inventory untracked and unprotected. Fail loudly and let the reconciler
+            # resolve exchange truth.
+            if quantity < intended_quantity * HOLDINGS_CAP_MIN_RATIO:
+                logger.critical(
+                    "ABORTING close of %s: only %.8f of the intended %.8f is sellable "
+                    "(free base %s) — inventory is locked (orphaned stop-loss?) or the "
+                    "position cannot be lot-sized honestly. Refusing to sell a fraction "
+                    "and book a full close.",
+                    symbol,
+                    quantity,
+                    intended_quantity,
+                    "unknown" if free_base is None else f"{free_base:.8f}",
+                )
+                self._record_close_inventory_locked(
+                    symbol=symbol,
+                    intended_quantity=intended_quantity,
+                    sellable_quantity=quantity,
+                    free_base=free_base,
+                )
+                return None
+            # Gate passed: the condition cleared, so a later abort starts a fresh streak.
+            with self._short_guard_lock:
+                self._close_abort_streaks.pop(symbol, None)
 
             # Generate deterministic client order ID for exit order idempotency
             # Format: atbx_{timestamp_hex}_{uuid8} (~25 chars, within Binance 36-char limit)
@@ -1330,8 +1396,11 @@ class LiveExecutionEngine:
         """Free base-asset balance available to a closing SELL, or None when unknown.
 
         ``free`` is the amount available to sell — reported identically in spot and
-        margin mode, and the resting stop-loss is cancelled before the close (#710),
-        so its previously locked inventory is free again by the time this reads it.
+        margin mode. The close path cancels the position's resting stop-loss first
+        (#710) so its inventory is free again by the time this reads it, but that
+        assumption does NOT hold for a stop the engine has lost track of: #1104 saw an
+        orphaned stop lock the whole position. The caller therefore gates on the
+        submitted-vs-intended ratio rather than trusting this value to be complete.
         A None return means the cap is skipped, never that the close is blocked: a
         transient balance-lookup failure must not stop an exit.
 
