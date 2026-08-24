@@ -305,7 +305,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_reset.add_argument(
         "--env",
         required=True,
-        choices=["development", "staging", "production"],
+        choices=["staging", "production"],
         help="Target Railway environment",
     )
     p_reset.set_defaults(func=_railway_reset)
@@ -315,7 +315,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_backup.add_argument(
         "--env",
         required=True,
-        choices=["development", "staging", "production"],
+        choices=["staging", "production"],
         help="Target Railway environment",
     )
     p_backup.set_defaults(func=_railway_backup)

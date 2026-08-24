@@ -3,8 +3,9 @@
 Deploy the current `develop` line to the **staging** Railway environment by
 syncing the long-running `staging` branch to `develop`.
 
-> **Environment chain:** `develop` → `staging` → `main`, mapping to Railway
-> `development` → `staging` → `production`.
+> **Environment chain:** `develop` → `staging` → `main`. Railway environments
+> are `staging` and `production` only; `develop` is the integration trunk (CI
+> on PRs, no auto-deploy — the Railway development environment was deleted).
 >
 > **`staging` is a protected, long-running branch.** It maps 1:1 to the Railway
 > staging environment and must **never be deleted**. It is protected

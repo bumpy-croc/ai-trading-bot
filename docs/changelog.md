@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Removed deleted Railway development environment references**: the Board
+  deleted the Railway `development` environment (unused; cost/heat), so
+  auto-deploys from `develop` no longer exist. `develop` is now the integration
+  trunk only (CI on PRs; no auto-deploy) and deployed testing happens on
+  staging via `/deploy-staging` parity sync. Updated the CLAUDE.md environment
+  matrix, `/deploy-staging` + `/deploy-prod` environment-chain notes, the
+  architecture-reviewer system overview, and the chaos-test plan's `railway
+  run`/`restart` commands (now target `staging`). `atb db … --env` and
+  `atb db railway … --env` no longer accept `development` (argparse rejects it
+  with a clear message); `RAILWAY_DEVELOPMENT_DATABASE_URL` remains harmless if
+  still set locally.
 - **#486 live-engine modularization complete**: `LiveTradingEngine._init_modular_handlers`
   (the last open item from `docs/refactor/live_engine_modularization.md`) is now a
   thin orchestrator over four construction-phase helpers — `_init_core_handlers`

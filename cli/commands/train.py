@@ -7,7 +7,7 @@ import os
 # * Conditionally import training commands only in non-Railway environments
 def is_railway_environment() -> bool:
     """
-    Check if running in any Railway environment (development, staging, or production).
+    Check if running in any Railway environment (staging or production).
 
     Returns:
         True if running in any Railway environment

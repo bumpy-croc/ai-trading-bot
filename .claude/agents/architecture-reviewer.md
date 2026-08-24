@@ -331,7 +331,7 @@ This trading system:
 - Supports both paper trading and live trading modes (must be clearly distinguished)
 - Implements ML-driven predictions for entry signals
 - Handles cryptocurrency markets (24/7, high volatility, rapid price movements)
-- Deploys to Railway with multiple environments (development, staging, production)
+- Deploys to Railway with two environments (staging, production)
 
 **Component Architecture:**
 - Strategies should compose `SignalGenerator`, `RiskManager`, and `PositionSizer` components

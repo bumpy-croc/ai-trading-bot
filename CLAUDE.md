@@ -181,9 +181,10 @@ Project name: **innovative-transformation**. Use Railway MCP server or `railway`
 
 | Environment | Branch | Notes |
 |-------------|--------|-------|
-| development | `develop` | |
-| staging | `staging` | |
+| staging | `staging` | Paper-trading validation |
 | main | `main` | **PRODUCTION — never destructive operations** |
+
+`develop` = integration trunk (CI on PRs; no auto-deploy). Deployed testing happens on staging via parity sync (`/deploy-staging`). The Railway development environment was deleted by the Board (2026-07) — do not reference or target it.
 
 See `docs/database.md` for Railway deployment and DB operations.
 

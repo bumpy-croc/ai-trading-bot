@@ -271,7 +271,7 @@ def phase_crash(
         logger.info(
             "Railway mode: crash recovery requires manual service restart.\n"
             "  1. Verify bot has an open position via DB\n"
-            "  2. Run: railway service restart --environment development\n"
+            "  2. Run: railway service restart --environment staging\n"
             "  3. Re-run this phase to validate recovery"
         )
         # Capture current trade count as baseline before restart
@@ -291,7 +291,7 @@ def phase_crash(
         logger.info("Railway baseline: %d trades before restart", baseline_trades)
         logger.info(
             "Waiting 30s for operator to restart the Railway service...\n"
-            "  Run now: railway service restart --environment development"
+            "  Run now: railway service restart --environment staging"
         )
         time.sleep(30)
         return _validate_crash_recovery(db, timeout, baseline_trades)

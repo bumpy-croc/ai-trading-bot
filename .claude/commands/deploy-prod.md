@@ -6,9 +6,11 @@ Promote **`staging` → `main`** (the production Railway environment) via a
 **⚠️ CRITICAL: This deploys a real-capital trading bot. Soak on staging first
 (`/deploy-staging`) and only promote a green, reviewed `staging`.**
 
-> **Environment chain:** `develop` → `staging` → `main`, mapping to Railway
-> `development` → `staging` → `production`. Production is always promoted from
-> **`staging`**, not directly from `develop`.
+> **Environment chain:** `develop` → `staging` → `main`. Railway environments
+> are `staging` and `production` only; `develop` is the integration trunk (CI
+> on PRs, no auto-deploy — the Railway development environment was deleted).
+> Production is always promoted from **`staging`**, not directly from
+> `develop`.
 >
 > **Why not `git reset --hard` + force-push?**
 > `main` carries its own history that does **not** exist on `staging`/`develop`:

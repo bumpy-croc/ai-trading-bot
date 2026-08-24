@@ -139,13 +139,13 @@ Railway supports one-off commands via `railway run`:
 ```bash
 # Run the smoke test script directly on Railway infrastructure
 # This connects to the Railway PostgreSQL database automatically
-railway run --environment development python scripts/chaos_smoke_test.py --phase journal --trades 5 --timeout 300
+railway run --environment staging python scripts/chaos_smoke_test.py --phase journal --trades 5 --timeout 300
 
 # Crash recovery test (starts bot, kills it, restarts, verifies)
-railway run --environment development python scripts/chaos_smoke_test.py --phase crash --timeout 120
+railway run --environment staging python scripts/chaos_smoke_test.py --phase crash --timeout 120
 
 # Balance integrity test
-railway run --environment development python scripts/chaos_smoke_test.py --phase balance --trades 10 --timeout 600
+railway run --environment staging python scripts/chaos_smoke_test.py --phase balance --trades 10 --timeout 600
 ```
 
 **Important:** `railway run` executes commands in the Railway environment with access to all env vars (DATABASE_URL, BINANCE_API_KEY, etc.) but as a one-off process, not a persistent service.
@@ -176,7 +176,7 @@ The script needs to handle Railway's environment:
 4. **Crash recovery on Railway**: Instead of SIGKILL, use `railway` CLI to restart the service:
    ```bash
    # From the smoke test service or local machine:
-   railway service restart --environment development
+   railway service restart --environment staging
    ```
    Then poll DB to verify position recovery after restart.
 

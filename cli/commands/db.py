@@ -847,9 +847,8 @@ def _get_database_url_for_env(env: str | None = None) -> str:
             raise RuntimeError("DATABASE_URL is required but not set.")
         return database_url
 
-    # Environment-specific database URLs
+    # Environment-specific database URLs (Railway development env was deleted)
     env_var_map = {
-        "development": "RAILWAY_DEVELOPMENT_DATABASE_URL",
         "staging": "RAILWAY_STAGING_DATABASE_URL",
         "production": "RAILWAY_PRODUCTION_DATABASE_URL",
     }
@@ -882,7 +881,8 @@ def _confirm_nuke_operation(env: str | None, db_url: str) -> bool:
     print("  • Remove ALL data permanently")
     print("  • Reset the database to an empty state")
     print("\n❌ THIS ACTION CANNOT BE UNDONE!")
-    print("💡 Consider creating a backup first with: atb db backup --env", env or "development")
+    backup_hint = f"atb db backup --env {env}" if env else "atb db backup"
+    print(f"💡 Consider creating a backup first with: {backup_hint}")
 
     # First confirmation
     confirm1 = input(
@@ -1042,7 +1042,8 @@ def _nuke(ns: argparse.Namespace) -> int:
         if success:
             print("\n🎉 Database successfully nuked!")
             print("💡 Consider running migrations to recreate the schema:")
-            print(f"     atb db verify --env {env or 'development'} --apply-migrations")
+            env_flag = f"--env {env} " if env else ""
+            print(f"     atb db verify {env_flag}--apply-migrations")
             return 0
         else:
             print("\n❌ Database nuke failed!")
@@ -1220,7 +1221,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     )
     p_verify.add_argument(
         "--env",
-        choices=["development", "staging", "production"],
+        choices=["staging", "production"],
         help="Target environment (default: uses DATABASE_URL)",
     )
     p_verify.set_defaults(func=_verify)
@@ -1229,7 +1230,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_migrate.add_argument("--check", action="store_true", help="Check migration status only")
     p_migrate.add_argument(
         "--env",
-        choices=["development", "staging", "production"],
+        choices=["staging", "production"],
         help="Target environment (default: uses DATABASE_URL)",
     )
     p_migrate.set_defaults(func=_migrate)
@@ -1241,7 +1242,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     )
     p_backup.add_argument(
         "--env",
-        choices=["development", "staging", "production"],
+        choices=["staging", "production"],
         help="Target environment (default: uses DATABASE_URL)",
     )
     p_backup.set_defaults(func=_backup)
@@ -1259,7 +1260,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_nuke = sub.add_parser("nuke", help="⚠️  DANGEROUS: Completely destroy and reset database")
     p_nuke.add_argument(
         "--env",
-        choices=["development", "staging", "production"],
+        choices=["staging", "production"],
         help="Target environment (default: uses DATABASE_URL)",
     )
     p_nuke.set_defaults(func=_nuke)
@@ -1267,7 +1268,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_coll_check = sub.add_parser("check-collation", help="Inspect database collation status")
     p_coll_check.add_argument(
         "--env",
-        choices=["development", "staging", "production"],
+        choices=["staging", "production"],
         help="Target environment (default: uses DATABASE_URL)",
     )
     p_coll_check.set_defaults(func=lambda ns: _collation_check(getattr(ns, "env", None)))
@@ -1275,7 +1276,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_coll_fix = sub.add_parser("fix-collation", help="Fix PostgreSQL collation mismatches")
     p_coll_fix.add_argument(
         "--env",
-        choices=["development", "staging", "production"],
+        choices=["staging", "production"],
         help="Target environment (default: uses DATABASE_URL)",
     )
     p_coll_fix.set_defaults(func=lambda ns: _collation_fix(getattr(ns, "env", None)))
