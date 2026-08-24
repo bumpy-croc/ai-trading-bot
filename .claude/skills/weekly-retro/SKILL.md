@@ -33,6 +33,11 @@ checklist line, a new tripwire.
    completion summary must lead with it, addressed to the human** — the retro cannot merge its own
    output, so an unmerged queue is invisible everywhere else (LESSONS §2.9 rule (d); #1047 sat
    `CLEAN` and unmerged for 14 days, taking §2.9/§2.10 off `develop` with it).
+   **"Merged" is not the finding — "merged how late" is.** Record its time-to-merge and whether it landed
+   *before* this retro started: #1076 merged 2026-08-24 08:53Z, **93 minutes** before the 08-24 run, after
+   7 days green. That is a pass on input 0b and a delivery failure at the same time, and only the latency
+   shows it. Apply the same read to the whole queue — a week in which nothing merged until the human
+   appeared is a finding regardless of how healthy each individual PR looks (LESSONS §2.9 rule (f)).
 1. **log.md** — the week's entries end to end, not just the tail. **A week with no entries is a
    finding, not a quiet week** — cross-check against the scheduled-task traces (input 6): if the
    monitors ran and the log is empty, findings were surfaced and dropped (LESSONS §2.10).
@@ -52,9 +57,19 @@ checklist line, a new tripwire.
    `SKILL.md` survives deregistration so it looks installed forever. (`ls` alone reported "no task
    missed its schedule" for three consecutive retros while six directories were unregistered —
    LESSONS §3. As of 2026-08-17: 19 directories, 13 registered, **4 enabled**.)
-   Then check each live task's `enabled` / `lastRunAt` **and its expected trace**: date sessions by
-   the first internal `"timestamp"` in `~/.claude/projects/<slug>/*.jsonl`, **not** by file mtime
-   (claude-mem rewrites mtimes). Failure modes, all silent:
+   Then audit each live task by **enumerating slots, not by reading `lastRunAt`**. Expand its
+   `cronExpression` across the window, list every slot it should have fired in, and match each to a dated
+   artifact: a session transcript dated by the first internal `"timestamp"` in
+   `~/.claude/projects/<slug>/*.jsonl` (**not** file mtime — claude-mem rewrites mtimes), a PR, or a log
+   entry. A slot with no artifact is a miss.
+   **`lastRunAt` cannot answer this and no task can audit itself** (LESSONS §2.15): it records the last
+   *attempt*, the task's own firing has just refreshed it, and a "within N intervals" tolerance passes any
+   single miss by construction. On 2026-08-19 the standup did not fire at all, and the five standups that
+   followed each reported *"all enabled tasks ran within their expected interval — PASS."* The retro is
+   the only pass positioned to catch this, so enumerate.
+   **For an effectful task, verify the effect as well as the firing.** `prune-worktrees` fired four times
+   in the 2026-08-17→24 window while the worktree count went **7 → 9**. A firing record is not an outcome.
+   Failure modes, all silent:
    - **didn't fire** — app closed (tasks run only while it's open);
    - **deregistered** — absent from the registry entirely. **This proves deregistration, not
      failure**: on 2026-08-13 Alex confirmed all six unregistered directories were deliberate
