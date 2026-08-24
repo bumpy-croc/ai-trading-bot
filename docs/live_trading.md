@@ -168,45 +168,63 @@ atb live-control resume --env production --reason "root cause fixed"
 
 ## Latched conditions are re-announced until cleared (#1095/#1096)
 
-Close-only mode, the manual system halt and `FEATURE_ENTRY_PAUSE` all block new entries until
-a human acts. Each used to announce itself exactly once, at minute zero. On 2026-08-20
-production latched close-only after a stop-loss re-placement failure, paged Slack correctly,
-and then sat halted for four days: nothing re-raised it, and the daily standup's "engine
-alive" check greps `Decision:` log lines, which keep flowing at normal cadence because signal
-generation runs *before* the close-only gate (#1094).
+Close-only mode, the manual system halt (including its fail-closed "state never successfully
+read" case) and `FEATURE_ENTRY_PAUSE` all block new entries until a human acts. Each used to
+announce itself exactly once, at minute zero. On 2026-08-20 production latched close-only
+after a stop-loss re-placement failure, paged Slack correctly, and then sat halted for four
+days: nothing re-raised it, and the daily standup's "engine alive" check greps `Decision:` log
+lines, which keep flowing at normal cadence because signal generation runs *before* the
+close-only gate (#1094).
 
 `LatchedConditionMonitor` (`engines/live/monitoring/latched_condition_monitor.py`) runs once
-per trading-loop iteration, before the data-freshness `continue` paths, and produces two
-things for every condition that is still active:
+per trading-loop iteration, before the data-freshness `continue` paths, and writes **one state
+row per pass** (at most hourly), which is a *positive assertion* about the entry path:
 
-- **A durable heartbeat row** in `system_events` every hour (`alert=false`, severity
-  `warning`, `error_code` one of `CLOSE_ONLY_LATCHED`, `SYSTEM_HALT_LATCHED`,
-  `ENTRY_PAUSE_LATCHED`). The close-only latch is an in-process bool that is never persisted
-  to `system_control_flags`, so these rows are what makes "the bot is currently unable to
-  trade" observable from the database at all. A monitor asserts on them like this:
+| Row | Meaning |
+| --- | --- |
+| `ENTRIES_ENABLED` | The loop ran and found nothing blocking entries. |
+| `CLOSE_ONLY_LATCHED` / `SYSTEM_HALT_LATCHED` / `ENTRY_PAUSE_LATCHED` | The loop ran and found entries blocked; the message carries elapsed time and reason. |
+| `*_LATCH_CLEARED` | The condition resolved (elapsed time in the message). |
+| *no row at all* | The loop thread is not running. This is itself the alarm. |
 
-  ```sql
-  SELECT error_code, message, timestamp
-  FROM system_events
-  WHERE error_code LIKE '%\_LATCHED' AND timestamp > now() - interval '2 hours'
-  ORDER BY timestamp DESC;
-  ```
+One query therefore separates all three cases without any external cross-check:
 
-  Any row returned means entries are blocked right now; the message carries the elapsed time
-  and the recorded reason. A matching `*_LATCH_CLEARED` row records the resolution.
-- **A bounded operator page** (`alert=true`, severity `critical`) at 1h, 4h and 12h after the
-  latch, then once every 24h for as long as it holds — at most three re-pages in the first
-  day and one a day after that (~31 in a month, not ~720). The webhook is delivered on a
-  short-lived daemon thread so a slow POST can never stall the trading loop, and the whole
-  check is fault-isolated: observability never propagates into the loop.
+```sql
+SELECT error_code, message, timestamp
+FROM system_events
+WHERE error_code = 'ENTRIES_ENABLED' OR error_code LIKE '%\_LATCHED'
+ORDER BY timestamp DESC LIMIT 5;
+```
 
-`_enter_close_only_mode(reason=...)` records *why* the latch tripped (reconciliation
-CRITICAL findings, drawdown breach, circuit breaker, DB outage, unconfirmed emergency close,
-ambiguous order submission) so the message four days later still explains itself, long after
-the log line that carried the detail has rotated out of the platform's retention.
+Interpretation: newest row `ENTRIES_ENABLED` and younger than ~2h → healthy; newest row
+`*_LATCHED` → entries are blocked right now; nothing inside ~2h → the loop is dead or the
+engine is down. (A `*_LATCHED` row stays inside the window for up to an hour after a
+`resume_trading()`, so the newest row wins: a later `ENTRIES_ENABLED` or `*_LATCH_CLEARED`
+supersedes it. The stale direction is a spurious FAIL, never a false NOMINAL.)
 
-Entry-pause is only reported when no macro-event window in `config/macro_events.json` covers
-the current time — a deliberate pause during an FOMC window is not a finding.
+Whether entries are blocked is read from `EntryPauseGate.entry_block()` — the same authority
+the entry and scale-in paths gate on — so the monitor cannot report a state the enforcement
+path disagrees with. That includes the fail-closed case where the `system_halt` flag has never
+been read successfully: entries are refused while the flag still reads `active=False`.
+
+On top of the rows, a **bounded operator page** (`alert=true`, severity `critical`) fires at
+1h, 4h and 12h after the latch, then once every 24h for as long as it holds — at most three
+re-pages in the first day and one a day after that (~31 in a month, not ~720). Pages past the
+first day are prefixed `STILL BLOCKED — DAY N` so day four does not read identically to day
+zero. The webhook is delivered on a short-lived daemon thread so a slow POST can never stall
+the trading loop, each condition is evaluated in its own `try`, and the whole check is
+fault-isolated: observability never propagates into the loop.
+
+`_enter_close_only_mode(reason=...)` records *why* the latch tripped (reconciliation CRITICAL
+findings — deduped and capped at three by `_format_findings` — drawdown breach, circuit
+breaker, DB outage, unconfirmed emergency close, ambiguous order submission) so the message
+four days later still explains itself, long after the log line that carried the detail has
+rotated out of the platform's retention. Elapsed time for the manual halt comes from the flag
+row's durable `updated_at`, so a restart cannot re-announce a four-day halt as "45m".
+
+Entry-pause is only reported when the macro-event guard is **enabled** and no window in
+`config/macro_events.json` covers the current time — with the guard disabled no window
+suppresses entries, so none may suppress the finding either.
 
 ## Position management features
 

@@ -4084,8 +4084,7 @@ class PeriodicReconciler:
                 # Pass WHY: the close-only latch keeps this reason for its
                 # re-announcements long after the log line rotates away (#1095).
                 self.on_critical(
-                    "periodic reconciliation CRITICAL: "
-                    + ("; ".join(findings) if findings else "unspecified discrepancy")
+                    "periodic reconciliation CRITICAL: " + self._format_findings(findings)
                 )
             except Exception as e:
                 logger.error("on_critical callback failed: %s", e)

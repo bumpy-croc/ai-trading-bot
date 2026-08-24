@@ -12,32 +12,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **Latched conditions now re-announce themselves until a human clears them** (#1095, #1096;
-  incident #1094). On 2026-08-20 production latched close-only after a stop-loss re-placement
-  failure, paged Slack correctly at minute zero — and then sat halted for four days. Nothing
-  re-raised the alert, nothing tracked whether the "manual review" it demanded ever happened,
-  and the daily standup reported NOMINAL every one of those days because its "engine alive"
-  check greps `Decision:` log lines, which keep flowing at normal cadence: signal generation
-  runs *before* the close-only gate in `entry_coordinator.check_entry_conditions`. A new
-  `LatchedConditionMonitor` (`src/engines/live/monitoring/latched_condition_monitor.py`) runs
-  once per trading-loop iteration and, for close-only, the manual system halt and
-  `FEATURE_ENTRY_PAUSE` (the last only when no `config/macro_events.json` window covers now),
-  emits **a durable `system_events` heartbeat row every hour** while the condition holds
-  (`CLOSE_ONLY_LATCHED` / `SYSTEM_HALT_LATCHED` / `ENTRY_PAUSE_LATCHED`, `alert=false`) plus
-  **a bounded operator page** at 1h, 4h and 12h after the latch, then once per 24h — at most
+- **Latched conditions now re-announce themselves until a human clears them, and the entry
+  state is asserted positively** (#1095, #1096; incident #1094). On 2026-08-20 production
+  latched close-only after a stop-loss re-placement failure, paged Slack correctly at minute
+  zero — and then sat halted for four days. Nothing re-raised the alert, nothing tracked
+  whether the "manual review" it demanded ever happened, and the daily standup reported
+  NOMINAL every one of those days because its "engine alive" check greps `Decision:` log
+  lines, which keep flowing at normal cadence: signal generation runs *before* the close-only
+  gate in `entry_coordinator.check_entry_conditions`. A new `LatchedConditionMonitor`
+  (`src/engines/live/monitoring/latched_condition_monitor.py`) runs once per trading-loop
+  iteration and writes **one `system_events` state row per pass** (at most hourly):
+  `ENTRIES_ENABLED` when nothing is blocking, or `CLOSE_ONLY_LATCHED` /
+  `SYSTEM_HALT_LATCHED` / `ENTRY_PAUSE_LATCHED` when something is, with a `*_LATCH_CLEARED`
+  row on resolution. Because the healthy case writes a row too, the *absence* of rows
+  unambiguously means the loop thread is dead — so a single query separates "trading",
+  "blocked" and "loop dead" with no external cross-check. This is also the detection fix:
+  the close-only latch is an in-process bool never written to `system_control_flags`, so
+  before this there was **no** durable signal a monitor could query. On top of the rows, a
+  bounded operator page fires at 1h, 4h and 12h after the latch, then once per 24h — at most
   three re-pages in the first day and one a day thereafter, so a month-long latch produces
-  ~31 pages rather than ~720. Every message carries elapsed time and the reason
-  ("still active after 3d 4h"), and a `*_LATCH_CLEARED` row records the resolution. The
-  heartbeat rows are the fix for the detection half too: the close-only latch is an
-  in-process bool that is never written to `system_control_flags`, so before this there was
-  **no** durable signal a monitor could query — a `system_events` row an hour old is now the
-  authoritative "entries are blocked right now". `_enter_close_only_mode()` takes an optional
-  `reason`, threaded through from every trip site (reconciliation CRITICAL findings, the
-  drawdown hard cap, the account circuit breaker, prolonged DB outage, unconfirmed emergency
-  closes, ambiguous order submissions), so the message still explains itself days later when
-  the log line that carried the detail has rotated out of the platform's retention. Alert
-  delivery runs on a short-lived daemon thread and the whole check is fault-isolated —
-  re-announcement can neither stall the trading loop nor take it down.
+  ~31 pages rather than ~720; pages past day one are prefixed `STILL BLOCKED — DAY N` so
+  day four does not read identically to day zero. "Are entries blocked?" is read from
+  `EntryPauseGate.entry_block()`, the same authority the entry and scale-in paths gate on
+  (lifted out of the former private `_active_cause`), so the monitor cannot report a state
+  the enforcement path disagrees with — including the fail-closed case where the `system_halt`
+  flag has never been successfully read, which blocks entries while still reading
+  `active=False`. Elapsed time for the manual halt comes from the flag row's durable
+  `updated_at` (mirrored into `SystemHaltState.since`), so a restart cannot re-announce a
+  four-day halt as "45m", and the first observation of any latch writes its row immediately
+  rather than an hour later, so an engine in a restart loop cannot stay blocked while
+  emitting nothing. `_enter_close_only_mode()` takes an optional `reason`, threaded through
+  from every trip site (reconciliation CRITICAL findings — deduped and capped via
+  `_format_findings` — the drawdown hard cap, the account circuit breaker, prolonged DB
+  outage, unconfirmed emergency closes, ambiguous order submissions), so the message still
+  explains itself days later when the log line that carried the detail has rotated out of the
+  platform's retention. Alert delivery runs on a short-lived daemon thread, each condition is
+  evaluated in its own `try`, and the whole check is fault-isolated — re-announcement can
+  neither stall the trading loop nor take it down.
+
 - **Append-only state files no longer conflict on every concurrent append** (#1079;
   near-loss case #1090). `.claude/state/log.md` is written by every agent and the PM,
   so two branches that each record something collided at EOF on nearly every PR —

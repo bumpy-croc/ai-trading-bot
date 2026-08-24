@@ -120,9 +120,11 @@ class SystemHaltEnforcer:
                 # Reason may be amended while halted; keep the mirror fresh
                 # without re-announcing.
                 self._halt.reason = status.reason
+                self._halt.since = status.updated_at
             return
 
         if active:
+            self._halt.since = status.updated_at
             self._activate(status.reason, status.source)
         else:
             self._deactivate()
@@ -154,6 +156,7 @@ class SystemHaltEnforcer:
         """Release the halt and announce that entries are live again."""
         self._halt.active = False
         self._halt.reason = None
+        self._halt.since = None
         try:
             message = "Manual system halt cleared — new entries and scale-ins are enabled again."
             logger.warning("✅ %s", message)
