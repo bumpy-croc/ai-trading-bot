@@ -13,8 +13,9 @@ becomes a diff or gets a written disposition.
 
 ## Items
 
-_(none — cleared by the 2026-08-17 retro. Empty on arrival for the third consecutive window, despite
-2026-08-13 producing at least four agenda-worthy items in one session — including a PM entry that
-explicitly wrote "Candidate LESSONS entry at the next retro" into `log.md` rather than here, and
-which is stranded in unmerged PR #1074. See [D-2026-08-17-01]. The one-line append that populates
-this file costs less than the log entry that substitutes for it.)_
+_(none — cleared by the 2026-08-24 retro. Empty on arrival for the fourth consecutive window. The
+2026-08-17→24 window generated at least four agenda-worthy items that reached this retro only via
+session transcripts: the 08-18 time-exit trace (→ #1083), the 08-20 peak-anchor discrepancy
+(→ #1084), the missed 08-19 standup slot (→ #1085), and the seven-day merge stall (→ #1079). Seven
+standup runs wrote nothing here and nothing to `log.md`. See [D-2026-08-24-01] and LESSONS §2.10 —
+the mechanism is now identified and the task file has been amended to name a layer-2 sink.)_
