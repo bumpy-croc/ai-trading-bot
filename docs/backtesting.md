@@ -211,10 +211,26 @@ command.
 - `ensemble_weighted` mixes the ML strategies and shares the same timeframe expectations.
 - `momentum_leverage` targets high-volatility regimes; prefer shorter lookbacks (≤ 180 days) when comparing against ML baselines.
 
-## Safety limits
+## Safety limits and the drawdown cap (`--drawdown-cap-mode`)
 
-Backtests stop early when max drawdown exceeds 50% to surface unbounded risk profiles. The run prints the stop reason, time, and
-candle index so you can inspect the raw data or adjust risk parameters (`--risk-per-trade`, `--max-drawdown`) before re-running.
+By default (`--drawdown-cap-mode enforce`) a backtest halts the instant drawdown crosses `--max-drawdown` (the ratified
+`portfolio.max_drawdown_pct`, 0.20, unless overridden) — this matches what prod actually does at the cap and is the correct,
+safe mode for any live-representative or promotion backtest. The CLI prints a loud `WARNING: RUN WAS TRUNCATED` banner and the
+results dict carries an explicit `early_stopped: true` marker, plus `early_stop_reason`, `early_stop_date`, and
+`early_stop_candle_index` — check `early_stopped`, not whether `early_stop_reason` happens to be truthy, since that field is
+only meaningful once you already know a stop occurred.
+
+**Truncation used to be silent.** Before #1102, a run whose true drawdown exceeded the cap simply stopped and reported the
+metrics accumulated up to that point, with no error and no marker — so a research backtest characterising a strategy's
+drawdown profile (rather than simulating what prod would actually do) could not distinguish a complete run from a partial
+one. If you are running a **research / characterisation** backtest and want to see the full drawdown profile without
+truncation, pass `--drawdown-cap-mode measure`: the run completes the full requested window, and the results report whether
+and when the cap *would* have been breached (`drawdown_cap_breached`, `drawdown_cap_breach_date`,
+`drawdown_cap_breach_candle_index`) instead of stopping there. **Never use `measure`-mode results to justify a promotion
+decision** — they describe a strategy running past the risk envelope prod actually enforces. Every result also carries
+`drawdown_cap_mode` and `drawdown_cap_threshold` so a truncated run can never be mistaken for a complete one, and the
+experimentation reporter (`src/experiments/reporter.py`) surfaces the same warnings on suite rows, including a mismatch
+warning when a variant was truncated and its baseline was not (or vice versa) — exactly the confusion that motivated #1102.
 
 ## Best practices
 
