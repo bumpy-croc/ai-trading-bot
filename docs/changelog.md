@@ -12,6 +12,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Exchange order rejections are now durably diagnosable** (#1094). Prod latched
+  close-only on 2026-08-20 after five consecutive stop-loss placement failures and
+  the reason was unrecoverable: `BinanceProvider.place_stop_loss_order` caught every
+  exception, wrote one `logger.error(...)` and returned `None`, so the Binance error
+  code reached neither `system_events` nor `reconciliation_audit_events` — the
+  reconciler recorded only the generic "exchange returned no order id", and Railway
+  stdout aged out hours later. A safety-critical failure was therefore permanently
+  undiagnosable. Order helpers now record an `ExchangeOrderError` (exchange error
+  code, message, error type, and the rejected order parameters — symbol, side,
+  quantity, stopPrice, price, timeInForce, plus the tick/step filters and free base
+  balance that shaped them) on every failure path of `place_stop_loss_order`,
+  `place_order`, `cancel_order` and `cancel_all_orders`. The live engine wires a
+  sink so each lands as a `system_events` row (`STOP_LOSS_PLACEMENT_FAILED` at
+  CRITICAL, `ORDER_PLACEMENT_FAILED` at error) with the full payload in `details`,
+  and the reconciler's unprotected-position audit row now names the exchange code
+  instead of "no order id". Codes with a documented root cause (51077 LOT_SIZE
+  stepSize precision, -1111 PRICE_FILTER tickSize precision, -2010 insufficient
+  balance) are annotated in the event so the next reader does not re-derive them.
+  Observability only: every helper returns exactly what it returned before —
+  `None`/`False` on failure, `ValueError` on a definitive reject — so the close-only
+  latch behaviour is unchanged, and both the recording and the sink are fault-isolated
+  (a failed durable write logs at WARNING and never reaches the trading path).
+  Credentials, signatures and request headers are never recorded.
 - **The primary checkout is now write-protected against agent mutation** (#1082;
   filesystem sibling of #1070). An agent shell's cwd is silently reset to the
   primary checkout mid-task, after which every *relative* path resolves there

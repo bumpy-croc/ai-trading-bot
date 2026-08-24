@@ -4173,6 +4173,26 @@ class PeriodicReconciler:
             alert=True,
         )
 
+    def _last_exchange_order_error(self, symbol: str) -> str | None:
+        """The exchange's own reason for its most recent order failure on ``symbol``.
+
+        The SL helpers return ``None`` on failure, so the audit row previously
+        said only "exchange returned no order id" (#1094). The provider now
+        records the rejection; surface it here so the audit trail names the
+        Binance code. Best-effort — never raises.
+        """
+        try:
+            error = getattr(self.exchange, "last_order_error", None)
+            if error is None or getattr(error, "symbol", None) != symbol:
+                return None
+            code = error.error_code if error.error_code is not None else "unknown"
+            reason = f"exchange code={code}: {error.error_message}"
+            known = error.known_cause
+            return f"{reason} [{known}]" if known else reason
+        except Exception as e:  # pragma: no cover - defensive; audit must not break
+            logger.warning("Failed to read last exchange order error for %s: %s", symbol, e)
+            return None
+
     def _audit_unprotected(self, position: Any, cause: str) -> str:
         """Persist a CRITICAL audit row for a position left without a stop-loss and
         return a short operator-facing detail string.
@@ -4185,6 +4205,9 @@ class PeriodicReconciler:
         """
         symbol = getattr(position, "symbol", "unknown")
         detail = f"{symbol} unprotected — SL re-placement failed ({cause})"
+        exchange_reason = self._last_exchange_order_error(symbol)
+        if exchange_reason:
+            detail = f"{detail}; {exchange_reason}"
         try:
             self.db_manager.log_audit_event(
                 session_id=self.session_id,

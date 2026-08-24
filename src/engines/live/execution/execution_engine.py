@@ -24,6 +24,7 @@ from src.config.constants import (
     DEFAULT_SLIPPAGE_RATE,
 )
 from src.data_providers.exchange_interface import (
+    ExchangeOrderError,
     OrderSide,
     OrderStatus,
     OrderType,
@@ -195,6 +196,33 @@ class LiveExecutionEngine:
         except Exception as e:  # pragma: no cover - defensive; never break execution
             logger.warning("Failed to log execution event %s: %s", error_code, e)
 
+    def attach_exchange_error_sink(self, exchange: Any) -> None:
+        """Route exchange-layer order failures into ``system_events``.
+
+        Order helpers return ``None`` on failure, so the exchange's own reason
+        (Binance error code + rejected parameters) never reached the database —
+        it lived only in application logs until they aged out (#1094). Wiring is
+        duck-typed and optional: an exchange without the hook is left untouched.
+        """
+        if exchange is None or not hasattr(exchange, "order_error_sink"):
+            return
+        exchange.order_error_sink = self._record_exchange_order_error
+
+    def _record_exchange_order_error(self, error: ExchangeOrderError) -> None:
+        """Persist one exchange order failure with its code and parameters.
+
+        A stop-loss failure leaves a position unprotected, so it is recorded at
+        CRITICAL under its own ``error_code``; other order failures are errors.
+        """
+        is_stop_loss = "stop_loss" in error.operation
+        self._log_execution_event(
+            EventType.ERROR,
+            error.summary(),
+            "STOP_LOSS_PLACEMENT_FAILED" if is_stop_loss else "ORDER_PLACEMENT_FAILED",
+            severity="critical" if is_stop_loss else "error",
+            details=error.to_details(),
+        )
+
     def _record_short_guard_rejection(
         self,
         symbol: str,
@@ -261,9 +289,9 @@ class LiveExecutionEngine:
                 "free_base_balance": float(free_balance) if free_balance is not None else None,
                 "free_value_usd": float(free_value_usd) if free_value_usd is not None else None,
                 "threshold_usd": SHORT_GUARD_DUST_THRESHOLD_USD,
-                "signal": {k: float(v) for k, v in signal_context.items()}
-                if signal_context
-                else None,
+                "signal": (
+                    {k: float(v) for k, v in signal_context.items()} if signal_context else None
+                ),
                 "open_positions": self._open_position_snapshot(),
                 "episode": {
                     "started_at": episode_started_at.isoformat(),

@@ -4316,6 +4316,47 @@ class TestReconcileCycleSeverityEvent:
         assert kwargs["field"] == "stop_loss_order_id"
         assert kwargs["severity"] == Severity.CRITICAL.value
 
+    def test_audit_unprotected_names_the_exchange_reason(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """The audit row carries the exchange's own reject code, not just
+        "exchange returned no order id" (#1094)."""
+        from src.data_providers.exchange_interface import ExchangeOrderError
+
+        mock_exchange.last_order_error = ExchangeOrderError(
+            operation="place_stop_loss_order",
+            symbol="BTCUSDT",
+            error_message="Precision is over the maximum defined for this asset.",
+            error_code=-1111,
+        )
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, MagicMock())
+        detail = pr._audit_unprotected(
+            MockPosition(db_position_id=99, stop_loss_order_id="sl_x"),
+            "exchange returned no order id",
+        )
+        assert "code=-1111" in detail
+        assert "PRICE_FILTER" in detail
+        assert "code=-1111" in mock_db.log_audit_event.call_args.kwargs["reason"]
+
+    def test_audit_unprotected_ignores_error_for_another_symbol(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """A stale error from a different symbol must not be attributed here."""
+        from src.data_providers.exchange_interface import ExchangeOrderError
+
+        mock_exchange.last_order_error = ExchangeOrderError(
+            operation="place_stop_loss_order",
+            symbol="ETHUSDT",
+            error_message="rejected",
+            error_code=-2010,
+        )
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, MagicMock())
+        detail = pr._audit_unprotected(
+            MockPosition(db_position_id=99, stop_loss_order_id="sl_x"),
+            "exchange returned no order id",
+        )
+        assert "code=" not in detail
+
 
 class TestOrphanedBorrowSweepSurfacedInCycle:
     """The periodic cycle runs the orphaned-borrow sweep BEFORE its flat early-return

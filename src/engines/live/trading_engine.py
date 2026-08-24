@@ -958,6 +958,9 @@ class LiveTradingEngine:
         self.live_execution_engine.position_snapshot_provider = lambda: list(
             self.live_position_tracker.positions.values()
         )
+        # Exchange order rejections (code + rejected params) land in
+        # system_events instead of dying with the application log (#1094).
+        self.live_execution_engine.attach_exchange_error_sink(self.exchange_interface)
 
     def _init_entry_handler(self, entry_handler: LiveEntryHandler | None) -> ExposureGovernor:
         """Build the entry handler and its exposure/macro/circuit-breaker gates."""
