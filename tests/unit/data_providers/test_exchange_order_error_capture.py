@@ -260,6 +260,29 @@ class TestOrderAndCancelErrorCapture:
 
     @patch("src.data_providers.binance_provider.Client")
     @patch("src.data_providers.binance_provider.get_config")
+    def test_unavailable_client_is_recorded(self, mock_config, mock_client_class):
+        """A client that failed to init at boot must not be a silent None."""
+        client = Mock()
+        provider = _binance_provider(mock_client_class, mock_config, client)
+        sink = _RecordingSink()
+        provider.order_error_sink = sink
+        provider._client = None
+
+        assert (
+            provider.place_order(
+                symbol="BTCUSDT",
+                side=OrderSide.BUY,
+                order_type=OrderType.MARKET,
+                quantity=0.1,
+            )
+            is None
+        )
+        assert sink.errors[0].operation == "place_order"
+        assert sink.errors[0].error_type == "ClientUnavailable"
+        assert sink.errors[0].params["symbol"] == "BTCUSDT"
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
     def test_cancel_failure_records_and_returns_false(self, mock_config, mock_client_class):
         client = Mock()
         client.cancel_order.side_effect = Exception("gateway error")

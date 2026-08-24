@@ -27,7 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sink so each lands as a `system_events` row (`STOP_LOSS_PLACEMENT_FAILED` at
   CRITICAL, `ORDER_PLACEMENT_FAILED` at error) with the full payload in `details`,
   and the reconciler's unprotected-position audit row now names the exchange code
-  instead of "no order id". Codes with a documented root cause (51077 LOT_SIZE
+  instead of "no order id" — but only when the record provably belongs to that
+  position's stop-loss attempt in the cycle in flight (matched on symbol AND
+  operation AND an age below the reconcile interval), because ``last_order_error``
+  is a single slot on the shared exchange instance and a confidently wrong pointer
+  in an incident artifact is worse than the honest generic string. Codes with a documented root cause (51077 LOT_SIZE
   stepSize precision, -1111 PRICE_FILTER tickSize precision, -2010 insufficient
   balance) are annotated in the event so the next reader does not re-derive them.
   Observability only: every helper returns exactly what it returned before —

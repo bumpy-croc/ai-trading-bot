@@ -53,6 +53,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# How recent an exchange order error must be to be attributed to the stop-loss
+# attempt of the cycle currently reporting a position as unprotected. Held below
+# DEFAULT_RECONCILIATION_INTERVAL_SECONDS so a record can only ever come from the
+# cycle in flight, never from a previous one (#1094).
+_EXCHANGE_ERROR_ATTRIBUTION_WINDOW_S = 90.0
+
 
 def _emit_event(
     on_event: Any,
@@ -4179,11 +4185,23 @@ class PeriodicReconciler:
         The SL helpers return ``None`` on failure, so the audit row previously
         said only "exchange returned no order id" (#1094). The provider now
         records the rejection; surface it here so the audit trail names the
-        Binance code. Best-effort — never raises.
+        Binance code — but only when the record provably belongs to THIS
+        position's stop-loss attempt in THIS cycle. Best-effort — never raises.
         """
         try:
             error = getattr(self.exchange, "last_order_error", None)
             if error is None or getattr(error, "symbol", None) != symbol:
+                return None
+            # One slot on a shared exchange instance, overwritten by any order
+            # failure on any path and never cleared on success. Without these two
+            # filters an entry rejection from hours ago, or an error predating a
+            # cause that never called the exchange at all, would be reported as
+            # THE reason this position is unprotected. A confidently wrong pointer
+            # in an incident artifact is worse than the honest generic string.
+            if not str(getattr(error, "operation", "")).startswith("place_stop_loss"):
+                return None
+            age_seconds = (datetime.now(UTC) - error.occurred_at).total_seconds()
+            if age_seconds > _EXCHANGE_ERROR_ATTRIBUTION_WINDOW_S:
                 return None
             code = error.error_code if error.error_code is not None else "unknown"
             reason = f"exchange code={code}: {error.error_message}"

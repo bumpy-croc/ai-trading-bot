@@ -1600,6 +1600,13 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - cannot place order")
+            self._record_order_error(
+                "place_order",
+                symbol,
+                error_message="Binance client unavailable - order not placed",
+                error_type="ClientUnavailable",
+                params=error_params,
+            )
             return None
 
         try:

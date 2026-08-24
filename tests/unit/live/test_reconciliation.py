@@ -4357,6 +4357,55 @@ class TestReconcileCycleSeverityEvent:
         )
         assert "code=" not in detail
 
+    def test_audit_unprotected_ignores_error_from_another_operation(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """An ENTRY rejection is not the reason the stop-loss is missing.
+
+        ``last_order_error`` is one slot on the shared exchange, so a -2010 on a
+        market buy would otherwise be reported as the SL failure cause — and the
+        "no stop price or SL unsupported" cause never calls the exchange at all.
+        """
+        from src.data_providers.exchange_interface import ExchangeOrderError
+
+        mock_exchange.last_order_error = ExchangeOrderError(
+            operation="place_order",
+            symbol="BTCUSDT",
+            error_message="Account has insufficient balance for requested action.",
+            error_code=-2010,
+        )
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, MagicMock())
+        detail = pr._audit_unprotected(
+            MockPosition(db_position_id=99, stop_loss_order_id="sl_x"),
+            "no stop price or SL unsupported",
+        )
+        assert "code=" not in detail
+
+    def test_audit_unprotected_ignores_stale_error(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """An error older than the attribution window belongs to an earlier cycle."""
+        from datetime import UTC, datetime, timedelta
+
+        from src.data_providers.exchange_interface import ExchangeOrderError
+        from src.engines.live.reconciliation import _EXCHANGE_ERROR_ATTRIBUTION_WINDOW_S
+
+        assert _EXCHANGE_ERROR_ATTRIBUTION_WINDOW_S < 120  # under the reconcile interval
+        mock_exchange.last_order_error = ExchangeOrderError(
+            operation="place_stop_loss_order",
+            symbol="BTCUSDT",
+            error_message="Precision is over the maximum defined for this asset.",
+            error_code=-1111,
+            occurred_at=datetime.now(UTC)
+            - timedelta(seconds=_EXCHANGE_ERROR_ATTRIBUTION_WINDOW_S + 5),
+        )
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, MagicMock())
+        detail = pr._audit_unprotected(
+            MockPosition(db_position_id=99, stop_loss_order_id="sl_x"),
+            "exchange returned no order id",
+        )
+        assert "code=" not in detail
+
 
 class TestOrphanedBorrowSweepSurfacedInCycle:
     """The periodic cycle runs the orphaned-borrow sweep BEFORE its flat early-return

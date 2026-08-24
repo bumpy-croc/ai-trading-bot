@@ -213,6 +213,12 @@ class LiveExecutionEngine:
 
         A stop-loss failure leaves a position unprotected, so it is recorded at
         CRITICAL under its own ``error_code``; other order failures are errors.
+
+        Forensic only: ``_log_execution_event`` writes straight to the DB and
+        never pages, so this CRITICAL row alerts nobody by design. Escalation for
+        an unprotected position is the reconciler's — ``_audit_unprotected`` ->
+        ``on_critical`` -> close-only. Do not add paging here without moving that
+        ownership too.
         """
         is_stop_loss = "stop_loss" in error.operation
         self._log_execution_event(
