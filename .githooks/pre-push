@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# Pre-push hook: run the fast unit tests before allowing a push.
+#
+# To skip deliberately, use git's own escape hatch:  git push --no-verify
+#
+# GH #1077: the previous version of this hook could not fail. It piped pytest into `tail`
+# and read `$?` (which is `tail`'s status), and it looked for `.venv/bin/python` relative to
+# the cwd, so from a linked worktree it fell through to a `python` that does not exist. Every
+# push printed "All fast tests passed" having run nothing. The invariants below exist because
+# a gate that cannot fail is worse than no gate: it prints green where there is no evidence.
+#
+# Invariants:
+#   1. pytest's own exit status decides the push -- never a pipeline's last stage.
+#   2. Paths resolve from the git checkout being pushed, never from the cwd.
+#   3. If the tests cannot be RUN, the push FAILS. "Unverifiable" is not "passed".
+
+set -uo pipefail
+
+fail() {
+    echo "" >&2
+    echo "pre-push: $1" >&2
+    echo "pre-push: push aborted. Use 'git push --no-verify' to skip this hook deliberately." >&2
+    exit 1
+}
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || REPO_ROOT=""
+[ -n "$REPO_ROOT" ] || fail "could not resolve the repository root (git rev-parse --show-toplevel failed)."
+cd "$REPO_ROOT" || fail "could not enter repository root '$REPO_ROOT'."
+
+# Linked worktrees have no .venv of their own; the interpreter lives in the primary checkout,
+# which is the parent of the shared git common dir.
+COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+case "$COMMON_DIR" in
+    "") PRIMARY_ROOT="" ;;
+    /*) PRIMARY_ROOT="$(dirname "$COMMON_DIR")" ;;
+    *)  PRIMARY_ROOT="$(dirname "$REPO_ROOT/$COMMON_DIR")" ;;
+esac
+
+# An interpreter only counts if it can actually run THIS repo's suite -- otherwise the hook
+# would "run" and report nothing, which is the defect it exists to prevent. `import pytest`
+# alone is too weak: the $VIRTUAL_ENV and PATH candidates are exactly the ones likely to be
+# another project's venv, where pytest exists but the repo's deps do not and every collection
+# dies on `No module named numpy`. numpy/pandas/xdist are the irreducible core of the suite
+# (xdist because the invocation below is parallel).
+usable() {
+    [ -n "${1:-}" ] && [ -x "$1" ] &&
+        "$1" -c "import pytest, numpy, pandas, xdist" >/dev/null 2>&1
+}
+
+PYTHON=""
+for candidate in \
+    "${ATB_PREPUSH_PYTHON:-}" \
+    "$REPO_ROOT/.venv/bin/python" \
+    "${PRIMARY_ROOT:+$PRIMARY_ROOT/.venv/bin/python}" \
+    "${VIRTUAL_ENV:+$VIRTUAL_ENV/bin/python}" \
+    "$(command -v python3 2>/dev/null || true)" \
+    "$(command -v python 2>/dev/null || true)"
+do
+    if usable "$candidate"; then
+        PYTHON="$candidate"
+        break
+    fi
+done
+
+[ -n "$PYTHON" ] || fail "no Python interpreter able to run this suite (pytest + numpy + pandas + xdist) was found (looked in \$ATB_PREPUSH_PYTHON, $REPO_ROOT/.venv, ${PRIMARY_ROOT:-<no primary>}/.venv, \$VIRTUAL_ENV, PATH). Run 'make deps-dev', or set ATB_PREPUSH_PYTHON."
+
+echo "pre-push: running fast unit tests with $PYTHON"
+
+# Pin src/cli to THIS checkout (GH #1070 source-root guard / worktree shim escape hatch), so a
+# push from a worktree tests the worktree's code and not the venv's install-time checkout.
+export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+
+# No pipe: pytest's status must reach $? unfiltered. (`set -o pipefail` plus ${PIPESTATUS[0]}
+# would work too, but not piping at all leaves nothing to get wrong.) No -p no:randomly:
+# pytest.ini's addopts pass --randomly-seed, which is unparseable once the plugin is
+# disabled -- the hook would abort with a usage error instead of running the suite.
+# No -x: combined with xdist it ends the session via Interrupted, so a plain test failure
+# exits 2 instead of 1 and the diagnosis below cannot tell it from a real interruption.
+# pytest.ini's --maxfail=5 already bounds the output.
+# -n 4, not -n auto: measured 48s vs 76s serial, while `auto` (one worker per core) came in
+# at 76s -- per-worker import overhead and CPU contention eat the gain. Same value, and the
+# same reason, as tests/run_tests.py.
+"$PYTHON" -m pytest tests/unit/ -q --timeout=30 -m "fast" -n 4 --dist=loadgroup
+STATUS=$?
+
+# pytest's exit codes are not interchangeable. Reporting "tests failed" for a usage or
+# collection error is the same misdiagnosis that hid the original bug: it sends the developer
+# hunting a test that is fine, when the real problem is the environment.
+case "$STATUS" in
+    0) ;;
+    1) fail "fast unit tests failed." ;;
+    2) fail "fast unit tests failed, or the run was interrupted (pytest exit 2 -- under -n this is also what hitting --maxfail looks like)." ;;
+    5) fail "pytest collected no tests (exit 5). The 'fast' suite should never be empty; this points at a broken checkout or pytest config, not at your changes." ;;
+    *) fail "pytest could not run the tests (exit $STATUS: usage, collection or internal error -- NOT a test failure). '$PYTHON' is probably missing this repo's dependencies: run 'make deps-dev', or point ATB_PREPUSH_PYTHON at a working interpreter." ;;
+esac
+
+echo "pre-push: fast unit tests passed. Pushing..."
+exit 0
