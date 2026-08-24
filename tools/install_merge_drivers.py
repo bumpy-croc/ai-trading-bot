@@ -45,10 +45,35 @@ from pathlib import Path
 #   mode degrades to the status quo rather than to a bad merge.
 #
 # Stdlib-only, so bare `python3` suffices (and, unlike `python`, it exists on macOS).
+SCRIPT = "tools/merge_append_only.py"
+
+
+def driver_command(script: str = SCRIPT) -> str:
+    """The command git runs to merge an append-only file.
+
+    Guarded, because the unguarded form has a silent-loss failure mode. When a merge driver
+    exits non-zero git records a conflict and stages ``UU`` — but it does **not** write
+    markers itself; that is the driver's job. So if the command never runs (script absent on
+    an older branch, no ``python3``), the working-tree file is left as *ours' content
+    verbatim, with no markers* — indistinguishable from a clean, complete merge. Anyone
+    resolving with ``git add`` would drop theirs' entry entirely: exactly the silent drop this
+    driver exists to prevent, and reachable precisely because the path is relative.
+
+    The guard falls through to ``git merge-file``, which writes real markers, so an absent
+    driver degrades to git's ordinary behaviour instead. Crashes *inside* the script are
+    handled by the script itself, which writes markers before exiting non-zero.
+    """
+    return (
+        f'if [ -f "{script}" ] && command -v python3 >/dev/null 2>&1; '
+        f'then python3 "{script}" %O %A %B %L %P; '
+        f"else git merge-file --marker-size=%L -L ours -L base -L theirs %A %O %B; fi"
+    )
+
+
 DRIVERS: dict[str, dict[str, str]] = {
     "append-only": {
         "name": "Union merge for append-only records (keeps both sides, chronological)",
-        "driver": "python3 tools/merge_append_only.py %O %A %B %L %P",
+        "driver": driver_command(),
     },
 }
 

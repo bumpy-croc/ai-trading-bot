@@ -46,18 +46,34 @@ def repo(tmp_path: Path) -> Path:
     return repo
 
 
-def register(repo: Path) -> None:
-    """Register the driver the way `make merge-drivers` does, but with an absolute path.
+def _driver_module():
+    sys.path.insert(0, str(TOOLS))
+    try:
+        import merge_append_only
 
-    The shipped registration is relative (it must follow the worktree); these throwaway repos
-    have no `tools/`, so point at the real script.
+        return merge_append_only
+    finally:
+        sys.path.pop(0)
+
+
+def installer():
+    sys.path.insert(0, str(TOOLS))
+    try:
+        import install_merge_drivers
+
+        return install_merge_drivers
+    finally:
+        sys.path.pop(0)
+
+
+def register(repo: Path, script: Path = DRIVER) -> None:
+    """Register the *shipped* command shape, with an absolute script path.
+
+    The real registration is relative so it follows the worktree; these throwaway repos have
+    no `tools/`, so the path is absolutised — but the surrounding guard is the shipped one,
+    so every test below exercises what actually ships.
     """
-    git(
-        repo,
-        "config",
-        "merge.append-only.driver",
-        f"{sys.executable} {DRIVER} %O %A %B %L %P",
-    )
+    git(repo, "config", "merge.append-only.driver", installer().driver_command(str(script)))
     git(repo, "config", "merge.append-only.name", "test")
 
 
@@ -342,3 +358,127 @@ class TestRepositoryContent:
     def test_changelog_is_not_union_merged(self) -> None:
         """Explicitly pinned: it is edited in place, so it must keep conflicting."""
         assert "docs/changelog.md" not in self._declared_in_gitattributes()
+
+
+class TestContentLossRegressions:
+    """Four reproduced silent-loss paths, all previously exiting 0 (PR #1098 review)."""
+
+    def test_a_quoted_header_inside_a_body_does_not_split_the_entry(self, repo: Path) -> None:
+        """The charter encourages entries that quote an earlier one, so this is normal usage.
+
+        Splitting on it hoisted a fabricated entry above the real one and truncated the real
+        entry mid-sentence.
+        """
+        register(repo)
+        seed(repo)
+        quoting = (
+            "## 2026-08-20 10:00 · note · ours\n"
+            "Corrects the earlier entry:\n"
+            "## 2026-02-01 00:00 · note · old\n"
+            "end of ours.\n\n"
+        )
+        branch_commit(repo, "ours", LOG_PATH, PREAMBLE + BASE_ENTRY + quoting)
+        branch_commit(repo, "theirs", LOG_PATH, PREAMBLE + BASE_ENTRY + THEIRS_ENTRY)
+        git(repo, "checkout", "-q", "ours")
+        merged = git(repo, "merge", "theirs", "-m", "m", check=False)
+
+        text = (repo / LOG_PATH).read_text()
+        if merged.returncode == 0:
+            assert quoting in text, "the quoted entry was split and reordered"
+        assert text.index("Corrects the earlier entry:") < text.index("end of ours.")
+        assert "Theirs appended this." in text
+
+    def test_missing_driver_script_yields_markers_not_ours_only(self, repo: Path) -> None:
+        """A linked worktree on a branch predating the driver must not silently drop theirs.
+
+        git reports CONFLICT either way, but with a bare command the working-tree file is
+        ours' content verbatim with no markers — indistinguishable from a clean merge, so
+        `git add` drops theirs' entry.
+        """
+        register(repo, script=repo / "does" / "not" / "exist.py")
+        merged = _two_appends(repo)
+
+        assert merged.returncode != 0
+        text = (repo / LOG_PATH).read_text()
+        assert "<<<<<<<" in text, "a marker-free ours-only file reads as a complete merge"
+        assert "Theirs appended this." in text, "theirs' entry must be recoverable"
+
+    def test_block_without_a_trailing_newline_does_not_glue_onto_the_next(self, repo: Path) -> None:
+        """`Ours body.## 2026-08-25 ...` destroys theirs' heading, in the file and next merge."""
+        register(repo)
+        seed(repo)
+        # Ours sorts FIRST, so it is not the final block and must be separated from theirs'.
+        no_newline = "## 2026-08-02 10:00 · note · ours\nOurs body."  # no trailing newline
+        earlier = "## 2026-08-25 12:00 · note · theirs\nTheirs body.\n\n"
+        branch_commit(repo, "ours", LOG_PATH, PREAMBLE + BASE_ENTRY + no_newline)
+        branch_commit(repo, "theirs", LOG_PATH, PREAMBLE + BASE_ENTRY + earlier)
+        git(repo, "checkout", "-q", "ours")
+        merged = git(repo, "merge", "theirs", "-m", "m", check=False)
+
+        if merged.returncode == 0:
+            text = (repo / LOG_PATH).read_text()
+            assert "Ours body.## " not in text, "theirs' heading was destroyed"
+            assert "\n\n## 2026-08-25" in text
+
+    def test_first_line_edit_on_both_sides_conflicts(self, repo: Path) -> None:
+        """First-line identity made an edit read as delete-old + add-new, keeping BOTH."""
+        register(repo)
+        seed(repo)
+        branch_commit(
+            repo,
+            "ours",
+            LOG_PATH,
+            PREAMBLE + BASE_ENTRY.replace("· base", "· OURS-EDIT"),
+        )
+        branch_commit(
+            repo,
+            "theirs",
+            LOG_PATH,
+            PREAMBLE + BASE_ENTRY.replace("· base", "· THEIRS-EDIT"),
+        )
+        git(repo, "checkout", "-q", "ours")
+        merged = git(repo, "merge", "theirs", "-m", "m", check=False)
+
+        assert merged.returncode != 0, "both sides editing one entry must conflict"
+        assert (repo / LOG_PATH).read_text().count("The ancestor entry.") == 1
+
+    def test_first_line_edit_racing_a_clear_conflicts(self, repo: Path) -> None:
+        """Otherwise the edited item silently survives, partially undoing the retro's clear."""
+        register(repo)
+        seed(repo)
+        branch_commit(repo, "clear", LOG_PATH, PREAMBLE)
+        branch_commit(
+            repo,
+            "editor",
+            LOG_PATH,
+            PREAMBLE + BASE_ENTRY.replace("· base", "· REWORDED"),
+        )
+        git(repo, "checkout", "-q", "clear")
+        merged = git(repo, "merge", "editor", "-m", "m", check=False)
+
+        if merged.returncode == 0:
+            assert (
+                "The ancestor entry." not in (repo / LOG_PATH).read_text()
+            ), "an edited entry silently survived a deliberate clear"
+
+    def test_a_crash_inside_the_driver_still_writes_markers(self, tmp_path: Path) -> None:
+        """An exception must not leave %A as ours-only, which reads as a complete merge."""
+        driver = _driver_module()
+        ancestor = tmp_path / "base"
+        ours = tmp_path / "ours"
+        theirs = tmp_path / "theirs"
+        ancestor.write_text(PREAMBLE + BASE_ENTRY)
+        ours.write_text(PREAMBLE + BASE_ENTRY + OURS_ENTRY)
+        theirs.write_text(PREAMBLE + BASE_ENTRY + THEIRS_ENTRY)
+
+        original = driver.merge
+        driver.merge = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        try:
+            code = driver.main([str(ancestor), str(ours), str(theirs), "7", LOG_PATH])
+        finally:
+            driver.merge = original
+
+        assert code != 0
+        text = ours.read_text()
+        assert "<<<<<<<" in text
+        assert "Theirs appended this." in text, "theirs' entry must survive a driver crash"

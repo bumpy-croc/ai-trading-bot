@@ -162,9 +162,14 @@ drop an entry from a record whose whole point is that entries are never dropped 
 
 `.gitattributes` maps those paths to a custom driver, `tools/merge_append_only.py`:
 
-- it splits each side into **entries** (an H2 heading in `log.md`, a top-level bullet in
-  `AGENDA.md`) and runs git's own three-way merge over them, so nothing on either side is
-  dropped and the common ancestor is never duplicated;
+- it splits each side into **entries** and runs git's own three-way merge over them, so
+  nothing on either side is dropped and the common ancestor is never duplicated. An entry
+  starts at a marker (an H2 heading in `log.md`, a top-level bullet in `AGENDA.md`) that
+  *also* carries a date *and* is preceded by a blank line. All three conditions are needed:
+  entries are encouraged to quote an earlier entry's header, and `log.md` bodies routinely
+  carry column-0 markup, so splitting on the marker alone would cut an entry in half. A line
+  that fails any condition stays inside its entry, which at worst makes that entry look
+  edited — a conflict, never a silent split;
 - concurrent **appends** are all kept, de-duplicated, sorted by the timestamp in each entry's
   first line when every entry in the region carries one;
 - **deletions are honoured**: the retro clearing `AGENDA.md` still clears it, while an item a
@@ -173,6 +178,16 @@ drop an entry from a record whose whole point is that entries are never dropped 
   two different bodies is an edit, not two appends: it stops the merge with real markers, as
   does an edit racing a deletion. This is deliberately *not* git's built-in `union` driver,
   which cannot tell the two apart and would ship both halves of a rewrite.
+
+  Because identity *is* the first line, editing that line would otherwise read as
+  delete-old-add-new and slip past those checks. The driver therefore also pairs a vanished
+  entry with an arrived one by **body** similarity and conflicts on the pair. **Residual
+  carve-out, stated plainly:** an entry whose first line *and* body are both rewritten
+  substantially, or a single-line entry whose only line is edited, is still indistinguishable
+  from a delete plus an unrelated append and will merge as one. Bodies are compared rather
+  than whole entries because whole-entry comparison cannot separate the cases — on real data
+  unrelated entries score 0.66 against 0.89 for a genuine edit, while by body the same cases
+  are 0.38 against 1.00.
 
 ### Which files qualify
 
@@ -216,10 +231,19 @@ it tautologically. What CI does assert is repository *content* — a unit test r
 one of them is silently inert.
 
 The symptom of an unregistered driver is exactly the old behaviour — a conflict in `log.md` on
-an ordinary append. If you get one, run `make merge-drivers-check` before resolving by hand.
-Every other failure mode degrades the same way: a missing `python3`, or a worktree on a branch
-that predates the driver, makes git fall back to ordinary conflict markers rather than to a bad
-merge.
+an ordinary append, with ordinary markers. If you get one, run `make merge-drivers-check`
+before resolving by hand.
+
+A driver that is registered but cannot *run* is more dangerous, and the registration is shaped
+around it. When a merge driver exits non-zero git records a conflict and stages `UU`, but git
+does **not** write the markers — that is the driver's job. So a command that never runs leaves
+the working-tree file as **ours' content verbatim, with no markers**, which is indistinguishable
+from a clean, complete merge; resolving it with `git add` would drop theirs' entry silently.
+That is reachable precisely because the path is relative (a linked worktree on a branch
+predating the driver has no such script). The registered command is therefore guarded — it
+tests for the script and for `python3` and otherwise falls through to `git merge-file`, which
+does write markers — and the script wraps itself so that an internal crash writes markers
+before exiting. Both paths are covered by tests.
 
 ## Strategy versioning
 

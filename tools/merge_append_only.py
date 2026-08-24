@@ -30,6 +30,12 @@ is an **edit**, not two appends:
   built-in ``union``, which cannot tell an append from an edit and would silently ship both
   halves of a rewrite.
 
+Because identity *is* the first line, an edit to that line would otherwise present as a
+delete plus an unrelated add. A vanished entry and an arrived one are therefore also paired by
+**body** similarity, and the pair conflicts. Residual carve-out, stated rather than hidden: an
+entry whose first line and body are both rewritten substantially, or a single-line entry whose
+only line changes, remains indistinguishable from a delete plus an append and merges as one.
+
 ## Which files qualify
 
 Only the paths in ``APPEND_ONLY_PATHS`` below. The driver is handed the pathname as ``%P`` and
@@ -53,9 +59,14 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
 
 DRIVER_NAME = "append-only"
+
+# Body-similarity above which a vanished and an arrived entry are judged to be one edit.
+# Chosen with a wide margin: measured must-conflict cases score 1.00, unrelated ones <= 0.38.
+_EDIT_SIMILARITY = 0.8
 
 
 @dataclass(frozen=True)
@@ -108,19 +119,46 @@ def rule_for(pathname: str) -> BlockRule | None:
     return APPEND_ONLY_PATHS.get(normalized)
 
 
+def starts_entry(line: str, previous: str | None, rule: BlockRule) -> bool:
+    """Whether ``line`` opens a new entry, given the line before it.
+
+    Three conditions, all needed. The marker (``## ``/``- ``) alone is not enough: entries are
+    encouraged to *quote* an earlier entry's header, and `log.md` bodies routinely carry
+    column-0 markup (107 column-0 ``- `` bullets sit inside bodies today). Splitting on a
+    quoted header hoisted a fabricated entry above the real one and truncated the real one
+    mid-sentence, so the shape test is deliberately narrow:
+
+    * the marker matches;
+    * the line carries a date, which every real header in both files does (95/95 in `log.md`);
+    * it is preceded by a blank line or by nothing, which is likewise true of every real
+      header, while a quoted one sits mid-paragraph.
+
+    A header that fails any of these folds into the preceding entry, which makes that entry
+    look *edited* — a conflict, never a silent split.
+    """
+    if not rule.start.match(line) or not _DATE.search(line):
+        return False
+    return previous is None or not previous.strip()
+
+
 def split_blocks(text: str, rule: BlockRule) -> list[str]:
     """Cut ``text`` into blocks, preserving every byte: ``"".join(result) == text``."""
     lines = text.splitlines(keepends=True)
     blocks: list[str] = []
     current: list[str] = []
     for line in lines:
-        if rule.start.match(line) and current:
+        if current and starts_entry(line, current[-1], rule):
             blocks.append("".join(current))
             current = []
         current.append(line)
     if current:
         blocks.append("".join(current))
     return blocks
+
+
+def is_entry(block: str, rule: BlockRule) -> bool:
+    """Whether a block is a well-formed entry (rather than the preamble or a malformed one)."""
+    return starts_entry(block.split("\n", 1)[0], None, rule)
 
 
 def timestamp_of(block: str) -> Timestamp | None:
@@ -191,11 +229,35 @@ def _pad(tokens: list[str], block_of: dict[str, str]) -> list[str]:
     padded: list[str] = []
     for token in tokens[:-1]:
         block = block_of[token]
-        if block.endswith("\n") and not block.endswith("\n\n"):
+        if not block.endswith("\n\n"):
+            # A block ending mid-line needs both newlines, or the next entry's heading is
+            # glued onto it and stops being a heading at all — in the file and on re-split.
             token = f"pad{len(block_of)}\n"
-            block_of[token] = block + "\n"
+            block_of[token] = block + ("\n" if block.endswith("\n") else "\n\n")
         padded.append(token)
     return padded + tokens[-1:]
+
+
+def _body(block: str) -> str:
+    return block.split("\n", 1)[1] if "\n" in block else ""
+
+
+def _looks_like_an_edit(removed: str, added: str) -> bool:
+    """Whether an entry that vanished and one that appeared are the same entry, reworded.
+
+    Entries are keyed on their first line, so editing that line reads as delete-old +
+    add-new and slips past the edit/edit and edit/delete checks entirely. The tell is the
+    body: a first-line edit leaves it intact. Comparing *bodies* rather than whole blocks is
+    what makes this safe — on real data the must-conflict cases score 1.00 while unrelated
+    entries score 0.06-0.38, whereas whole-block comparison puts an unrelated pair at 0.66
+    against 0.89 for a genuine edit, far too close to separate.
+
+    Both bodies must be non-blank, so single-line entries never pair with each other.
+    """
+    removed_body, added_body = _body(removed).strip(), _body(added).strip()
+    if not removed_body or not added_body:
+        return False
+    return SequenceMatcher(None, removed_body, added_body).ratio() >= _EDIT_SIMILARITY
 
 
 def _resolve_hunk(
@@ -204,6 +266,7 @@ def _resolve_hunk(
     theirs: list[str],
     block_of: dict[str, str],
     reorder: bool,
+    rule: BlockRule,
 ) -> list[str] | None:
     """Three-way merge one conflict region at entry granularity.
 
@@ -211,6 +274,10 @@ def _resolve_hunk(
     human must settle. Because entries are identified by their first line, an edit is visible
     as *the same key with a different body* and is never mistaken for an append.
     """
+
+    if not all(is_entry(block_of[t], rule) for t in (*base, *ours, *theirs)):
+        # The preamble, or a malformed/quoted header. Never resolve these automatically.
+        return None
 
     def by_key(tokens: list[str]) -> dict[str, str] | None:
         keyed: dict[str, str] = {}
@@ -248,6 +315,18 @@ def _resolve_hunk(
         else:
             resolved[key] = a if a is not None else t
 
+    # A first-line edit is invisible to the checks above: it presents as one key leaving and
+    # another arriving. Pair them by body and conflict, or the "both sides edited one entry"
+    # and "edit racing a deletion" rows of the contract quietly keep both copies.
+    removed = [keyed_base[key] for key in keyed_base if resolved.get(key) is None]
+    added = [
+        token for key, token in resolved.items() if token is not None and key not in keyed_base
+    ]
+    for gone in removed:
+        for arrival in added:
+            if _looks_like_an_edit(block_of[gone], block_of[arrival]):
+                return None
+
     def surviving(tokens: list[str], skip: set[str]) -> list[str]:
         out: list[str] = []
         for token in tokens:
@@ -267,7 +346,7 @@ def _resolve_hunk(
 
 
 def _resolve_tokens(
-    merged: str, block_of: dict[str, str], marker_size: int, reorder: bool
+    merged: str, block_of: dict[str, str], marker_size: int, rule: BlockRule
 ) -> list[str] | None:
     """Walk git's --diff3 output. Returns None if any non-append conflict remains."""
     ours_m, base_m, theirs_m, end_m = (c * marker_size for c in ("<", "|", "=", ">"))
@@ -285,7 +364,7 @@ def _resolve_tokens(
         elif section and line.startswith(theirs_m):
             section = "theirs"
         elif section and line.startswith(end_m):
-            hunk = _resolve_hunk(ours, base, theirs, block_of, reorder)
+            hunk = _resolve_hunk(ours, base, theirs, block_of, rule.reorder_by_timestamp, rule)
             if hunk is None:
                 return None
             result.extend(_pad(hunk, block_of))
@@ -335,7 +414,7 @@ def merge(ancestor: Path, ours: Path, theirs: Path, marker_size: int, pathname: 
         )
         if proc.returncode < 0 or proc.returncode > 127:
             return _fallback(ancestor, ours, theirs, marker_size)
-        resolved = _resolve_tokens(proc.stdout, block_of, marker_size, rule.reorder_by_timestamp)
+        resolved = _resolve_tokens(proc.stdout, block_of, marker_size, rule)
     finally:
         for path in paths.values():
             path.unlink(missing_ok=True)
@@ -365,7 +444,14 @@ def main(argv: list[str]) -> int:
     except (IndexError, ValueError):
         marker_size = 7
     pathname = argv[4] if len(argv) > 4 else ""
-    return merge(ancestor, ours, theirs, max(marker_size, 7), pathname)
+    marker_size = max(marker_size, 7)
+    try:
+        return merge(ancestor, ours, theirs, marker_size, pathname)
+    except Exception as exc:  # noqa: BLE001 - a crash must not leave %A marker-free
+        # git does not write conflict markers for us; if we bail without doing so, %A keeps
+        # ours' content verbatim and reads as a clean merge, silently dropping theirs.
+        print(f"merge-{DRIVER_NAME}: unexpected failure: {exc!r}", file=sys.stderr)
+        return _fallback(ancestor, ours, theirs, marker_size)
 
 
 if __name__ == "__main__":

@@ -25,8 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ordered by their timestamps, deliberate deletions are honoured (the retro's `AGENDA.md`
   clear stands, while an item appended during the retro survives it), and **edits still
   conflict** — entries are identified by their first line, so the same entry with two
-  bodies is an edit, not two appends. Deliberately not git's built-in `union` driver, which
-  cannot tell those apart. `docs/changelog.md` is excluded on purpose: entries are prepended
+  bodies is an edit, not two appends (a first-line edit, which would otherwise read as a
+  delete plus an add, is caught by pairing the vanished and arrived entries on body
+  similarity). Deliberately not git's built-in `union` driver, which cannot tell those apart.
+  An entry starts only at a marker that also carries a date and follows a blank line, so a
+  header quoted inside a body — normal usage, since entries reference earlier ones — cannot
+  split an entry in half. Registration is guarded: git does not write conflict markers when a
+  driver exits non-zero, so a command that cannot run would leave the file as ours' content
+  with no markers, reading as a clean merge; the registered command tests for the script and
+  interpreter and otherwise falls through to `git merge-file`, and the script writes markers
+  before exiting on an internal crash. `docs/changelog.md` is excluded on purpose: entries are prepended
   into shared `###` sections and `[Unreleased]` is rewritten at release time, so two branches
   really do edit the same region. Registration is the invisible half — `merge.<name>.driver`
   is a local config key, and without it git ignores `.gitattributes` **without saying so**
