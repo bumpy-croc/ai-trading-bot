@@ -2,14 +2,24 @@
 
 The hooks used to live only in ``.git/hooks``: untracked, unreviewable, and silently different
 on every machine — which is how the inert pre-push hook of GH #1077 survived unnoticed. The
-hook source is now version-controlled; this installer links it into place.
+hook source is now version-controlled; this installer puts it where git will run it.
 
-Symlinks (rather than copies) are used so a merged fix reaches every checkout without a
-re-install. Existing hooks that this repo does not own are left alone.
+Two properties matter more than elegance here, both because getting them wrong recreates
+#1077 — a safeguard that silently stops safeguarding:
+
+* **Hooks are copied, never symlinked.** ``$GIT_COMMON_DIR/hooks`` is shared by every linked
+  worktree, but ``make install`` runs inside ephemeral agent worktrees. A symlink into one of
+  those dangles the moment the worktree is pruned or its branch stops shipping ``.githooks/``,
+  and git skips a dangling hook *silently*, exiting 0. A copy cannot dangle.
+* **The source is read from the primary checkout** (the parent of the git common dir) when it
+  has one, so a feature branch in a worktree cannot seed the repo-wide hook.
+
+Drift is the price of copying, so ``--check`` compares content and is wired to ``make
+hooks-check``; ``make install`` re-copies on every run.
 
 Usage:
     python tools/install_git_hooks.py           # install / repair
-    python tools/install_git_hooks.py --check    # report drift, exit 1 if not installed
+    python tools/install_git_hooks.py --check   # report drift, exit 1 if out of date
 """
 
 from __future__ import annotations
@@ -21,6 +31,7 @@ import sys
 from pathlib import Path
 
 SOURCE_DIR_NAME = ".githooks"
+HOOK_MODE = 0o755
 
 
 def _git(*args: str, cwd: Path | None = None) -> str:
@@ -34,7 +45,20 @@ def _git(*args: str, cwd: Path | None = None) -> str:
 
 
 def repo_root(start: Path | None = None) -> Path:
+    """Root of the checkout being invoked from (a linked worktree, possibly)."""
     return Path(_git("rev-parse", "--show-toplevel", cwd=start)).resolve()
+
+
+def _common_dir(root: Path) -> Path:
+    common = Path(_git("rev-parse", "--git-common-dir", cwd=root))
+    if not common.is_absolute():
+        common = root / common
+    return common.resolve()
+
+
+def primary_root(root: Path) -> Path:
+    """Root of the checkout that owns the shared git dir — the same rule the hook uses."""
+    return _common_dir(root).parent
 
 
 def hooks_dir(root: Path) -> Path:
@@ -46,54 +70,75 @@ def hooks_dir(root: Path) -> Path:
     if configured:
         path = Path(os.path.expanduser(configured))
         return path if path.is_absolute() else (root / path)
-    common = Path(_git("rev-parse", "--git-common-dir", cwd=root))
-    if not common.is_absolute():
-        common = root / common
-    return common.resolve() / "hooks"
+    return _common_dir(root) / "hooks"
+
+
+def source_dir(root: Path) -> tuple[Path | None, Path]:
+    """Return the ``.githooks`` to install from, and the primary root it was judged against.
+
+    Prefers the primary checkout's copy: the hooks directory is shared, so seeding it from
+    whatever branch a worktree happens to be on would leak a feature branch's hook to every
+    other worktree. Falls back to the invoking checkout — safe only because we copy.
+    """
+    primary = primary_root(root)
+    for candidate in (primary / SOURCE_DIR_NAME, root / SOURCE_DIR_NAME):
+        if candidate.is_dir():
+            return candidate, primary
+    return None, primary
 
 
 def install(root: Path, *, check_only: bool = False) -> int:
-    source_dir = root / SOURCE_DIR_NAME
-    if not source_dir.is_dir():
-        print(f"error: {source_dir} does not exist", file=sys.stderr)
+    source, primary = source_dir(root)
+    if source is None:
+        print(
+            f"error: no {SOURCE_DIR_NAME}/ found in {primary} or {root}",
+            file=sys.stderr,
+        )
         return 1
+    if source.parent != primary:
+        print(
+            f"note: {primary} has no {SOURCE_DIR_NAME}/ (branch predates tracked hooks); "
+            f"installing from {source} instead. Hooks are copied, so pruning this worktree "
+            f"cannot disable them.",
+        )
 
     target_dir = hooks_dir(root)
     target_dir.mkdir(parents=True, exist_ok=True)
     problems = 0
 
-    for source in sorted(p for p in source_dir.iterdir() if p.is_file()):
-        target = target_dir / source.name
-        wanted = source.resolve()
-        current = target.resolve() if target.exists() or target.is_symlink() else None
+    for hook in sorted(p for p in source.iterdir() if p.is_file()):
+        target = target_dir / hook.name
+        wanted = hook.read_bytes()
+        current = target.read_bytes() if target.is_file() else None
 
-        if current == wanted:
-            print(f"ok      {target} -> {wanted}")
+        if current == wanted and not target.is_symlink():
+            print(f"ok      {target}")
             continue
 
         if check_only:
-            actual = current if current is not None else "<missing>"
-            print(f"DRIFT   {target}: {actual} (want {wanted})", file=sys.stderr)
+            state = "<missing>" if current is None else "differs"
+            print(f"DRIFT   {target}: {state} (want a copy of {hook})", file=sys.stderr)
             problems += 1
             continue
 
-        if target.exists() or target.is_symlink():
-            backup = target.with_suffix(target.suffix + ".bak")
+        if current is not None or target.is_symlink():
+            backup = target.with_name(target.name + ".bak")
             target.replace(backup)
             print(f"backup  {target} -> {backup}")
-        target.symlink_to(wanted)
-        print(f"linked  {target} -> {wanted}")
+        target.write_bytes(wanted)
+        target.chmod(HOOK_MODE)
+        print(f"copied  {hook} -> {target}")
 
     if check_only and problems:
         print(
-            "\nHooks are not installed. Run: python tools/install_git_hooks.py",
+            "\nHooks are out of date. Run: python tools/install_git_hooks.py",
             file=sys.stderr,
         )
     return 1 if problems else 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description="Install the repo's tracked git hooks.")
     parser.add_argument(
         "--check", action="store_true", help="report drift without changing anything"
     )

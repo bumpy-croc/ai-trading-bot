@@ -36,10 +36,15 @@ case "$COMMON_DIR" in
     *)  PRIMARY_ROOT="$(dirname "$REPO_ROOT/$COMMON_DIR")" ;;
 esac
 
-# An interpreter only counts if it can actually import pytest -- otherwise the hook would
-# "run" and report nothing, which is the defect this hook exists to prevent.
+# An interpreter only counts if it can actually run THIS repo's suite -- otherwise the hook
+# would "run" and report nothing, which is the defect it exists to prevent. `import pytest`
+# alone is too weak: the $VIRTUAL_ENV and PATH candidates are exactly the ones likely to be
+# another project's venv, where pytest exists but the repo's deps do not and every collection
+# dies on `No module named numpy`. numpy/pandas/xdist are the irreducible core of the suite
+# (xdist because the invocation below is parallel).
 usable() {
-    [ -n "${1:-}" ] && [ -x "$1" ] && "$1" -c "import pytest" >/dev/null 2>&1
+    [ -n "${1:-}" ] && [ -x "$1" ] &&
+        "$1" -c "import pytest, numpy, pandas, xdist" >/dev/null 2>&1
 }
 
 PYTHON=""
@@ -57,7 +62,7 @@ do
     fi
 done
 
-[ -n "$PYTHON" ] || fail "no Python interpreter with pytest found (looked in \$ATB_PREPUSH_PYTHON, $REPO_ROOT/.venv, ${PRIMARY_ROOT:-<no primary>}/.venv, \$VIRTUAL_ENV, PATH). Run 'make deps-dev', or set ATB_PREPUSH_PYTHON."
+[ -n "$PYTHON" ] || fail "no Python interpreter able to run this suite (pytest + numpy + pandas + xdist) was found (looked in \$ATB_PREPUSH_PYTHON, $REPO_ROOT/.venv, ${PRIMARY_ROOT:-<no primary>}/.venv, \$VIRTUAL_ENV, PATH). Run 'make deps-dev', or set ATB_PREPUSH_PYTHON."
 
 echo "pre-push: running fast unit tests with $PYTHON"
 
@@ -69,12 +74,25 @@ export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 # would work too, but not piping at all leaves nothing to get wrong.) No -p no:randomly:
 # pytest.ini's addopts pass --randomly-seed, which is unparseable once the plugin is
 # disabled -- the hook would abort with a usage error instead of running the suite.
-"$PYTHON" -m pytest tests/unit/ -x -q --timeout=30 -m "fast"
+# No -x: combined with xdist it ends the session via Interrupted, so a plain test failure
+# exits 2 instead of 1 and the diagnosis below cannot tell it from a real interruption.
+# pytest.ini's --maxfail=5 already bounds the output.
+# -n 4, not -n auto: measured 48s vs 76s serial, while `auto` (one worker per core) came in
+# at 76s -- per-worker import overhead and CPU contention eat the gain. Same value, and the
+# same reason, as tests/run_tests.py.
+"$PYTHON" -m pytest tests/unit/ -q --timeout=30 -m "fast" -n 4 --dist=loadgroup
 STATUS=$?
 
-if [ "$STATUS" -ne 0 ]; then
-    fail "fast unit tests failed (pytest exit $STATUS)."
-fi
+# pytest's exit codes are not interchangeable. Reporting "tests failed" for a usage or
+# collection error is the same misdiagnosis that hid the original bug: it sends the developer
+# hunting a test that is fine, when the real problem is the environment.
+case "$STATUS" in
+    0) ;;
+    1) fail "fast unit tests failed." ;;
+    2) fail "fast unit tests failed, or the run was interrupted (pytest exit 2 -- under -n this is also what hitting --maxfail looks like)." ;;
+    5) fail "pytest collected no tests (exit 5). The 'fast' suite should never be empty; this points at a broken checkout or pytest config, not at your changes." ;;
+    *) fail "pytest could not run the tests (exit $STATUS: usage, collection or internal error -- NOT a test failure). '$PYTHON' is probably missing this repo's dependencies: run 'make deps-dev', or point ATB_PREPUSH_PYTHON at a working interpreter." ;;
+esac
 
 echo "pre-push: fast unit tests passed. Pushing..."
 exit 0

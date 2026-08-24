@@ -122,11 +122,22 @@ The installer respects `core.hooksPath` when set and otherwise targets `$GIT_COM
 which is **shared by every linked worktree** of a checkout — install once per clone, not once
 per worktree. Hooks that this repo does not ship are left untouched.
 
-`pre-push` runs the fast-marked unit tests and blocks the push when they fail. It resolves the
+Hooks are **copied, not symlinked**, and the source is read from the primary checkout when it
+has a `.githooks/`. Both rules exist because the hooks directory is shared while `make install`
+often runs inside an ephemeral agent worktree: a symlink into such a worktree dangles as soon
+as it is pruned, and **git skips a dangling hook silently, exiting 0** — reintroducing GH #1077
+through its own remedy. The cost of copying is drift, which `make hooks-check` detects and
+`make install` repairs.
+
+`pre-push` runs the fast-marked unit tests (in parallel, `-n 4` — the same worker count `tests/run_tests.py` uses; ~48s) and blocks the push when
+they fail. It distinguishes a genuine test failure from an environment failure — a usage or
+collection error is reported as such, not as "the tests failed". It resolves the
 repository root with `git rev-parse --show-toplevel` (never the cwd) and looks for an
-interpreter that can import pytest, in order: `$ATB_PREPUSH_PYTHON`, this checkout's `.venv`,
-the primary checkout's `.venv` (linked worktrees have none of their own), `$VIRTUAL_ENV`, then
-`python3`/`python` on `PATH`. **If no such interpreter exists the push fails** — a check that
+interpreter that can import `pytest`, `numpy`, `pandas` and `xdist` — an `import pytest` probe
+alone would accept another project's venv and then die in collection — in order:
+`$ATB_PREPUSH_PYTHON`, this checkout's `.venv`, the primary checkout's `.venv` (linked
+worktrees have none of their own), `$VIRTUAL_ENV`, then `python3`/`python` on `PATH`.
+**If no such interpreter exists the push fails** — a check that
 cannot run must not report success (GH #1077).
 
 To skip deliberately, use git's own escape hatch:

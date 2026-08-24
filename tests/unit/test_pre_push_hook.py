@@ -26,7 +26,9 @@ PASSING_TEST = "import pytest\n\n@pytest.mark.fast\ndef test_ok():\n    assert T
 FAILING_TEST = "import pytest\n\n@pytest.mark.fast\ndef test_broken():\n    assert False, 'deliberately broken'\n"
 # Mirrors the real pytest.ini closely enough to catch hook flags that fight the project
 # config (e.g. `-p no:randomly` vs the inherited `--randomly-seed`).
-PYTEST_INI = "[pytest]\naddopts = --randomly-seed=1\nmarkers =\n    fast: Fast running tests\n"
+PYTEST_INI = (
+    "[pytest]\naddopts = --randomly-seed=1 --maxfail=5\nmarkers =\n    fast: Fast running tests\n"
+)
 
 
 def _git(*args: str, cwd: Path) -> None:
@@ -113,7 +115,7 @@ def test_hook_fails_when_no_interpreter_is_available(checkout):
 
     result = _run_hook(repo, {"PATH": str(scrubbed)})
     assert result.returncode != 0
-    assert "no Python interpreter with pytest found" in result.stderr
+    assert "no Python interpreter able to run this suite" in result.stderr
 
 
 @pytest.mark.slow
@@ -151,7 +153,7 @@ def _run_installer(cwd: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 @pytest.mark.fast
-def test_installer_links_hooks_and_check_reports_drift(checkout):
+def test_installer_copies_hooks_and_check_reports_drift(checkout):
     """A correct hook nobody installed is the same failure class as an inert one."""
     repo = checkout()
     shutil.copytree(REPO_ROOT / ".githooks", repo / ".githooks")
@@ -162,8 +164,9 @@ def test_installer_links_hooks_and_check_reports_drift(checkout):
 
     assert _run_installer(repo).returncode == 0
     installed = repo / ".git" / "hooks" / "pre-push"
-    assert installed.is_symlink()
-    assert installed.resolve() == (repo / ".githooks" / "pre-push").resolve()
+    assert installed.is_file() and not installed.is_symlink()
+    assert installed.read_bytes() == (repo / ".githooks" / "pre-push").read_bytes()
+    assert os.access(installed, os.X_OK)
 
     assert _run_installer(repo, "--check").returncode == 0
 
@@ -178,3 +181,61 @@ def test_installer_preserves_foreign_hooks(checkout):
 
     assert _run_installer(repo).returncode == 0
     assert foreign.read_text() == "#!/bin/sh\nexit 0\n"
+
+
+@pytest.mark.slow
+def test_installed_hook_survives_pruning_the_worktree_it_was_installed_from(checkout, tmp_path):
+    """The regression that a symlinking installer would have shipped.
+
+    ``$GIT_COMMON_DIR/hooks`` is shared by every worktree, but ``make install`` runs inside
+    ephemeral agent worktrees. If the installer linked the shared hook into a worktree, pruning
+    that worktree would leave a dangling symlink -- and git skips a dangling hook *silently*,
+    exiting 0. That is #1077 again, arriving via its own remedy.
+    """
+    repo = checkout()
+    shutil.copytree(REPO_ROOT / ".githooks", repo / ".githooks")
+    _git("add", "-A", "--", ".githooks", cwd=repo)
+    _git("commit", "-q", "-m", "hooks", cwd=repo)
+
+    worktree = tmp_path / "wt"
+    _git("worktree", "add", "-q", "-b", "feature", str(worktree), cwd=repo)
+    assert _run_installer(worktree).returncode == 0
+
+    installed = repo / ".git" / "hooks" / "pre-push"
+    assert not installed.is_symlink(), "hooks must be copied, never linked into a worktree"
+
+    shutil.rmtree(worktree)
+    _git("worktree", "prune", cwd=repo)
+    assert installed.is_file(), "installed hook must outlive the worktree it came from"
+
+    # And it must still be able to block a push.
+    (repo / "tests" / "unit" / "test_sample.py").write_text(FAILING_TEST)
+    result = subprocess.run(
+        ["bash", str(installed)], cwd=repo, capture_output=True, text=True, timeout=300
+    )
+    assert result.returncode != 0, f"{result.stdout}\n{result.stderr}"
+    assert "fast unit tests failed" in result.stderr
+
+
+@pytest.mark.slow
+def test_hook_reports_environment_failure_distinctly_from_test_failure(checkout):
+    """Exit 5 (nothing collected) must not be reported as 'the tests failed'."""
+    repo = checkout(PASSING_TEST.replace("@pytest.mark.fast\n", ""))
+    result = _run_hook(repo)
+    assert result.returncode != 0
+    assert "collected no tests" in result.stderr
+    assert "fast unit tests failed" not in result.stderr
+
+
+@pytest.mark.slow
+def test_hook_rejects_an_interpreter_that_cannot_run_the_suite(checkout):
+    """An interpreter with pytest but without the repo's deps must be skipped, not used."""
+    repo = checkout()
+    stub = repo / "stub-python"
+    stub.write_text("#!/bin/sh\nexit 1\n")
+    stub.chmod(0o755)
+
+    result = _run_hook(repo, {"ATB_PREPUSH_PYTHON": str(stub)})
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert str(stub) not in result.stdout, "the unusable interpreter must not have been used"
+    assert ".venv/bin/python" in result.stdout
