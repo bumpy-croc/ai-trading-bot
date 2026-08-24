@@ -292,3 +292,16 @@ def test_agenda_clear_keeps_a_concurrently_appended_item(repo: Path) -> None:
     text = (repo / AGENDA_PATH).read_text()
     assert "#1084" in text, "an item added during the retro must not be lost"
     assert "#1036" not in text, "the retro's deliberate clear must stand"
+
+
+def test_reordered_entries_stay_separated_by_a_blank_line(repo: Path) -> None:
+    """An entry appended without a trailing blank line must not butt against its new neighbour."""
+    register(repo)
+    seed(repo)
+    late = "## 2026-08-10 12:00 · note · ours\nOurs appended this.\n"  # no trailing blank
+    early = "## 2026-08-05 08:00 · note · theirs\nTheirs appended this.\n"
+    branch_commit(repo, "ours", LOG_PATH, PREAMBLE + BASE_ENTRY + late)
+    branch_commit(repo, "theirs", LOG_PATH, PREAMBLE + BASE_ENTRY + early)
+    git(repo, "checkout", "-q", "ours")
+    assert git(repo, "merge", "theirs", "-m", "m", check=False).returncode == 0
+    assert "\n\n## 2026-08-10" in (repo / LOG_PATH).read_text()

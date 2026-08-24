@@ -192,8 +192,9 @@ a file.
 
 Half of a merge driver cannot be version-controlled: `merge.append-only.driver` is a local git
 config key, and when it is missing git **ignores the `.gitattributes` entry without saying so**
-— the same invisible-absence failure as GH #1077. Registration therefore runs from the same
-place as the hooks and the worktree shim:
+— the same invisible-absence failure as the inert pre-push hook of GH #1077 above.
+Registration therefore runs from the same place as the hooks and the worktree shim, and has
+its own drift check alongside `make hooks-check`:
 
 ```bash
 make install               # registers the driver (along with everything else)

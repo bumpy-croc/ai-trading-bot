@@ -181,6 +181,23 @@ def _sorted_chronologically(tokens: list[str], block_of: dict[str, str]) -> list
     return [token for _, token in sorted(dated, key=lambda pair: pair[0])]
 
 
+def _pad(tokens: list[str], block_of: dict[str, str]) -> list[str]:
+    """Keep a blank line between entries the driver has just reordered.
+
+    An entry's separator blank line belongs to the block *before* it, so moving a block that
+    happens to end without one would butt it against its new neighbour. Confined to blocks
+    coming out of a conflict region, so untouched parts of the file keep their exact bytes.
+    """
+    padded: list[str] = []
+    for token in tokens[:-1]:
+        block = block_of[token]
+        if block.endswith("\n") and not block.endswith("\n\n"):
+            token = f"pad{len(block_of)}\n"
+            block_of[token] = block + "\n"
+        padded.append(token)
+    return padded + tokens[-1:]
+
+
 def _resolve_hunk(
     ours: list[str],
     base: list[str],
@@ -271,7 +288,7 @@ def _resolve_tokens(
             hunk = _resolve_hunk(ours, base, theirs, block_of, reorder)
             if hunk is None:
                 return None
-            result.extend(hunk)
+            result.extend(_pad(hunk, block_of))
             section = None
         elif section == "ours":
             ours.append(line)
