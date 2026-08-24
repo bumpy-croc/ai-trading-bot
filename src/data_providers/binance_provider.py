@@ -119,6 +119,12 @@ _BINANCE_SUBSCRIPTION_NOT_ACTIVE = -2036
 _BAN_EXPIRY_PATTERN = re.compile(r"banned until (\d{13})")
 
 
+def _exchange_error_code(exc: BaseException) -> int | None:
+    """Binance error code carried by an exception, when it has one."""
+    code = getattr(exc, "code", None)
+    return code if isinstance(code, int) else None
+
+
 def _parse_ban_expiry(error_message: str, now_ms: int | None = None) -> float | None:
     """Extract ban expiry timestamp from Binance -1003 error message.
 
@@ -1579,8 +1585,28 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         client ID already exists, Binance will reject the duplicate order.
         For market orders, requests FULL response type to capture fill data at placement.
         """
+        # Requested parameters, recorded on every failure path so a rejected
+        # order stays diagnosable after application logs age out.
+        error_params: dict[str, Any] = {
+            "symbol": symbol,
+            "side": getattr(side, "value", str(side)),
+            "type": getattr(order_type, "value", str(order_type)),
+            "quantity": quantity,
+            "price": price,
+            "stopPrice": stop_price,
+            "timeInForce": time_in_force,
+            "sideEffectType": side_effect_type,
+        }
+
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - cannot place order")
+            self._record_order_error(
+                "place_order",
+                symbol,
+                error_message="Binance client unavailable - order not placed",
+                error_type="ClientUnavailable",
+                params=error_params,
+            )
             return None
 
         try:
@@ -1590,6 +1616,13 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             )
             if not is_valid:
                 logger.error(f"Order validation failed: {error_msg}")
+                self._record_order_error(
+                    "place_order",
+                    symbol,
+                    error_message=f"Local order validation failed: {error_msg}",
+                    error_type="ValidationFailed",
+                    params=error_params,
+                )
                 return None
 
             # Convert to Binance parameters
@@ -1627,11 +1660,19 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 order_params["sideEffectType"] = side_effect_type
 
             # Place the order
+            error_params.update(order_params)
             response = self._call_create_order(**order_params)
 
             order_id = str(response.get("orderId", ""))
             if not order_id:
                 logger.error(f"Order placed but no orderId in response: {response}")
+                self._record_order_error(
+                    "place_order",
+                    symbol,
+                    error_message=f"Exchange returned no orderId in response: {response}",
+                    error_type="MissingOrderId",
+                    params=error_params,
+                )
                 return None
 
             # Parse full response into Order object
@@ -1654,6 +1695,14 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     f"Duplicate client order ID detected: {client_order_id}. "
                     "This order may have already been placed. Check order status manually."
                 )
+                self._record_order_error(
+                    "place_order",
+                    symbol,
+                    error_message=f"Duplicate client order ID {client_order_id}: {error_msg}",
+                    error_code=error_code if isinstance(error_code, int) else None,
+                    error_type="DuplicateClientOrderId",
+                    params=error_params,
+                )
                 return None
 
             # Definitive rejections: the exchange explicitly refused the order,
@@ -1665,6 +1714,14 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     error_code,
                     error_msg,
                 )
+                self._record_order_error(
+                    "place_order",
+                    symbol,
+                    error_message=error_msg,
+                    error_code=error_code if isinstance(error_code, int) else None,
+                    error_type=type(e).__name__,
+                    params=error_params,
+                )
                 raise ValueError(
                     f"Order rejected by exchange (code={error_code}): {error_msg}"
                 ) from e
@@ -1672,6 +1729,14 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # Ambiguous error (unknown code, network-adjacent): return None so the
             # caller treats it as "order may or may not have been placed".
             logger.error(f"Binance order error (ambiguous, code={error_code}): {e}")
+            self._record_order_error(
+                "place_order",
+                symbol,
+                error_message=error_msg,
+                error_code=error_code if isinstance(error_code, int) else None,
+                error_type=type(e).__name__,
+                params=error_params,
+            )
             return None
         except BinanceAPIException as e:
             # REST API errors surface as BinanceAPIException (not BinanceOrderException).
@@ -1684,13 +1749,37 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     error_code,
                     error_msg,
                 )
+                self._record_order_error(
+                    "place_order",
+                    symbol,
+                    error_message=str(error_msg),
+                    error_code=error_code if isinstance(error_code, int) else None,
+                    error_type=type(e).__name__,
+                    params=error_params,
+                )
                 raise ValueError(
                     f"Order rejected by exchange (code={error_code}): {error_msg}"
                 ) from e
             logger.error(f"Binance API error placing order (code={error_code}): {e}")
+            self._record_order_error(
+                "place_order",
+                symbol,
+                error_message=str(error_msg),
+                error_code=error_code if isinstance(error_code, int) else None,
+                error_type=type(e).__name__,
+                params=error_params,
+            )
             return None
         except Exception as e:
             logger.error(f"Failed to place order: {e}")
+            self._record_order_error(
+                "place_order",
+                symbol,
+                error_message=str(e),
+                error_code=_exchange_error_code(e),
+                error_type=type(e).__name__,
+                params=error_params,
+            )
             return None
 
     def _parse_placement_response(
@@ -1794,8 +1883,28 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         Uses STOP_LOSS_LIMIT order type which requires both a stop price
         (trigger) and a limit price (execution price).
         """
+        # Requested parameters, recorded on every failure path so the rejected
+        # request survives log retention. Refined below as sizing/rounding runs.
+        error_params: dict[str, Any] = {
+            "symbol": symbol,
+            "side": getattr(side, "value", str(side)),
+            "type": "STOP_LOSS_LIMIT",
+            "quantity": quantity,
+            "stopPrice": stop_price,
+            "price": limit_price,
+            "timeInForce": "GTC",
+            "sideEffectType": side_effect_type,
+        }
+
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - cannot place stop-loss order")
+            self._record_order_error(
+                "place_stop_loss_order",
+                symbol,
+                error_message="Binance client unavailable - stop-loss not placed",
+                error_type="ClientUnavailable",
+                params=error_params,
+            )
             return None
 
         # Callers may pass Decimal values (SQLAlchemy Numeric columns from a DB-loaded
@@ -1808,11 +1917,25 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 limit_price = float(limit_price)
         except (TypeError, ValueError) as e:
             logger.error("Invalid numeric input to stop-loss order for %s: %s", symbol, e)
+            self._record_order_error(
+                "place_stop_loss_order",
+                symbol,
+                error_message=f"Invalid numeric input to stop-loss order: {e}",
+                error_type=type(e).__name__,
+                params=error_params,
+            )
             return None
 
         # Validate stop_price is positive and finite
         if not (stop_price > 0 and math.isfinite(stop_price)):
             logger.error("Invalid stop_price: %s", stop_price)
+            self._record_order_error(
+                "place_stop_loss_order",
+                symbol,
+                error_message=f"Invalid stop_price: {stop_price}",
+                error_type="InvalidStopPrice",
+                params=error_params,
+            )
             return None
 
         try:
@@ -1831,10 +1954,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             symbol_info = self.get_symbol_info(symbol)
             step_size = 0.0
             base_asset: str | None = None
+            error_params["symbol_info_available"] = bool(symbol_info)
             if symbol_info:
                 # Validate tick_size is numeric before division to prevent TypeError
                 tick_size_raw = symbol_info.get("tick_size", 0.01)
                 tick_size = float(tick_size_raw) if isinstance(tick_size_raw, int | float) else 0.01
+                error_params["tick_size"] = tick_size
                 if tick_size > 0:
                     # `round(x / tick) * tick` in float math leaves artifacts (e.g.
                     # round(1648.82 / 0.01) * 0.01 = 1648.8200000000001) that exceed the
@@ -1854,6 +1979,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     float(step_size_raw) if isinstance(step_size_raw, int | float) else 0.00001
                 )
                 base_asset = symbol_info.get("base_asset")
+                error_params["step_size"] = step_size
 
             # A SELL stop-loss can never order more of the base asset than is actually
             # free: Binance deducts the trade fee from a buy's fill and round-to-nearest
@@ -1865,6 +1991,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # (short cover) is funded from quote, so it isn't constrained by base holdings.
             if side == OrderSide.SELL:
                 free_base = self._free_base_balance(base_asset or base_asset_from_symbol(symbol))
+                error_params["free_base_balance"] = free_base
                 if free_base is not None and free_base < quantity:
                     logger.warning(
                         "Stop-loss sell qty %.8f for %s exceeds free base balance "
@@ -1894,6 +2021,17 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     quantity,
                     symbol,
                 )
+                error_params["quantity"] = quantity
+                self._record_order_error(
+                    "place_stop_loss_order",
+                    symbol,
+                    error_message=(
+                        f"Stop-loss quantity is {quantity} after lot sizing - no free base "
+                        "asset to protect; order not sent"
+                    ),
+                    error_type="ZeroQuantityAfterSizing",
+                    params=error_params,
+                )
                 return None
 
             sl_params = {
@@ -1909,11 +2047,19 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 sl_params["newClientOrderId"] = client_order_id
             if side_effect_type:
                 sl_params["sideEffectType"] = side_effect_type
+            error_params.update(sl_params)
             response = self._call_create_order(**sl_params)
 
             order_id = str(response.get("orderId", ""))
             if not order_id:
                 logger.error(f"Stop-loss order placed but no orderId in response: {response}")
+                self._record_order_error(
+                    "place_stop_loss_order",
+                    symbol,
+                    error_message=f"Exchange returned no orderId in response: {response}",
+                    error_type="MissingOrderId",
+                    params=error_params,
+                )
                 return None
 
             logger.info(
@@ -1924,9 +2070,25 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
         except BinanceOrderException as e:
             logger.error(f"Binance stop-loss order error: {e}")
+            self._record_order_error(
+                "place_stop_loss_order",
+                symbol,
+                error_message=str(e),
+                error_code=_exchange_error_code(e),
+                error_type=type(e).__name__,
+                params=error_params,
+            )
             return None
         except Exception as e:
             logger.error(f"Failed to place stop-loss order: {e}")
+            self._record_order_error(
+                "place_stop_loss_order",
+                symbol,
+                error_message=str(e),
+                error_code=_exchange_error_code(e),
+                error_type=type(e).__name__,
+                params=error_params,
+            )
             return None
 
     def cancel_order(self, order_id: str, symbol: str) -> bool:
@@ -1942,9 +2104,25 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
         except BinanceOrderException as e:
             logger.error(f"Failed to cancel order {order_id}: {e}")
+            self._record_order_error(
+                "cancel_order",
+                symbol,
+                error_message=str(e),
+                error_code=_exchange_error_code(e),
+                error_type=type(e).__name__,
+                params={"symbol": symbol, "orderId": order_id},
+            )
             return False
         except Exception as e:
             logger.error(f"Error cancelling order {order_id}: {e}")
+            self._record_order_error(
+                "cancel_order",
+                symbol,
+                error_message=str(e),
+                error_code=_exchange_error_code(e),
+                error_type=type(e).__name__,
+                params={"symbol": symbol, "orderId": order_id},
+            )
             return False
 
     def cancel_all_orders(self, symbol: str | None = None) -> bool:
@@ -1963,6 +2141,14 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
         except Exception as e:
             logger.error(f"Failed to cancel all orders: {e}")
+            self._record_order_error(
+                "cancel_all_orders",
+                symbol or "ALL",
+                error_message=str(e),
+                error_code=_exchange_error_code(e),
+                error_type=type(e).__name__,
+                params={"symbol": symbol},
+            )
             return False
 
     @with_rate_limit_retry(max_retries=3, base_delay=1.0)

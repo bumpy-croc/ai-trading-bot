@@ -42,6 +42,11 @@ This repo is set up to be operated by a persistent Claude Code daemon (e.g. Clau
 **Hard rules for the daemon:**
 - Never change `.claude/state/charter.md` or `src/config/risk-limits.json` — those are human-owned.
 - Never rewrite history in `log.md` or closed incidents — append-only; corrections are new entries referencing the earlier one.
+  Because it is append-only, `log.md` (and `.claude/skills/weekly-retro/AGENDA.md`) use the `append-only` git merge
+  driver: concurrent appends merge without a conflict — the two sides' contributions ordered by their first entry's
+  timestamp, though not globally sorted — while edits still conflict. The driver is
+  registered by `make install` / `make merge-drivers`; if you hit a conflict on a plain append, run
+  `make merge-drivers-check` — an unregistered driver is silently inert. See `docs/development.md`.
 - Never execute a `board_required: true` action without a human approving the proposal.
 - Model promotion for a live-trading symbol does **not** require human sign-off (per `charter.md`'s autonomy envelope and stated high risk appetite) — but only once the model has cleared the standard promotion bar: held-out temporal eval, per-regime breakdown, calibration check, and >=48h paper-trading validation (see `ml-engineer` agent). Self-certifying against that bar without actually running it does not count as "verified." Log every promotion decision and its evidence in `log.md`.
 - If the charter is missing or invalid, refuse to make material decisions.
@@ -202,6 +207,72 @@ safe list in `.claude/LESSONS.md` §3 (mirrored in `.claude/agents/live-ops.md`)
 6. **Use `--paper-trading`** when testing live trading changes.
 7. **Check for existing branches** before creating new ones to avoid duplicates.
 8. **Verify database connection** before running integration tests.
+9. **Rebuilt the venv? Re-run `make shim`.** See below.
+
+### Worktrees and the shared venv (GH #1070)
+
+All worktrees share `/Users/alex/Sites/ai-trading-bot/.venv`. `pip install -e .` hardcodes the
+absolute path of the checkout it was run from, so `atb` and `python experiments/*.py` used to
+silently execute **that** checkout's code from inside any other worktree — producing plausible,
+completely invalid results (a 365d backtest returned `+114.69%` and `-28.29%` on consecutive runs).
+
+`make install` now also installs `tools/atb_worktree_shim.py` into site-packages, which pins
+`src`/`cli` to the checkout enclosing your **cwd**. This is transparent — no `PYTHONPATH` needed.
+
+- The shim lives in site-packages, which is **not** version-controlled. After any venv rebuild:
+  `make shim` (or `python tools/install_worktree_shim.py`).
+- Verify at any time: `python tools/install_worktree_shim.py --check`.
+- If the shim is missing, the run fails loudly instead of producing a wrong answer: `src/__init__.py`
+  calls `src._source_root.verify_source_root()`, so every entry point that imports `src` is covered — `atb`, `pytest`,
+  `python experiments/x.py`, ad-hoc scripts — with no opt-in required.
+- Sanity check before trusting any number: `python -P -c "import src; print(src.__file__)"` must
+  print a path under your worktree. **Keep the `-P`** — without it `sys.path[0]` is the cwd, so the
+  check finds your worktree's `src/` and reports success even while `atb` runs a different
+  checkout. `-P` reproduces the console-script shape, which is the one that actually breaks.
+
+### The primary checkout is write-protected against agents (GH #1082)
+
+`/Users/alex/Sites/ai-trading-bot` is the `main` (production) reference checkout **and** Alex's
+own working copy. Agent sessions never write to it: all agent work happens in a worktree under
+`.claude/worktrees/`. A `PreToolUse` hook (`tools/primary_checkout_guard.py`, wired in
+`.claude/settings.json`) enforces that mechanically, because the failure it prevents is silent —
+a shell's cwd gets reset to the primary checkout mid-task, and every subsequent *relative* path
+then resolves there instead of in your worktree.
+
+**It fires only for a session that has actually worked inside a worktree** (a "pinned"
+session — pinned on the first tool call whose cwd is in one). An unpinned session is by
+definition somebody working legitimately in the only tree they have: the PM daemon, which runs
+in the primary and must append to `.claude/state/log.md`; a fresh single clone with no
+worktrees, which every contributor and every Claude Code Web session has. Those are never
+guarded.
+
+For a pinned session it refuses, with a banner naming both paths and the remedy:
+
+- any `Edit`/`Write`/`NotebookEdit` whose path lands in the primary checkout's working tree;
+- a `Bash` write into it (`sed -i`, `>`/`>>`, `rm`, `mv`, `cp`, `touch`, `tee`, `chmod`, and
+  working-tree-mutating `git` subcommands such as `checkout`, `reset`, `commit`, `add`, `stash`);
+- a **relative read** (`cat`, `grep`, `sed -n`, `wc`, …) issued with the cwd back at the primary
+  checkout after the session has been working in a worktree — the cwd-reset itself.
+
+Deliberately **not** protected, because agent work legitimately writes there: `<primary>/.git/**`
+(every worktree's git operations, and `git worktree add`), `<primary>/.claude/worktrees/**`, and
+anything git-ignored in the primary checkout (the shared `.venv`, `logs/`, caches).
+
+**Human override** — the hook only runs inside Claude Code, so your editor, your terminal and your
+own `git` are never affected. To let *this session* write to the primary checkout:
+
+```bash
+ATB_ALLOW_PRIMARY_WRITE=1 claude          # preferred: an agent cannot set this for itself
+touch ~/.claude/atb-allow-primary-write   # for a session already running
+```
+
+The sentinel is **self-expiring** (30 minutes) so one stray `touch` cannot disable the guard
+indefinitely.
+
+The guard fails **open**: any unexpected error, an unresolvable path (`> $OUT`), or a missing
+`git` allows the tool call, so a bug in it can never brick a session. Complements — does not
+replace — the #1070 import guard (`src/_source_root.py`), which covers `import`, not the
+filesystem.
 
 ## What To Read For Your Task
 

@@ -220,8 +220,9 @@ def _make_state(
     metrics.peak_balance = tracker_peak
     state.performance_tracker.get_metrics.return_value = metrics
 
-    def _enter():
+    def _enter(reason=None):
         state._close_only_mode = True
+        state._close_only_reason = reason
 
     state._enter_close_only_mode.side_effect = _enter
     return state

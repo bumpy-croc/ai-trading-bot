@@ -11,7 +11,304 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Latched conditions now re-announce themselves until a human clears them, and the entry
+  state is asserted positively** (#1095, #1096; incident #1094). On 2026-08-20 production
+  latched close-only after a stop-loss re-placement failure, paged Slack correctly at minute
+  zero — and then sat halted for four days. Nothing re-raised the alert, nothing tracked
+  whether the "manual review" it demanded ever happened, and the daily standup reported
+  NOMINAL every one of those days because its "engine alive" check greps `Decision:` log
+  lines, which keep flowing at normal cadence: signal generation runs *before* the close-only
+  gate in `entry_coordinator.check_entry_conditions`. A new `LatchedConditionMonitor`
+  (`src/engines/live/monitoring/latched_condition_monitor.py`) runs once per trading-loop
+  iteration and writes **one `system_events` state row per pass** (at most hourly):
+  `ENTRIES_ENABLED` when nothing is blocking, or `CLOSE_ONLY_LATCHED` /
+  `SYSTEM_HALT_LATCHED` / `ENTRY_PAUSE_LATCHED` when something is, with a `*_LATCH_CLEARED`
+  row on resolution. Because the healthy case writes a row too, the *absence* of rows
+  unambiguously means the loop thread is dead — so a single query separates "trading",
+  "blocked" and "loop dead" with no external cross-check. This is also the detection fix:
+  the close-only latch is an in-process bool never written to `system_control_flags`, so
+  before this there was **no** durable signal a monitor could query. On top of the rows, a
+  bounded operator page fires at 1h, 4h and 12h after the latch, then once per 24h — at most
+  three re-pages in the first day and one a day thereafter, so a month-long latch produces
+  ~31 pages rather than ~720; pages past day one are prefixed `STILL BLOCKED — DAY N` so
+  day four does not read identically to day zero. "Are entries blocked?" is read from
+  `EntryPauseGate.entry_blocks()`, the same authority the entry and scale-in paths gate on
+  (lifted out of the former private `_active_cause`), so the monitor cannot report a state
+  the enforcement path disagrees with — including the fail-closed case where the `system_halt`
+  flag has never been successfully read, which blocks entries while still reading
+  `active=False`. The gate reports *every* active lever, not just the one that wins the skip
+  log: escalating from `FEATURE_ENTRY_PAUSE` to the manual kill switch used to write a
+  strictly newer `ENTRY_PAUSE_LATCH_CLEARED` row reading "new entries are enabled again"
+  while the halt was in force. Elapsed time for the manual halt comes from the flag row's durable
+  `updated_at` (mirrored into `SystemHaltState.since`), so a restart cannot re-announce a
+  four-day halt as "45m" — close-only is in-process by nature and `FEATURE_ENTRY_PAUSE` has
+  no DB row, so for those two elapsed remains process-relative and the accumulated
+  `*_LATCHED` rows are the durable source. The first observation of any latch writes its row immediately
+  rather than an hour later, so an engine in a restart loop cannot stay blocked while
+  emitting nothing. `_enter_close_only_mode()` takes an optional `reason`, threaded through
+  from every trip site (reconciliation CRITICAL findings — deduped and capped via
+  `_format_findings` — the drawdown hard cap, the account circuit breaker, prolonged DB
+  outage, unconfirmed emergency closes, ambiguous order submissions), so the message still
+  explains itself days later when the log line that carried the detail has rotated out of the
+  platform's retention. Alert delivery runs on a short-lived daemon thread, each condition is
+  evaluated in its own `try`, and the whole check is fault-isolated — re-announcement can
+  neither stall the trading loop nor take it down.
+
+- **Append-only state files no longer conflict on every concurrent append** (#1079;
+  near-loss case #1090). `.claude/state/log.md` is written by every agent and the PM,
+  so two branches that each record something collided at EOF on nearly every PR —
+  ~8 hand-resolutions in one 2026-08-13 session, ~7 more on 2026-08-24, each one
+  mechanically identical and each one a chance to silently drop an entry from a record
+  whose entire purpose is that entries are never dropped. `.gitattributes` now maps
+  `.claude/state/log.md` and `.claude/skills/weekly-retro/AGENDA.md` to a custom
+  `append-only` merge driver (`tools/merge_append_only.py`). It splits each side into
+  entries (H2 heading / top-level bullet), runs git's own three-way merge over them, and
+  re-merges each conflict region at entry granularity: concurrent appends are all kept and
+  ordered by their timestamps, deliberate deletions are honoured (the retro's `AGENDA.md`
+  clear stands, while an item appended during the retro survives it), and **edits still
+  conflict** — entries are identified by their first line, so the same entry with two
+  bodies is an edit, not two appends (a first-line edit, which would otherwise read as a
+  delete plus an add, is caught by pairing the vanished and arrived entries on body
+  similarity). Deliberately not git's built-in `union` driver, which cannot tell those apart.
+  Entry boundaries are guessed from prose, which cannot be done reliably — a quoted header
+  can satisfy every shape rule — so correctness rests on two properties instead: one side's
+  contribution is never reordered or split internally, and the finished result is verified
+  against the inputs (each side's added lines must survive verbatim and unbroken) before it
+  is accepted, falling back to an ordinary conflict otherwise. Measured over 800 randomised
+  merges: zero corruptions; on realistic bodies 393/400 still merge cleanly. The fuzz harness
+  that found the last defect ships as `tools/fuzz_append_only_merge.py`, since code review
+  demonstrably was not a reliable filter for this design. Registration is guarded: git does not write conflict markers when a
+  driver exits non-zero, so a command that cannot run would leave the file as ours' content
+  with no markers, reading as a clean merge; the registered command tests for the script and
+  interpreter and otherwise falls through to `git merge-file`, and the script writes markers
+  before exiting on an internal crash. `docs/changelog.md` is excluded on purpose: entries are prepended
+  into shared `###` sections and `[Unreleased]` is rewritten at release time, so two branches
+  really do edit the same region. Registration is the invisible half — `merge.<name>.driver`
+  is a local config key, and without it git ignores `.gitattributes` **without saying so**
+  (#1077's class), so `tools/install_merge_drivers.py` runs from `make install` alongside the
+  hook and shim installers, and `make merge-drivers-check` reports an unregistered or stale
+  driver as drift.
+- **The `pre-push` hook can now fail** (#1077). It was inert: pytest's output was
+  piped into `tail`, so `EXIT_CODE=$?` captured `tail`'s status and the gate exited
+  0 no matter what the tests did, and `.venv/bin/python` was resolved relative to
+  the cwd, so a push from a linked worktree (which has no `.venv`) fell through to
+  a bare `python` that does not exist on macOS. Every push printed
+  `python: command not found` followed by `All fast tests passed. Pushing...`. The
+  hook now runs pytest unpiped, resolves the repo root via
+  `git rev-parse --show-toplevel` and the primary checkout via
+  `--git-common-dir`, requires an interpreter that can actually import pytest, and
+  **aborts the push when it cannot verify** (documented skip: `git push
+  --no-verify`). It also drops `-p no:randomly`, which conflicted with the
+  `--randomly-seed` in `pytest.ini`'s `addopts` and would have aborted the hook
+  with a usage error even after the other two fixes. Hook sources moved into a
+  tracked `.githooks/` with an installer (`make hooks`, wired into `make install`)
+  so they are reviewable rather than drifting per machine. Hooks are **copied**, and sourced
+  from the primary checkout, because `$GIT_COMMON_DIR/hooks` is shared while `make install`
+  runs inside ephemeral agent worktrees — a symlink into one dangles when it is pruned, and
+  git skips a dangling hook silently with exit 0. The hook also runs `-n 4` (48s
+  instead of 76s serial; `-n auto` measured no better than serial, since per-worker import
+  overhead eats the gain — a hook slow enough to bypass is the inert hook again) and classifies
+  pytest's exit codes, so a usage/collection error is not reported as a test failure.
+  Drift detection compares the **executable bit** as well as content: git ignores a
+  non-executable hook and the push succeeds, so a content-only check would have printed
+  `ok` over the very always-pass the tool exists to prevent.
+  `tests/unit/test_pre_push_hook.py` proves the hook fails on a broken test, from a
+  subdirectory, and from a worktree; that an installed hook still blocks a bad push after
+  the worktree it was installed from is pruned; and that a `chmod -x`'d hook is reported as
+  drift and repaired.
+
+- **Exchange order rejections are now durably diagnosable** (#1094). Prod latched
+  close-only on 2026-08-20 after five consecutive stop-loss placement failures and
+  the reason was unrecoverable: `BinanceProvider.place_stop_loss_order` caught every
+  exception, wrote one `logger.error(...)` and returned `None`, so the Binance error
+  code reached neither `system_events` nor `reconciliation_audit_events` — the
+  reconciler recorded only the generic "exchange returned no order id", and Railway
+  stdout aged out hours later. A safety-critical failure was therefore permanently
+  undiagnosable. Order helpers now record an `ExchangeOrderError` (exchange error
+  code, message, error type, and the rejected order parameters — symbol, side,
+  quantity, stopPrice, price, timeInForce, plus the tick/step filters and free base
+  balance that shaped them) on every failure path of `place_stop_loss_order`,
+  `place_order`, `cancel_order` and `cancel_all_orders`. The live engine wires a
+  sink so each lands as a `system_events` row (`STOP_LOSS_PLACEMENT_FAILED` at
+  CRITICAL, `ORDER_PLACEMENT_FAILED` at error) with the full payload in `details`,
+  and the reconciler's unprotected-position audit row now names the exchange code
+  instead of "no order id" — but only when the record provably belongs to that
+  position's stop-loss attempt in the cycle in flight (matched on symbol AND
+  operation AND an age below the reconcile interval), because ``last_order_error``
+  is a single slot on the shared exchange instance and a confidently wrong pointer
+  in an incident artifact is worse than the honest generic string. Codes with a documented root cause (51077 LOT_SIZE
+  stepSize precision, -1111 PRICE_FILTER tickSize precision, -2010 insufficient
+  balance) are annotated in the event so the next reader does not re-derive them.
+  Observability only: every helper returns exactly what it returned before —
+  `None`/`False` on failure, `ValueError` on a definitive reject — so the close-only
+  latch behaviour is unchanged, and both the recording and the sink are fault-isolated
+  (a failed durable write logs at WARNING and never reaches the trading path).
+  Credentials, signatures and request headers are never recorded.
+- **The primary checkout is now write-protected against agent mutation** (#1082;
+  filesystem sibling of #1070). An agent shell's cwd is silently reset to the
+  primary checkout mid-task, after which every *relative* path resolves there
+  instead of in the agent's worktree — a read returns stale content (recorded:
+  247 lines of a 578-line file, no error) and a `sed -i` writes into the tree
+  that must stay pinned to `main`. The #1070 import guard cannot cover this: a
+  `sed -i` imports nothing. `tools/primary_checkout_guard.py` runs as a
+  `PreToolUse` hook (registered in `.claude/settings.json`) and refuses, with a
+  banner naming both paths and the remedy, any `Edit`/`Write` or write-shaped
+  `Bash` command targeting the primary checkout's working tree, plus a relative
+  read issued from the primary checkout. Both are gated on whether the session
+  has actually worked inside a worktree, so an ordinary single clone (every
+  contributor, Claude Code Web) and the PM daemon writing `.claude/state/log.md`
+  in the primary are never guarded. `<primary>/.git/**`, `<primary>/.claude/worktrees/**` and git-ignored
+  paths (shared `.venv`, `logs/`) stay writable. A hook — not `chmod`/ACLs —
+  because agents run as the human's uid, so only "am I inside a Claude Code
+  session?" separates the two; the human's editor and terminal are unaffected.
+  Deliberate override: `ATB_ALLOW_PRIMARY_WRITE=1` at launch, or
+  `touch ~/.claude/atb-allow-primary-write`. Fails open by design.
+- **Worktree commands no longer silently execute another checkout's code** (#1070,
+  P0; supersedes #1024). `pip install -e .` writes a `sys.meta_path` finder whose
+  `MAPPING` hardcodes the absolute path of the checkout `make install` was run
+  from. Because `sys.meta_path` is consulted *after* `PathFinder`, that stale
+  mapping only loses when a `sys.path` entry already contains `src`/`cli` — true
+  for `python -c` and `python <repo-root>/x.py`, and **false** for the `atb`
+  console script (`sys.path[0]` is `.venv/bin`) and for `python experiments/x.py`
+  (`sys.path[0]` is `experiments/`). Every worktree shares one venv, so those two
+  shapes silently ran the primary checkout's branch. Observed impact: the same
+  365d HyperGrowth backtest returned `+114.69%` and `-28.29%` on consecutive runs
+  from the same directory, with no warning. Two layers now close this:
+  `tools/atb_worktree_shim.py`, installed into site-packages by `make install`
+  (also `make shim`) and executed from a `.pth` on every interpreter start, binds
+  top-level `src`/`cli` to the checkout enclosing the **cwd**; and `src/__init__.py`
+  calls `src._source_root.verify_source_root()`, which raises
+  `SourceRootMismatchError` with a copy-pasteable remedy whenever the imported
+  source root differs from the invoking checkout. The guard sits in the package
+  `__init__` rather than in each entry point so that `atb`, `pytest`,
+  `python experiments/*.py` and ad-hoc scripts are all covered without opting in.
+  The guard module sits at the top level of `src` rather than under `src.utils` so
+  that importing it executes no other repo module — at that moment the checkout's
+  identity is precisely what is in doubt. Root detection stops at the first
+  directory holding a `.git` entry, so a momentarily-invalid worktree cannot let
+  the walk-up climb into the primary checkout that encloses it. It is a deliberate no-op for non-editable site-packages installs (production
+  containers) and when the cwd is outside any checkout. Escape hatches:
+  `ATB_DISABLE_WORKTREE_SHIM=1` (skip the shim), `ATB_ALLOW_SOURCE_ROOT_MISMATCH=1`
+  (downgrade the guard to a stderr warning). **The shim lives in site-packages,
+  which is not version-controlled — re-run `make shim` after any venv rebuild;
+  `python tools/install_worktree_shim.py --check` verifies it.** A failed shim
+  install (read-only site-packages, system python) warns and continues rather than
+  breaking `make install`; only `--check` reports it through the exit code.
+  Diagnose with `python -P -c "import src; print(src.__file__)"` — the `-P` matters,
+  since plain `-c` puts the cwd on `sys.path` and prints a false all-clear.
+
+### Changed
+- **`src/config/risk-limits.json` now governs the running system** (#986, design
+  §3.5 "Hydration"). The Board-ratified limits file was previously **inert**: its
+  loader (`src/config/risk_limits.py`, shipped in #1034) had zero consumers in
+  `src/`, so the values that actually drove the engines came from
+  `src/config/constants.py`. The Board ratified a file that controlled nothing,
+  and changing a limit required a code deploy. Now `RiskParameters` defaults the
+  six ratified risk-limit fields (`base_risk_per_trade`, `max_risk_per_trade`,
+  `max_position_size`, `max_daily_risk`, `max_drawdown`,
+  `max_correlated_exposure`) to a sentinel hydrated from `get_risk_limits()` in
+  `__post_init__`, so every bare `RiskParameters()` yields ratified values by
+  construction. Explicit constructor arguments still win (strategy/caller intent,
+  clamped downstream by the engines).
+- **Fail-closed boot**: the live runner, the backtest CLI, and `ExperimentRunner`
+  call `get_risk_limits()` before any provider/exchange construction. A missing,
+  unreadable, or schema-invalid limits file now stops the engine before it can
+  reach a venue, instead of silently falling back to a constant.
+- **Risk flags on the live and backtest CLIs default to `None`** ("use the
+  ratified value") instead of hardcoded literals. This retires the drifted
+  backtest defaults, which ran at **half** live risk and 2.5x live drawdown
+  tolerance: `--risk-per-trade` 0.01 -> 0.02, `--max-risk-per-trade` 0.02 -> 0.03,
+  `--max-drawdown` 0.5 -> 0.20. Live values are unchanged (constants and the
+  ratified JSON already agreed at 0.02 / 0.03 / 0.20).
+- **BEHAVIOURAL CHANGE — a bare `Backtester` now caps positions at the ratified
+  20%, not 10%** (#1073 follow-up). `Backtester.max_position_size` used to
+  *report* `DEFAULT_MAX_POSITION_SIZE` (0.10) whenever `risk_parameters is None`,
+  while the entry/exit handlers were built from
+  `risk_manager.params.max_position_size` — which #1073 hydrated to 0.20. The
+  reported cap and the enforced cap therefore disagreed, and the regression guard
+  (`tests/unit/test_backtest_live_parity.py`) kept passing because it compared the
+  reported value against the same 0.10 literal. Measured on
+  `Backtester(strategy, data_provider, initial_balance=10_000)`:
+
+  | | before #1073 | #1073 as merged | now |
+  |---|---|---|---|
+  | `.max_position_size` (reported) | 0.10 | 0.10 | **0.20** |
+  | `risk_manager.params` (enforced) | 0.10 | **0.20** | **0.20** |
+  | entry/exit handler | 0.10 | **0.20** | **0.20** |
+
+  The property now reads `risk_manager.params.max_position_size`
+  unconditionally, so reported == enforced by construction. **0.20 is the
+  intended default**: parity with live is the whole point of the single-source
+  design, and a backtest that silently sizes differently from the ratified live
+  cap is the measurement error this change exists to remove. The parity test now
+  asserts reported == enforced == the loader's value, so it cannot pass vacuously
+  again.
+
+  **Consequence for existing results (relevant to #1081) — the blast radius
+  differs by call path, because only two seams consult a strategy's
+  `max_fraction`.** `resolve_strategy_max_position_size` is applied at exactly
+  two sites, `cli/commands/backtest.py` and `src/experiments/runner.py`;
+  **`Backtester.__init__` never calls it**, and there is no other `max_fraction`
+  consumer anywhere under `src/engines/backtest/`. So:
+  - **Via `atb backtest` or `ExperimentRunner`** (the seam applies): only
+    strategies that declare no `max_fraction` shift. Auditing
+    `src/strategies/*.py`, that is **`ml_adaptive` and `ensemble_weighted`**
+    alone — their default backtests move 0.10 -> 0.20.
+  - **Via direct `Backtester(...)` construction** (research harnesses, ad-hoc
+    scripts, and `cli/commands/migration.py`, which builds
+    `RiskParameters(base_risk_per_trade=…, max_risk_per_trade=…)` with no
+    `max_position_size`): **every strategy shifts**, `max_fraction` regardless.
+    A bare `Backtester(AdaptiveTrend(), ...)` ran at 0.10 and now runs at 0.20 —
+    never at its declared 0.95. Every stored `atb migration` baseline is on this
+    path.
+
+  A result is therefore only safe to compare across this boundary if it came
+  through the CLI/harness seam **and** the strategy declares `max_fraction`.
+  Direct-construction results are not comparable across the boundary for any
+  strategy.
+
+  **"Unaffected" here means reproducible, not comparable to live.**
+  `src/strategies/ml_basic.py` and `ml_sentiment.py` declare
+  `"max_fraction": DEFAULT_MAX_POSITION_SIZE`, pinning themselves to the
+  now-retired 0.10 constant — so through the CLI seam they keep backtesting at
+  0.10 against a ratified **live** cap of 0.20. Their numbers still reproduce;
+  they are not live-representative. Whether that tighter sizing is deliberate or
+  an accidental dependency on a constant slated for deletion in #986 step 7 is
+  tracked for an explicit decision in #1089, not settled here.
+- **Live behaviour: the enforced bounds are unchanged, but scale-in accounting
+  and the short-entry cap move.** The drawdown guard's cap resolves to 0.20
+  before and after (matching the deployed prod boot log `hard cap=20.0%`), and
+  the effective live position bound stays 0.20 (`railway.json` pins
+  `--max-position 0.20`). Two live-reachable paths do read
+  `params.max_position_size`, so "no live sizing path is affected" was too
+  strong:
+  - *Scale-in accounting.* `PortfolioRiskManager.adjust_position_after_scale_in`
+    clamps tracked exposure to `max(0.0, params.max_position_size - current)` and
+    charges the difference to `daily_risk_used`. It is reached from
+    `src/engines/live/execution/exit_handler.py` on every scale-in, and
+    `hyper_growth` configures `scale_in_thresholds` with `max_scale_ins: 2`. With
+    the field moving 0.10 -> 0.20, the *tracked* headroom doubles. Executed size is
+    still clamped by the engine-level `--max-position 0.20`, so this is arguably a
+    fix — the accounting ceiling and the execution ceiling now agree instead of the
+    accounting one under-counting — but it is a live behavioural delta, not a no-op.
+  - *Short entries.* `entry_coordinator` bounds a short by
+    `min(short_fraction, state.max_position_size)` on the branch gated by
+    `overrides.get("position_sizer")`, which `ComponentStrategy.get_risk_overrides()`
+    always populates — so the gate is truthy for every component strategy. The
+    effective short cap therefore moves 0.10 -> 0.20 the moment shorts are
+    re-enabled on a strategy that does not set the field explicitly. This is
+    dormant today only because of #1030's long-only **config flag**, not because of
+    any code guarantee — and long-only's evidence base is itself under
+    re-examination ([D-2026-08-13-06], #1081), so treat it as a near-term state.
+
 ### Added
+- Parity tripwire tests (design §3.9.4): `RiskParameters()` must equal the
+  ratified loader values field-by-field, so any future drift between the file the
+  Board signs and the values the engines construct fails CI
+  (`tests/unit/config/test_risk_parameters_hydration.py`), plus boot-wiring and
+  fail-closed tests for the three entry points
+  (`tests/unit/config/test_risk_limits_boot_wiring.py`).
 - **HyperGrowth/ETHUSDT is long-only by explicit configuration** (#1020,
   board-approved proposal 2026-07-12-01): `MLBasicSignalGenerator` gains an
   `allow_shorts` flag (default `True`) that, when `False`, withholds the
@@ -101,6 +398,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behavior change when neither flag is passed; the live path cannot be pinned.
 
 ### Fixed
+- **Restart-safe peak/baseline seeding now works on carry-forward boots** (#1036):
+  both durable-history seeders — the `MaxDrawdownGuard` peak (#1001) and the
+  `AccountCircuitBreaker` daily baseline + drawdown peak (#1032) — read
+  `_recovered_inactive_session_id` to find the prior session holding the
+  `account_history` rows. That field's lifetime belongs to the #668
+  carry-forward re-entry guard, which clears it during startup BEFORE the first
+  loop iteration, so on exactly the boot path a mid-drawdown restart takes
+  (clean restart → NEW session → positions carried forward) both seeders read an
+  empty value, silently self-anchored to the post-restart balance, and logged
+  "account_history peak unavailable" as if that were normal — for 30 days on
+  staging. Fixed with a dedicated `_history_seed_session_id`, written once by
+  `LiveSessionRecoverer` when a prior session is found and never cleared, and
+  resolved through the new `src/engines/live/monitoring/seed_lineage.py`; the
+  lineage is now owned by the seeders' need rather than by an unrelated guard.
+  The documented ~3s first-snapshot race is handled deterministically instead of
+  by timing: an empty-but-successful read is terminal only when NO prior session
+  exists (a genuinely fresh account, unchanged behaviour), and is retried within
+  the existing `MAX_SEED_ATTEMPTS` budget when history was expected — the guard
+  arms provisionally from the current balance so the cap is never unarmed and
+  ratchets the peak UP via the new `MaxDrawdownGuard.raise_peak`, while the
+  breaker keeps evaluating (its `seed_peak` only ever raises). Seeding
+  provenance now tells the truth: the `peak_seed` field on breaker trip/dry-run
+  events gains a third value, `seed_unavailable`, for "durable history was
+  expected but could not be obtained" — a defect logged at WARNING — so it can
+  no longer be confused with `self_anchored`, which means "there was genuinely
+  nothing to seed from". The guard logs the same provenance when it arms.
+  Prod boots are unaffected (they reuse the active session, whose peak already
+  resolved); the 2026-07-14 staging boot would have armed at the durable
+  $1015.98 rather than $1015.84, which flips no historical trip decision.
+  Review round: the in-line pre-order gate (`check_before_new_risk`) now
+  ratchets a provisionally-armed peak too — it previously evaluated against the
+  stale boot balance and could admit the entry that the loop check tripped
+  close-only on moments later, re-opening the one-iteration leak that gate
+  exists to close (the same stale peak also under-throttled `_durable_peak_balance`
+  dynamic sizing). The upgrade retries get their own attempt counter, consumed
+  only by the once-per-iteration loop check, so the several chokepoint calls per
+  iteration cannot burn the 10-attempt budget in seconds. A recovery lookup that
+  RAISES now sets `_history_seed_lookup_failed`, so an undetermined lineage
+  expects history and latches `seed_unavailable` instead of laundering a failed
+  lookup into a legitimate `self_anchored`. `MAX_DRAWDOWN_BREACH` risk events now
+  carry `peak_seed`, matching the breaker, so a breach measured off a provisional
+  peak is distinguishable in `system_events` from one measured off durable
+  history. The legacy `_recovered_inactive_session_id` fallback and its Protocol
+  members are gone, making the decoupling unconditional. Finally, a session-REUSE
+  boot that finds no snapshots no longer logs "durable seeding FAILED … measuring
+  from the depressed value" — there was nothing to seed from, and the wording now
+  says so.
+
 - **Macro-event calendar refilled through Jan 2027** (#1053): `config/macro_events.json`
   had no event newer than 2026-07-14, so the macro de-risk guard had zero upcoming
   coverage and its staleness canary

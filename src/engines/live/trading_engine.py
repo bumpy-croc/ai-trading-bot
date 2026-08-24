@@ -74,6 +74,7 @@ from src.engines.live.monitoring import (
 )
 from src.engines.live.monitoring.circuit_breaker_enforcer import CircuitBreakerEnforcer
 from src.engines.live.monitoring.drawdown_guard import MaxDrawdownEnforcer, MaxDrawdownGuard
+from src.engines.live.monitoring.latched_condition_monitor import LatchedConditionMonitor
 from src.engines.live.monitoring.system_halt_enforcer import SystemHaltEnforcer
 from src.engines.live.recovery import LiveSessionRecoverer
 from src.engines.live.startup import LiveStartupSequencer
@@ -646,6 +647,17 @@ class LiveTradingEngine:
         # new session (#668); None when recovery took the active/crash path or
         # found no recent session.
         self._recovered_inactive_session_id: int | None = None
+        # Durable seeding lineage (#1036): the session whose account_history
+        # rows the restart-safe risk seeders (drawdown guard peak, circuit
+        # breaker baseline/peak) must baseline from. Set once by recovery and
+        # never cleared — _recovered_inactive_session_id above is cleared by
+        # the #668 carry-forward guard before the first loop iteration, which
+        # silently disarmed both seeders on carry-forward boots.
+        self._history_seed_session_id: int | None = None
+        # Set when the recovery lookup itself failed: the lineage is undetermined
+        # rather than known-absent, so the seeders must expect history instead of
+        # self-anchoring as if the account were fresh (#1036).
+        self._history_seed_lookup_failed: bool = False
 
     def _init_dynamic_risk_manager(self) -> None:
         """Build the dynamic-risk manager now that the database is available."""
@@ -769,6 +781,8 @@ class LiveTradingEngine:
         # Trading state
         self.is_running = False
         self._close_only_mode = False  # No new entries when True; exits still run
+        # Why the latch was tripped, for the re-announcement message (#1095).
+        self._close_only_reason: str | None = None
         # Startup account-sync may stage a balance correction to persist after the
         # session is wired; owned by LiveStartupSequencer, declared here so the
         # engine carries the attribute for the startup backref Protocol (#486).
@@ -947,6 +961,9 @@ class LiveTradingEngine:
         self.live_execution_engine.position_snapshot_provider = lambda: list(
             self.live_position_tracker.positions.values()
         )
+        # Exchange order rejections (code + rejected params) land in
+        # system_events instead of dying with the application log (#1094).
+        self.live_execution_engine.attach_exchange_error_sink(self.exchange_interface)
 
     def _init_entry_handler(self, entry_handler: LiveEntryHandler | None) -> ExposureGovernor:
         """Build the entry handler and its exposure/macro/circuit-breaker gates."""
@@ -1081,6 +1098,12 @@ class LiveTradingEngine:
             halt_state=self._system_halt,
         )
         self._system_halt_enforcer.prime()
+        # Re-announce latched conditions until a human clears them (#1096) and
+        # make the in-process close-only latch observable in system_events (#1095).
+        self._latched_condition_monitor = LatchedConditionMonitor(
+            engine_state=self,
+            halt_state=self._system_halt,
+        )
 
         # Startup recovery — session balance, persisted positions, exchange
         # reconciliation. Reads/writes engine state at call time (#486).
@@ -1284,16 +1307,26 @@ class LiveTradingEngine:
             exit_on_crash=exit_on_crash,
         )
 
-    def _enter_close_only_mode(self) -> None:
-        """Enter close-only mode: no new entries, exits/stops/trailing still active."""
+    def _enter_close_only_mode(self, reason: str | None = None) -> None:
+        """Enter close-only mode: no new entries, exits/stops/trailing still active.
+
+        ``reason`` is recorded so the re-announcement (#1096) can still say WHY
+        entries are blocked days later, when the log line that explained it has
+        rotated out of the platform's log retention (#1094).
+        """
         if not self._close_only_mode:
             self._close_only_mode = True
-            logger.critical("🚨 CLOSE-ONLY MODE ACTIVATED — no new entries until manual review")
+            self._close_only_reason = reason
+            detail = f" (reason: {reason})" if reason else ""
+            logger.critical(
+                "🚨 CLOSE-ONLY MODE ACTIVATED — no new entries until manual review%s", detail
+            )
             # Emit once on transition (guarded above) so the kill-switch is
-            # visible in system_events and pages an operator.
+            # visible in system_events and pages an operator. The
+            # LatchedConditionMonitor re-announces it for as long as it holds.
             self._record_event(
                 EventType.ALERT,
-                "Close-only mode activated — no new entries until manual review",
+                f"Close-only mode activated — no new entries until manual review{detail}",
                 severity="critical",
                 component="risk",
                 error_code="CLOSE_ONLY",
@@ -1304,7 +1337,10 @@ class LiveTradingEngine:
         """Resume normal trading after close-only mode review."""
         if self._close_only_mode:
             self._close_only_mode = False
+            self._close_only_reason = None
             logger.info("✅ Close-only mode deactivated — normal trading resumed")
+            # The monitor writes the durable CLOSE_ONLY_LATCH_CLEARED row on its
+            # next pass; nothing to page here.
 
     def _start_websocket_streams(self, symbol: str, timeframe: str) -> None:
         """Initialize WebSocket streams for reduced API weight."""
@@ -1551,6 +1587,10 @@ class LiveTradingEngine:
                 # `atb live-control halt` blocks new risk in this very
                 # iteration (and on every data-outage `continue` path below).
                 self._system_halt_enforcer.check()
+                # Re-announce anything still blocking entries (#1096). Runs
+                # before the data-freshness `continue` paths so a latch keeps
+                # being reported through a market-data outage too.
+                self._latched_condition_monitor.check()
                 # For mock and real providers, update live data if supported.
                 # Skip when WS kline cache is active (no REST needed).
                 if not self._ws_kline_active and hasattr(self.data_provider, "update_live_data"):
@@ -1751,7 +1791,9 @@ class LiveTradingEngine:
                             unreachable_for,
                             DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS,
                         )
-                        self._enter_close_only_mode()
+                        self._enter_close_only_mode(
+                            f"database unreachable for {unreachable_for:.0f}s"
+                        )
                     logger.warning(
                         "Database temporarily unreachable in trading loop (%s); "
                         "backing off %.0fs and retrying — not counted toward "

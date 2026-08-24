@@ -85,10 +85,12 @@ class RecoveryEngineState(Protocol):
     current_balance: float
     _close_only_mode: bool
     _recovered_inactive_session_id: int | None
+    _history_seed_session_id: int | None
+    _history_seed_lookup_failed: bool
 
     def _strategy_name(self) -> str: ...
 
-    def _enter_close_only_mode(self) -> None: ...
+    def _enter_close_only_mode(self, reason: str | None = None) -> None: ...
 
     def _log_trade(self, trade: Trade) -> None: ...
 
@@ -145,6 +147,15 @@ class LiveSessionRecoverer:
                 return None
 
             logger.info("🔍 Found %s session #%s", source, session_id)
+
+            # Durable seeding lineage (#1036): this session holds the
+            # account_history rows the restart-safe risk seeders must baseline
+            # from. Recorded for BOTH recovery paths (reused active session and
+            # clean restart) and never cleared — unlike
+            # _recovered_inactive_session_id, whose lifetime belongs to the #668
+            # carry-forward guard, which clears it during startup before the
+            # first loop iteration runs.
+            state._history_seed_session_id = session_id
 
             # Clean restart (inactive session): remember it so start() can carry its
             # OPEN positions forward into the new session — INDEPENDENT of whether a
@@ -206,6 +217,13 @@ class LiveSessionRecoverer:
             # balance). Propagate so startup fails fast.
             raise
         except Exception as e:
+            # The lineage is now UNDETERMINED, not absent: the lookup could not
+            # prove this is a fresh account. Without this flag the seeders would
+            # read an empty _history_seed_session_id, conclude "no history
+            # exists", and latch `self_anchored` — reporting a failed lookup as
+            # a legitimate fresh-account anchor (#1036). Flagging it makes them
+            # expect history, retry, and latch `seed_unavailable` with a WARNING.
+            state._history_seed_lookup_failed = True
             logger.error("❌ Error recovering session: %s", e, exc_info=True)
             return None
 
@@ -541,7 +559,10 @@ class LiveSessionRecoverer:
                         # Route through the guarded helper so the CLOSE_ONLY event
                         # fires — this path previously entered close-only SILENTLY,
                         # unlike the reconcile_startup path below. #853
-                        state._enter_close_only_mode()
+                        state._enter_close_only_mode(
+                            f"{critical_count} CRITICAL reconciliation issues while "
+                            "resolving pending orders"
+                        )
                     # One bounded, deduped, paged-on-critical summary — this
                     # resolve_pending path is where the 714 UNKNOWN-order storm arose.
                     self._emit_reconcile_summary(
@@ -581,7 +602,9 @@ class LiveSessionRecoverer:
                     )
                     # Route through the guarded helper so the CLOSE_ONLY event is
                     # emitted on this startup-critical path too, not just runtime.
-                    state._enter_close_only_mode()
+                    state._enter_close_only_mode(
+                        f"{critical_count} CRITICAL startup reconciliation issues"
+                    )
                 self._emit_reconcile_summary(results, critical_count, high_count, "reconciliation")
 
                 # Log HIGH severity auto-corrections (cancelled entries, SL fills)

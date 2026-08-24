@@ -53,6 +53,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# How recent an exchange order error must be to be attributed to the stop-loss
+# attempt of the cycle currently reporting a position as unprotected. Held below
+# DEFAULT_RECONCILIATION_INTERVAL_SECONDS so a record can only ever come from the
+# cycle in flight, never from a previous one (#1094).
+_EXCHANGE_ERROR_ATTRIBUTION_WINDOW_S = 90.0
+
 
 def _emit_event(
     on_event: Any,
@@ -3149,7 +3155,8 @@ class PeriodicReconciler:
             db_manager: Database manager.
             session_id: Current trading session ID.
             interval: Seconds between reconciliation cycles.
-            on_critical: Callback invoked on CRITICAL severity (e.g., enter close-only mode).
+            on_critical: Callback invoked with a human-readable reason on CRITICAL
+                severity (e.g., the engine's ``_enter_close_only_mode``).
             on_event: Callback (the engine's ``_record_event``) that writes a system_events
                 row and optionally pages an operator; propagated to the child reconciler.
                 None disables it (standalone use / tests).
@@ -4074,7 +4081,11 @@ class PeriodicReconciler:
         # 5. Trigger close-only mode on CRITICAL
         if max_severity == Severity.CRITICAL and self.on_critical:
             try:
-                self.on_critical()
+                # Pass WHY: the close-only latch keeps this reason for its
+                # re-announcements long after the log line rotates away (#1095).
+                self.on_critical(
+                    "periodic reconciliation CRITICAL: " + self._format_findings(findings)
+                )
             except Exception as e:
                 logger.error("on_critical callback failed: %s", e)
 
@@ -4173,6 +4184,38 @@ class PeriodicReconciler:
             alert=True,
         )
 
+    def _last_exchange_order_error(self, symbol: str) -> str | None:
+        """The exchange's own reason for its most recent order failure on ``symbol``.
+
+        The SL helpers return ``None`` on failure, so the audit row previously
+        said only "exchange returned no order id" (#1094). The provider now
+        records the rejection; surface it here so the audit trail names the
+        Binance code — but only when the record provably belongs to THIS
+        position's stop-loss attempt in THIS cycle. Best-effort — never raises.
+        """
+        try:
+            error = getattr(self.exchange, "last_order_error", None)
+            if error is None or getattr(error, "symbol", None) != symbol:
+                return None
+            # One slot on a shared exchange instance, overwritten by any order
+            # failure on any path and never cleared on success. Without these two
+            # filters an entry rejection from hours ago, or an error predating a
+            # cause that never called the exchange at all, would be reported as
+            # THE reason this position is unprotected. A confidently wrong pointer
+            # in an incident artifact is worse than the honest generic string.
+            if not str(getattr(error, "operation", "")).startswith("place_stop_loss"):
+                return None
+            age_seconds = (datetime.now(UTC) - error.occurred_at).total_seconds()
+            if age_seconds > _EXCHANGE_ERROR_ATTRIBUTION_WINDOW_S:
+                return None
+            code = error.error_code if error.error_code is not None else "unknown"
+            reason = f"exchange code={code}: {error.error_message}"
+            known = error.known_cause
+            return f"{reason} [{known}]" if known else reason
+        except Exception as e:  # pragma: no cover - defensive; audit must not break
+            logger.warning("Failed to read last exchange order error for %s: %s", symbol, e)
+            return None
+
     def _audit_unprotected(self, position: Any, cause: str) -> str:
         """Persist a CRITICAL audit row for a position left without a stop-loss and
         return a short operator-facing detail string.
@@ -4185,6 +4228,9 @@ class PeriodicReconciler:
         """
         symbol = getattr(position, "symbol", "unknown")
         detail = f"{symbol} unprotected — SL re-placement failed ({cause})"
+        exchange_reason = self._last_exchange_order_error(symbol)
+        if exchange_reason:
+            detail = f"{detail}; {exchange_reason}"
         try:
             self.db_manager.log_audit_event(
                 session_id=self.session_id,
