@@ -32,8 +32,9 @@ class _State:
             get_session_peak_equity=lambda **kw: self._session_peak_equity,
         )
 
-    def _enter_close_only_mode(self):
+    def _enter_close_only_mode(self, reason: str | None = None):
         self._close_only_mode = True
+        self._close_only_reason = reason
 
     def _record_event(self, *args, **kwargs):
         self.events.append(kwargs.get("error_code"))

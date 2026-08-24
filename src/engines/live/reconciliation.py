@@ -3155,7 +3155,8 @@ class PeriodicReconciler:
             db_manager: Database manager.
             session_id: Current trading session ID.
             interval: Seconds between reconciliation cycles.
-            on_critical: Callback invoked on CRITICAL severity (e.g., enter close-only mode).
+            on_critical: Callback invoked with a human-readable reason on CRITICAL
+                severity (e.g., the engine's ``_enter_close_only_mode``).
             on_event: Callback (the engine's ``_record_event``) that writes a system_events
                 row and optionally pages an operator; propagated to the child reconciler.
                 None disables it (standalone use / tests).
@@ -4080,7 +4081,11 @@ class PeriodicReconciler:
         # 5. Trigger close-only mode on CRITICAL
         if max_severity == Severity.CRITICAL and self.on_critical:
             try:
-                self.on_critical()
+                # Pass WHY: the close-only latch keeps this reason for its
+                # re-announcements long after the log line rotates away (#1095).
+                self.on_critical(
+                    "periodic reconciliation CRITICAL: " + self._format_findings(findings)
+                )
             except Exception as e:
                 logger.error("on_critical callback failed: %s", e)
 

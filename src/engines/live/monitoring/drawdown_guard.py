@@ -318,7 +318,7 @@ class DrawdownEngineState(Protocol):
     db_manager: DatabaseManager
     _close_only_mode: bool
 
-    def _enter_close_only_mode(self) -> None: ...
+    def _enter_close_only_mode(self, reason: str | None = None) -> None: ...
 
     def _record_event(
         self,
@@ -421,7 +421,11 @@ class MaxDrawdownEnforcer:
         # also re-fires if close-only is cleared while the breach persists, so
         # resume_trading() alone cannot silently restart entries mid-breach.
         try:
-            state._enter_close_only_mode()
+            state._enter_close_only_mode(
+                f"max-drawdown hard cap breached: drawdown "
+                f"{assessment.drawdown * 100:.2f}% >= limit "
+                f"{self._guard.max_drawdown_pct * 100:.1f}%"
+            )
             self._breach_notified = True
             message = (
                 f"MAX DRAWDOWN HARD CAP BREACHED: drawdown {assessment.drawdown * 100:.2f}% "
