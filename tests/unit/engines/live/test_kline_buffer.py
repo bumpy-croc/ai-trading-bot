@@ -322,3 +322,113 @@ class TestEdgeCases:
 
         result = buf.get_dataframe()
         pd.testing.assert_frame_equal(result, original)
+
+
+@pytest.mark.fast
+class TestClosedBarTracking:
+    """Closed-bar frontier tracking for closed-candle gating (parity plan P1.0/D1).
+
+    The buffer reads the Binance kline ``x`` (is_closed) flag and exposes
+    ``last_closed_bar_time`` — the open time of the newest bar known closed.
+    Decision paths consume this; protective paths never wait on it.
+    """
+
+    def test_seed_treats_tail_as_forming(self):
+        """After REST seed, the tail is conservatively forming: frontier is index[-2]."""
+        seed_df = _make_seed_df(5)
+        buf = KlineBuffer("BTCUSDT", "1h", _make_provider(seed_df))
+
+        assert buf.last_closed_bar_time == seed_df.index[-2]
+
+    def test_forming_tick_does_not_advance_frontier(self):
+        """A non-closed update to the tail leaves the frontier at index[-2]."""
+        seed_df = _make_seed_df(5)
+        buf = KlineBuffer("BTCUSDT", "1h", _make_provider(seed_df))
+
+        tail_ts_ms = int(seed_df.index[-1].timestamp() * 1000)
+        buf.on_kline(_make_kline_event(tail_ts_ms, 1, 2, 0.5, 1.5, 10, closed=False))
+
+        assert buf.last_closed_bar_time == seed_df.index[-2]
+
+    def test_close_event_marks_tail_closed(self):
+        """An x=true event for the tail advances the frontier to the tail."""
+        seed_df = _make_seed_df(5)
+        buf = KlineBuffer("BTCUSDT", "1h", _make_provider(seed_df))
+
+        tail_ts_ms = int(seed_df.index[-1].timestamp() * 1000)
+        buf.on_kline(_make_kline_event(tail_ts_ms, 1, 2, 0.5, 1.5, 10, closed=True))
+
+        assert buf.last_closed_bar_time == seed_df.index[-1]
+
+    def test_new_bar_after_close_keeps_frontier_on_previous_tail(self):
+        """After a close event and the next bar's first forming tick, the frontier
+        is the just-closed bar and the new tail counts as forming."""
+        seed_df = _make_seed_df(5)
+        buf = KlineBuffer("BTCUSDT", "1h", _make_provider(seed_df))
+        tail_ts_ms = int(seed_df.index[-1].timestamp() * 1000)
+
+        buf.on_kline(_make_kline_event(tail_ts_ms, 1, 2, 0.5, 1.5, 10, closed=True))
+        buf.on_kline(
+            _make_kline_event(tail_ts_ms + 3_600_000, 1.5, 1.6, 1.4, 1.5, 1, closed=False)
+        )
+
+        assert buf.last_closed_bar_time == seed_df.index[-1]
+
+    def test_missed_close_event_recovered_by_next_bar(self):
+        """If the x=true event was dropped, the next bar's arrival still proves the
+        previous tail closed (a successor bar exists)."""
+        seed_df = _make_seed_df(5)
+        buf = KlineBuffer("BTCUSDT", "1h", _make_provider(seed_df))
+        tail_ts_ms = int(seed_df.index[-1].timestamp() * 1000)
+
+        # No x=true for the old tail — straight to the next bar's forming tick.
+        buf.on_kline(
+            _make_kline_event(tail_ts_ms + 3_600_000, 1.5, 1.6, 1.4, 1.5, 1, closed=False)
+        )
+
+        assert buf.last_closed_bar_time == seed_df.index[-1]
+
+    def test_resync_resets_tail_to_forming(self):
+        """After a REST resync the new tail is conservatively forming again."""
+        seed_df = _make_seed_df(5)
+        provider = _make_provider(seed_df)
+        buf = KlineBuffer("BTCUSDT", "1h", provider)
+        tail_ts_ms = int(seed_df.index[-1].timestamp() * 1000)
+        buf.on_kline(_make_kline_event(tail_ts_ms, 1, 2, 0.5, 1.5, 10, closed=True))
+        assert buf.last_closed_bar_time == seed_df.index[-1]
+
+        newer = _make_seed_df(6)
+        provider.get_live_data = MagicMock(return_value=newer)
+        buf.resync_from_rest(provider, "BTCUSDT", "1h")
+
+        assert buf.last_closed_bar_time == newer.index[-2]
+
+    def test_empty_buffer_has_no_frontier(self):
+        """An empty buffer exposes no closed bar."""
+        empty = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        buf = KlineBuffer("BTCUSDT", "1h", _make_provider(empty))
+
+        assert buf.last_closed_bar_time is None
+
+    def test_single_row_frontier_requires_close_event(self):
+        """A single-row buffer has no frontier until its bar receives x=true."""
+        single = _make_seed_df(1)
+        buf = KlineBuffer("BTCUSDT", "1h", _make_provider(single))
+        assert buf.last_closed_bar_time is None
+
+        ts_ms = int(single.index[-1].timestamp() * 1000)
+        buf.on_kline(_make_kline_event(ts_ms, 1, 2, 0.5, 1.5, 10, closed=True))
+
+        assert buf.last_closed_bar_time == single.index[-1]
+
+    def test_close_state_survives_late_forming_duplicate(self):
+        """A late/duplicate forming event for an already-closed tail does not
+        regress the frontier."""
+        seed_df = _make_seed_df(5)
+        buf = KlineBuffer("BTCUSDT", "1h", _make_provider(seed_df))
+        tail_ts_ms = int(seed_df.index[-1].timestamp() * 1000)
+
+        buf.on_kline(_make_kline_event(tail_ts_ms, 1, 2, 0.5, 1.5, 10, closed=True))
+        buf.on_kline(_make_kline_event(tail_ts_ms, 1, 2, 0.5, 1.4, 9, closed=False))
+
+        assert buf.last_closed_bar_time == seed_df.index[-1]
