@@ -8,7 +8,8 @@ while maintaining consistent data synchronization.
 
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
@@ -104,6 +105,78 @@ class Order:
     client_order_id: str | None = None  # Our atb_... idempotency key
 
 
+# Binance reject codes whose root cause is already documented, so a durable
+# error row can name it instead of leaving the next reader to re-derive it.
+KNOWN_ORDER_REJECT_CAUSES: dict[int, str] = {
+    -1111: (
+        "PRICE_FILTER tickSize precision: price/stopPrice carries more decimals "
+        "than the symbol's tick size (quantize to the tick)"
+    ),
+    51077: (
+        "LOT_SIZE stepSize precision: quantity carries more decimals than the "
+        "symbol's step size (quantize to the step)"
+    ),
+    -2010: (
+        "NEW_ORDER_REJECTED: usually insufficient free balance to cover the "
+        "order, e.g. a SELL stop-loss sized above free base holdings"
+    ),
+    -1013: "filter failure: LOT_SIZE / MIN_NOTIONAL / PRICE_FILTER rejected the order",
+    -2015: "invalid API key, IP, or permissions for this action",
+}
+
+
+@dataclass(frozen=True)
+class ExchangeOrderError:
+    """Durable evidence of an exchange rejecting or failing an order request.
+
+    Order helpers return ``None``/``False`` on failure, which erases *why* the
+    exchange refused. This record carries the exchange error code, its message
+    and the rejected request parameters so the failure stays diagnosable after
+    application logs age out. Purely observational: it never alters control flow.
+
+    ``params`` holds order parameters only (symbol, side, quantity, prices,
+    filter values). Credentials, signatures and request headers must never be
+    put here.
+    """
+
+    operation: str
+    symbol: str
+    error_message: str
+    error_code: int | None = None
+    error_type: str | None = None
+    params: dict[str, Any] = field(default_factory=dict)
+    occurred_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    @property
+    def known_cause(self) -> str | None:
+        """Documented root cause for this error code, when one is known."""
+        if self.error_code is None:
+            return None
+        return KNOWN_ORDER_REJECT_CAUSES.get(self.error_code)
+
+    def summary(self) -> str:
+        """One-line operator-facing description, error code first."""
+        code = self.error_code if self.error_code is not None else "unknown"
+        text = f"{self.operation} failed for {self.symbol} (code={code}): {self.error_message}"
+        known = self.known_cause
+        if known:
+            text = f"{text} - known cause: {known}"
+        return text
+
+    def to_details(self) -> dict[str, Any]:
+        """JSON-serialisable payload for the ``system_events`` details column."""
+        return {
+            "operation": self.operation,
+            "symbol": self.symbol,
+            "error_code": self.error_code,
+            "error_type": self.error_type,
+            "error_message": self.error_message,
+            "known_cause": self.known_cause,
+            "rejected_params": dict(self.params),
+            "occurred_at": self.occurred_at.isoformat(),
+        }
+
+
 @dataclass
 class Trade:
     """Represents a completed trade"""
@@ -133,6 +206,16 @@ class ExchangeInterface(ABC):
         """Whether this exchange is operating in margin mode. Override in subclasses."""
         return False
 
+    # Optional durable sink for order-layer failures, wired by the live engine
+    # (duck-typed, so observability can never couple execution to a provider).
+    # Class-level defaults: providers that bypass this ``__init__`` still read
+    # them safely.
+    order_error_sink: Callable[[ExchangeOrderError], None] | None = None
+    # Last recorded order failure, for callers that want to name the exchange
+    # reason in their own audit trail (e.g. the reconciler's unprotected-position
+    # rows) without re-plumbing the error through return values.
+    last_order_error: ExchangeOrderError | None = None
+
     def __init__(self, api_key: str, api_secret: str, testnet: bool = False):
         """
         Initialize the exchange interface.
@@ -147,6 +230,39 @@ class ExchangeInterface(ABC):
         self.testnet = testnet
         self._client = None
         self._initialize_client()
+
+    def _record_order_error(
+        self,
+        operation: str,
+        symbol: str,
+        *,
+        error_message: str,
+        error_code: int | None = None,
+        error_type: str | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> None:
+        """Persist why an order request failed, without touching control flow.
+
+        Order helpers still return ``None``/``False`` exactly as before; this
+        only records the exchange's reason so it outlives log retention.
+        Fully fault-isolated - an observability failure must never break or
+        delay order placement.
+        """
+        try:
+            error = ExchangeOrderError(
+                operation=operation,
+                symbol=symbol,
+                error_message=str(error_message),
+                error_code=error_code,
+                error_type=error_type,
+                params=dict(params or {}),
+            )
+            self.last_order_error = error
+            sink = self.order_error_sink
+            if sink is not None:
+                sink(error)
+        except Exception as e:  # pragma: no cover - defensive; never break trading
+            logger.warning("Failed to record exchange order error for %s: %s", symbol, e)
 
     @abstractmethod
     def _initialize_client(self):
