@@ -87,14 +87,33 @@ guard); the alerting-budget comment now lives at `engine.py:302`.
 ### 1.10 Silent wrong-source execution — exam/backtest numbers computed against the wrong code, cwd, or model
 Three separate instances this week, one meta-class: a run produced numbers, but not from the source
 it claimed.
-- **(a) Shared-venv `atb` staleness.** The `atb` console script is an editable install pinned to
-  ONE checkout; bare `atb` from any *other* worktree silently executed that checkout's code
-  (workaround + detail in §3). Sibling filed as GH #999 (script-path `sys.path` shadowing of the
-  main checkout's stale `src/`). **Escalated to P0 and fixed 2026-08-13 (GH #1070)** after the same
-  365d HyperGrowth backtest returned **+114.69%** and **−28.29%** on consecutive runs from the same
-  cwd — the first silently executing the primary checkout, then 131 commits behind on `main` and
-  pre-#1020 (shorts still enabled). Sign-flipped headline risk numbers, no warning, no error. The
-  precise mechanism and the structural fix are in §3.
+- **(a) Shared-venv `atb` staleness — the worst of the three; filed P3, recurred at P0, now FIXED
+  (GH #1070, 2026-08-13).** The editable install's generated finder hardcodes
+  `MAPPING = {'cli': '/Users/alex/Sites/ai-trading-bot/cli', 'src': '.../src'}` — the absolute path
+  of the checkout `make install` was run from. `atb` (a console script) and
+  `python /abs/path/script.py` both put the *script's own directory* at `sys.path[0]`, never cwd, so
+  `import src...` from **any** worktree resolved to the **primary checkout**, frozen on `main` at
+  2026-07-04 (131 commits behind `origin/main` as of 2026-08-13). Only `python -c` / an interactive
+  REPL insert `''` and pick up the worktree — which is exactly why the old sanity check was useless:
+  it passed in precisely the state that was broken. Demonstrated blast radius, same command, same
+  cwd, same flags: **+114.69% / 8.74% MaxDD** (silently ran the stale checkout, shorts still enabled,
+  pre-#1020) vs **−28.29% / 31.27% MaxDD** (correct code). Sign-flipped headline, no warning, no
+  error.
+  - **It is not only exams.** The 2026-08-14 `daily-trading-standup` read its ratified thresholds from
+    the same stale checkout, found no `src/config/risk-limits.json` (it landed there in #1034, promoted
+    to prod 08-13), reported *"the file path in this task's instructions is stale for `main`"* — the
+    instructions were right and the checkout was six weeks old — and silently fell back to the retired
+    `.claude/state/` copy. The values happened to match, so it read PASS. **A Board edit to the ratified
+    limits would have been invisible to the daily monitoring pass.** Under the #1070 guard that run
+    would have hard-errored instead of quietly reading six-week-old config.
+  - **Lineage:** filed at P3 as **#1024** (2026-07-13) with the ask "add a warning"; re-filed at **P0
+    as #1070** (2026-08-13) after it invalidated a Board-level decision — see §2.14. Sibling **#999**
+    covers the script-path `sys.path` shadowing variant.
+  - **Current state:** structurally fixed — a site-packages shim binds `src`/`cli` to the checkout
+    enclosing your cwd, and `src/_source_root.verify_source_root()` hard-errors on a mismatch
+    (mechanism and residual hazards in §3). `PYTHONPATH="$(pwd)" atb <cmd>` was the historical
+    workaround and still works as a belt-and-braces override; it is no longer the standing
+    requirement.
 - **(b) cwd-relative registry path.** `DEFAULT_MODEL_REGISTRY_PATH = "src/ml/models"`
   (`constants.py:25`) resolves against *process cwd* — an exam launched from the wrong directory
   silently resolved to an empty registry and produced an all-HOLD / 0-trade result that looked like
@@ -220,6 +239,22 @@ running the code. **Rule:** every merge flow and PR-review disposition runs
 `gh api repos/OWNER/REPO/pulls/<N>/comments` and explicitly dispositions **each** bot finding — a
 bot's green summary status does **not** mean zero inline findings. (Extends CLAUDE.md's "Handling PR
 Review Comments".) Earned: #948.
+- **Recurrence 2026-08-13, on the distillate PRs themselves — five findings, all correct, all merged
+  unaddressed.** `claude[bot]` left four inline comments on **#1052** (the weekly retro) and one on
+  **#1056**; every one was accurate and none was answered. Still standing on `develop` as a result:
+  the audit line calling `alert-monitor`/`staging-cohort-observer` **"DEREGISTERED, zero runs"** when
+  the same entry says they last ran 07-29/07-28; a `Ref:` index that omits §2.12, a section that
+  entry itself introduced; and "26 days" where the same anchor date gives **27** (fixed in §2.12
+  below by the 2026-08-17 retro). On #1056 the bot caught the **withdrawn 20.33% phantom-peak figure
+  being reused as live evidence at 15:40Z — about two hours before the PM independently self-caught
+  it** (§2.13 case 2). The control fired first and was not read.
+- **Rule (sharpened for docs/state PRs):** on a PR whose payload *is* the durable record — `log.md`,
+  LESSONS, incidents — an unresolved bot comment at merge time does not become a follow-up, it
+  becomes a **published error in the record**, and `log.md`'s append-only norm means it can then only
+  be retracted by a later entry, never edited. Resolve or explicitly reject each inline comment **in
+  the thread** before merging a distillate PR. Cost of skipping it here: three known-wrong statements
+  merged into the institutional record, and a two-hour-late correction on a Board-facing figure.
+  Earned: #1052, #1056.
 
 ### 2.9 Distillate deferred to someone else's PR is distillate lost — a lessons PR must land on its own
 The 2026-07-13 retro (PR #1026) bundled its LESSONS/skill distillate with a 52-line PM-directed
@@ -254,6 +289,17 @@ recovered them.
     to re-land quietly — **name it to the human in the completion summary as the top item.** The
     retro's only channel to a decision-maker is that summary; an unmerged PR queue is invisible
     everywhere else.
+- **Rule (e) — a stranded CORRECTION is worse than a stranded lesson, because the thing it corrects
+  is already published.** `log.md` is append-only, so a wrong entry is retracted by a *later* entry.
+  If that later entry sits in an unmerged PR, `develop` carries the error with nothing attached to
+  it, and every reader — including the next agent to grep the log — takes it at face value.
+  [D-2026-08-13-06] states plainly that [D-2026-08-13-04] decision 2 "is WRONG as stated"; it has
+  been `CLEAN` + CI-green + unmerged in PR #1074 for 4 days while [D-2026-08-13-04] has been on
+  `develop` that whole time (so has the tier-restore reproduction, PR #1072).
+  **Rule:** a PR whose payload is a correction/retraction of something already on `develop` is
+  merge-first, ahead of the work that prompted it. If it cannot be merged in the same session,
+  name it in the handover as a *live inconsistency in the record*, not as a pending doc PR.
+  Earned: PR #1074/#1072 vs [D-2026-08-13-04], 2026-08-13→17.
 
 ### 2.10 A monitoring run that writes nothing durable did not happen
 Between 2026-07-20 and 2026-07-27 the scheduled fleet ran ~25 times (`daily-trading-standup` 8/8
@@ -293,7 +339,9 @@ the last 14 days — a deliberate canary from #962, whose own docstring says the
 failing around **07-28 and then failed every PR to `develop`**. It was a good test firing correctly,
 on time, with a message naming the file and the fix. Nothing consumed it for 12 days, because it had
 no owner and no refill procedure. Two costs, and the second is worse:
-1. the real one — 26 days with **no upcoming macro de-risk coverage on live capital** (#1053);
+1. the real one — **27 days** (2026-07-14 → 08-10) with **no upcoming macro de-risk coverage on live
+   capital** (#1053; the "26 days" first written here was off by one against §2.11's own anchor date,
+   flagged by `claude[bot]` on #1052 and merged unaddressed — see §2.8);
 2. **every** PR showed red CI, so red became the resting state and a genuinely broken PR was
    indistinguishable from the background failure. #1048 is red solely because of this and is
    otherwise a one-line docs change.
@@ -305,6 +353,55 @@ no owner and no refill procedure. Two costs, and the second is worse:
 - **Design note:** prefer *warn* over *fail* when the staleness is in data the PR does not touch and
   the guarded code path is itself healthy — so calendar rot cannot block unrelated work.
   Earned: GH #1053 (found via #1048's `unit-tests (4)`), #962.
+
+### 2.13 A cited number is not evidence until you reproduce it — citation depth is itself a risk signal
+On 2026-08-13 **three separate numbers failed on contact with their source, in one session**:
+1. The tier-restore magnitude claim (ratified tiers → "MaxDD 17.01%, *inside the existing cap*")
+   came from a risk review **citing an earlier review** — two hops from data. Reproduced honestly it
+   is **22.23% MaxDD, still breaching the 20% cap** (#1071). The PM's decision to restore tiers
+   *instead of* raising the cap rested entirely on the disproven half; [D-2026-08-13-04] decision 2
+   had to be revised the same day ([D-2026-08-13-06]).
+2. "Prod already breached 20% live (20.33%)" was cited repeatedly as evidence for widening the cap.
+   It was **withdrawn on 2026-07-04** as phantom-era *book* value (§5.6). The PM self-caught and
+   corrected it — but only after it had framed a Board decision.
+3. #1036's assumed repro conditions ("carry-forward boots fail to seed; staging ran 30 days
+   self-anchored") were **contradicted by the actual promote boot log**, which armed at
+   `peak=$84.42, provenance db_session_max` on exactly that path ([D-2026-08-13-05]).
+- **Rule:** before a number justifies a decision, **re-run it from the data**, not from the document.
+  A figure reached by citation — review→review, log→log, summary→summary — is a *hypothesis about
+  what was measured*, and it degrades every hop. State the hop count when you quote one.
+- **Rule:** the dispatch instruction *"reproduce it yourself, and if it does not reproduce, STOP and
+  report"* is what caught all three. Put it in every dispatch that will act on a prior result — it is
+  cheap, and it was the only control that fired here. The agent that stopped rather than shipping a
+  measurably net-positive diff under a disproven framing made the right call; that is not a stall.
+- **Corollary:** report a failed reproduction at the *decision* it invalidates, not just at the
+  experiment. #1071's real finding was "[D-2026-08-13-04] decision 2 is wrong", not "MaxDD is 22.23%".
+- Related: §2.5 covers verifying an *agent's claims* against live state; this covers **our own written
+  record**, which reads as authoritative and therefore gets checked less.
+  Earned: GH #1071, #1070, #1036, [D-2026-08-13-04]/[D-2026-08-13-06], incident #845's withdrawal.
+
+### 2.14 A defect whose failure mode is "silently wrong numbers" cannot be a P3
+The shared-venv worktree substitution (§1.10a) was **known, documented in LESSONS since 2026-07-13,
+and filed as GH #1024 at `priority:p3`** with the ask "add a warning." It sat 31 days. On 2026-08-13
+it produced **+114.69% and -28.29% from the same command** and invalidated the reproduction under a
+Board-level risk decision; re-filed as **#1070, P0**. Severity was never a function of how hard the
+defect was to hit — the primary checkout had been frozen since 2026-07-04, so it was hit constantly.
+- **Rule:** priority for a measurement/provenance defect is set by **what it corrupts, not by how
+  often it errors**. A defect that throws is self-limiting; one that returns a plausible wrong number
+  costs every conclusion drawn while it is open — retroactively, including conclusions already acted
+  on. Those are P0/P1 by construction. "Add a warning" is the *fix*, not the *priority*.
+- **Rule:** documenting a silent-corruption trap is not mitigating it. §1.10a and the §3 workaround
+  were both written down and both correct; nobody applied them, because a silent failure never
+  presents the moment at which you reach for a workaround. Prefer a fix that makes the wrong thing
+  **impossible or loud** (per-worktree venv; a startup assertion that resolved `src.__file__` matches
+  the invoking repo root) over one that makes it *documented*.
+- **Corollary — freeze the dependent decisions, not just the defect.** [D-2026-08-13-06] correctly
+  held all strategy/risk parameter changes until #1070 landed (it has) and an affected-experiment
+  triage runs.
+  When a measurement channel is found untrustworthy the live question is not "fix it?" but **"which
+  already-taken decisions rest on it?"** — #1020 (long-only, live in prod since 2026-08-13) is in
+  that set today.
+  Earned: GH #1024 (P3, 2026-07-13) → #1070 (P0, 2026-08-13), #1071, [D-2026-08-13-06].
 
 ---
 
@@ -403,33 +500,58 @@ no owner and no refill procedure. Two costs, and the second is worse:
   `python -c` and `python <repo-root>/x.py` (cwd/script dir *is* the root) and **false** for:
   - the `atb` console script (`sys.path[0]` is `.venv/bin`), and
   - `python experiments/x.py` (`sys.path[0]` is `experiments/`, which has no `src/`).
-  Hence "it worked when I checked it interactively" and broke for every real run. **Fix:**
-  `tools/atb_worktree_shim.py`, copied into site-packages by `make install` and executed from a
-  `.pth` on every interpreter start; it resolves the checkout enclosing the **cwd** and inserts a
-  meta-path finder at position 0 binding top-level `src`/`cli` there. Backstop:
-  `src/__init__.py` calls `src._source_root.verify_source_root()`, which hard-errors with a
-  copy-pasteable remedy when imported-root ≠ cwd-root. It lives in the package `__init__` on
-  purpose — an entry-point-by-entry-point guard would have missed `python experiments/x.py`,
-  which is precisely the shape that produced the bad numbers. The guard module sits at the top
-  level of `src` (not under `src.utils`) so importing it executes no other repo module — the
-  checkout's identity is still in question at that point. **Diagnose with `python -P -c "import
-  src; print(src.__file__)"`; plain `-c` puts the cwd on `sys.path` and prints a false all-clear.** **If you ever rebuild the
-  venv, re-run `python tools/install_worktree_shim.py`** (or `make shim`) — the shim lives in
-  site-packages, which is not version-controlled. `python tools/install_worktree_shim.py --check`
-  verifies it. `PYTHONPATH="$(pwd)"` remains a valid one-off override. Sibling GH #999 covers the
-  script-path shadowing variant; GH #1024 (the "just add a warning" P3 framing) is superseded — a
-  warning would have been ignored exactly like the wrong number was.
+
+  Hence "it worked when I checked it interactively" and broke for every real run — the pre-fix
+  sanity check passed in exactly the state that was broken. Pre-fix, the primary checkout was frozen
+  on `main` at 2026-07-04 (131 commits behind `origin/main`), so a worktree run silently executed
+  six-week-old code: the same 365d backtest returned **+114.69% / 8.74% MaxDD** and
+  **−28.29% / 31.27% MaxDD**. **Fix:** `tools/atb_worktree_shim.py`, copied into site-packages by
+  `make install` and executed from a `.pth` on every interpreter start; it resolves the checkout
+  enclosing the **cwd** and inserts a meta-path finder at position 0 binding top-level `src`/`cli`
+  there. Backstop: `src/__init__.py` calls `src._source_root.verify_source_root()`, which
+  hard-errors (`SourceRootMismatchError`) with a copy-pasteable remedy when imported-root ≠
+  cwd-root. It lives in the package `__init__` on purpose — an entry-point-by-entry-point guard
+  would have missed `python experiments/x.py`, which is precisely the shape that produced the bad
+  numbers. The guard module sits at the top level of `src` (not under `src.utils`) so importing it
+  executes no other repo module — the checkout's identity is still in question at that point.
+  **Diagnose with `python -P -c "import src; print(src.__file__)"`; keep the `-P` — plain `python -c`
+  puts cwd on `sys.path[0]`, finds your worktree's `src/`, and prints a false all-clear in exactly
+  the broken state.**
+  - **Residual hazard — the shim lives in site-packages, which is not version-controlled, so a venv
+    rebuild silently removes it.** After any rebuild: `make shim` (or
+    `python tools/install_worktree_shim.py`). Verify with
+    `python tools/install_worktree_shim.py --check`. The `verify_source_root()` guard means a missing
+    shim fails loudly rather than returning a wrong number.
+  - `PYTHONPATH="$(pwd)" atb <cmd>` from the worktree root was the historical workaround (pre-#1070)
+    and remains a valid one-off override; it is no longer required per invocation.
+  - **Still live, NOT fixed by the import guard: plain shell reads.** A `grep`/`sed`/`cat` on a
+    *relative* path runs against whatever the shell's cwd is, and cwd resets to the primary checkout
+    between tool calls — so a relative read silently returns 2026-07-04 content. Use absolute
+    worktree paths for every file read during a worktree session (the 2026-08-17 retro tripped this
+    reading `.claude/LESSONS.md`: 247 lines in the primary checkout vs 578 in the worktree).
+  - Sibling GH #999 covers the script-path shadowing variant; GH #1024 (the "just add a warning" P3
+    framing) is superseded — a warning would have been ignored exactly like the wrong number was.
 - **`ls ~/.claude/scheduled-tasks` is NOT the task list — the scheduler registry is.** The directory
-  holds a `SKILL.md` per task and **keeps it after the task is deregistered**, so a dead task looks
-  installed forever. On 2026-08-10: 19 directories, **13 registered tasks**. `alert-monitor`,
-  `staging-cohort-observer`, `eod-worktree-prune` and `pm-fleet-watchdog` had vanished from the
-  registry and last ran 2026-07-28/29 — including `alert-monitor`, the operator-alert watchdog for a
-  **live-capital** bot, dark for 12 days. Three consecutive retros audited tasks with `ls` and
-  reported "no task missed its schedule."
+  holds a `SKILL.md` per task and **keeps it after the task is deregistered**, so a retired task looks
+  installed forever. On 2026-08-17: 19 directories, **13 registered tasks**, of which only **4 are
+  enabled** — `prune-worktrees`, `daily-trading-standup`, `weekly-model-retrain`, `weekly-retro`.
+  Three consecutive retros audited with `ls` and reported "no task missed its schedule."
   **Rule:** audit with `mcp__scheduled-tasks__list_scheduled_tasks` and **diff registry ⇄ directory
   both ways** — a directory with no registry entry is a DEAD task; check `enabled` and `lastRunAt`,
-  not just presence. (`prune-worktrees` is a *separate live task* from the dead `eod-worktree-prune`
-  directory — don't read one as evidence for the other.) Earned: GH #1050.
+  not just presence. (`prune-worktrees` is a *separate live task* from the retired `eod-worktree-prune`
+  directory — don't read one as evidence for the other.)
+  **Premise correction (Alex, 2026-08-13 on GH #1050):** the six unregistered directories are
+  **deliberate retirements, not a silent failure** — `alert-monitor` ("runs too often; the daily
+  standup does much the same thing"), `staging-cohort-observer`, `pm-fleet-watchdog`,
+  `eod-worktree-prune`, plus two non-trading leftovers (`hue-287-legacy-asset-soak`,
+  `suburani-flip-daily-watch`). The 2026-08-10 retro reported them as a 12-day monitoring outage; the
+  *audit-instrument* rule above is right, the *outage* was not. **Absence from the registry proves
+  deregistration, never intent — ask the human before calling it an outage.**
+  **Operational consequence, and it is load-bearing:** `daily-trading-standup` is now the **sole
+  automated watchdog** for the live-capital bot, so worst-case detection latency is **~24h**. Calibrate
+  escalation to that; per GH #1050 it has absorbed `alert-monitor`'s positive-state assertions
+  (`FEATURE_ENTRY_PAUSE`, `Decision:` lines flowing, >48h-flat as the #1045 symptom, registry drift).
+  Earned: GH #1050.
 - **A persisted model-provider selection silently kills every scheduled task.** `switch-model-provider`
   writes the model choice to settings, and scheduled runs inherit it. When the selection is
   unavailable the run dies **on turn 1** with `There's an issue with the selected model (<id>). It
@@ -440,6 +562,35 @@ no owner and no refill procedure. Two costs, and the second is worse:
   **Rule:** after any provider switch, confirm the next scheduled run actually produced its artifact.
   When auditing tasks, grep transcripts for `may not exist or you may not have access` — a fired-but-
   died run is invisible in `lastRunAt`, which records the *attempt*. Earned: GH #1051.
+- **Usage-limit exhaustion is a second, identical-looking turn-1 kill — and it also kills agents
+  mid-task, including during a production deploy.** On 2026-08-15 `daily-trading-standup` fired and
+  its entire transcript is one line: `You've hit your weekly limit · resets Aug 16 at 7pm
+  (Europe/London)`. `lastRunAt` updated normally. The 08-16 slot then produced no session at all, so
+  `weekly-model-retrain` missed its only weekly window. The same exhaustion killed the **prod-promote
+  agent mid-flight on 08-13**, before it reported — the PM had to verify the live deploy's boot
+  itself ([D-2026-08-13-05]).
+  **Rule:** add `hit your weekly limit` / `hit your usage limit` to the transcript greps alongside the
+  model-provider signature; treat *any* ~20-line scheduled transcript as failed-until-proven. Before
+  a long autonomous window (a promote, a tournament), check headroom — the `check-usage` skill exists
+  for exactly this — because the failure lands *after* the irreversible half of the work.
+- **The `pre-push` hook is inert — do not read "All fast tests passed" as evidence (GH #1077).**
+  `.git/hooks/pre-push` pipes pytest into `tail -5` and then reads `$?`, which is **`tail`'s** exit
+  status, so the failure branch is unreachable and the hook always exits 0. It also probes
+  `.venv/bin/python` *relative to cwd* — absent in every worktree — and falls back to bare `python`,
+  which does not exist on this machine. Observed printing `python: command not found` and
+  `All fast tests passed.` in consecutive lines. Hooks live in `$GIT_COMMON_DIR/hooks` (shared by all
+  worktrees) and are **not versioned**, so this cannot be fixed by a PR. CI's `unit-tests (1..4)` is
+  the real gate; run `PYTHONPATH=. <venv>/python tests/run_tests.py unit` yourself before pushing
+  money-path code. Same class as §2.12/§5.7: a check that cannot fail is a *disabled* check, and this
+  one is worse than absent because it prints a green line.
+- **A catch-up burst makes `lastRunAt` lie about punctuality.** Scheduled tasks only fire while the
+  app is open; on reopen, every overdue task fires at once. On 2026-08-17 `daily-trading-standup`,
+  `weekly-model-retrain` and `weekly-retro` all show `lastRunAt` within **32ms of each other**
+  (10:02:20.98–10:02:21.00Z) — three catch-ups, not three on-time runs, and three agents contending
+  for the same repo and worktrees simultaneously.
+  **Rule:** when several tasks share a `lastRunAt` to the second, that is an app-reopen batch: check
+  each against its `cronExpression` to find the slot it actually missed, and expect concurrent-agent
+  contention in that window.
 
 ---
 

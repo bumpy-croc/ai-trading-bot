@@ -15,7 +15,7 @@ are layer 4, dispatch decisions layer 2 (`docs/architecture/memory_system.md`).
 
 1. **Isolation.** Work in a disposable worktree from `origin/develop`
    (`git worktree add .claude/worktrees/<name> origin/develop --detach` or `-b <branch>`), then
-   immediately `touch .agent-active` in it (gitignored sentinel — the `eod-worktree-prune` nightly
+   immediately `touch .agent-active` in it (gitignored sentinel — the `prune-worktrees` nightly
    pruner hard-skips any worktree carrying it, plus a 48h age floor; it deleted a live agent's
    worktree mid-tournament before this existed, 2026-07-10). **Verify you own the worktree BEFORE
    any checkout:** `git worktree list` must show YOUR path — never `cd`/checkout inside a worktree
@@ -25,17 +25,23 @@ are layer 4, dispatch decisions layer 2 (`docs/architecture/memory_system.md`).
    a cherry-pick scare and a branch-switch incident earned this), never staging/prod, never a
    shared registry's `latest` symlink. The prompt must be self-contained: paths absolute,
    context included — the agent has none of yours.
-2. **Prove the worktree is what actually runs.** Immediately after creating it, run
+2. **Prove the worktree is what actually runs — provenance clause; put this in any dispatch that
+   runs code (GH #1070, P0).** Immediately after creating the worktree, run
    `python -P -c "import src; print(src.__file__)"` and confirm the path is under YOUR worktree.
    The `-P` is not optional: without it `sys.path[0]` is the cwd, so the check passes even in the
    broken state — it must reproduce the console-script shape to be worth running.
-   All worktrees share one venv whose editable install pins imports to the checkout it was
-   created from; until GH #1070 shipped, `atb` and `python experiments/*.py` silently executed
-   that other checkout's code (the same 365d backtest returned `+114.69%` and `-28.29%` on
-   consecutive runs, no warning). The shim now handles this automatically — but it lives in
-   site-packages, so a venv rebuild silently removes it. If the path is wrong:
-   `make shim` (or `python tools/install_worktree_shim.py`). **Any agent reporting a number
-   must state which checkout produced it.**
+   All worktrees share one venv whose editable install pins imports to the checkout it was created
+   from; until GH #1070 shipped, `atb …` and `python /abs/script.py` from a worktree silently
+   executed that other checkout's code (the same 365d backtest returned `+114.69%` and `-28.29%`,
+   no warning). A site-packages shim now binds `src`/`cli` to the checkout enclosing your cwd, and
+   `src/_source_root.py` hard-errors on a mismatch — but the shim is not version-controlled, so a
+   venv rebuild silently removes it. If the path is wrong: `make shim` (or
+   `python tools/install_worktree_shim.py`; `--check` verifies). `PYTHONPATH="$(pwd)"` remains a
+   valid one-off override, not a per-call requirement.
+   **File reads must still use absolute worktree paths** — the import guard does not cover them; a
+   relative `grep`/`sed`/`cat` resolves against a cwd that resets to the primary checkout and
+   silently returns stale content. **Any agent reporting a number must state, in its report, which
+   code path actually executed it.**
 3. **Compute discipline.** Heavy jobs (training, backtests) STRICTLY SEQUENTIAL — one at a
    time machine-wide (thermal + the 0.1s-timeout non-determinism under CPU contention, #913;
    also the standing "run backtests sequentially" feedback). Expect 1.5–4x nominal durations
@@ -74,10 +80,13 @@ are layer 4, dispatch decisions layer 2 (`docs/architecture/memory_system.md`).
 ## The PM side — what you owe every dispatch
 
 - **Backstop watcher on every long-running dispatch**: `run_in_background` + notify, so a lost
-  wake-up degrades to late collection, not lost work (`agent-fleet-health` has the sweep). The
-  structural backstop is the `pm-fleet-watchdog` scheduled task (hourly, fires on app relaunch) —
-  it catches lanes stranded by a wake-loss even if this session is gone. Record the lane in
-  `.claude/state/handover.md` (`session-handover`) at dispatch time.
+  wake-up degrades to late collection, not lost work (`agent-fleet-health` has the sweep). Record
+  the lane in `.claude/state/handover.md` (`session-handover`) at dispatch time.
+  **There is no longer a structural backstop:** `pm-fleet-watchdog` was retired (deliberately, GH
+  #1050) — only `prune-worktrees`, `daily-trading-standup`, `weekly-model-retrain` and `weekly-retro`
+  remain enabled. A lane stranded by a wake-loss, a kill, or **usage-limit exhaustion** (which took
+  the 08-13 prod-promote agent mid-deploy, LESSONS §3) is now recovered only by this session or the
+  next PM boot — so the handover record is the whole safety net, not a redundant one.
 - **Review gauntlet — mandatory for money-path code** (live trading, risk, reconciliation,
   margin, order execution): TWO reviewers minimum (code-reviewer + architecture-reviewer;
   risk-officer for live-affecting proposals, dispatched FRESH — adversarial rule: it forms its
