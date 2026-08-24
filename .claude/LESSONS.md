@@ -524,11 +524,31 @@ defect was to hit — the primary checkout had been frozen since 2026-07-04, so 
     shim fails loudly rather than returning a wrong number.
   - `PYTHONPATH="$(pwd)" atb <cmd>` from the worktree root was the historical workaround (pre-#1070)
     and remains a valid one-off override; it is no longer required per invocation.
-  - **Still live, NOT fixed by the import guard: plain shell reads.** A `grep`/`sed`/`cat` on a
-    *relative* path runs against whatever the shell's cwd is, and cwd resets to the primary checkout
-    between tool calls — so a relative read silently returns 2026-07-04 content. Use absolute
-    worktree paths for every file read during a worktree session (the 2026-08-17 retro tripped this
-    reading `.claude/LESSONS.md`: 247 lines in the primary checkout vs 578 in the worktree).
+  - **The filesystem sibling — FIXED 2026-08-24, GH #1082.** A `grep`/`sed`/`cat` on a *relative*
+    path runs against whatever the shell's cwd is, and cwd resets to the primary checkout between
+    tool calls — so a relative read silently returns 2026-07-04 content, and a relative `sed -i`
+    writes into the tree that must stay pinned to `main`. The import guard does not cover this:
+    a `sed -i` imports nothing. (The 2026-08-17 retro tripped it reading `.claude/LESSONS.md`:
+    247 lines in the primary checkout vs 578 in the worktree, no error.)
+    **Fix:** `tools/primary_checkout_guard.py`, a `PreToolUse` hook registered in
+    `.claude/settings.json`. It refuses any `Edit`/`Write` or write-shaped `Bash` command
+    (`sed -i`, `>`/`>>`, `rm`/`mv`/`cp`/`touch`/`tee`, working-tree-mutating `git` subcommands)
+    whose target resolves into the primary checkout's working tree, and — separately — refuses a
+    *relative read* issued with cwd back at the primary checkout once the session has pinned a
+    worktree, which catches the cwd reset itself rather than only its writes.
+    **Why a hook and not `chmod`/ACLs:** agents run as Alex's uid on Alex's machine, so no
+    filesystem permission can tell an agent write from a human one. A Claude Code hook can,
+    exactly and by construction — it does not exist outside a Claude Code session. It is also
+    version-controlled, unlike a `.git/hooks/` script (cf. the inert pre-push, GH #1077).
+    **Not protected on purpose:** `<primary>/.git/**` (every worktree's git ops, and
+    `git worktree add`), `<primary>/.claude/worktrees/**`, and anything git-ignored in the primary
+    (shared `.venv`, `logs/`, caches). **Human override:** `ATB_ALLOW_PRIMARY_WRITE=1` at launch
+    (an agent cannot set it for its own hook process), or `touch ~/.claude/atb-allow-primary-write`.
+    **Limits, stated honestly:** shell parsing is best-effort — a write hidden inside `python -c`,
+    a heredoc script, `xargs`, or a `make` target is not detected; and reads are only guarded once
+    the session has actually worked inside a worktree. Absolute worktree paths remain the rule; the
+    guard is a net under it, not a replacement for it. The guard fails **open** by design — a
+    guard that bricks every tool call gets switched off, and then protects nothing.
   - Sibling GH #999 covers the script-path shadowing variant; GH #1024 (the "just add a warning" P3
     framing) is superseded — a warning would have been ignored exactly like the wrong number was.
 - **`ls ~/.claude/scheduled-tasks` is NOT the task list — the scheduler registry is.** The directory

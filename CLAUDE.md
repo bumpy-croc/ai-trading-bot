@@ -225,6 +225,39 @@ completely invalid results (a 365d backtest returned `+114.69%` and `-28.29%` on
   check finds your worktree's `src/` and reports success even while `atb` runs a different
   checkout. `-P` reproduces the console-script shape, which is the one that actually breaks.
 
+### The primary checkout is write-protected against agents (GH #1082)
+
+`/Users/alex/Sites/ai-trading-bot` is the `main` (production) reference checkout **and** Alex's
+own working copy. Agent sessions never write to it: all agent work happens in a worktree under
+`.claude/worktrees/`. A `PreToolUse` hook (`tools/primary_checkout_guard.py`, wired in
+`.claude/settings.json`) enforces that mechanically, because the failure it prevents is silent —
+a shell's cwd gets reset to the primary checkout mid-task, and every subsequent *relative* path
+then resolves there instead of in your worktree.
+
+It refuses, with a banner naming both paths and the remedy:
+
+- any `Edit`/`Write`/`NotebookEdit` whose path lands in the primary checkout's working tree;
+- a `Bash` write into it (`sed -i`, `>`/`>>`, `rm`, `mv`, `cp`, `touch`, `tee`, `chmod`, and
+  working-tree-mutating `git` subcommands such as `checkout`, `reset`, `commit`, `add`, `stash`);
+- a **relative read** (`cat`, `grep`, `sed -n`, `wc`, …) issued with the cwd back at the primary
+  checkout after the session has been working in a worktree — the cwd-reset itself.
+
+Deliberately **not** protected, because agent work legitimately writes there: `<primary>/.git/**`
+(every worktree's git operations, and `git worktree add`), `<primary>/.claude/worktrees/**`, and
+anything git-ignored in the primary checkout (the shared `.venv`, `logs/`, caches).
+
+**Human override** — the hook only runs inside Claude Code, so your editor, your terminal and your
+own `git` are never affected. To let *this session* write to the primary checkout:
+
+```bash
+ATB_ALLOW_PRIMARY_WRITE=1 claude          # preferred: an agent cannot set this for itself
+touch ~/.claude/atb-allow-primary-write   # for a session already running
+```
+
+The guard fails **open**: any unexpected error allows the tool call, so a bug in it can never
+brick a session. Complements — does not replace — the #1070 import guard (`src/_source_root.py`),
+which covers `import`, not the filesystem.
+
 ## What To Read For Your Task
 
 `CODE.md` applies to **all tasks** — read it before writing any code.

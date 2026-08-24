@@ -12,6 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The primary checkout is now write-protected against agent mutation** (#1082;
+  filesystem sibling of #1070). An agent shell's cwd is silently reset to the
+  primary checkout mid-task, after which every *relative* path resolves there
+  instead of in the agent's worktree — a read returns stale content (recorded:
+  247 lines of a 578-line file, no error) and a `sed -i` writes into the tree
+  that must stay pinned to `main`. The #1070 import guard cannot cover this: a
+  `sed -i` imports nothing. `tools/primary_checkout_guard.py` runs as a
+  `PreToolUse` hook (registered in `.claude/settings.json`) and refuses, with a
+  banner naming both paths and the remedy, any `Edit`/`Write` or write-shaped
+  `Bash` command targeting the primary checkout's working tree, plus a relative
+  read issued from the primary checkout once the session has worked in a
+  worktree. `<primary>/.git/**`, `<primary>/.claude/worktrees/**` and git-ignored
+  paths (shared `.venv`, `logs/`) stay writable. A hook — not `chmod`/ACLs —
+  because agents run as the human's uid, so only "am I inside a Claude Code
+  session?" separates the two; the human's editor and terminal are unaffected.
+  Deliberate override: `ATB_ALLOW_PRIMARY_WRITE=1` at launch, or
+  `touch ~/.claude/atb-allow-primary-write`. Fails open by design.
 - **Worktree commands no longer silently execute another checkout's code** (#1070,
   P0; supersedes #1024). `pip install -e .` writes a `sys.meta_path` finder whose
   `MAPPING` hardcodes the absolute path of the checkout `make install` was run

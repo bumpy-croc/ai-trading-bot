@@ -26,6 +26,19 @@ and `python experiments/x.py` all fail loudly rather than returning a wrong numb
 scripts need no opt-in. **Do not** set `ATB_ALLOW_SOURCE_ROOT_MISMATCH=1` to silence it on a run
 whose numbers you intend to act on. Background: GH #1070, `.claude/LESSONS.md` §1.10a / §3.
 
+### Never write to the primary checkout
+
+`/Users/alex/Sites/ai-trading-bot` is the production reference and stays pinned to `main`. Do
+all work in a worktree under `.claude/worktrees/` and **use absolute worktree paths for every
+file read and write** — a shell's cwd can be reset to the primary checkout mid-task, after which
+a relative `grep`/`sed`/`cat` silently reads (or `sed -i` writes) the wrong tree.
+
+A `PreToolUse` hook (`tools/primary_checkout_guard.py`) refuses such writes, and refuses a
+relative read issued from the primary checkout once the session has been working in a worktree.
+If you hit its banner, the fix is an absolute path under your worktree — not the override. The
+override exists for the human: `ATB_ALLOW_PRIMARY_WRITE=1` at launch, or
+`touch ~/.claude/atb-allow-primary-write`. Background: GH #1082, `.claude/LESSONS.md` §3.
+
 ### Planning Complex Features
 
 For features involving exchange interaction, crash recovery, or position state mutation: enumerate all failure scenarios BEFORE writing code:

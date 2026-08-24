@@ -38,10 +38,18 @@ are layer 4, dispatch decisions layer 2 (`docs/architecture/memory_system.md`).
    venv rebuild silently removes it. If the path is wrong: `make shim` (or
    `python tools/install_worktree_shim.py`; `--check` verifies). `PYTHONPATH="$(pwd)"` remains a
    valid one-off override, not a per-call requirement.
-   **File reads must still use absolute worktree paths** — the import guard does not cover them; a
-   relative `grep`/`sed`/`cat` resolves against a cwd that resets to the primary checkout and
-   silently returns stale content. **Any agent reporting a number must state, in its report, which
-   code path actually executed it.**
+   **File reads and writes must use absolute worktree paths** — the import guard does not cover
+   them; a relative `grep`/`sed`/`cat` resolves against a cwd that resets to the primary checkout
+   and silently returns stale content, and a relative `sed -i` writes into it. Since GH #1082 a
+   `PreToolUse` hook (`tools/primary_checkout_guard.py`) refuses those writes and refuses a
+   relative read issued from the primary checkout after your session has worked in a worktree —
+   if you see its banner, the fix is an absolute path under YOUR worktree, never the override.
+   The override (`ATB_ALLOW_PRIMARY_WRITE=1` at launch, or `touch
+   ~/.claude/atb-allow-primary-write`) belongs to the human; do not reach for it in a dispatch.
+   The hook is best-effort on shell parsing — a write inside `python -c`, a heredoc, `xargs` or a
+   `make` target is not caught — so absolute paths remain the rule, not a fallback.
+   **Any agent reporting a number must state, in its report, which code path actually executed
+   it.**
 3. **Compute discipline.** Heavy jobs (training, backtests) STRICTLY SEQUENTIAL — one at a
    time machine-wide (thermal + the 0.1s-timeout non-determinism under CPU contention, #913;
    also the standing "run backtests sequentially" feedback). Expect 1.5–4x nominal durations
