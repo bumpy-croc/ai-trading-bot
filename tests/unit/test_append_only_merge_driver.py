@@ -7,6 +7,7 @@ so a test that bypasses git's own dispatch would prove nothing about the case th
 
 from __future__ import annotations
 
+import random
 import subprocess
 import sys
 from pathlib import Path
@@ -382,10 +383,9 @@ class TestContentLossRegressions:
         git(repo, "checkout", "-q", "ours")
         merged = git(repo, "merge", "theirs", "-m", "m", check=False)
 
+        assert merged.returncode == 0, merged.stdout + merged.stderr
         text = (repo / LOG_PATH).read_text()
-        if merged.returncode == 0:
-            assert quoting in text, "the quoted entry was split and reordered"
-        assert text.index("Corrects the earlier entry:") < text.index("end of ours.")
+        assert quoting in text, "the quoted entry was split and reordered"
         assert "Theirs appended this." in text
 
     def test_missing_driver_script_yields_markers_not_ours_only(self, repo: Path) -> None:
@@ -415,10 +415,10 @@ class TestContentLossRegressions:
         git(repo, "checkout", "-q", "ours")
         merged = git(repo, "merge", "theirs", "-m", "m", check=False)
 
-        if merged.returncode == 0:
-            text = (repo / LOG_PATH).read_text()
-            assert "Ours body.## " not in text, "theirs' heading was destroyed"
-            assert "\n\n## 2026-08-25" in text
+        assert merged.returncode == 0, merged.stdout + merged.stderr
+        text = (repo / LOG_PATH).read_text()
+        assert "Ours body.## " not in text, "theirs' heading was destroyed"
+        assert "\n\n## 2026-08-25" in text
 
     def test_first_line_edit_on_both_sides_conflicts(self, repo: Path) -> None:
         """First-line identity made an edit read as delete-old + add-new, keeping BOTH."""
@@ -482,3 +482,141 @@ class TestContentLossRegressions:
         text = ours.read_text()
         assert "<<<<<<<" in text
         assert "Theirs appended this." in text, "theirs' entry must survive a driver crash"
+
+    def test_a_correction_quoting_a_dated_header_after_a_blank_line(self, repo: Path) -> None:
+        """The charter's own correction pattern, written naturally (PR #1098 round 3).
+
+        The quoted header satisfies marker + date + preceded-by-blank-line, so shape rules
+        alone cannot reject it. What keeps the entry intact is that one side's contribution is
+        never reordered or separated internally, whatever the driver believes its shape to be.
+        """
+        register(repo)
+        seed(repo)
+        correction = (
+            "## [D-2026-08-20-01] 2026-08-20 10:30 · correction · daemon(PM)\n"
+            "Corrects the entry below, quoted verbatim:\n"
+            "\n"
+            "## [D-2026-07-08-01] 2026-07-08 20:33 · deploy-verify · daemon(PM)\n"
+            "\n"
+            "The correction is that the deploy actually failed.\n\n"
+        )
+        branch_commit(repo, "ours", LOG_PATH, PREAMBLE + BASE_ENTRY + correction)
+        branch_commit(repo, "theirs", LOG_PATH, PREAMBLE + BASE_ENTRY + THEIRS_ENTRY)
+        git(repo, "checkout", "-q", "ours")
+        merged = git(repo, "merge", "theirs", "-m", "m", check=False)
+
+        assert merged.returncode == 0, merged.stdout + merged.stderr
+        text = (repo / LOG_PATH).read_text()
+        assert correction in text, "the correction was split and its quote hoisted"
+        assert text.count("2026-07-08 20:33") == 1, "a duplicate July header was fabricated"
+        assert "Theirs appended this." in text
+
+    def test_a_side_with_several_entries_keeps_them_together_and_in_order(self, repo: Path) -> None:
+        """The invariant behind the fix, asserted directly rather than via a symptom."""
+        register(repo)
+        seed(repo)
+        run = (
+            "## 2026-08-11 09:00 · note · ours\nFirst of ours.\n\n"
+            "## 2026-08-12 09:00 · note · ours\nSecond of ours.\n\n"
+        )
+        branch_commit(repo, "ours", LOG_PATH, PREAMBLE + BASE_ENTRY + run)
+        branch_commit(repo, "theirs", LOG_PATH, PREAMBLE + BASE_ENTRY + THEIRS_ENTRY)
+        git(repo, "checkout", "-q", "ours")
+        merged = git(repo, "merge", "theirs", "-m", "m", check=False)
+
+        assert merged.returncode == 0, merged.stdout + merged.stderr
+        text = (repo / LOG_PATH).read_text()
+        assert run in text, "one side's contiguous contribution was broken up"
+        assert "Theirs appended this." in text
+
+    def test_both_sides_quoting_the_same_header_do_not_interleave(self, repo: Path) -> None:
+        """The sixth path, found by fuzzing rather than by reading (PR #1098 round 3).
+
+        Identical blocks share a token, so when both sides quote the same header the diff can
+        align on it and thread one side's entry through the middle of the other's. The output
+        post-condition catches this without knowing the mechanism.
+        """
+        register(repo)
+        seed(repo)
+        quote = (
+            "Corrects the entry below, quoted verbatim:\n"
+            "\n"
+            "## [D-2026-07-08-01] 2026-07-08 20:33 · deploy-verify · daemon(PM)\n"
+            "\n"
+        )
+        ours_entry = f"## 2026-08-21 18:30 · correction · ours\n{quote}ours' correction.\n\n"
+        theirs_entry = f"## 2026-08-01 09:30 · correction · theirs\n{quote}theirs' correction.\n\n"
+        branch_commit(repo, "ours", LOG_PATH, PREAMBLE + BASE_ENTRY + ours_entry)
+        branch_commit(repo, "theirs", LOG_PATH, PREAMBLE + BASE_ENTRY + theirs_entry)
+        git(repo, "checkout", "-q", "ours")
+        merged = git(repo, "merge", "theirs", "-m", "m", check=False)
+
+        text = (repo / LOG_PATH).read_text()
+        if merged.returncode == 0:
+            assert (
+                ours_entry in text and theirs_entry in text
+            ), "one contribution was threaded through the middle of the other"
+        else:
+            assert "<<<<<<<" in text
+            assert "theirs' correction." in text
+
+    @pytest.mark.parametrize("seed_value", range(12))
+    def test_adversarial_merges_never_corrupt_a_contribution(
+        self, tmp_path: Path, seed_value: int
+    ) -> None:
+        """Randomised-but-seeded merges of deliberately hostile bodies.
+
+        The block model is a guess about prose, and three review rounds showed that reading
+        the code is not a reliable way to find where the guess breaks. This asserts the
+        property that actually matters — whatever the driver decides, each side's added text
+        survives verbatim and unbroken, or the merge conflicts — over bodies containing quoted
+        headers (dated forwards and backwards, with and without a preceding blank line),
+        column-0 bullets, conflict-marker text, and blocks ending mid-line.
+        """
+        rng = random.Random(seed_value)
+        heads = [
+            "## 2026-08-{d:02d} {h:02d}:00 · note · {who}\n",
+            "## [D-2026-08-{d:02d}-01] 2026-08-{d:02d} ~{h:02d}:30 · decision · {who}\n",
+            "## 2026-08-{d:02d} · track-record · {who}\n",
+        ]
+        bodies = [
+            "Plain body.\n",
+            "Quoted after a blank line:\n\n## [D-2026-07-08-01] 2026-07-08 20:33 · x · y\n\nend.\n",
+            "Quoted mid-paragraph:\n## 2026-02-01 00:00 · note · old\nend.\n",
+            "Forward-dated quote:\n\n## 2099-12-31 23:59 · note · future\n\nend.\n",
+            "Markers in prose:\n<<<<<<< ours\n=======\n>>>>>>> theirs\nend.\n",
+            "- column-0 bullet\n- another\n## 2026-03-03 03:03 · note · quoted\n",
+            "No trailing newline.",
+        ]
+
+        def make(who: str) -> str:
+            head = rng.choice(heads).format(d=rng.randint(1, 28), h=rng.randint(0, 23), who=who)
+            body = rng.choice(bodies)
+            tail = "" if body.endswith("\n\n") else "\n" if body.endswith("\n") else "\n\n"
+            return head + body + tail
+
+        repo = tmp_path / "fuzz"
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "t@example.com")
+        git(repo, "config", "user.name", "Test")
+        write(repo, ".gitattributes", f"{LOG_PATH} merge=append-only\n")
+        register(repo)
+
+        base = PREAMBLE + "".join(make("base") for _ in range(rng.randint(1, 3)))
+        seed(repo, LOG_PATH, base)
+        ours_add = "".join(make("ours") for _ in range(rng.randint(1, 3)))
+        theirs_add = "".join(make("theirs") for _ in range(rng.randint(1, 3)))
+        branch_commit(repo, "ours", LOG_PATH, base + ours_add)
+        branch_commit(repo, "theirs", LOG_PATH, base + theirs_add)
+        git(repo, "checkout", "-q", "ours")
+        merged = git(repo, "merge", "theirs", "-m", "m", check=False)
+        text = (repo / LOG_PATH).read_text()
+
+        if merged.returncode == 0:
+            for name, chunk in (("ours", ours_add), ("theirs", theirs_add)):
+                assert chunk.strip() in text, f"{name}'s contribution was altered or split"
+            for line in base.splitlines():
+                assert not line.strip() or line in text, "an ancestor line was dropped"
+        else:
+            assert "<<<<<<<" in text, "a conflict must leave recoverable markers"

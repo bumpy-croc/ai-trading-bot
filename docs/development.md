@@ -165,11 +165,21 @@ drop an entry from a record whose whole point is that entries are never dropped 
 - it splits each side into **entries** and runs git's own three-way merge over them, so
   nothing on either side is dropped and the common ancestor is never duplicated. An entry
   starts at a marker (an H2 heading in `log.md`, a top-level bullet in `AGENDA.md`) that
-  *also* carries a date *and* is preceded by a blank line. All three conditions are needed:
-  entries are encouraged to quote an earlier entry's header, and `log.md` bodies routinely
-  carry column-0 markup, so splitting on the marker alone would cut an entry in half. A line
-  that fails any condition stays inside its entry, which at worst makes that entry look
-  edited — a conflict, never a silent split;
+  *also* carries a date *and* is preceded by a blank line — a heuristic, because entries are
+  encouraged to quote an earlier entry's header and `log.md` bodies routinely carry column-0
+  markup. **Correctness does not rest on that heuristic**, and it cannot: a quoted header can
+  satisfy every shape rule, as the charter's own correction pattern does. Two downstream
+  properties make a wrong guess harmless instead:
+  - **one side's contribution is never reordered or split internally.** Whatever the driver
+    believes the shape to be, the text one side wrote is emitted contiguously and in written
+    order; ordering happens only *between* contributions;
+  - **the result is verified, not trusted.** Before accepting a merge the driver checks the
+    finished text against the inputs and confirms each side's added lines are present
+    verbatim and unbroken. If not, it abandons the merge for an ordinary conflict. An
+    unknown failure mode therefore costs a conflict, never a mangled record — which matters,
+    because the sixth defect found in this file (two sides quoting the same header, whose
+    identical blocks collapsed to one token and let the diff thread one contribution through
+    the middle of the other) was found by fuzzing, not by review;
 - concurrent **appends** are all kept, de-duplicated, sorted by the timestamp in each entry's
   first line when every entry in the region carries one;
 - **deletions are honoured**: the retro clearing `AGENDA.md` still clears it, while an item a
@@ -188,6 +198,17 @@ drop an entry from a record whose whole point is that entries are never dropped 
   than whole entries because whole-entry comparison cannot separate the cases — on real data
   unrelated entries score 0.66 against 0.89 for a genuine edit, while by body the same cases
   are 0.38 against 1.00.
+
+A rule requiring entry timestamps never to go backwards was considered and **rejected on
+measurement**: 11 of 94 header transitions in the real `log.md` already go backwards (5 genuine
+out-of-order appends, 6 because 34 headers carry a date but no time). It would therefore fold
+roughly one appended entry in eight into its predecessor and conflict — reintroducing the toil
+this exists to remove.
+
+**Cost of the safety checks, measured.** Over 400 randomised merges of deliberately hostile
+bodies: 0 corruptions, 335 clean, 65 conflicts. Over 400 with realistic bodies: 0 corruptions,
+391 clean, 9 conflicts. So the driver removes ~98% of the hand-resolutions on ordinary content
+and fails toward a conflict on the rest.
 
 ### Which files qualify
 

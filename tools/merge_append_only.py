@@ -130,11 +130,13 @@ def starts_entry(line: str, previous: str | None, rule: BlockRule) -> bool:
 
     * the marker matches;
     * the line carries a date, which every real header in both files does (95/95 in `log.md`);
-    * it is preceded by a blank line or by nothing, which is likewise true of every real
-      header, while a quoted one sits mid-paragraph.
+    * it is preceded by a blank line or by nothing, likewise true of every real header today.
 
-    A header that fails any of these folds into the preceding entry, which makes that entry
-    look *edited* — a conflict, never a silent split.
+    **This is a heuristic and correctness does not rest on it.** A quoted header can satisfy
+    all three — the charter's own correction pattern does — so no shape rule can be relied on
+    to tell a header from a quotation of one. What makes a wrong guess harmless is downstream:
+    one side's contribution is never reordered or split internally, and the finished result is
+    verified against the input before it is accepted (see ``contributions_intact``).
     """
     if not rule.start.match(line) or not _DATE.search(line):
         return False
@@ -208,34 +210,59 @@ def _key(block: str) -> str:
     return block.split("\n", 1)[0]
 
 
-def _sorted_chronologically(tokens: list[str], block_of: dict[str, str]) -> list[str]:
-    """Stable timestamp sort, applied only when every block carries a date."""
-    dated: list[tuple[Timestamp, str]] = []
-    for token in tokens:
-        stamp = timestamp_of(block_of[token])
-        if stamp is None:
-            return tokens
-        dated.append((stamp, token))
-    return [token for _, token in sorted(dated, key=lambda pair: pair[0])]
+def _pad_boundary(token: str, block_of: dict[str, str]) -> str:
+    """Ensure a block that something else will follow ends with a blank line.
 
-
-def _pad(tokens: list[str], block_of: dict[str, str]) -> list[str]:
-    """Keep a blank line between entries the driver has just reordered.
-
-    An entry's separator blank line belongs to the block *before* it, so moving a block that
-    happens to end without one would butt it against its new neighbour. Confined to blocks
-    coming out of a conflict region, so untouched parts of the file keep their exact bytes.
+    An entry's separator blank line belongs to the block *before* it, so a block that ends
+    without one would butt against whatever is placed after it — and a block ending mid-line
+    would glue the next heading onto its last line, destroying it both in the file and on the
+    next re-split. Applied only at a segment boundary, never inside one side's contribution.
     """
-    padded: list[str] = []
-    for token in tokens[:-1]:
-        block = block_of[token]
-        if not block.endswith("\n\n"):
-            # A block ending mid-line needs both newlines, or the next entry's heading is
-            # glued onto it and stops being a heading at all — in the file and on re-split.
-            token = f"pad{len(block_of)}\n"
-            block_of[token] = block + ("\n" if block.endswith("\n") else "\n\n")
-        padded.append(token)
-    return padded + tokens[-1:]
+    block = block_of[token]
+    if block.endswith("\n\n"):
+        return token
+    padded = f"pad{len(block_of)}\n"
+    block_of[padded] = block + ("\n" if block.endswith("\n") else "\n\n")
+    return padded
+
+
+def _lines(text: str) -> list[str]:
+    return [line.rstrip("\n") for line in text.splitlines()]
+
+
+def _added_runs(ancestor: str, side: str) -> list[list[str]]:
+    """Maximal runs of lines one side introduced relative to the ancestor."""
+    base, mine = _lines(ancestor), _lines(side)
+    matcher = SequenceMatcher(None, base, mine, autojunk=False)
+    return [
+        mine[j1:j2] for tag, _, _, j1, j2 in matcher.get_opcodes() if tag in ("insert", "replace")
+    ]
+
+
+def _contains_run(haystack: list[str], run: list[str]) -> bool:
+    if not run:
+        return True
+    for start in range(len(haystack) - len(run) + 1):
+        if haystack[start : start + len(run)] == run:
+            return True
+    return False
+
+
+def contributions_intact(ancestor: str, ours: str, theirs: str, merged: str) -> bool:
+    """Post-condition: each side's added text survives verbatim and unbroken.
+
+    Checked against the real file texts, independently of every heuristic above. The block
+    model is a *guess* about prose — it has been wrong in six distinct ways so far, and the
+    sixth (two sides quoting the same header, whose identical blocks collapsed to one token
+    and let the diff interleave one contribution into the middle of the other) was found by
+    fuzzing rather than by reading. So the result is verified rather than trusted: if either
+    side's contribution is not present contiguously, the merge is abandoned for an ordinary
+    conflict. An unknown-unknown then costs a conflict, never a mangled record.
+    """
+    result = _lines(merged)
+    return all(
+        _contains_run(result, run) for side in (ours, theirs) for run in _added_runs(ancestor, side)
+    )
 
 
 def _body(block: str) -> str:
@@ -338,11 +365,29 @@ def _resolve_hunk(
             out.append(survivor)
         return out
 
+    # Segments, not individual entries. Whatever the driver believes the shape of one side's
+    # contribution to be, that contribution is emitted contiguously and in the order it was
+    # written, so a mis-split can never relocate, separate or truncate it. Ordering happens
+    # only *between* segments. This is what makes the split rules a best-effort heuristic
+    # rather than a correctness dependency.
     seen: set[str] = set()
     existing = surviving(base, seen)
-    added = surviving(ours, seen) + surviving(theirs, seen)
-    merged = existing + added
-    return _sorted_chronologically(merged, block_of) if reorder else merged
+    contributions = [surviving(ours, seen), surviving(theirs, seen)]
+    contributions = [run for run in contributions if run]
+    if reorder and len(contributions) == 2:
+        stamps = [timestamp_of(block_of[run[0]]) for run in contributions]
+        if all(stamp is not None for stamp in stamps) and stamps[1] < stamps[0]:  # type: ignore[operator]
+            contributions.reverse()
+
+    segments = [segment for segment in (existing, *contributions) if segment]
+    merged: list[str] = []
+    for index, segment in enumerate(segments):
+        segment = list(segment)
+        if index < len(segments) - 1:
+            # Separate segments only at their boundary; never touch bytes inside one.
+            segment[-1] = _pad_boundary(segment[-1], block_of)
+        merged.extend(segment)
+    return merged
 
 
 def _resolve_tokens(
@@ -367,7 +412,7 @@ def _resolve_tokens(
             hunk = _resolve_hunk(ours, base, theirs, block_of, rule.reorder_by_timestamp, rule)
             if hunk is None:
                 return None
-            result.extend(_pad(hunk, block_of))
+            result.extend(hunk)
             section = None
         elif section == "ours":
             ours.append(line)
@@ -422,7 +467,16 @@ def merge(ancestor: Path, ours: Path, theirs: Path, marker_size: int, pathname: 
     if resolved is None:
         return _fallback(ancestor, ours, theirs, marker_size)
 
-    ours.write_text("".join(block_of[t] for t in resolved), encoding="utf-8")
+    merged = "".join(block_of[token] for token in resolved)
+    if not contributions_intact(texts[0], texts[1], texts[2], merged):
+        print(
+            f"merge-{DRIVER_NAME}: refusing a result that does not preserve both "
+            "contributions verbatim; falling back to a normal conflict.",
+            file=sys.stderr,
+        )
+        return _fallback(ancestor, ours, theirs, marker_size)
+
+    ours.write_text(merged, encoding="utf-8")
     return 0
 
 
