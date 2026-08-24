@@ -48,12 +48,30 @@ def is_current() -> bool:
     return module_dst.read_text(encoding="utf-8") == SOURCE.read_text(encoding="utf-8")
 
 
-def install() -> None:
+def install() -> bool:
+    """Best-effort install. Returns False (without raising) when site-packages is read-only.
+
+    The shim is a convenience; `src/_source_root.py` is the safety net. A system-python or
+    `--user` install has no writable purelib, and taking all of `make install` down over an
+    optional optimisation would be a worse failure than not having it.
+    """
     module_dst, pth_dst = _installed_paths()
-    module_dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(SOURCE, module_dst)
-    pth_dst.write_text(PTH_CONTENT, encoding="utf-8")
+    try:
+        module_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(SOURCE, module_dst)
+        pth_dst.write_text(PTH_CONTENT, encoding="utf-8")
+    except OSError as exc:
+        print(
+            f"WARNING: could not install the atb worktree import shim ({exc}).\n"
+            f"         Target: {module_dst}\n"
+            "         This is not fatal: a source-root mismatch will still fail loudly via\n"
+            "         src/_source_root.py. To silence this, run inside a virtualenv, or use\n"
+            '         PYTHONPATH="$(pwd)" when invoking from a git worktree. See GH #1070.',
+            file=sys.stderr,
+        )
+        return False
     print(f"atb worktree import shim installed -> {module_dst}")
+    return True
 
 
 def uninstall() -> None:
@@ -80,6 +98,8 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
+    # Only --check reports failure through the exit code; a plain install must never break
+    # `make install` on an environment whose site-packages we cannot write to.
     install()
     return 0
 

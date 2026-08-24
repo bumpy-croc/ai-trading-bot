@@ -407,10 +407,13 @@ no owner and no refill procedure. Two costs, and the second is worse:
   `tools/atb_worktree_shim.py`, copied into site-packages by `make install` and executed from a
   `.pth` on every interpreter start; it resolves the checkout enclosing the **cwd** and inserts a
   meta-path finder at position 0 binding top-level `src`/`cli` there. Backstop:
-  `src/__init__.py` calls `src.utils.source_root.verify_source_root()`, which hard-errors with a
+  `src/__init__.py` calls `src._source_root.verify_source_root()`, which hard-errors with a
   copy-pasteable remedy when imported-root ≠ cwd-root. It lives in the package `__init__` on
   purpose — an entry-point-by-entry-point guard would have missed `python experiments/x.py`,
-  which is precisely the shape that produced the bad numbers. **If you ever rebuild the
+  which is precisely the shape that produced the bad numbers. The guard module sits at the top
+  level of `src` (not under `src.utils`) so importing it executes no other repo module — the
+  checkout's identity is still in question at that point. **Diagnose with `python -P -c "import
+  src; print(src.__file__)"`; plain `-c` puts the cwd on `sys.path` and prints a false all-clear.** **If you ever rebuild the
   venv, re-run `python tools/install_worktree_shim.py`** (or `make shim`) — the shim lives in
   site-packages, which is not version-controlled. `python tools/install_worktree_shim.py --check`
   verifies it. `PYTHONPATH="$(pwd)"` remains a valid one-off override. Sibling GH #999 covers the

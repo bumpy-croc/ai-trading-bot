@@ -218,10 +218,12 @@ completely invalid results (a 365d backtest returned `+114.69%` and `-28.29%` on
   `make shim` (or `python tools/install_worktree_shim.py`).
 - Verify at any time: `python tools/install_worktree_shim.py --check`.
 - If the shim is missing, the run fails loudly instead of producing a wrong answer: `src/__init__.py`
-  calls `verify_source_root()`, so every entry point that imports `src` is covered — `atb`, `pytest`,
+  calls `src._source_root.verify_source_root()`, so every entry point that imports `src` is covered — `atb`, `pytest`,
   `python experiments/x.py`, ad-hoc scripts — with no opt-in required.
-- Sanity check before trusting any number: `python -c "import src; print(src.__file__)"` must print
-  a path under your worktree.
+- Sanity check before trusting any number: `python -P -c "import src; print(src.__file__)"` must
+  print a path under your worktree. **Keep the `-P`** — without it `sys.path[0]` is the cwd, so the
+  check finds your worktree's `src/` and reports success even while `atb` runs a different
+  checkout. `-P` reproduces the console-script shape, which is the one that actually breaks.
 
 ## What To Read For Your Task
 

@@ -15,6 +15,8 @@ if str(project_root) not in sys.path:
 try:
     import src  # noqa: F401,E402
 except RuntimeError as exc:  # SourceRootMismatchError, defined in the package that just failed
+    if type(exc).__name__ != "SourceRootMismatchError":
+        raise  # an unrelated import failure: keep its traceback, don't misreport the remedy
     # A traceback would bury the remedy; the operator needs the instructions, not the frames.
     print(exc, file=sys.stderr)
     raise SystemExit(2) from None

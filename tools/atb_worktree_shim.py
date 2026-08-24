@@ -40,7 +40,8 @@ REDIRECTED_PACKAGES = ("src", "cli")
 _PROJECT_MARKER = 'name = "ai-trading-bot"'
 _DISABLE_ENV = "ATB_DISABLE_WORKTREE_SHIM"
 
-# Set by install() so downstream guards can report what the shim decided.
+# Set by install(); read by src/_source_root.py so the mismatch banner can say whether the
+# shim ran at all — "shim not active" is the single most useful diagnostic in that message.
 ATB_SHIM_ROOT_ENV = "ATB_SHIM_REPO_ROOT"
 
 
@@ -62,7 +63,18 @@ def _looks_like_repo_root(candidate: Path) -> bool:
 
 
 def find_repo_root(start: str | os.PathLike[str] | None = None) -> Path | None:
-    """Walk up from ``start`` (default: cwd) to the enclosing ai-trading-bot checkout root."""
+    """Walk up from ``start`` (default: cwd) to the enclosing ai-trading-bot checkout root.
+
+    The walk stops at the first directory holding a ``.git`` entry even when that directory
+    does not qualify as a checkout root. Worktrees live *inside* the primary checkout
+    (``<primary>/.claude/worktrees/<name>``), so a worktree that momentarily fails the
+    structural test — mid-rebase, a missing ``cli/__init__.py`` — would otherwise let the walk
+    climb straight into the primary checkout and silently reproduce the bug this exists to fix.
+
+    Kept byte-for-byte in step with ``src/_source_root.find_repo_root``; the duplication is
+    deliberate (this module must run before any repo code is importable) and pinned by
+    ``tests/unit/test_source_root_guard.py::test_guard_and_shim_agree_on_every_root``.
+    """
     try:
         current = Path(start).resolve() if start is not None else Path.cwd().resolve()
     except OSError:
@@ -70,6 +82,8 @@ def find_repo_root(start: str | os.PathLike[str] | None = None) -> Path | None:
     for candidate in (current, *current.parents):
         if _looks_like_repo_root(candidate):
             return candidate
+        if (candidate / ".git").exists():
+            return None
     return None
 
 

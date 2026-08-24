@@ -9,6 +9,11 @@ backtest, which is worse than no answer at all.
 run repo code — the ``atb`` console script, ``pytest``, ``python experiments/x.py``, an ad-hoc
 ``python -c`` — is covered without opting in. Nothing else needs to call it.
 
+This module lives at the top level of ``src`` and imports nothing from the repo, so the guard
+runs before any other repo module executes. Putting it under ``src.utils`` would drag that
+package's ``__init__`` (and its siblings) in first — code from the very checkout whose identity
+is still in question.
+
 The root-finding logic is intentionally duplicated from the shim rather than shared: the shim
 must run before any repo code is importable. ``tests/unit/test_source_root_guard.py`` asserts
 the two implementations agree.
@@ -17,6 +22,7 @@ the two implementations agree.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 __all__ = [
@@ -30,6 +36,7 @@ __all__ = [
 PROJECT_MARKER = 'name = "ai-trading-bot"'
 REQUIRED_PACKAGES = ("src", "cli")
 ALLOW_MISMATCH_ENV = "ATB_ALLOW_SOURCE_ROOT_MISMATCH"
+SHIM_ROOT_ENV = "ATB_SHIM_REPO_ROOT"
 
 
 class SourceRootMismatchError(RuntimeError):
@@ -49,7 +56,14 @@ def _looks_like_repo_root(candidate: Path) -> bool:
 
 
 def find_repo_root(start: str | os.PathLike[str] | None = None) -> Path | None:
-    """Walk up from ``start`` (default: cwd) to the enclosing ai-trading-bot checkout root."""
+    """Walk up from ``start`` (default: cwd) to the enclosing ai-trading-bot checkout root.
+
+    The walk stops at the first directory holding a ``.git`` entry even when that directory
+    does not qualify as a checkout root. Worktrees live *inside* the primary checkout
+    (``<primary>/.claude/worktrees/<name>``), so a worktree that momentarily fails the
+    structural test — mid-rebase, a missing ``cli/__init__.py`` — would otherwise let the walk
+    climb straight into the primary checkout and silently reproduce the very bug this guards.
+    """
     try:
         current = Path(start).resolve() if start is not None else Path.cwd().resolve()
     except OSError:
@@ -57,17 +71,29 @@ def find_repo_root(start: str | os.PathLike[str] | None = None) -> Path | None:
     for candidate in (current, *current.parents):
         if _looks_like_repo_root(candidate):
             return candidate
+        if (candidate / ".git").exists():
+            return None
     return None
 
 
 def source_root() -> Path:
     """Repo root the currently-imported ``src`` package was loaded from."""
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[1]
 
 
 def invocation_root() -> Path | None:
     """Repo root enclosing the current working directory, if any."""
     return find_repo_root()
+
+
+def _shim_status() -> str:
+    chosen = os.environ.get(SHIM_ROOT_ENV)
+    if chosen:
+        return f"  worktree shim   : active, chose {chosen}\n"
+    return (
+        "  worktree shim   : NOT ACTIVE — this is almost certainly why you are seeing this.\n"
+        "                    It lives in site-packages, which no venv rebuild restores.\n"
+    )
 
 
 def _mismatch_message(imported: Path, invoked: Path) -> str:
@@ -76,6 +102,7 @@ def _mismatch_message(imported: Path, invoked: Path) -> str:
         "==================== ATB SOURCE ROOT MISMATCH (GH #1070) ====================\n"
         f"  imported code from : {imported}\n"
         f"  invoked from       : {invoked}\n"
+        f"{_shim_status()}"
         "\n"
         "Python resolved `src`/`cli` to a DIFFERENT checkout than the one you are\n"
         "working in. This happens when the shared venv's editable install still points\n"
@@ -93,7 +120,7 @@ def _mismatch_message(imported: Path, invoked: Path) -> str:
     )
 
 
-def verify_source_root(*, strict: bool = True) -> Path | None:
+def verify_source_root() -> Path:
     """Raise when the imported source root differs from the invoking checkout.
 
     Returns the imported source root on success. A no-op when there is nothing meaningful to
@@ -112,9 +139,7 @@ def verify_source_root(*, strict: bool = True) -> Path | None:
         return imported
 
     message = _mismatch_message(imported, invoked)
-    if not strict or os.environ.get(ALLOW_MISMATCH_ENV) == "1":
-        import sys
-
+    if os.environ.get(ALLOW_MISMATCH_ENV) == "1":
         print(message, file=sys.stderr)
         return imported
     raise SourceRootMismatchError(message)

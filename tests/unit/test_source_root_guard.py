@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from src.utils.source_root import (
+from src._source_root import (
     SourceRootMismatchError,
     find_repo_root,
     source_root,
@@ -34,21 +34,34 @@ SHIM_SOURCE = REPO_ROOT / "tools" / "atb_worktree_shim.py"
 pytestmark = pytest.mark.fast
 
 
-def _load_shim_module():
-    """Import the shim straight from ``tools/`` without installing it into site-packages."""
-    spec = importlib.util.spec_from_file_location("_atb_worktree_shim_under_test", SHIM_SOURCE)
+def _load_module_from_path(name: str, path: Path):
+    """Import a module straight from ``tools/`` without installing it into site-packages."""
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
+def _load_shim_module():
+    return _load_module_from_path("_atb_worktree_shim_under_test", SHIM_SOURCE)
+
+
+# Written by the synthetic checkout's `src.utils` package if anything imports it. The guard
+# must run before any other repo module executes, so after a guarded import this file must NOT
+# exist - see test_guard_import_touches_no_other_repo_module.
+SIBLING_SENTINEL = "src_utils_was_imported.txt"
+
+
 def _make_fake_checkout(root: Path, marker: str, *, guarded: bool = False) -> Path:
     """Create a minimal but genuine ai-trading-bot checkout that reports ``marker``.
 
-    With ``guarded=True`` the checkout carries a real copy of ``src/utils/source_root.py`` and a
-    ``src/__init__.py`` that invokes it, mirroring this repo's own layout so a subprocess
-    exercises the production guard rather than a re-implementation of it.
+    With ``guarded=True`` the checkout mirrors this repo's real layout: a copy of the actual
+    ``src/_source_root.py``, a ``src/__init__.py`` that invokes it, and a populated
+    ``src/utils`` package whose ``__init__`` pulls in a sibling module — exactly the shape that
+    would run *before* the guard if the guard ever moved back under ``src.utils``. The sibling
+    records the fact by touching :data:`SIBLING_SENTINEL`, so the regression is detectable
+    rather than merely theoretical.
     """
     root.mkdir(parents=True, exist_ok=True)
     (root / "pyproject.toml").write_text('[project]\nname = "ai-trading-bot"\n', encoding="utf-8")
@@ -59,18 +72,26 @@ def _make_fake_checkout(root: Path, marker: str, *, guarded: bool = False) -> Pa
     (root / "experiments").mkdir(exist_ok=True)
 
     if guarded:
-        utils = root / "src" / "utils"
-        utils.mkdir(exist_ok=True)
-        (utils / "__init__.py").touch()
-        (utils / "source_root.py").write_text(
-            (REPO_ROOT / "src" / "utils" / "source_root.py").read_text(encoding="utf-8"),
+        (root / "src" / "_source_root.py").write_text(
+            (REPO_ROOT / "src" / "_source_root.py").read_text(encoding="utf-8"),
             encoding="utf-8",
         )
         (root / "src" / "__init__.py").write_text(
             f'CHECKOUT = "{marker}"\n'
-            "from src.utils.source_root import verify_source_root\n"
+            "from src._source_root import verify_source_root\n"
             "verify_source_root()\n",
             encoding="utf-8",
+        )
+        utils = root / "src" / "utils"
+        utils.mkdir(exist_ok=True)
+        (utils / "bounds.py").write_text(
+            "from pathlib import Path\n"
+            f"Path(__file__).resolve().parents[2] / {SIBLING_SENTINEL!r}\n"
+            f"(Path(__file__).resolve().parents[2] / {SIBLING_SENTINEL!r}).touch()\n",
+            encoding="utf-8",
+        )
+        (utils / "__init__.py").write_text(
+            "from src.utils.bounds import *  # noqa: F401,F403\n", encoding="utf-8"
         )
     return root
 
@@ -304,7 +325,7 @@ class TestVerifySourceRoot:
         monkeypatch.chdir(other)
         fake_site_packages = tmp_path / "site-packages"
         monkeypatch.setattr(
-            "src.utils.source_root.source_root", lambda: fake_site_packages, raising=True
+            "src._source_root.source_root", lambda: fake_site_packages, raising=True
         )
 
         assert verify_source_root() == fake_site_packages
@@ -383,6 +404,116 @@ class TestGuardFiresOnBareImport:
         assert (
             Path(result.stdout.strip()).resolve() == (REPO_ROOT / "src" / "__init__.py").resolve()
         )
+
+
+class TestGuardImportIsSelfContained:
+    """The guard must be the FIRST repo code to run, not merely happen to be."""
+
+    def test_guard_import_touches_no_other_repo_module(self, tmp_path: Path) -> None:
+        primary = _make_fake_checkout(tmp_path / "primary", "primary", guarded=True)
+
+        result = _run_python(
+            _probe_code(primary, with_shim=False),
+            cwd=primary,
+            script=primary / "experiments" / "probe.py",
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert not (primary / SIBLING_SENTINEL).exists(), (
+            "importing src pulled in src.utils before the source-root guard ran; the guard "
+            "must not live under a package with siblings"
+        )
+
+    def test_real_guard_module_imports_nothing_from_the_repo(self) -> None:
+        """Cheap structural pin on the real module, independent of the subprocess tests."""
+        source = (REPO_ROOT / "src" / "_source_root.py").read_text(encoding="utf-8")
+        repo_imports = [
+            line
+            for line in source.splitlines()
+            if line.startswith(("import src", "from src", "import cli", "from cli"))
+        ]
+
+        assert repo_imports == []
+
+
+class TestWalkUpStopsAtCheckoutBoundaries:
+    def test_a_broken_worktree_does_not_resolve_to_its_parent_checkout(
+        self, tmp_path: Path
+    ) -> None:
+        """Worktrees live inside the primary checkout, so an unbounded walk-up reproduces #1070."""
+        primary = _make_fake_checkout(tmp_path / "primary", "primary")
+        (primary / ".git").mkdir()
+        worktree = _make_fake_checkout(primary / ".claude" / "worktrees" / "wt", "wt")
+        (worktree / ".git").write_text("gitdir: ../../../.git/worktrees/wt\n", encoding="utf-8")
+        # Mid-rebase / partially-checked-out state: no longer a structurally valid root.
+        (worktree / "cli" / "__init__.py").unlink()
+
+        assert find_repo_root(worktree) is None
+
+    def test_a_healthy_worktree_still_resolves_to_itself(self, tmp_path: Path) -> None:
+        primary = _make_fake_checkout(tmp_path / "primary", "primary")
+        (primary / ".git").mkdir()
+        worktree = _make_fake_checkout(primary / ".claude" / "worktrees" / "wt", "wt")
+        (worktree / ".git").write_text("gitdir: ../../../.git/worktrees/wt\n", encoding="utf-8")
+
+        assert find_repo_root(worktree / "experiments") == worktree.resolve()
+
+
+class TestMismatchBannerDiagnostics:
+    def test_banner_reports_the_shim_as_inactive_when_it_did_not_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        other = _make_fake_checkout(tmp_path / "other", "other")
+        monkeypatch.chdir(other)
+        monkeypatch.delenv("ATB_SHIM_REPO_ROOT", raising=False)
+
+        with pytest.raises(SourceRootMismatchError) as excinfo:
+            verify_source_root()
+
+        assert "worktree shim   : NOT ACTIVE" in str(excinfo.value)
+
+    def test_banner_reports_the_root_the_shim_chose(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        other = _make_fake_checkout(tmp_path / "other", "other")
+        monkeypatch.chdir(other)
+        monkeypatch.setenv("ATB_SHIM_REPO_ROOT", "/somewhere/else")
+
+        with pytest.raises(SourceRootMismatchError) as excinfo:
+            verify_source_root()
+
+        assert "active, chose /somewhere/else" in str(excinfo.value)
+
+
+class TestShimInstallerDegradesGracefully:
+    def test_unwritable_site_packages_warns_instead_of_raising(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """`make install` must survive a read-only purelib; the guard is the real safety net."""
+        installer = _load_module_from_path(
+            "_atb_shim_installer_under_test", REPO_ROOT / "tools" / "install_worktree_shim.py"
+        )
+        readonly = tmp_path / "site-packages"
+        readonly.mkdir()
+        monkeypatch.setattr(installer, "site_packages", lambda: readonly)
+        monkeypatch.setattr(
+            installer.shutil,
+            "copyfile",
+            lambda *a, **k: (_ for _ in ()).throw(PermissionError(13, "Permission denied")),
+        )
+
+        assert installer.install() is False
+        assert "could not install the atb worktree import shim" in capsys.readouterr().err
+
+    def test_main_still_exits_zero_when_the_install_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        installer = _load_module_from_path(
+            "_atb_shim_installer_exit_code", REPO_ROOT / "tools" / "install_worktree_shim.py"
+        )
+        monkeypatch.setattr(installer, "install", lambda: False)
+
+        assert installer.main([]) == 0
 
 
 class TestAtbEntryPointIsGuarded:

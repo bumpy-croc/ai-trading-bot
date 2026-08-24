@@ -26,7 +26,9 @@ are layer 4, dispatch decisions layer 2 (`docs/architecture/memory_system.md`).
    shared registry's `latest` symlink. The prompt must be self-contained: paths absolute,
    context included — the agent has none of yours.
 2. **Prove the worktree is what actually runs.** Immediately after creating it, run
-   `python -c "import src; print(src.__file__)"` and confirm the path is under YOUR worktree.
+   `python -P -c "import src; print(src.__file__)"` and confirm the path is under YOUR worktree.
+   The `-P` is not optional: without it `sys.path[0]` is the cwd, so the check passes even in the
+   broken state — it must reproduce the console-script shape to be worth running.
    All worktrees share one venv whose editable install pins imports to the checkout it was
    created from; until GH #1070 shipped, `atb` and `python experiments/*.py` silently executed
    that other checkout's code (the same 365d backtest returned `+114.69%` and `-28.29%` on

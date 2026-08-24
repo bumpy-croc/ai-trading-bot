@@ -26,17 +26,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tools/atb_worktree_shim.py`, installed into site-packages by `make install`
   (also `make shim`) and executed from a `.pth` on every interpreter start, binds
   top-level `src`/`cli` to the checkout enclosing the **cwd**; and `src/__init__.py`
-  calls `src.utils.source_root.verify_source_root()`, which raises
+  calls `src._source_root.verify_source_root()`, which raises
   `SourceRootMismatchError` with a copy-pasteable remedy whenever the imported
   source root differs from the invoking checkout. The guard sits in the package
   `__init__` rather than in each entry point so that `atb`, `pytest`,
   `python experiments/*.py` and ad-hoc scripts are all covered without opting in.
-  It is a deliberate no-op for non-editable site-packages installs (production
+  The guard module sits at the top level of `src` rather than under `src.utils` so
+  that importing it executes no other repo module — at that moment the checkout's
+  identity is precisely what is in doubt. Root detection stops at the first
+  directory holding a `.git` entry, so a momentarily-invalid worktree cannot let
+  the walk-up climb into the primary checkout that encloses it. It is a deliberate no-op for non-editable site-packages installs (production
   containers) and when the cwd is outside any checkout. Escape hatches:
   `ATB_DISABLE_WORKTREE_SHIM=1` (skip the shim), `ATB_ALLOW_SOURCE_ROOT_MISMATCH=1`
   (downgrade the guard to a stderr warning). **The shim lives in site-packages,
   which is not version-controlled — re-run `make shim` after any venv rebuild;
-  `python tools/install_worktree_shim.py --check` verifies it.**
+  `python tools/install_worktree_shim.py --check` verifies it.** A failed shim
+  install (read-only site-packages, system python) warns and continues rather than
+  breaking `make install`; only `--check` reports it through the exit code.
+  Diagnose with `python -P -c "import src; print(src.__file__)"` — the `-P` matters,
+  since plain `-c` puts the cwd on `sys.path` and prints a false all-clear.
 
 ### Added
 - **HyperGrowth/ETHUSDT is long-only by explicit configuration** (#1020,

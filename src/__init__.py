@@ -8,7 +8,7 @@ entry point — covers ``atb``, ``pytest``, ``python experiments/*.py`` and any 
 because all of them must import ``src`` before they can do anything.
 """
 
-from src.utils.source_root import verify_source_root
+from src._source_root import verify_source_root
 
 verify_source_root()
 
