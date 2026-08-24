@@ -2,9 +2,9 @@
 id: 2026-07-04T1300-P1-hypergrowth-drawdown-cap-breach
 opened_by: risk-officer
 severity: P1
-status: open
+status: mitigated
 opened_at: 2026-07-04T13:00:00Z
-mitigated_at: null
+mitigated_at: 2026-07-11T12:55:00Z
 closed_at: null
 human_paged: false   # no working page channel exists (observability audit P0); surfaced via GitHub issue + this file + session report to pm
 affected_components: [live-engine, risk-management, hyper_growth-strategy]
@@ -60,13 +60,88 @@ Real money. Live account is at $83.92 from a $103.82 peak (-$19.90, -19.18%). Pa
 
 Bleeding not active this hour (position is stop-protected, sizes capped at 20%/2%-risk), but the account sits one ordinary stop-out from re-breaching the hard cap, with no automated layer that would halt or even notice. Charter's stated breach action (halt new entries + page human) is not currently achievable by the system itself.
 
-## Post-mortem (filled after close)
+## Post-mortem (filled 2026-07-13 at mitigation; PM-directed follow-up to the 2026-07-13 weekly retro)
+
+**Status rationale.** Set to `mitigated` (not `closed`): the acute protection gap that *defined*
+this incident — no live drawdown halt, drawdown input resetting on every restart, and events paging
+nobody — is closed and prod-verified (below). Final closure is gated on the risk-officer's
+condition-3 **24–48h spurious-close-only watch** for #1001 (started 2026-07-12 17:35Z on
+`[D-2026-07-12-04]`, i.e. through ~2026-07-14 17:35Z); once that window elapses clean, risk-officer/
+PM flips to `closed`. `mitigated_at` = 2026-07-11 12:55Z, when the last acute-gap fix (guard seeded
+from `account_history`, #851) was verified live.
 
 ### Root cause
+Two independent things wearing one incident number:
+1. **A functional protection gap** — the portfolio 20% max-drawdown hard cap
+   (`risk-limits.json`) had *no live enforcement path at all*. Four stacked control failures (see
+   Detection §1–4): the `PortfolioRiskManager.check_drawdown` halt was dead code in live (#749);
+   the backtest CLI default (0.5) and HyperGrowth's breaker override (`[0.15,0.30,0.45]`, second
+   tier past the kill line) meant even the offline signals didn't enforce the 20% line; and live's
+   drawdown input reset to `initial_balance` on every restart with no rehydration, so the engine
+   perceived ~0.6% DD against a true ~19%. Plus `alert_webhook_url` unset → firing events paged
+   nobody.
+2. **A data-quality artifact that inflated the original claim** — the "20.33% live breach off a
+   $103.82 April peak" was computed over pre-#655 `account_history.balance`, which was a
+   software-pinned `session_start` book value (May: one distinct value across 451 rows), not a live
+   exchange read. Withdrawn same-day (see CORRECTION). No true-equity 20% breach was ever
+   established.
+
+So: the *unprotected state* was real; the *already-realized breach* was phantom.
+
 ### Contributing factors
+- Phantom-balance failure mode (documented in `project_capital_erosion_postmortem`) claimed the
+  review itself — treating `account_history.equity` as ground truth without a distinct-count sanity
+  check on its balance base. Now distilled as `.claude/LESSONS.md` §5.6.
+- No working operator page channel at detection time (2026-06-08 observability-audit finding) — the
+  incident had to be surfaced via GitHub issue + this file + the PM session, not an alert.
+- The strategy's *structural* full-year expectancy (365d honest backtest: −20.15% / 21.84% MaxDD,
+  reproduced exactly) means the 20% cap is reachable by ordinary trading, not just by a bug — the
+  guard contains the symptom; the expectancy is a separate strategic thread (returns-levers program
+  + long-only proposal #1020).
+
 ### What went well
+- Detection came from an *independent* honest-backtest surface (#844 Kelly eval), and the PM
+  immediately dispatched a fresh quant-researcher/risk-officer review rather than acting on the
+  first number.
+- The phantom peak was caught and withdrawn **same-day**, with a surgical correction that named
+  exactly which claims fell and which stood — the model the `decision-record` skill now cites.
+- The review performed **zero** production mutations; all analysis was read-only.
+
 ### What went poorly
+- A 20% portfolio hard cap shipped to live capital with **no enforcement wiring** and stayed that
+  way undetected — #749 had flagged the dead code since 2026-06-10 (P2, unacted) three weeks before
+  this incident surfaced it. A hard risk limit with no live call site is the failure that should
+  never recur; a "limit exists in config" is not a control until a live path reads and enforces it.
+- The drawdown input silently reset on every restart — a recovery path that re-initialized state
+  without rehydrating it (the same class as LESSONS §1.3).
+
 ### Action items (each links to a proposal or tracker)
+**Shipped & prod-verified (the acute gap — CLOSED):**
+- New `src/engines/live/monitoring/drawdown_guard.py`: enforced **close-only halt** at the 20% hard
+  cap with 10%/16% warning tiers (#848/#849) — the live enforcement path that #749's dead code
+  never provided. Armed at every prod boot since (peak $84.42, hard cap 20.0%, session 20).
+- Guard **seeds its peak from `account_history` true-equity**, not tracker book value / `initial_balance`
+  (#850/#851, prod-verified 2026-07-11 12:55Z) — fixes the restart-reset (control failure #4).
+- Same-iteration cap enforcement + dynamic-risk throttle anchored to the durable session peak
+  (#1001, prod 2026-07-12) — closes an ordering gap where the cap enforced one iteration late.
+- Operator alerts delivered via `$ALERT_WEBHOOK_URL` + explicit missing-channel flag (#855/#864) —
+  fixes "pages nobody."
+- Position/risk caps (20% max-position, 2% risk ceiling, `FEATURE_ENTRY_PAUSE`) (#835/#841); standup
+  tripwires installed ($80.18 / $75.96 / $67.52).
+
+**Tracked residuals (hardening/hygiene — do NOT block closure of the acute incident):**
+- **#847** — durable *cross-session* peak anchor (guard currently seeds per-session from
+  `account_history`; #847 makes the anchor durable across reconciled resets).
+- **#986** — risk-ratification bundle (Board-owned): arm circuit breakers in prod, resolve the
+  constants↔risk-limits 0.20/0.5 drift (control failure #2), and retire HyperGrowth's dead throttle
+  tiers past the kill line (control failure #3).
+- **#749** — remove the now-superseded dead `PortfolioRiskManager.check_drawdown` path (cleanup; the
+  new guard supersedes it functionally).
+- **Structural expectancy** — the 365d MaxDD breach is a strategy-expectancy problem, owned by the
+  returns-levers research program and the HyperGrowth/ETHUSDT long-only proposal (#1020, board_required,
+  awaiting Alex); the guard contains it but does not fix it.
+- **Closure gate** — risk-officer's 24–48h spurious-close-only watch on #1001 completing clean
+  (~2026-07-14 17:35Z), then flip `status: closed` with `closed_at`.
 
 ---
 
