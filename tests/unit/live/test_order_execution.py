@@ -576,7 +576,10 @@ class TestCloseSellHoldingsGuard:
         self, execution_engine_with_exchange, mock_exchange
     ):
         """LESSONS 1.1: `floor(q/step)*step` artifacts (0.00030000000000000003) are quantized."""
-        self._configure_exchange(mock_exchange, free_base=0.00037, step_size=0.0001)
+        # The shortfall must stay inside CLOSE_HOLDINGS_CAP_MIN_RATIO — the cap only
+        # ever shaves a fee-rounding sliver, and a larger gap now aborts the close
+        # (#1104). 0.00039996 vs 0.0004 still floors to the artifact-producing 3 lots.
+        self._configure_exchange(mock_exchange, free_base=0.00039996, step_size=0.0001)
 
         result = execution_engine_with_exchange.execute_exit(
             symbol="ETHUSDT",

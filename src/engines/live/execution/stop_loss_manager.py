@@ -136,32 +136,45 @@ class LiveStopLossManager:
         submit a close (it would -2010, or over-sell an already-closed position).
         """
         state = self._state
-        if not (
-            state.enable_live_trading and state.exchange_interface and position.stop_loss_order_id
-        ):
+        # Capture the id ONCE. position.stop_loss_order_id is a field on an object
+        # shared with the OrderTracker callback thread (LivePositionTracker.positions
+        # is a shallow dict copy), and re-reading it after the cancel round-trip can
+        # yield None — see below (#1104).
+        sl_order_id = position.stop_loss_order_id
+        if not (state.enable_live_trading and state.exchange_interface and sl_order_id):
             return False
+        # Untrack BEFORE issuing the cancel. Binance emits the CANCELED
+        # executionReport on the already-open user socket as soon as it processes
+        # the cancel — routinely before the DELETE response reaches us — and the
+        # REST poll re-checks tracking membership only before its get_order, not
+        # after. An id left tracked across that window fires the unexpected-cancel
+        # escalation for a cancel WE issued: a false UNPROTECTED page, and worse,
+        # the handler nulls stop_loss_order_id, so the reconciler then stacks a
+        # duplicate stop on top of one that is still resting. That orphan locks the
+        # base asset and starves every subsequent close (#1104).
+        if state.order_tracker:
+            state.order_tracker.stop_tracking(sl_order_id)
         cancelled = False
         try:
-            cancelled = bool(
-                state.exchange_interface.cancel_order(position.stop_loss_order_id, position.symbol)
-            )
+            cancelled = bool(state.exchange_interface.cancel_order(sl_order_id, position.symbol))
             if cancelled:
                 logger.info(
                     "Cancelled stop-loss order %s for %s before close",
-                    position.stop_loss_order_id,
+                    sl_order_id,
                     position.symbol,
                 )
         except Exception as e:
             logger.warning(
                 "Error cancelling stop-loss order %s for %s: %s",
-                position.stop_loss_order_id,
+                sl_order_id,
                 position.symbol,
                 e,
             )
-        # Only stop tracking when the cancel is confirmed; otherwise the order may
-        # still be live on the exchange and must remain watched.
-        if cancelled and state.order_tracker:
-            state.order_tracker.stop_tracking(position.stop_loss_order_id)
+        # Unconfirmed cancel: the order may still rest on the exchange, so restore
+        # tracking. Preserves the pre-existing invariant that only a confirmed
+        # cancel stops the order being watched.
+        if not cancelled and state.order_tracker:
+            state.order_tracker.track_order(sl_order_id, position.symbol)
         return cancelled
 
     def filled_quantity(self, position: LivePosition) -> float | None:

@@ -127,6 +127,13 @@ BORROW_DUST_EPSILON = 1e-8  # Borrowed amounts at/below this are treated as zero
 ORPHANED_BORROW_SWEEP_COOLDOWN_SECONDS = 300  # Min seconds between sweep attempts per base asset
 ENTRY_PAUSE_WARNING_INTERVAL_SECONDS = 300  # Min seconds between entry-pause skip warnings
 
+# A closing SELL is capped at the free base balance so a fee-rounding sliver cannot
+# trigger -2010. That cap must only ever shave a sliver: if free base is below this
+# fraction of the intended close, inventory is locked by something we do not know
+# about (an orphaned stop-loss, #1104) and shrinking the order would sell a fraction
+# while the caller books a FULL close. Abort instead.
+CLOSE_HOLDINGS_CAP_MIN_RATIO = 0.98
+
 # Core Trading Defaults (used across backtest and live engines)
 DEFAULT_STOP_LOSS_PCT = 0.05  # 5% stop loss
 DEFAULT_MIN_STOP_LOSS_PCT = 0.01  # 1% minimum stop loss

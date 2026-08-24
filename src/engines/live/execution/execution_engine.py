@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.config.constants import (
+    CLOSE_HOLDINGS_CAP_MIN_RATIO,
     DEFAULT_FEE_RATE,
     DEFAULT_SLIPPAGE_RATE,
 )
@@ -1180,6 +1181,40 @@ class LiveExecutionEngine:
             if order_side == OrderSide.SELL:
                 free_base = self._free_base_for_close(symbol)
                 if free_base is not None and free_base < quantity:
+                    # The cap exists to shave a fee-rounding sliver. A shortfall
+                    # bigger than that means the base is LOCKED by an order we do
+                    # not know about — in #1104 an orphaned stop-loss held the whole
+                    # position, and the cap silently shrank a full close to 1.1% of
+                    # its size. Submitting that partial is the dangerous branch: the
+                    # caller books a FULL close on success and abandons the rest of
+                    # the inventory untracked and unprotected. Fail loudly instead
+                    # and let the reconciler resolve exchange truth.
+                    if free_base < quantity * CLOSE_HOLDINGS_CAP_MIN_RATIO:
+                        logger.critical(
+                            "ABORTING close of %s: free base balance %.8f is far below the "
+                            "intended close quantity %.8f — inventory is locked (orphaned "
+                            "stop-loss?). Refusing to sell a fraction and book a full close.",
+                            symbol,
+                            free_base,
+                            quantity,
+                        )
+                        self._log_execution_event(
+                            EventType.ERROR,
+                            (
+                                f"Close of {symbol} aborted: free base {free_base:.8f} is "
+                                f"below {CLOSE_HOLDINGS_CAP_MIN_RATIO:.0%} of the intended "
+                                f"{quantity:.8f} — base asset is locked by an untracked order; "
+                                "position remains OPEN for the reconciler to resolve."
+                            ),
+                            "CLOSE_INVENTORY_LOCKED",
+                            severity="critical",
+                            details={
+                                "symbol": symbol,
+                                "requested_quantity": float(quantity),
+                                "free_base_balance": float(free_base),
+                            },
+                        )
+                        return None
                     logger.warning(
                         "Close sell qty %.8f for %s exceeds free base balance %.8f "
                         "— capping to holdings to avoid -2010.",
