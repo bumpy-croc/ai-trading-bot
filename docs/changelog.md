@@ -93,14 +93,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asserts reported == enforced == the loader's value, so it cannot pass vacuously
   again.
 
-  **Consequence for existing results (relevant to #1081):** any backtest number
-  produced by a bare `Backtester` — no explicit `max_position_size`, and a
-  strategy that declares no `max_fraction` — was produced at a 10% cap and will
-  not reproduce at today's 20%. Auditing `src/strategies/*.py`, every strategy
-  declares `max_fraction` in `get_risk_overrides()` **except `ml_adaptive` and
-  `ensemble_weighted`**; those two are the ones whose default backtests double.
-  `atb backtest` is unaffected for strategies that declare `max_fraction` (the
-  CLI seeds it via `resolve_strategy_max_position_size`).
+  **Consequence for existing results (relevant to #1081) — the blast radius
+  differs by call path, because only two seams consult a strategy's
+  `max_fraction`.** `resolve_strategy_max_position_size` is applied at exactly
+  two sites, `cli/commands/backtest.py` and `src/experiments/runner.py`;
+  **`Backtester.__init__` never calls it**, and there is no other `max_fraction`
+  consumer anywhere under `src/engines/backtest/`. So:
+  - **Via `atb backtest` or `ExperimentRunner`** (the seam applies): only
+    strategies that declare no `max_fraction` shift. Auditing
+    `src/strategies/*.py`, that is **`ml_adaptive` and `ensemble_weighted`**
+    alone — their default backtests move 0.10 -> 0.20.
+  - **Via direct `Backtester(...)` construction** (research harnesses, ad-hoc
+    scripts, and `cli/commands/migration.py`, which builds
+    `RiskParameters(base_risk_per_trade=…, max_risk_per_trade=…)` with no
+    `max_position_size`): **every strategy shifts**, `max_fraction` regardless.
+    A bare `Backtester(AdaptiveTrend(), ...)` ran at 0.10 and now runs at 0.20 —
+    never at its declared 0.95. Every stored `atb migration` baseline is on this
+    path.
+
+  A result is therefore only safe to compare across this boundary if it came
+  through the CLI/harness seam **and** the strategy declares `max_fraction`.
+  Direct-construction results are not comparable across the boundary for any
+  strategy.
+
+  **"Unaffected" here means reproducible, not comparable to live.**
+  `src/strategies/ml_basic.py` and `ml_sentiment.py` declare
+  `"max_fraction": DEFAULT_MAX_POSITION_SIZE`, pinning themselves to the
+  now-retired 0.10 constant — so through the CLI seam they keep backtesting at
+  0.10 against a ratified **live** cap of 0.20. Their numbers still reproduce;
+  they are not live-representative. Whether that tighter sizing is deliberate or
+  an accidental dependency on a constant slated for deletion in #986 step 7 is
+  tracked for an explicit decision in #1089, not settled here.
 - **Live behaviour: the enforced bounds are unchanged, but scale-in accounting
   and the short-entry cap move.** The drawdown guard's cap resolves to 0.20
   before and after (matching the deployed prod boot log `hard cap=20.0%`), and

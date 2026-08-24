@@ -537,9 +537,11 @@ class TestBacktesterPositionSizeParity:
     def test_backtester_max_position_size_default(self):
         """A bare Backtester caps at the Board-ratified position size (#986).
 
-        Asserted against the loader rather than a literal so the test tracks a
-        ratification change instead of blocking it, plus a hard 0.20 pin so a
-        loader regression cannot make the comparison vacuous.
+        Asserted against the loader so the cap under test is the one the system
+        actually resolves, plus a hard 0.20 pin so a loader regression cannot
+        make the comparison vacuous. The pin deliberately blocks a silent
+        ratification change — on a revote, update it and the matching pin in
+        test_risk_limits_boot_wiring.py together.
         """
         from src.config.risk_limits import get_risk_limits
         from src.engines.backtest.engine import Backtester
