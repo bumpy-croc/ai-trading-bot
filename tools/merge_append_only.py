@@ -22,8 +22,13 @@ is an **edit**, not two appends:
 * entries only one side touched are taken from that side — including deletions, so the weekly
   retro clearing `AGENDA.md` still clears it, while an item another branch appended in the
   meantime survives the clear (GH #1090);
-* entries neither side had are appends and are all kept, de-duplicated, in timestamp order
-  when every entry in the region carries a date;
+* entries neither side had are appends and are all kept, de-duplicated. **Ordering is
+  between contributions, not global**: the two sides' contributions may be swapped so that the
+  one whose first new entry is earlier comes first, and entries within one contribution keep
+  the order that side wrote them. There is no total chronological sort — a side appending
+  08-01 and 08-30 against a side appending 08-15 yields 08-01, 08-30, 08-15. Reordering
+  *within* a contribution is exactly what corrupted entries in earlier revisions, so it is not
+  done;
 * **anything else stops the merge with real markers** — both sides editing one entry, an edit
   racing a deletion, two different bodies under the same entry header, or repeated entry
   headers that make the region ambiguous. This is the difference between this driver and git's

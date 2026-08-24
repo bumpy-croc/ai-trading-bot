@@ -456,10 +456,13 @@ class TestContentLossRegressions:
         git(repo, "checkout", "-q", "clear")
         merged = git(repo, "merge", "editor", "-m", "m", check=False)
 
+        text = (repo / LOG_PATH).read_text()
         if merged.returncode == 0:
             assert (
-                "The ancestor entry." not in (repo / LOG_PATH).read_text()
+                "The ancestor entry." not in text
             ), "an edited entry silently survived a deliberate clear"
+        else:
+            assert "<<<<<<<" in text, "a conflict must leave recoverable markers"
 
     def test_a_crash_inside_the_driver_still_writes_markers(self, tmp_path: Path) -> None:
         """An exception must not leave %A as ours-only, which reads as a complete merge."""

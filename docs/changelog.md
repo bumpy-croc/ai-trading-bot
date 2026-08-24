@@ -33,7 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contribution is never reordered or split internally, and the finished result is verified
   against the inputs (each side's added lines must survive verbatim and unbroken) before it
   is accepted, falling back to an ordinary conflict otherwise. Measured over 800 randomised
-  merges: zero corruptions; on realistic bodies 391/400 still merge cleanly. Registration is guarded: git does not write conflict markers when a
+  merges: zero corruptions; on realistic bodies 393/400 still merge cleanly. The fuzz harness
+  that found the last defect ships as `tools/fuzz_append_only_merge.py`, since code review
+  demonstrably was not a reliable filter for this design. Registration is guarded: git does not write conflict markers when a
   driver exits non-zero, so a command that cannot run would leave the file as ours' content
   with no markers, reading as a clean merge; the registered command tests for the script and
   interpreter and otherwise falls through to `git merge-file`, and the script writes markers

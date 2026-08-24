@@ -206,9 +206,34 @@ roughly one appended entry in eight into its predecessor and conflict — reintr
 this exists to remove.
 
 **Cost of the safety checks, measured.** Over 400 randomised merges of deliberately hostile
-bodies: 0 corruptions, 335 clean, 65 conflicts. Over 400 with realistic bodies: 0 corruptions,
-391 clean, 9 conflicts. So the driver removes ~98% of the hand-resolutions on ordinary content
-and fails toward a conflict on the rest.
+bodies: 0 corruptions, 353 clean, 47 conflicts. Over 400 with realistic bodies: 0 corruptions,
+**393 clean, 7 conflicts**. So the driver removes ~98% of the hand-resolutions on ordinary
+content and fails toward a conflict on the rest.
+
+### Changing the driver: run the fuzz harness
+
+`tools/fuzz_append_only_merge.py` ships with the driver on purpose. Seven content-loss paths
+were found in it across three review rounds, and the last one — two sides quoting the same
+header — was found by this harness *after* careful review by two people had missed it. Both
+reviewers concluded that reading the code is not a reliable filter for this design, so run the
+thing that was:
+
+```bash
+python tools/fuzz_append_only_merge.py                 # 400 hostile cases; non-zero on corruption
+python tools/fuzz_append_only_merge.py --realistic     # ordinary prose; measures the conflict rate
+python tools/fuzz_append_only_merge.py --cases 2000 --start-seed 5000   # longer soak
+```
+
+It checks four oracles per case, two of which exist specifically because the driver's own
+post-condition cannot see them: that no line is *duplicated* (the post-condition checks
+presence, not count) and that ancestor content neither side deleted survives (the
+post-condition only looks at added runs). A fixed-seed subset runs in CI via
+`tests/unit/test_append_only_merge_driver.py`.
+
+Note when extending it that a naive per-line duplication bound is wrong — two *different*
+entries may legitimately share a line and both survive, so the bound is inclusion-exclusion
+against the ancestor. Both this harness and the independent review initially produced false
+positives from getting that wrong.
 
 ### Which files qualify
 

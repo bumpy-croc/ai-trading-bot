@@ -1,7 +1,9 @@
 # Custom merge drivers.
 #
 # `merge=append-only` resolves the append/append case — two branches each adding a new entry —
-# by keeping both, in timestamp order, instead of raising a conflict. It is NOT git's built-in
+# by keeping both instead of raising a conflict. The two sides' contributions may be swapped so
+# the earlier-dated one comes first, but there is NO total chronological sort: entries within
+# one side keep the order that side wrote them. It is NOT git's built-in
 # `union`: it performs a real three-way merge over entry blocks, so an edit to existing
 # content, or an edit racing a deletion, still conflicts and still needs a human.
 #
