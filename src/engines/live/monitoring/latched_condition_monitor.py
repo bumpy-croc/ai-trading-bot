@@ -245,14 +245,15 @@ class LatchedConditionMonitor:
     def observe_entry_gate(self, key: str) -> Observation:
         """Read one lever from the gate the entry path itself consults.
 
-        Deliberately NOT a re-derivation: ``EntryPauseGate.entry_block()`` is the
-        authority, so the monitor reports exactly what blocks entries, including
-        the fail-closed "halt state unverified" case that a naive ``active`` read
-        misses. The gate reports one cause at a time (its own precedence), which
-        is the effective block.
+        Deliberately NOT a re-derivation: ``EntryPauseGate.entry_blocks()`` is
+        the authority, so the monitor reports exactly what blocks entries,
+        including the fail-closed "halt state unverified" case that a naive
+        ``active`` read misses. Every active lever is matched independently —
+        reading only the gate's winning cause would record a shadowed lever
+        (an entry pause under a manual halt) as *cleared* while it still holds.
         """
-        block = self._gate.entry_block()
-        if block is None or block.key != key:
+        block = next((b for b in self._gate.entry_blocks() if b.key == key), None)
+        if block is None:
             return Observation(False)
         if key == "entry_pause" and self._macro_window_excuses_the_pause():
             return Observation(False)

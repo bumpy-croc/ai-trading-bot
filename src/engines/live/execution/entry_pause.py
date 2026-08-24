@@ -79,33 +79,46 @@ class EntryPauseGate:
             logger.debug("%s — skipping %s", cause, context)
         return True
 
-    def entry_block(self) -> EntryBlock | None:
-        """The active pause source, or None when entries are allowed.
+    def entry_blocks(self) -> tuple[EntryBlock, ...]:
+        """EVERY lever currently blocking entries, in precedence order.
 
         The authority for "are entries blocked": the entry/scale-in paths gate
         on it and the latched-condition monitor announces it, so the two cannot
         disagree about a blocked state (#1096 review — a monitor blind to the
-        fail-closed unverified case reproduced #1094's exact shape).
+        fail-closed unverified case reproduced #1094's exact shape). All active
+        levers are reported, not just the first: a monitor that saw only the
+        winning cause would record the shadowed one as *cleared* while it is
+        still in force.
         """
+        blocks: list[EntryBlock] = []
         if self._halt_state is not None:
             if not self._halt_state.established:
                 # Fail closed: the halt flag has never been successfully read
                 # (e.g. DB unreachable at boot) — do not add risk on the
                 # optimistic default.
-                return EntryBlock(
-                    "system_halt",
-                    "MANUAL SYSTEM HALT state UNVERIFIED "
-                    "(system_halt flag not successfully read yet — failing closed)",
+                blocks.append(
+                    EntryBlock(
+                        "system_halt",
+                        "MANUAL SYSTEM HALT state UNVERIFIED "
+                        "(system_halt flag not successfully read yet — failing closed)",
+                    )
                 )
-            if self._halt_state.active:
-                return EntryBlock(
-                    "system_halt",
-                    "MANUAL SYSTEM HALT active "
-                    f"(reason: {self._halt_state.reason or 'no reason recorded'})",
+            elif self._halt_state.active:
+                blocks.append(
+                    EntryBlock(
+                        "system_halt",
+                        "MANUAL SYSTEM HALT active "
+                        f"(reason: {self._halt_state.reason or 'no reason recorded'})",
+                    )
                 )
         if is_enabled("entry_pause", default=False):
-            return EntryBlock("entry_pause", "FEATURE_ENTRY_PAUSE active")
-        return None
+            blocks.append(EntryBlock("entry_pause", "FEATURE_ENTRY_PAUSE active"))
+        return tuple(blocks)
+
+    def entry_block(self) -> EntryBlock | None:
+        """The highest-precedence active pause source, or None when allowed."""
+        blocks = self.entry_blocks()
+        return blocks[0] if blocks else None
 
     def entry_block_reason(self) -> str | None:
         """The active pause source's log prefix, or None when not paused."""

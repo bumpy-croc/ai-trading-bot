@@ -193,14 +193,19 @@ One query therefore separates all three cases without any external cross-check:
 SELECT error_code, message, timestamp
 FROM system_events
 WHERE error_code = 'ENTRIES_ENABLED' OR error_code LIKE '%\_LATCHED'
-ORDER BY timestamp DESC LIMIT 5;
+ORDER BY timestamp DESC, id DESC LIMIT 5;
 ```
 
-Interpretation: newest row `ENTRIES_ENABLED` and younger than ~2h → healthy; newest row
-`*_LATCHED` → entries are blocked right now; nothing inside ~2h → the loop is dead or the
-engine is down. (A `*_LATCHED` row stays inside the window for up to an hour after a
-`resume_trading()`, so the newest row wins: a later `ENTRIES_ENABLED` or `*_LATCH_CLEARED`
-supersedes it. The stale direction is a spurious FAIL, never a false NOMINAL.)
+Interpretation is per *pass*, not per row: one pass writes `ENTRIES_ENABLED` **or** one
+`*_LATCHED` row for every lever currently blocking, so read the rows sharing the newest
+timestamp. Newest pass is `ENTRIES_ENABLED` and younger than ~2h → healthy; newest pass
+contains any `*_LATCHED` → entries are blocked right now, and every blocking lever is listed;
+nothing inside ~2h → the loop is dead or the engine is down. `ORDER BY ... , id DESC` breaks
+the microsecond tie between rows written in the same pass. `*_LATCH_CLEARED` rows are
+deliberately **not** in this query — they are historical annotations of a resolution, not
+state, and a lever clearing while another still holds must not read as "entries enabled".
+A stale `*_LATCHED` row survives at most one heartbeat after `resume_trading()`, which is a
+spurious FAIL, never a false NOMINAL.
 
 Whether entries are blocked is read from `EntryPauseGate.entry_block()` — the same authority
 the entry and scale-in paths gate on — so the monitor cannot report a state the enforcement
@@ -221,6 +226,12 @@ breaker, DB outage, unconfirmed emergency close, ambiguous order submission) so 
 four days later still explains itself, long after the log line that carried the detail has
 rotated out of the platform's retention. Elapsed time for the manual halt comes from the flag
 row's durable `updated_at`, so a restart cannot re-announce a four-day halt as "45m".
+
+Elapsed time is durable **only for the manual halt**, which has a `system_control_flags` row.
+Close-only is in-process by nature (a restart genuinely clears it), and `FEATURE_ENTRY_PAUSE`
+is an env var with no row — so a crash-looping entry-paused engine reports `0m` on every boot
+and never escalates past its first page. The durable *record* still accumulates: its own
+`ENTRY_PAUSE_LATCHED` rows are the source for how long that pause has really been in force.
 
 Entry-pause is only reported when the macro-event guard is **enabled** and no window in
 `config/macro_events.json` covers the current time — with the guard disabled no window

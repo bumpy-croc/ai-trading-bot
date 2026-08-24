@@ -326,6 +326,46 @@ class TestEntryGateConditions:
         monitor.check()
         assert len(codes(state, "ENTRY_PAUSE_LATCHED")) == 1
 
+    def test_both_levers_active_are_both_reported(self, monkeypatch):
+        """A halt shadowing an existing entry pause must not record it CLEARED.
+
+        The gate reports one winning cause for the skip log; the monitor matches
+        every active lever, so escalating from FEATURE_ENTRY_PAUSE to the manual
+        kill switch cannot write a false "new entries are enabled again" row.
+        """
+        monkeypatch.setattr(
+            "src.engines.live.execution.entry_pause.is_enabled",
+            lambda name, default=False: name == "entry_pause",
+        )
+        state = FakeEngineState()
+        clock = FakeClock()
+        halt = _established()
+        monitor = LatchedConditionMonitor(state, halt, clock=clock, dispatch_async=False)
+        monkeypatch.setattr(monitor, "_macro_window_excuses_the_pause", lambda: False)
+
+        monitor.check()  # entry pause alone
+        assert len(codes(state, "ENTRY_PAUSE_LATCHED")) == 1
+
+        # Operator escalates to the kill switch while the pause is still set.
+        halt.active = True
+        halt.reason = "escalated"
+        clock.advance(HEARTBEAT_INTERVAL_SECONDS)
+        monitor.check()
+
+        assert len(codes(state, "SYSTEM_HALT_LATCHED")) == 1
+        assert len(codes(state, "ENTRY_PAUSE_LATCHED")) == 2
+        assert codes(state, "ENTRY_PAUSE_LATCH_CLEARED") == []
+        assert codes(state, ENTRIES_ENABLED_CODE) == []
+        assert set(monitor.latched_summary()) == {"system_halt", "entry_pause"}
+
+        # Clearing the halt leaves the pause latched and records only the halt.
+        halt.active = False
+        clock.advance(HEARTBEAT_INTERVAL_SECONDS)
+        monitor.check()
+        assert len(codes(state, "SYSTEM_HALT_LATCH_CLEARED")) == 1
+        assert codes(state, "ENTRY_PAUSE_LATCH_CLEARED") == []
+        assert codes(state, ENTRIES_ENABLED_CODE) == []
+
     def test_conditions_are_tracked_independently(self, setup):
         state, clock, monitor = setup
         state._close_only_mode = True

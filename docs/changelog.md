@@ -33,13 +33,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   three re-pages in the first day and one a day thereafter, so a month-long latch produces
   ~31 pages rather than ~720; pages past day one are prefixed `STILL BLOCKED — DAY N` so
   day four does not read identically to day zero. "Are entries blocked?" is read from
-  `EntryPauseGate.entry_block()`, the same authority the entry and scale-in paths gate on
+  `EntryPauseGate.entry_blocks()`, the same authority the entry and scale-in paths gate on
   (lifted out of the former private `_active_cause`), so the monitor cannot report a state
   the enforcement path disagrees with — including the fail-closed case where the `system_halt`
   flag has never been successfully read, which blocks entries while still reading
-  `active=False`. Elapsed time for the manual halt comes from the flag row's durable
+  `active=False`. The gate reports *every* active lever, not just the one that wins the skip
+  log: escalating from `FEATURE_ENTRY_PAUSE` to the manual kill switch used to write a
+  strictly newer `ENTRY_PAUSE_LATCH_CLEARED` row reading "new entries are enabled again"
+  while the halt was in force. Elapsed time for the manual halt comes from the flag row's durable
   `updated_at` (mirrored into `SystemHaltState.since`), so a restart cannot re-announce a
-  four-day halt as "45m", and the first observation of any latch writes its row immediately
+  four-day halt as "45m" — close-only is in-process by nature and `FEATURE_ENTRY_PAUSE` has
+  no DB row, so for those two elapsed remains process-relative and the accumulated
+  `*_LATCHED` rows are the durable source. The first observation of any latch writes its row immediately
   rather than an hour later, so an engine in a restart loop cannot stay blocked while
   emitting nothing. `_enter_close_only_mode()` takes an optional `reason`, threaded through
   from every trip site (reconciliation CRITICAL findings — deduped and capped via
