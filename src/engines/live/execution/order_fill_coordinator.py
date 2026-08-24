@@ -200,8 +200,11 @@ class LiveOrderFillCoordinator:
         reconciler's missing-stop path re-places protection on its next cycle
         (which also persists the NEW id over the stale DB value), and emits a
         critical ``system_events`` row + webhook alert. Deliberate cancels from
-        the close path don't reach here — that path stops tracking the SL order
-        before the callback can fire.
+        the close path don't reach here — that path calls
+        ``OrderTracker.mark_self_cancelled`` before issuing the cancel, so the
+        terminal status is recognised as our own and never routed to ``on_cancel``
+        (#1104). It does NOT untrack first: a stop is cancelled at the moment price
+        is touching it, so a genuine fill in that window must still be processed.
 
         Returns True when ``order_id`` matched a tracked position's stop-loss.
         """

@@ -127,6 +127,22 @@ BORROW_DUST_EPSILON = 1e-8  # Borrowed amounts at/below this are treated as zero
 ORPHANED_BORROW_SWEEP_COOLDOWN_SECONDS = 300  # Min seconds between sweep attempts per base asset
 ENTRY_PAUSE_WARNING_INTERVAL_SECONDS = 300  # Min seconds between entry-pause skip warnings
 
+# Exchange-bound SELL quantities are capped at the free base balance so a fee-rounding
+# sliver cannot trigger -2010, then snapped down to a whole lot. Both steps must only
+# ever shave a sliver. If the quantity actually submitted falls below this fraction of
+# the quantity intended, the base asset is locked by an order we do not know about (an
+# orphaned stop-loss, #1104) or the position is too small to lot-size honestly — and
+# submitting the remainder is the dangerous branch: a close is booked as a FULL exit,
+# and a stop-loss is recorded as full protection. Refuse instead, and let the honest
+# UNPROTECTED escalation fire. Applies to both the close path and stop-loss placement.
+HOLDINGS_CAP_MIN_RATIO = 0.98
+
+# Consecutive aborted closes on one symbol before latching close-only. The exit signal
+# re-fires every trading-loop iteration, so without a latch the abort pages once per
+# ~66s — the alert-storm shape #1104 itself had. Two aborts can be transient; three
+# means the position is stuck open and needs an operator.
+CLOSE_ABORT_CLOSE_ONLY_STREAK = 3
+
 # Core Trading Defaults (used across backtest and live engines)
 DEFAULT_STOP_LOSS_PCT = 0.05  # 5% stop loss
 DEFAULT_MIN_STOP_LOSS_PCT = 0.01  # 1% minimum stop loss

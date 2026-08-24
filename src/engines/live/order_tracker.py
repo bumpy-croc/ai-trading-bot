@@ -8,6 +8,7 @@ the trading engine when orders fill, partially fill, or get cancelled.
 import logging
 import math
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -65,6 +66,12 @@ MAX_CALLBACK_RETRIES = 5
 # for a specific order (e.g. Binance -1100 for invalid orderId format).
 # At a 10-second poll interval this gives ~100 seconds of tolerance.
 MAX_API_ERROR_RETRIES = 10
+
+# How long a "we are cancelling this ourselves" mark suppresses the unexpected-cancel
+# escalation. It only has to outlive one cancel round-trip plus the terminal
+# notification (WS: milliseconds; REST poll: up to poll_interval). Bounded so a mark
+# left behind by a crashed cancel cannot silence a genuine cancellation minutes later.
+SELF_CANCEL_SUPPRESSION_TTL_SECONDS = 60.0
 
 
 class OrderTracker:
@@ -130,6 +137,53 @@ class OrderTracker:
         # Circuit breaker to handle exchange API failures gracefully
         # Prevents resource exhaustion from repeated failing API calls
         self._circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60.0)
+        # Orders WE are deliberately cancelling, id -> monotonic mark time. The order
+        # stays tracked across the cancel (so a FILL landing in that window is still
+        # processed); only the unexpected-cancel escalation is suppressed. See
+        # mark_self_cancelled (#1104).
+        self._self_cancelled: dict[str, float] = {}
+
+    def mark_self_cancelled(self, order_id: str) -> None:
+        """Declare that WE are about to cancel ``order_id``, so its terminal
+        CANCELED notification must not escalate as an unexpected cancellation.
+
+        The order deliberately stays TRACKED across the cancel round-trip. Binance
+        emits the terminal executionReport on the open user socket before the DELETE
+        response returns, and a stop-loss is cancelled at exactly the moment price is
+        touching it — so that window is precisely when a genuine FILL is most likely.
+        Untracking first would discard it (``process_execution_event`` early-returns on
+        unknown ids) and, with polling disabled while the WS is primary, nothing would
+        re-deliver it. Suppressing only the escalation keeps the fill path intact
+        (#1104).
+        """
+        with self._lock:
+            self._self_cancelled[order_id] = time.monotonic()
+
+    def clear_self_cancelled(self, order_id: str) -> None:
+        """Drop a self-cancel mark, e.g. when the cancel could not be confirmed.
+
+        An unconfirmed cancel may still be resting, so any later terminal status is
+        genuinely unexpected and must escalate.
+        """
+        with self._lock:
+            self._self_cancelled.pop(order_id, None)
+
+    def _consume_self_cancelled(self, order_id: str) -> bool:
+        """Whether this terminal status is our own cancel; consumes the mark.
+
+        Also prunes marks past ``SELF_CANCEL_SUPPRESSION_TTL_SECONDS`` so an
+        abandoned mark cannot silence a real cancellation later.
+        """
+        now = time.monotonic()
+        with self._lock:
+            for stale in [
+                oid
+                for oid, marked in self._self_cancelled.items()
+                if now - marked > SELF_CANCEL_SUPPRESSION_TTL_SECONDS
+            ]:
+                del self._self_cancelled[stale]
+            marked_at = self._self_cancelled.pop(order_id, None)
+        return marked_at is not None
 
     def _emit_critical(self, message: str, error_code: str) -> None:
         """Route an operator-critical order condition (an orphaned/unrecoverable
@@ -180,6 +234,7 @@ class OrderTracker:
             order_id: Order ID to stop tracking
         """
         with self._lock:
+            self._self_cancelled.pop(order_id, None)
             if order_id in self._pending_orders:
                 del self._pending_orders[order_id]
                 self._order_locks.pop(order_id, None)
@@ -646,9 +701,21 @@ class OrderTracker:
                         self._pending_orders[order_id].last_filled_qty = actual_filled
 
             logger.warning("Order %s: %s %s", status.value, order_id, tracked.symbol)
+            # A cancel WE issued is not an unexpected termination. Escalating it pages
+            # a false UNPROTECTED alert and — because the handler clears the position's
+            # stop_loss_order_id — makes the reconciler stack a duplicate stop on one
+            # that is still resting, orphaning it (#1104). Any fill delta carried by
+            # this terminal status was already booked above, so suppressing only the
+            # cancel callback loses nothing.
             # Call callback outside any lock to prevent deadlock.
             # Pass actual filled qty so the caller uses the reconciled value.
-            if self.on_cancel:
+            if self._consume_self_cancelled(order_id):
+                logger.info(
+                    "Order %s: %s is our own deliberate cancel — not escalating",
+                    order_id,
+                    status.value,
+                )
+            elif self.on_cancel:
                 try:
                     self.on_cancel(order_id, tracked.symbol, actual_filled)
                 except Exception as e:

@@ -964,6 +964,10 @@ class LiveTradingEngine:
         # Exchange order rejections (code + rejected params) land in
         # system_events instead of dying with the application log (#1094).
         self.live_execution_engine.attach_exchange_error_sink(self.exchange_interface)
+        # "We cannot exit this position" must page and, if it repeats, latch close-only
+        # rather than paging once per trading-loop iteration forever (#1104).
+        self.live_execution_engine.alert_dispatcher = self._send_alert
+        self.live_execution_engine.on_critical = self._enter_close_only_mode
 
     def _init_entry_handler(self, entry_handler: LiveEntryHandler | None) -> ExposureGovernor:
         """Build the entry handler and its exposure/macro/circuit-breaker gates."""
