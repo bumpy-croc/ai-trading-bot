@@ -22,6 +22,11 @@ from unittest.mock import Mock
 # runners that don't set ENV.
 os.environ.setdefault("ENV", "test")
 
+# A test suite that exercises a different checkout's code than the one you edited reports green
+# for work you did not do. Importing `src` runs the source-root guard (src/__init__.py, GH #1070);
+# do it here so the failure lands before any collection or stubbing noise.
+import src  # noqa: F401,E402
+
 if "onnxruntime" not in sys.modules:
     stub_onnx = ModuleType("onnxruntime")
 
