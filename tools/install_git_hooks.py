@@ -14,8 +14,9 @@ Two properties matter more than elegance here, both because getting them wrong r
 * **The source is read from the primary checkout** (the parent of the git common dir) when it
   has one, so a feature branch in a worktree cannot seed the repo-wide hook.
 
-Drift is the price of copying, so ``--check`` compares content and is wired to ``make
-hooks-check``; ``make install`` re-copies on every run.
+Drift is the price of copying, so ``--check`` compares content **and the executable bit** —
+git skips a non-executable hook silently — and is wired to ``make hooks-check``; ``make
+install`` re-copies on every run.
 
 Usage:
     python tools/install_git_hooks.py           # install / repair
@@ -110,15 +111,30 @@ def install(root: Path, *, check_only: bool = False) -> int:
         target = target_dir / hook.name
         wanted = hook.read_bytes()
         current = target.read_bytes() if target.is_file() else None
+        # The mode bit is as load-bearing as the content: git skips a non-executable hook
+        # SILENTLY and the push succeeds. Content-only drift detection would print "ok" over
+        # exactly the always-pass this tool exists to prevent.
+        executable = target.is_file() and os.access(target, os.X_OK)
+        content_ok = current == wanted and not target.is_symlink()
 
-        if current == wanted and not target.is_symlink():
+        if content_ok and executable:
             print(f"ok      {target}")
             continue
 
         if check_only:
-            state = "<missing>" if current is None else "differs"
-            print(f"DRIFT   {target}: {state} (want a copy of {hook})", file=sys.stderr)
+            if current is None:
+                state = "<missing>"
+            elif not content_ok:
+                state = "is a symlink" if target.is_symlink() else "differs"
+            else:
+                state = "not executable — git would skip it silently"
+            print(f"DRIFT   {target}: {state} (want an executable copy of {hook})", file=sys.stderr)
             problems += 1
+            continue
+
+        if content_ok:
+            target.chmod(HOOK_MODE)
+            print(f"chmod   {target} (restored the executable bit)")
             continue
 
         if current is not None or target.is_symlink():

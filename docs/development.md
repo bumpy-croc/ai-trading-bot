@@ -126,8 +126,13 @@ Hooks are **copied, not symlinked**, and the source is read from the primary che
 has a `.githooks/`. Both rules exist because the hooks directory is shared while `make install`
 often runs inside an ephemeral agent worktree: a symlink into such a worktree dangles as soon
 as it is pruned, and **git skips a dangling hook silently, exiting 0** — reintroducing GH #1077
-through its own remedy. The cost of copying is drift, which `make hooks-check` detects and
-`make install` repairs.
+through its own remedy. The cost of copying is drift, which `make hooks-check` detects — comparing **content and
+the executable bit**, because git ignores a non-executable hook and lets the push through —
+and `make install` repairs.
+
+`make hooks-check` inspects the hooks installed on *your machine*, so it is a workstation
+check, not a repo-content one: a fresh CI clone has no hooks installed by design and would
+always report drift. Run it locally if a push ever seems not to be running tests.
 
 `pre-push` runs the fast-marked unit tests (in parallel, `-n 4` — the same worker count `tests/run_tests.py` uses; ~48s) and blocks the push when
 they fail. It distinguishes a genuine test failure from an environment failure — a usage or

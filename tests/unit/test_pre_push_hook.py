@@ -80,6 +80,15 @@ def checkout(tmp_path: Path):
 def test_hook_is_executable_and_tracked():
     assert HOOK.is_file(), "the hook must be version-controlled, not only in .git/hooks"
     assert os.access(HOOK, os.X_OK)
+    # git skips a non-executable hook silently, so the committed mode is load-bearing too.
+    entry = subprocess.run(
+        ["git", "ls-files", "-s", "--", ".githooks/pre-push"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert entry.startswith("100755 "), f"hook must be committed executable, got: {entry!r}"
 
 
 @pytest.mark.slow
@@ -239,3 +248,24 @@ def test_hook_rejects_an_interpreter_that_cannot_run_the_suite(checkout):
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
     assert str(stub) not in result.stdout, "the unusable interpreter must not have been used"
     assert ".venv/bin/python" in result.stdout
+
+
+@pytest.mark.fast
+def test_check_reports_a_non_executable_hook_as_drift(checkout):
+    """A content-identical hook with no +x is skipped by git silently — that is drift."""
+    repo = checkout()
+    shutil.copytree(REPO_ROOT / ".githooks", repo / ".githooks")
+    assert _run_installer(repo).returncode == 0
+
+    installed = repo / ".git" / "hooks" / "pre-push"
+    installed.chmod(0o644)
+
+    drifted = _run_installer(repo, "--check")
+    assert drifted.returncode == 1, "--check called a hook git would ignore healthy"
+    assert "not executable" in drifted.stderr
+
+    assert _run_installer(repo).returncode == 0
+    assert os.access(installed, os.X_OK), "install() must restore the executable bit"
+    assert installed.read_bytes() == (repo / ".githooks" / "pre-push").read_bytes()
+    assert not (repo / ".git" / "hooks" / "pre-push.bak").exists(), "no backup churn for a chmod"
+    assert _run_installer(repo, "--check").returncode == 0

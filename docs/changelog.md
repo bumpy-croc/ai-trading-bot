@@ -33,9 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of 76s serial; `-n auto` measured no better than serial, since per-worker import
   overhead eats the gain — a hook slow enough to bypass is the inert hook again) and classifies
   pytest's exit codes, so a usage/collection error is not reported as a test failure.
+  Drift detection compares the **executable bit** as well as content: git ignores a
+  non-executable hook and the push succeeds, so a content-only check would have printed
+  `ok` over the very always-pass the tool exists to prevent.
   `tests/unit/test_pre_push_hook.py` proves the hook fails on a broken test, from a
-  subdirectory, and from a worktree, and that an installed hook still blocks a bad push after
-  the worktree it was installed from is pruned.
+  subdirectory, and from a worktree; that an installed hook still blocks a bad push after
+  the worktree it was installed from is pruned; and that a `chmod -x`'d hook is reported as
+  drift and repaired.
 - **The primary checkout is now write-protected against agent mutation** (#1082;
   filesystem sibling of #1070). An agent shell's cwd is silently reset to the
   primary checkout mid-task, after which every *relative* path resolves there
