@@ -12,6 +12,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Backtests no longer silently truncate at the drawdown cap with no marker** (#1102). PR
+  #1073 made `RiskParameters()` default-hydrate `max_drawdown` from the ratified
+  `src/config/risk-limits.json` (0.20); the backtest engine has always early-stopped a run once
+  drawdown crosses that threshold, so any arm whose true drawdown exceeds the cap — e.g.
+  HyperGrowth's honest 365d backtest at ~21.8% MaxDD — reported partial results with no error
+  and no way to tell from the output that the run was cut short. `Backtester` gained a
+  `drawdown_cap_mode` parameter (`"enforce"`, the default and safe choice for any
+  live-representative/promotion run — halts at the cap exactly as before) and `"measure"`
+  (research/characterisation only — runs the full window and reports whether/when the cap
+  *would* have been breached instead of stopping there). Results now always carry an explicit
+  `early_stopped: bool` marker (not just the possibly-absent `early_stop_reason` string), plus
+  `drawdown_cap_mode`, `drawdown_cap_threshold`, `drawdown_cap_breached`,
+  `drawdown_cap_breach_date`, and `drawdown_cap_breach_candle_index`. `atb backtest` gained
+  `--drawdown-cap-mode` and now prints a loud truncation warning instead of staying silent;
+  `ExperimentConfig`/`ExperimentResult` (`src/experiments/`) plumb the same fields through so a
+  preregistered research run can opt into `measure` explicitly, and the suite reporter flags
+  both a truncated variant and a truncation *mismatch* against its baseline — the exact
+  confusion that caused the #1081 Step-2 re-run to report unexplained mismatches before being
+  root-caused. Default behavior for every existing caller is unchanged. See
+  `agents/research/1102-backtest-truncation.md` for the full analysis, including other
+  silent-cap paths found but not fixed (`#1089`).
 - **Latched conditions now re-announce themselves until a human clears them, and the entry
   state is asserted positively** (#1095, #1096; incident #1094). On 2026-08-20 production
   latched close-only after a stop-loss re-placement failure, paged Slack correctly at minute

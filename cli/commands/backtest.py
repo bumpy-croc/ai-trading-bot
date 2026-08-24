@@ -372,6 +372,7 @@ def _handle(ns: argparse.Namespace) -> int:
             log_to_database=enable_db_logging,
             enable_engine_risk_exits=enable_engine_risk_exits,
             enable_dynamic_risk=enable_dynamic_risk,
+            drawdown_cap_mode=getattr(ns, "drawdown_cap_mode", "enforce"),
         )
 
         # Map provider types to exchange names for symbol conversion
@@ -406,6 +407,25 @@ def _handle(ns: argparse.Namespace) -> int:
         print(f"Final Balance: ${results['final_balance']:.2f}")
         print(f"Hold Return: {results['hold_return']:.2f}%")
         print(f"Trading vs Hold: {results['trading_vs_hold_difference']:+.2f}%")
+        print(f"Drawdown Cap Mode: {results.get('drawdown_cap_mode', 'enforce')}")
+        if results.get("early_stopped"):
+            print("!" * 50)
+            print("WARNING: RUN WAS TRUNCATED — results above cover a PARTIAL window only.")
+            print(f"  Reason: {results.get('early_stop_reason')}")
+            print(f"  Stopped at: {results.get('early_stop_date')}")
+            print(
+                "  Re-run with --drawdown-cap-mode measure to see the full "
+                "drawdown profile (research use only — not live-representative)."
+            )
+            print("!" * 50)
+        elif results.get("drawdown_cap_breached"):
+            print(
+                "NOTE: drawdown crossed the cap "
+                f"({results.get('drawdown_cap_threshold', 0):.1%}) at "
+                f"{results.get('drawdown_cap_breach_date')} but the run was NOT "
+                "truncated (drawdown_cap_mode=measure) — a live-representative "
+                "run with the same cap would have halted here."
+            )
         print("=" * 50)
 
         if enable_db_logging and results.get("session_id"):
@@ -542,6 +562,22 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         type=float,
         default=None,
         help="Maximum drawdown before stopping. Default: ratified limit",
+    )
+    p.add_argument(
+        "--drawdown-cap-mode",
+        choices=["enforce", "measure"],
+        default="enforce",
+        help=(
+            "'enforce' (default; safe for live-representative/promotion runs): "
+            "halt the run the instant drawdown crosses --max-drawdown, matching "
+            "what prod actually does at the cap. 'measure' (research/"
+            "characterisation only): run the full window without truncating and "
+            "report whether/when the cap would have been breached instead of "
+            "stopping there -- never use 'measure' results to justify promoting "
+            "a strategy to live trading. A truncated run is always marked "
+            "'early_stopped: true' in the results, so a partial run can never "
+            "be mistaken for a complete one."
+        ),
     )
     p.add_argument(
         "--max-position-size",

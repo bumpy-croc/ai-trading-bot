@@ -809,7 +809,9 @@ class TestRiskManagementEdgeCases:
     """Test edge cases in risk management logic"""
 
     def test_max_drawdown_exceeded_early_stop(self, mock_data_provider, minimal_strategy):
-        """Backtest should stop when max drawdown exceeded"""
+        """Backtest should stop when max drawdown exceeded, and results must
+        say so via the explicit ``early_stopped`` marker (#1102) -- not just
+        a possibly-None ``early_stop_reason`` string."""
         # Create data that causes large drawdown
         crash_data = create_ohlcv_data(100, start_price=50000, trend=-0.60)  # 60% decline
         mock_data_provider.get_historical_data.return_value = crash_data
@@ -826,10 +828,168 @@ class TestRiskManagementEdgeCases:
 
         results = backtester.run("BTCUSDT", "1h", datetime(2024, 1, 1))
 
+        # Default mode is "enforce" and results must be tagged as such.
+        assert results["drawdown_cap_mode"] == "enforce"
         # Should have early stopped
         if results["early_stop_reason"]:
+            assert results["early_stopped"] is True
             assert "drawdown" in results["early_stop_reason"].lower()
             assert results["early_stop_date"] is not None
+            assert results["drawdown_cap_breached"] is True
+            assert results["drawdown_cap_threshold"] == pytest.approx(0.20)
+        else:
+            assert results["early_stopped"] is False
+
+    def test_drawdown_cap_mode_measure_does_not_truncate(self, mock_data_provider):
+        """'measure' mode must run the full window and report the breach as
+        a metric instead of stopping the run there (#1102).
+
+        Uses a deterministic scripted strategy (BUY at the start of each
+        cycle, SELL at the end, full allocation, no fees/slippage) instead
+        of ml_basic so the drawdown trajectory -- and hence which trade
+        crosses the cap -- is exact rather than dependent on ML inference
+        against random data.
+        """
+        from src.strategies.components import (
+            Signal,
+            SignalDirection,
+            SignalGenerator,
+            Strategy,
+        )
+        from src.strategies.components.position_sizer import PositionSizer
+        from src.strategies.components.risk_manager import RiskManager as ComponentRiskManager
+
+        class CycleSignalGenerator(SignalGenerator):
+            """BUY at the start of each 2-row cycle, SELL (exit) at the end."""
+
+            def __init__(self):
+                super().__init__("cycle_generator")
+
+            def generate_signal(self, df, index, regime=None) -> Signal:
+                self.validate_inputs(df, index)
+                if index % 2 == 0:
+                    return Signal(SignalDirection.BUY, strength=1.0, confidence=1.0, metadata={})
+                return Signal(SignalDirection.SELL, strength=1.0, confidence=1.0, metadata={})
+
+            def get_confidence(self, df, index) -> float:
+                return 1.0
+
+        class FullAllocationRiskManager(ComponentRiskManager):
+            def __init__(self):
+                super().__init__("full_allocation_risk")
+
+            def calculate_position_size(self, signal, balance, regime=None) -> float:
+                if balance <= 0 or signal.direction == SignalDirection.HOLD:
+                    return 0.0
+                return balance
+
+            def should_exit(self, position, current_data, regime=None) -> bool:
+                return False
+
+            def get_stop_loss(self, entry_price, signal, regime=None) -> float:
+                # Stop far away -- exits are driven by the SELL signal, not SL.
+                return (
+                    entry_price * 0.01
+                    if signal.direction == SignalDirection.BUY
+                    else (entry_price * 100)
+                )
+
+        class PassThroughSizer(PositionSizer):
+            def __init__(self):
+                super().__init__("pass_through_sizer")
+
+            def calculate_size(self, signal, balance, risk_amount, regime=None) -> float:
+                self.validate_inputs(balance, risk_amount)
+                if signal.direction == SignalDirection.HOLD:
+                    return 0.0
+                return self.apply_bounds_checking(
+                    risk_amount, balance, min_fraction=0.0, max_fraction=1.0
+                )
+
+        def build_strategy() -> Strategy:
+            strategy = Strategy(
+                name="CycleCrashStrategy",
+                signal_generator=CycleSignalGenerator(),
+                risk_manager=FullAllocationRiskManager(),
+                position_sizer=PassThroughSizer(),
+            )
+            # Strategy applies its own hardcoded 25%-of-balance position cap
+            # (src/strategies/components/strategy.py) on top of whatever the
+            # sizer/risk_manager return. Remove it so this test's precise
+            # per-trade loss ratios translate directly into balance drawdown.
+            strategy._max_position_pct = 1.0
+            return strategy
+
+        # 6 cycles of [entry_row, exit_row], each losing ~15% of balance.
+        # Compounding losses cross the 20% cap within the first couple of
+        # trades (exact timing depends on engine fill-price mechanics, which
+        # this test does not try to hand-replicate), leaving several more
+        # cycles of data for "measure" mode -- which must not truncate -- to
+        # run through that "enforce" mode never reaches.
+        prices = []
+        price = 1000.0
+        for _ in range(6):
+            prices.append(price)  # entry row
+            price *= 0.85
+            prices.append(price)  # exit row
+        timestamps = pd.date_range(datetime(2024, 1, 1), periods=len(prices), freq="1h")
+        df = pd.DataFrame(
+            {
+                "open": prices,
+                "high": prices,
+                "low": prices,
+                "close": prices,
+                "volume": np.ones(len(prices)),
+            },
+            index=timestamps,
+        )
+        mock_data_provider.get_historical_data.return_value = df
+
+        risk_params = RiskParameters(max_drawdown=0.20, max_position_size=1.0)
+
+        enforced = Backtester(
+            strategy=build_strategy(),
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+            risk_parameters=risk_params,
+            log_to_database=False,
+            fee_rate=0.0,
+            slippage_rate=0.0,
+            drawdown_cap_mode="enforce",
+        ).run("BTCUSDT", "1h", df.index[0], df.index[-1])
+
+        measured = Backtester(
+            strategy=build_strategy(),
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+            risk_parameters=RiskParameters(max_drawdown=0.20, max_position_size=1.0),
+            log_to_database=False,
+            fee_rate=0.0,
+            slippage_rate=0.0,
+            drawdown_cap_mode="measure",
+        ).run("BTCUSDT", "1h", df.index[0], df.index[-1])
+
+        assert enforced["early_stopped"] is True, "fixture must actually breach the cap"
+        assert measured["early_stopped"] is False
+        assert measured["drawdown_cap_mode"] == "measure"
+        assert measured["drawdown_cap_breached"] is True
+        assert measured["drawdown_cap_breach_date"] is not None
+        # "measure" must run past the point "enforce" stopped at, proving it
+        # actually kept going instead of also truncating.
+        assert measured["total_trades"] > enforced["total_trades"]
+        # And the two must agree on WHEN the cap was first crossed, since
+        # "measure" is supposed to observe the same event without acting on it.
+        assert measured["drawdown_cap_breach_date"] == enforced["early_stop_date"]
+
+    def test_drawdown_cap_mode_rejects_invalid_value(self, mock_data_provider, minimal_strategy):
+        """An invalid drawdown_cap_mode must fail fast, not silently fall
+        back to a mode the caller didn't ask for."""
+        with pytest.raises(ValueError, match="drawdown_cap_mode"):
+            Backtester(
+                strategy=minimal_strategy,
+                data_provider=mock_data_provider,
+                drawdown_cap_mode="yolo",  # type: ignore[arg-type]
+            )
 
     def test_stop_loss_at_zero(self, mock_data_provider, minimal_strategy):
         """Stop loss at 0 (impossible price) should not crash"""
