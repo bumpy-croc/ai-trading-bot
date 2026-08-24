@@ -12,6 +12,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The `pre-push` hook can now fail** (#1077). It was inert: pytest's output was
+  piped into `tail`, so `EXIT_CODE=$?` captured `tail`'s status and the gate exited
+  0 no matter what the tests did, and `.venv/bin/python` was resolved relative to
+  the cwd, so a push from a linked worktree (which has no `.venv`) fell through to
+  a bare `python` that does not exist on macOS. Every push printed
+  `python: command not found` followed by `All fast tests passed. Pushing...`. The
+  hook now runs pytest unpiped, resolves the repo root via
+  `git rev-parse --show-toplevel` and the primary checkout via
+  `--git-common-dir`, requires an interpreter that can actually import pytest, and
+  **aborts the push when it cannot verify** (documented skip: `git push
+  --no-verify`). It also drops `-p no:randomly`, which conflicted with the
+  `--randomly-seed` in `pytest.ini`'s `addopts` and would have aborted the hook
+  with a usage error even after the other two fixes. Hook sources moved into a
+  tracked `.githooks/` with an installer (`make hooks`, wired into `make install`)
+  so they are reviewable rather than drifting per machine. Hooks are **copied**, and sourced
+  from the primary checkout, because `$GIT_COMMON_DIR/hooks` is shared while `make install`
+  runs inside ephemeral agent worktrees — a symlink into one dangles when it is pruned, and
+  git skips a dangling hook silently with exit 0. The hook also runs `-n 4` (48s
+  instead of 76s serial; `-n auto` measured no better than serial, since per-worker import
+  overhead eats the gain — a hook slow enough to bypass is the inert hook again) and classifies
+  pytest's exit codes, so a usage/collection error is not reported as a test failure.
+  Drift detection compares the **executable bit** as well as content: git ignores a
+  non-executable hook and the push succeeds, so a content-only check would have printed
+  `ok` over the very always-pass the tool exists to prevent.
+  `tests/unit/test_pre_push_hook.py` proves the hook fails on a broken test, from a
+  subdirectory, and from a worktree; that an installed hook still blocks a bad push after
+  the worktree it was installed from is pruned; and that a `chmod -x`'d hook is reported as
+  drift and repaired.
 - **The primary checkout is now write-protected against agent mutation** (#1082;
   filesystem sibling of #1070). An agent shell's cwd is silently reset to the
   primary checkout mid-task, after which every *relative* path resolves there
