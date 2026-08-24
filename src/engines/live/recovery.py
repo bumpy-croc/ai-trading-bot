@@ -85,6 +85,8 @@ class RecoveryEngineState(Protocol):
     current_balance: float
     _close_only_mode: bool
     _recovered_inactive_session_id: int | None
+    _history_seed_session_id: int | None
+    _history_seed_lookup_failed: bool
 
     def _strategy_name(self) -> str: ...
 
@@ -146,6 +148,15 @@ class LiveSessionRecoverer:
 
             logger.info("🔍 Found %s session #%s", source, session_id)
 
+            # Durable seeding lineage (#1036): this session holds the
+            # account_history rows the restart-safe risk seeders must baseline
+            # from. Recorded for BOTH recovery paths (reused active session and
+            # clean restart) and never cleared — unlike
+            # _recovered_inactive_session_id, whose lifetime belongs to the #668
+            # carry-forward guard, which clears it during startup before the
+            # first loop iteration runs.
+            state._history_seed_session_id = session_id
+
             # Clean restart (inactive session): remember it so start() can carry its
             # OPEN positions forward into the new session — INDEPENDENT of whether a
             # positive balance was recovered. A fully-liquidated session (balance 0)
@@ -206,6 +217,13 @@ class LiveSessionRecoverer:
             # balance). Propagate so startup fails fast.
             raise
         except Exception as e:
+            # The lineage is now UNDETERMINED, not absent: the lookup could not
+            # prove this is a fresh account. Without this flag the seeders would
+            # read an empty _history_seed_session_id, conclude "no history
+            # exists", and latch `self_anchored` — reporting a failed lookup as
+            # a legitimate fresh-account anchor (#1036). Flagging it makes them
+            # expect history, retry, and latch `seed_unavailable` with a WARNING.
+            state._history_seed_lookup_failed = True
             logger.error("❌ Error recovering session: %s", e, exc_info=True)
             return None
 

@@ -302,7 +302,9 @@ class LiveStartupSequencer:
                 )
             finally:
                 # Clear so a later start()/stop()/start() re-entry cannot re-trigger a
-                # stale-session reassign (#668, P3).
+                # stale-session reassign (#668, P3). The restart-safe risk seeders
+                # must NOT read this field — it is dead by the first loop iteration.
+                # They use the durable `_history_seed_session_id` instead (#1036).
                 state._recovered_inactive_session_id = None
 
     def self_heal_terminal_positions(self) -> None:

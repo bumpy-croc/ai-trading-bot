@@ -265,6 +265,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behavior change when neither flag is passed; the live path cannot be pinned.
 
 ### Fixed
+- **Restart-safe peak/baseline seeding now works on carry-forward boots** (#1036):
+  both durable-history seeders — the `MaxDrawdownGuard` peak (#1001) and the
+  `AccountCircuitBreaker` daily baseline + drawdown peak (#1032) — read
+  `_recovered_inactive_session_id` to find the prior session holding the
+  `account_history` rows. That field's lifetime belongs to the #668
+  carry-forward re-entry guard, which clears it during startup BEFORE the first
+  loop iteration, so on exactly the boot path a mid-drawdown restart takes
+  (clean restart → NEW session → positions carried forward) both seeders read an
+  empty value, silently self-anchored to the post-restart balance, and logged
+  "account_history peak unavailable" as if that were normal — for 30 days on
+  staging. Fixed with a dedicated `_history_seed_session_id`, written once by
+  `LiveSessionRecoverer` when a prior session is found and never cleared, and
+  resolved through the new `src/engines/live/monitoring/seed_lineage.py`; the
+  lineage is now owned by the seeders' need rather than by an unrelated guard.
+  The documented ~3s first-snapshot race is handled deterministically instead of
+  by timing: an empty-but-successful read is terminal only when NO prior session
+  exists (a genuinely fresh account, unchanged behaviour), and is retried within
+  the existing `MAX_SEED_ATTEMPTS` budget when history was expected — the guard
+  arms provisionally from the current balance so the cap is never unarmed and
+  ratchets the peak UP via the new `MaxDrawdownGuard.raise_peak`, while the
+  breaker keeps evaluating (its `seed_peak` only ever raises). Seeding
+  provenance now tells the truth: the `peak_seed` field on breaker trip/dry-run
+  events gains a third value, `seed_unavailable`, for "durable history was
+  expected but could not be obtained" — a defect logged at WARNING — so it can
+  no longer be confused with `self_anchored`, which means "there was genuinely
+  nothing to seed from". The guard logs the same provenance when it arms.
+  Prod boots are unaffected (they reuse the active session, whose peak already
+  resolved); the 2026-07-14 staging boot would have armed at the durable
+  $1015.98 rather than $1015.84, which flips no historical trip decision.
+  Review round: the in-line pre-order gate (`check_before_new_risk`) now
+  ratchets a provisionally-armed peak too — it previously evaluated against the
+  stale boot balance and could admit the entry that the loop check tripped
+  close-only on moments later, re-opening the one-iteration leak that gate
+  exists to close (the same stale peak also under-throttled `_durable_peak_balance`
+  dynamic sizing). The upgrade retries get their own attempt counter, consumed
+  only by the once-per-iteration loop check, so the several chokepoint calls per
+  iteration cannot burn the 10-attempt budget in seconds. A recovery lookup that
+  RAISES now sets `_history_seed_lookup_failed`, so an undetermined lineage
+  expects history and latches `seed_unavailable` instead of laundering a failed
+  lookup into a legitimate `self_anchored`. `MAX_DRAWDOWN_BREACH` risk events now
+  carry `peak_seed`, matching the breaker, so a breach measured off a provisional
+  peak is distinguishable in `system_events` from one measured off durable
+  history. The legacy `_recovered_inactive_session_id` fallback and its Protocol
+  members are gone, making the decoupling unconditional. Finally, a session-REUSE
+  boot that finds no snapshots no longer logs "durable seeding FAILED … measuring
+  from the depressed value" — there was nothing to seed from, and the wording now
+  says so.
+
 - **Macro-event calendar refilled through Jan 2027** (#1053): `config/macro_events.json`
   had no event newer than 2026-07-14, so the macro de-risk guard had zero upcoming
   coverage and its staleness canary
