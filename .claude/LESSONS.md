@@ -553,7 +553,8 @@ defect was to hit — the primary checkout had been frozen since 2026-07-04, so 
     **Not protected on purpose:** `<primary>/.git/**` (every worktree's git ops, and
     `git worktree add`), `<primary>/.claude/worktrees/**`, and anything git-ignored in the primary
     (shared `.venv`, `logs/`, caches). **Human override:** `ATB_ALLOW_PRIMARY_WRITE=1` at launch
-    (an agent cannot set it for its own hook process), or `touch ~/.claude/atb-allow-primary-write`.
+    (an agent cannot set it for its own hook process), or `touch ~/.claude/atb-allow-primary-write`,
+    which self-expires after 30 minutes so one stray `touch` cannot disable the guard for good.
     **Limits, stated honestly:** shell parsing is best-effort — a write hidden inside `python -c`,
     a heredoc script, `xargs`, `find -exec` or a `make` target is not detected; nothing is guarded
     before the session's first worktree-cwd tool call; and an agent can simply delete the hook
