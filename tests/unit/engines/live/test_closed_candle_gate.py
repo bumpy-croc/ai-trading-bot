@@ -242,7 +242,9 @@ class TestStampDecisionSignal:
         assert md["decision_bar_open_time"] == "2026-07-01T03:00:00"
 
     def test_none_decision_is_a_noop(self):
-        stamp_decision_signal(None, bar_time=pd.Timestamp("2026-07-01"), bar_closed=True, timeframe="1h")
+        stamp_decision_signal(
+            None, bar_time=pd.Timestamp("2026-07-01"), bar_closed=True, timeframe="1h"
+        )
 
     def test_preserves_existing_metadata(self):
         decision = _make_decision(metadata={"onnx_pred": 0.7})

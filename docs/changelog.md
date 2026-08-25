@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Closed-candle gating for live signal decisions** (#1106; parity plan decision D1,
+  `docs/refactor/backtest_live_parity_plan.md` §2 divergence #1). Live rewrites the
+  kline-buffer tail on every WebSocket tick and the trading loop decided on `df.iloc[-1]`
+  — a partially formed candle — while backtest is inherently closed-bar. The forming-bar
+  flip-rate study (`docs/research/experiments/2026-07-06_forming-bar-fliprate.md`) measured
+  **43.2% of decisions at minute 5 disagreeing** with the closed-bar decision, driven
+  entirely by the floating reference price (`predicted_return`'s denominator; the ML
+  feature window was already closed-bars-only in both engines).
+
+  Behind the `closed_candle_gating` feature flag (**default OFF**, so the merge is inert),
+  the loop evaluates the strategy signal exactly once per newly closed bar, at that bar's
+  index, freezing the reference price to that bar's final close. `KlineBuffer` now tracks
+  `last_closed_bar_time` from the Binance kline `x: true` flag, and `Signal.metadata` is
+  stamped with the decision bar's identity in **both** flag states so a staging/prod A/B can
+  attribute every decision.
+
+  **Protective paths stay tick-driven and ungated in both modes** — stop-loss, trailing
+  stops, exit checks, partial operations, PnL/MFE-MAE updates, reconciliation, drawdown
+  guard and account monitoring all continue to run on the forming bar every tick. Gating
+  never delays protection. Only the two entry call sites consume the gated index.
+
+  Decision parity is now pinned by `tests/unit/engines/live/test_closed_candle_parity.py`:
+  the same data through the backtest runtime and through the gated live loop produces the
+  same decision, on the same bar, at the same reference price — with a control test proving
+  the ungated path still diverges.
+
 ### Fixed
 - **Stop-loss re-placement loop that left a live ETHUSDT position repeatedly unprotected**
   (#1104, #1109; incident #1094). On 2026-08-19 thirteen stop-loss orders were placed and

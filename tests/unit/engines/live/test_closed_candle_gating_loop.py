@@ -114,9 +114,7 @@ class TestFlagWiring:
     def test_repo_default_is_off(self):
         """feature_flags.json ships the flag OFF — staging A/B decides the flip
         (plan §5 default-flip quarantine)."""
-        flags = json.loads(
-            (Path(__file__).resolve().parents[4] / "feature_flags.json").read_text()
-        )
+        flags = json.loads((Path(__file__).resolve().parents[4] / "feature_flags.json").read_text())
         assert flags["closed_candle_gating"] is False
 
     def test_engine_defaults_to_disabled(self, monkeypatch):
