@@ -129,6 +129,7 @@ from src.strategies.components import Position as ComponentPosition
 from src.strategies.components import RuntimeContext, StrategyRuntime
 from src.strategies.components import Strategy as ComponentStrategy
 from src.strategies.components.exposure_governor import ExposureGovernor
+from src.trading.exit_reason import ExitReason
 
 from .account_sync import AccountSynchronizer
 from .order_tracker import OrderTracker
@@ -1461,6 +1462,7 @@ class LiveTradingEngine:
                             None,
                             None,
                             None,
+                            exit_category=ExitReason.ENGINE_SHUTDOWN,
                         )
                     except Exception as e:
                         logger.error(
@@ -2108,6 +2110,7 @@ class LiveTradingEngine:
         candle_low: float | None,
         candle,
         skip_live_close: bool = False,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
     ) -> None:
         """Serialise the close on the position\'s base-asset lock, then execute it (#703).
 
@@ -2124,6 +2127,7 @@ class LiveTradingEngine:
             candle_low,
             candle,
             skip_live_close=skip_live_close,
+            exit_category=exit_category,
         )
 
     def _execute_exit_locked(
@@ -2136,6 +2140,7 @@ class LiveTradingEngine:
         candle_low: float | None,
         candle,
         skip_live_close: bool = False,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
     ) -> None:
         """Close a position using shared execution modules (delegated to LiveExitCoordinator)."""
         return self.exit_coordinator.execute_exit_locked(
@@ -2147,6 +2152,7 @@ class LiveTradingEngine:
             candle_low,
             candle,
             skip_live_close=skip_live_close,
+            exit_category=exit_category,
         )
 
     def _cancel_stop_loss_order(self, position: Position) -> bool:
@@ -2398,6 +2404,7 @@ class LiveTradingEngine:
                 "pnl": trade.pnl,
                 "pnl_percent": trade.pnl_percent,
                 "exit_reason": trade.exit_reason,
+                "exit_category": str(trade.exit_category),
                 "duration_minutes": (trade.exit_time - trade.entry_time).total_seconds() / 60,
             }
 

@@ -44,6 +44,7 @@ from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.shared.commission import order_commission_usd, split_base_quote
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
+from src.trading.exit_reason import ExitReason, classify_stop_exit
 
 if TYPE_CHECKING:
     from src.data_providers.exchange_interface import ExchangeInterface, Order
@@ -1116,6 +1117,7 @@ class PositionReconciler:
                         exit_fee=exit_fee,
                         log_trade=True,
                         exit_order_id=stable_exit_id,
+                        exit_category=ExitReason.RECOVERED,
                     )
         except Exception as e:
             logger.warning(
@@ -2174,6 +2176,10 @@ class PositionReconciler:
             exit_fee=sl_exit_fee,
             log_trade=True,
             exit_order_id=sl_oid,
+            # A stop that filled while the bot was offline is the same logical exit
+            # as one it watched fill; the offline circumstance stays in the detail
+            # string, so grouping by category does not re-split it (#1115).
+            exit_category=classify_stop_exit(position),
         )
 
     @staticmethod
@@ -2262,6 +2268,7 @@ class PositionReconciler:
             reason="external_close_recovery",
             exit_order_id=f"reconcile_ext_{db_pos_id}",
             balance_realized=False,
+            exit_category=ExitReason.EXTERNAL_CLOSE,
         )
 
     @staticmethod
@@ -2739,6 +2746,7 @@ class PositionReconciler:
         exit_fee: float = 0.0,
         log_trade: bool = False,
         exit_order_id: str | None = None,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
     ) -> None:
         """Update session balance with realized P&L after reconciliation close.
 
@@ -2756,6 +2764,7 @@ class PositionReconciler:
                 closure is recorded elsewhere are not double-logged.
             exit_order_id: Exchange order id for the closing fill — used as the Trade's
                 ``order_id`` so a re-run dedups via ``uq_trade_order_session``.
+            exit_category: Typed exit category recorded on the ``trades`` row.
         """
         if exit_price is None or exit_price <= 0:
             self._audit_pnl_skip(position, reason, "no usable exit price")
@@ -2904,6 +2913,7 @@ class PositionReconciler:
                     interest_cost=interest_cost,
                     reason=reason,
                     exit_order_id=exit_order_id,
+                    exit_category=exit_category,
                 )
         except Exception as e:
             logger.warning(
@@ -2925,6 +2935,7 @@ class PositionReconciler:
         reason: str,
         exit_order_id: str | None,
         balance_realized: bool = True,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
     ) -> None:
         """Insert a ``trades`` row for a reconciler-closed position, commission and
         quantity populated.
@@ -2987,6 +2998,7 @@ class PositionReconciler:
                 exit_time=datetime.now(UTC),
                 pnl=float(gross_pnl),
                 exit_reason=reason,
+                exit_category=exit_category,
                 strategy_name=getattr(position, "strategy_name", None) or "reconciler",
                 session_id=self.session_id,
                 quantity=logged_quantity,

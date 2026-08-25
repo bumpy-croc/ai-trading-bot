@@ -12,6 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`exit_reason` was free text with substring-matched control flow** (#1115). The backtest
+  engine chose an exit's order type with `if "Stop loss" in exit_reason:`, so the `stop_loss`
+  and `stop_loss_filled_offline` spellings silently skipped it and exited as market orders with
+  no stop-gap pricing; the live engine used a *different*, case-insensitive matcher, so the two
+  engines disagreed about what counted as a stop exit. A closed `ExitReason` StrEnum
+  (`src/trading/exit_reason.py`) now backs every exit decision in both engines, and every
+  substring match is an enum comparison. `trades.exit_category` (migration
+  `0014_add_exit_category`) persists it; `exit_reason` keeps its exact historical values,
+  which the `account_balances` ledger key and a pre-registered experiment metric depend on.
+  Crucially the taxonomy distinguishes `stop_loss` (a protective stop took the planned loss)
+  from `trailing_stop` (a trailing stop banked a gain) — classified from the position's
+  trailing/breakeven flags, not from the prose. Prod through 2026-08-20 re-reads as trailing
+  stops 11/11 positive (+$6.18) and protective stops 0/2 (−$1.99), a split the old vocabulary
+  hid. Historical rows are not rewritten: `v_trades_exit_category` resolves a category at read
+  time and flags inferred rows, and `agents/research/1115-exit-taxonomy.md` records the per-row
+  prod mapping. The dashboard's "failed orders" tile, which filtered on an `exit_reason` value
+  no producer ever wrote, now counts `emergency_close`.
 - **Stop-loss re-placement loop that left a live ETHUSDT position repeatedly unprotected**
   (#1104, #1109; incident #1094). On 2026-08-19 thirteen stop-loss orders were placed and
   killed ~66s apart while the position stayed open. The cadence was the **trading loop**

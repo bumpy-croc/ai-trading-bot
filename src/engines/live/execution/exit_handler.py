@@ -48,6 +48,11 @@ from src.engines.shared.validation import (
     is_position_fully_closed,
     is_same_bar_entry,
 )
+from src.trading.exit_reason import (
+    STOP_EXIT_CATEGORIES,
+    ExitReason,
+    classify_stop_exit,
+)
 
 if TYPE_CHECKING:
     from src.position_management.early_cut import EarlyCutPolicy
@@ -70,6 +75,9 @@ class LiveExitCheck:
 
     should_exit: bool
     exit_reason: str = ""
+    # Typed category behind the free-text reason. Control flow branches on this;
+    # exit_reason stays prose for operators and the balance-ledger key (#1115).
+    exit_category: ExitReason = ExitReason.UNKNOWN
     limit_price: float | None = None  # For SL/TP pricing
     # Window MFE observed by the early-cut policy (raw price fraction), when
     # it evaluated this cycle. Surfaced into strategy_executions reasons by
@@ -88,6 +96,7 @@ class LiveExitResult:
     exit_fee: float = 0.0
     slippage_cost: float = 0.0
     exit_reason: str = ""
+    exit_category: ExitReason = ExitReason.UNKNOWN
     error: str | None = None
 
 
@@ -197,31 +206,22 @@ class LiveExitHandler:
         """Map a position side to the exit order side."""
         return map_exit_order_side_from_position(position)
 
-    def _is_stop_loss_reason(self, exit_reason: str) -> bool:
-        """Return True when the exit reason indicates a stop loss."""
-        reason_lower = exit_reason.lower()
-        return (
-            "stop loss" in reason_lower
-            or "stop_loss" in reason_lower
-            or "stop-loss" in reason_lower
-        )
-
     def _build_exit_intent(
         self,
         position: LivePosition,
         exit_reason: str,
+        exit_category: ExitReason,
         limit_price: float | None,
     ) -> OrderIntent:
-        """Build an OrderIntent for an exit based on the reason."""
-        reason_lower = exit_reason.lower()
+        """Build an OrderIntent for an exit based on the exit category."""
         order_type = OrderType.MARKET
         stop_price = None
         effective_limit = limit_price
 
-        if self._is_stop_loss_reason(exit_reason):
+        if exit_category in STOP_EXIT_CATEGORIES:
             order_type = OrderType.STOP_LOSS
             stop_price = limit_price if limit_price is not None else position.stop_loss
-        elif "take profit" in reason_lower or "take_profit" in reason_lower:
+        elif exit_category is ExitReason.TAKE_PROFIT:
             order_type = OrderType.TAKE_PROFIT
             if effective_limit is None:
                 effective_limit = position.take_profit
@@ -245,7 +245,7 @@ class LiveExitHandler:
     def _apply_stop_loss_gap_pricing(
         self,
         position: LivePosition,
-        exit_reason: str,
+        exit_category: ExitReason,
         base_exit_price: float,
         limit_price: float | None,
         candle_high: float | None,
@@ -254,7 +254,7 @@ class LiveExitHandler:
         """Adjust stop-loss exit pricing for adverse gap-through moves."""
         if not self.use_high_low_for_stops:
             return base_exit_price
-        if not self._is_stop_loss_reason(exit_reason):
+        if exit_category not in STOP_EXIT_CATEGORIES:
             return base_exit_price
 
         stop_price = limit_price if limit_price is not None else position.stop_loss
@@ -373,6 +373,7 @@ class LiveExitHandler:
             return LiveExitCheck(
                 should_exit=True,
                 exit_reason="Stop loss",
+                exit_category=classify_stop_exit(position),
                 limit_price=position.stop_loss,
                 early_cut_window_mfe_pct=early_cut_window_mfe,
             )
@@ -380,6 +381,7 @@ class LiveExitHandler:
             return LiveExitCheck(
                 should_exit=True,
                 exit_reason="Take profit",
+                exit_category=ExitReason.TAKE_PROFIT,
                 limit_price=position.take_profit,
                 early_cut_window_mfe_pct=early_cut_window_mfe,
             )
@@ -387,6 +389,7 @@ class LiveExitHandler:
             return LiveExitCheck(
                 should_exit=True,
                 exit_reason=time_reason or "Time exit",
+                exit_category=ExitReason.TIME_EXIT,
                 limit_price=None,
                 early_cut_window_mfe_pct=early_cut_window_mfe,
             )
@@ -394,12 +397,14 @@ class LiveExitHandler:
             return LiveExitCheck(
                 should_exit=True,
                 exit_reason=early_cut_reason or "Early cut",
+                exit_category=ExitReason.EARLY_CUT,
                 limit_price=None,
                 early_cut_window_mfe_pct=early_cut_window_mfe,
             )
         return LiveExitCheck(
             should_exit=True,
             exit_reason=signal_reason,
+            exit_category=ExitReason.SIGNAL_EXIT,
             limit_price=None,
             early_cut_window_mfe_pct=early_cut_window_mfe,
         )
@@ -414,12 +419,14 @@ class LiveExitHandler:
         candle_high: float | None = None,
         candle_low: float | None = None,
         data_provider: Any = None,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
     ) -> LiveExitResult:
         """Execute an exit for a position.
 
         Args:
             position: Position to close.
-            exit_reason: Reason for exit.
+            exit_reason: Free-text exit detail recorded on the trade.
+            exit_category: Typed exit category driving order-type and gap pricing.
             current_price: Current market price.
             limit_price: Limit price for SL/TP exits.
             current_balance: Current account balance.
@@ -456,7 +463,7 @@ class LiveExitHandler:
             candle_high=candle_high,
             candle_low=candle_low,
         )
-        order_intent = self._build_exit_intent(position, exit_reason, limit_price)
+        order_intent = self._build_exit_intent(position, exit_reason, exit_category, limit_price)
         decision = self.execution_model.decide_fill(order_intent, snapshot)
 
         base_exit_price = limit_price if limit_price is not None else current_price
@@ -473,7 +480,7 @@ class LiveExitHandler:
 
         base_exit_price = self._apply_stop_loss_gap_pricing(
             position=position,
-            exit_reason=exit_reason,
+            exit_category=exit_category,
             base_exit_price=base_exit_price,
             limit_price=limit_price,
             candle_high=candle_high,
@@ -546,6 +553,7 @@ class LiveExitHandler:
             exit_fee=execution_result.exit_fee,
             slippage_cost=execution_result.slippage_cost,
             exit_reason=exit_reason,
+            exit_category=exit_category,
         )
 
     def execute_filled_exit(
@@ -554,12 +562,14 @@ class LiveExitHandler:
         exit_reason: str,
         filled_price: float,
         current_balance: float,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
     ) -> LiveExitResult:
         """Finalize an exit where the exchange already filled the order.
 
         Args:
             position: Position to close.
-            exit_reason: Reason for exit.
+            exit_reason: Free-text exit detail recorded on the trade.
+            exit_category: Typed exit category persisted alongside the detail.
             filled_price: Exchange-reported fill price.
             current_balance: Current account balance.
 
@@ -643,6 +653,7 @@ class LiveExitHandler:
             exit_fee=exit_fee,
             slippage_cost=slippage_cost,
             exit_reason=exit_reason,
+            exit_category=exit_category,
         )
 
     def _check_strategy_exit(
@@ -1101,6 +1112,7 @@ class LiveExitHandler:
                 self.execute_exit(
                     position=position,
                     exit_reason=f"Partial exits complete @ level {target_level}",
+                    exit_category=ExitReason.PARTIAL_EXIT_COMPLETE,
                     current_price=price,
                     limit_price=None,
                     current_balance=current_balance,

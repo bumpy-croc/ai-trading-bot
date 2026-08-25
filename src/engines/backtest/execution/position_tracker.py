@@ -24,6 +24,7 @@ from src.engines.shared.partial_exit_executor import PartialExitExecutor
 from src.engines.shared.side_utils import to_side_string
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.mfe_mae_tracker import MFEMAETracker, MFEMetrics
+from src.trading.exit_reason import ExitReason
 
 logger = logging.getLogger(__name__)
 
@@ -367,13 +368,15 @@ class PositionTracker:
         exit_time: datetime,
         exit_reason: str,
         basis_balance: float,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
     ) -> PositionCloseResult:
         """Close the current position and compute final trade record.
 
         Args:
             exit_price: Exit price (after slippage).
             exit_time: Exit timestamp.
-            exit_reason: Reason for exit.
+            exit_reason: Free-text exit detail.
+            exit_category: Typed exit category persisted alongside the detail.
             basis_balance: Balance basis for PnL calculation.
 
         Returns:
@@ -426,6 +429,7 @@ class PositionTracker:
             pnl=trade_pnl_cash,
             pnl_percent=trade_pnl_pct,
             exit_reason=exit_reason,
+            exit_category=exit_category,
             stop_loss=trade.stop_loss,
             take_profit=trade.take_profit,
             mfe=metrics.mfe if metrics else 0.0,
