@@ -1,9 +1,13 @@
 """Trading-loop behavior of closed-candle gating (parity plan P1.0, decision D1).
 
-Flag OFF (default, shipped state): the loop is byte-identical to today — the
+Flag OFF (default, shipped state): the loop's decisions are unchanged — the
 strategy signal is evaluated every tick on the tail (forming) bar and entries
-may follow every tick. The only addition is Signal.metadata stamping (required
-in BOTH modes so the staging/prod A/B can attribute decisions).
+may follow every tick. Deliberately NOT claimed as byte-identical:
+Signal.metadata gains three decision-bar keys on every tick (required in BOTH
+modes so the staging/prod A/B can attribute decisions), and
+Strategy._extract_indicators fans metadata into the indicator snapshot, so
+those keys reach persisted rows. Nothing reads them to make a decision, which
+is what makes the flag-OFF path inert.
 
 Flag ON (``closed_candle_gating`` / FEATURE_CLOSED_CANDLE_GATING): signal
 evaluation runs exactly once per newly closed bar, at that bar's index, while
@@ -196,16 +200,26 @@ class TestFlagOnGating:
         assert engine._runtime_process_decision.call_args.args[1] == 3
 
     def test_decision_inputs_come_from_closed_bar(self):
-        """The gated evaluation receives the closed bar's close and open time —
-        the exact inputs backtest would use at that index."""
+        """The gated evaluation is priced at the closed bar's close.
+
+        ``current_price`` is NOT a dead argument: it flows through
+        ``build_runtime_context`` into ``build_component_positions``, setting
+        ``ComponentPosition.current_price`` — the value a strategy consults for
+        anti-pyramiding and correlation-aware sizing. Freezing it to the bar's
+        close is therefore a real parity property, matching how backtest values
+        open positions at that same bar.
+
+        ``current_time`` is deliberately not asserted: the runtime context
+        discards it, so pinning it here would pin a value nothing reads.
+        """
         engine = _make_engine()
         df = _make_df(5)
 
         _run(engine, [df])
 
         args = engine._runtime_process_decision.call_args.args
+        assert args[1] == 3  # the closed bar's index
         assert args[3] == pytest.approx(float(df["close"].iloc[-2]))
-        assert args[4] == df.index[-2].to_pydatetime().replace(tzinfo=UTC)
 
     def test_new_closed_bar_triggers_exactly_one_evaluation(self):
         engine = _make_engine()
@@ -278,9 +292,13 @@ class TestFlagOnGating:
         the tail itself (no one-bar lag)."""
         engine = _make_engine()
         df = _make_df(5)
-        engine._kline_buffer = Mock(last_closed_bar_time=df.index[-1])
+        # The frontier now arrives with the frame, captured in the same lock
+        # acquisition by KlineBuffer.snapshot() and recorded by the market-data
+        # coordinator — not re-read off the buffer at decision time.
+        _stub_loop_periphery(engine, [df])
+        engine._buffer_frontier = df.index[-1]
 
-        _run(engine, [df])
+        engine._trading_loop("BTCUSDT", "1h", max_steps=1)
 
         assert engine._runtime_process_decision.call_count == 1
         assert engine._runtime_process_decision.call_args.args[1] == 4

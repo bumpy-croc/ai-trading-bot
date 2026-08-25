@@ -165,18 +165,34 @@ class TestGateEnabled:
 
         assert view.evaluate is False
 
-    def test_stale_buffer_frontier_ahead_of_frame_clamps_to_tail(self):
-        """A buffer frontier newer than the frame (stale REST fallback) proves the
-        tail closed — decide on the tail, not beyond it."""
+    def test_frontier_ahead_of_frame_clamps_to_tail(self):
+        """A frontier past the frame's tail means the frame was TRUNCATED.
+
+        The original version of this test justified the clamp as "a stale REST
+        fallback frontier proves the tail closed". That inference is unsound
+        and this test codified it: a frontier read at a *later* instant than
+        the frame says nothing about the row the frame is holding, so clamping
+        would certify a still-forming tail as closed.
+
+        The clamp is sound only under the invariant the production wiring now
+        guarantees — the frontier is captured in the SAME lock acquisition as
+        the frame (``KlineBuffer.snapshot``), so it can never describe a newer
+        world than the frame does. Given that, a frontier beyond the tail can
+        only mean rows were dropped downstream (the loop's essential-column
+        ``dropna``), and every surviving row is at or below a provably closed
+        bar — so the tail is closed and is the right bar to decide on.
+        """
         gate = ClosedCandleGate(enabled=True)
         df = _make_df(5)
-        ahead = df.index[-1] + pd.Timedelta(hours=1)
+        # Not "a newer read of the buffer" — the frame lost its later rows.
+        truncated = df.iloc[:-1]
+        frontier = df.index[-1]
 
-        view = gate.resolve(df, buffer_frontier=ahead)
+        view = gate.resolve(truncated, buffer_frontier=frontier)
 
         assert view.evaluate is True
-        assert view.index == 4
-        assert view.bar_time == df.index[-1]
+        assert view.index == len(truncated) - 1
+        assert view.bar_time == truncated.index[-1]
 
     def test_single_row_frame_has_nothing_closed(self):
         gate = ClosedCandleGate(enabled=True)

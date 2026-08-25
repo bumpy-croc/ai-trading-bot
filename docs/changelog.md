@@ -33,6 +33,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guard and account monitoring all continue to run on the forming bar every tick. Gating
   never delays protection. Only the two entry call sites consume the gated index.
 
+  Hardening from the review round: the closed-bar frontier is captured in the
+  **same lock acquisition** as the frame it describes (`KlineBuffer.snapshot`), closing a
+  race where a bar closing during indicator/ML prep let the gate decide on a floating
+  close while reporting `decision_bar_closed=True`; a closed bar's OHLCV can no longer be
+  rewritten by a late duplicate WebSocket event; incomparable timestamps (mixed
+  tz-awareness after a degraded REST fallback) fail closed with a latched warning instead
+  of escaping into `consecutive_errors`; the decision bar resolves against the dataset the
+  strategy runtime actually indexes rather than the loop's post-`dropna` frame; the bar is
+  consumed only **after** entry execution has had its attempt, so a failed entry retries on
+  the next tick instead of losing a full timeframe; a strategy hot-swap clears the cached
+  decision and the evaluated-bar high-water mark; and the decision-bar keys are persisted
+  through `extract_ml_predictions_from_signal` so the staging A/B has a data source.
+
+  A stalled gate is now **observable**: its only symptom is the absence of a decision,
+  which is indistinguishable from a quiet market (the #1094/#1095 failure shape), so
+  `LatchedConditionMonitor` gained a `CLOSED_CANDLE_GATE_STALLED` condition asserting the
+  gate is still evaluating.
+
   Decision parity is now pinned by `tests/unit/engines/live/test_closed_candle_parity.py`:
   the same data through the backtest runtime and through the gated live loop produces the
   same decision, on the same bar, at the same reference price — with a control test proving

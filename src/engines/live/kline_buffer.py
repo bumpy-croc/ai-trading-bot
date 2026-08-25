@@ -106,9 +106,15 @@ class KlineBuffer:
                 return  # Stale event — don't bump freshness timer
 
             if event_ts == tail_ts:
-                # Update current candle (open or closed — same OHLCV write).
-                # A late forming-event duplicate must not regress a bar already
-                # marked closed, so closed-ness only latches on.
+                # Once a bar is closed its OHLCV is final. A late duplicate of
+                # an earlier forming event for the same bar must not rewrite it
+                # — the values, not just the flag: closed-candle gating hands
+                # that row to the strategy as the bar's settled truth, and a
+                # re-delivered mid-bar close would silently un-settle it.
+                # A repeated x=true carries identical final values, so allowing
+                # it through costs nothing and keeps the path idempotent.
+                if self._tail_closed and not kline.get("x"):
+                    return
                 self._update_current_candle(kline)
                 if kline.get("x"):
                     self._tail_closed = True
@@ -144,6 +150,22 @@ class KlineBuffer:
         with self._lock:
             return self._df.copy()
 
+    def snapshot(self) -> tuple[pd.DataFrame, pd.Timestamp | None]:
+        """Return the frame and its closed-bar frontier captured atomically.
+
+        Reading ``get_dataframe()`` and ``last_closed_bar_time`` as two separate
+        locked calls is a race: the WebSocket thread can close the tail bar in
+        between, so the frontier would declare a bar closed that the already-copied
+        frame still holds mid-formation. Closed-candle gating would then decide on a
+        floating close while reporting ``decision_bar_closed=True`` — the exact
+        contamination it exists to remove. One lock, both values, no window.
+
+        Returns:
+            (frame copy, open time of the newest provably closed bar or None).
+        """
+        with self._lock:
+            return self._df.copy(), self._last_closed_bar_time_locked()
+
     @property
     def is_fresh(self) -> bool:
         """Check whether the buffer has been updated recently.
@@ -173,13 +195,17 @@ class KlineBuffer:
         paths (stop-loss/trailing/exit checks) never wait on this.
         """
         with self._lock:
-            if self._df.empty:
-                return None
-            if self._tail_closed:
-                return self._df.index[-1]
-            if len(self._df) >= 2:
-                return self._df.index[-2]
+            return self._last_closed_bar_time_locked()
+
+    def _last_closed_bar_time_locked(self) -> pd.Timestamp | None:
+        """Closed-bar frontier. Must be called while holding ``self._lock``."""
+        if self._df.empty:
             return None
+        if self._tail_closed:
+            return self._df.index[-1]
+        if len(self._df) >= 2:
+            return self._df.index[-2]
+        return None
 
     def resync_from_rest(self, provider, symbol: str, timeframe: str) -> None:
         """Replace the entire buffer with fresh REST data after reconnection.

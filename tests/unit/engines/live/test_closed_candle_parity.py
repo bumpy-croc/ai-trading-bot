@@ -162,6 +162,18 @@ def _forming_frames(history: pd.DataFrame, ticks_per_bar: int = 3) -> list[pd.Da
     return frames
 
 
+def _observed_close(decision) -> float:
+    """The close the STRATEGY actually read, from the probe's signal metadata.
+
+    Deliberately not the ``current_price`` argument threaded through
+    ``runtime_process_decision``: ``build_runtime_context`` discards it (both
+    live and backtest), so the reference-price freeze happens purely via the
+    index. Asserting on the passed-in price would assert on a value no
+    strategy ever reads — a test that cannot fail for the right reason.
+    """
+    return float(decision.signal.metadata["close"])
+
+
 def _reference_decisions(history: pd.DataFrame) -> list[tuple[pd.Timestamp, str, float]]:
     """Backtest-side decisions: the runtime at each closed bar's own index."""
     runtime = StrategyRuntime(_make_strategy())
@@ -174,7 +186,7 @@ def _reference_decisions(history: pd.DataFrame) -> list[tuple[pd.Timestamp, str,
             (
                 dataset.data.index[index],
                 decision.signal.direction.value,
-                float(dataset.data["close"].iloc[index]),
+                _observed_close(decision),
             )
         )
     runtime.finalize()
@@ -205,7 +217,7 @@ def _run_live(frames: list[pd.DataFrame]) -> list[tuple[pd.Timestamp, str, float
         decision = real_decide(df, index, balance, current_price, current_time)
         if decision is not None:
             recorded.append(
-                (df.index[index], decision.signal.direction.value, float(current_price))
+                (df.index[index], decision.signal.direction.value, _observed_close(decision))
             )
         return decision
 
@@ -252,54 +264,65 @@ def test_gated_live_matches_backtest_bar_for_bar(gating_on):
     Live sees each bar form tick by tick (with a deliberately contradictory
     forming tail); backtest sees only closed bars. With gating ON the two
     decision sequences must be identical: same bar timestamps, same signal
-    directions, same reference prices.
+    directions, same closes actually read by the strategy.
+
+    The equality is deliberately against the WHOLE reference sequence, not a
+    ``expected[: len(actual)]`` prefix. A prefix comparison passes when the
+    gate jams after one bar — the exact failure mode that is otherwise
+    invisible — so it would let a stalled gate masquerade as parity.
     """
     history = _closed_bars(12)
     expected = _reference_decisions(history)
-    # The live loop cannot decide on the final history bar until a successor
-    # bar exists, so the last reference bar has no live counterpart.
     actual = _run_live(_forming_frames(history))
 
-    assert actual, "gated live path produced no decisions"
-    assert actual == expected[: len(actual)]
+    assert actual == expected
     # Exactly one decision per closed bar — no duplicate evaluations across
     # the three ticks per bar.
     assert len(actual) == len({bar for bar, _, _ in actual})
 
 
 @pytest.mark.fast
-def test_ungated_live_diverges_from_backtest(gating_off):
-    """Control: without the gate, live decides on forming-bar inputs.
-
-    The decision lands on the same bar *timestamp* (live's tail is that bar,
-    still forming), but with the forming close as its reference price — so the
-    decision sequence does not match backtest. If this ever stops diverging,
-    the parity test above has stopped measuring anything.
-    """
+def test_gated_live_evaluates_every_closed_bar(gating_on):
+    """A gate that jams must fail this, independently of the equality above."""
     history = _closed_bars(12)
-    expected = _reference_decisions(history)
     actual = _run_live(_forming_frames(history))
 
-    assert actual, "ungated live path produced no decisions"
-    assert actual != expected[: len(actual)], (
-        "ungated live matched backtest — the forming-bar divergence is gone, "
-        "so this control no longer guards the parity test"
-    )
-
-    closes = {ts: float(c) for ts, c in history["close"].items()}
-    contaminated = [
-        (bar, price)
-        for bar, _, price in actual
-        if bar in closes and price != pytest.approx(closes[bar])
-    ]
-    assert contaminated, "no decision used a forming-bar reference price"
+    assert len(actual) == len(history) - WARMUP
+    assert [bar for bar, _, _ in actual] == list(history.index[WARMUP:])
 
 
 @pytest.mark.fast
-def test_decision_reference_price_is_the_bars_final_close(gating_on):
-    """The reference price must be the closed bar's close, not the live tick."""
+def test_ungated_live_diverges_from_backtest(gating_off):
+    """Control: without the gate, live decides on forming-bar inputs.
+
+    Compared bar-by-bar on CONTENT, not by list shape: the ungated path
+    produces three decisions per bar, so any length-based comparison would be
+    true for trivial reasons and would keep passing even if the forming-bar
+    contamination disappeared entirely.
+    """
+    history = _closed_bars(12)
+    expected = {bar: (direction, close) for bar, direction, close in _reference_decisions(history)}
+    actual = _run_live(_forming_frames(history))
+
+    assert actual, "ungated live path produced no decisions"
+    shared = [(bar, d, c) for bar, d, c in actual if bar in expected]
+    assert shared, "no ungated decision landed on a bar backtest also decided"
+
+    differing = [(bar, d, c) for bar, d, c in shared if (d, c) != expected[bar]]
+    assert differing, (
+        "every ungated decision matched backtest's on the same bar — the "
+        "forming-bar divergence is gone, so this control no longer guards the "
+        "parity test"
+    )
+
+
+@pytest.mark.fast
+def test_gated_strategy_reads_the_bars_final_close(gating_on):
+    """The strategy must read the closed bar's own close, not a forming tick."""
     history = _closed_bars(8)
     closes = {ts: float(c) for ts, c in history["close"].items()}
 
-    for bar, _, price in _run_live(_forming_frames(history)):
-        assert price == pytest.approx(closes[bar])
+    observed = _run_live(_forming_frames(history))
+    assert observed
+    for bar, _, close in observed:
+        assert close == pytest.approx(closes[bar])

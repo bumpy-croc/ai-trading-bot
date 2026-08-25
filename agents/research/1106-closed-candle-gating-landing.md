@@ -134,3 +134,145 @@ is a separate change (staging env flag), not part of this PR.
 
 Do **not** treat a parity-passing backtest as authorization to size up; the parity plan's
 sizing guardrail (§1) still applies and the residual is biased optimistic.
+
+---
+
+# Review round (2026-08-25)
+
+Four reviewers (two architecture, two code) across two waves. **No blockers**; the merge was
+safe with the flag OFF. What follows is what had to be true before the flag could be flipped
+ON in staging, plus two test defects.
+
+## The parity test was weaker than it looked
+
+Two of its three assertions could not fail for the right reason:
+
+- `assert actual == expected[: len(actual)]` — the slice makes the comparison vacuous under
+  the failure that matters. A reviewer demonstrated it: cut the stream to one bar and
+  **1 decision out of 10 expected passes all three assertions**. Now `assert actual ==
+  expected`, plus a separate `test_gated_live_evaluates_every_closed_bar`. Verified by
+  replaying the jam: the old assertion returned True, both new ones return False.
+- The control asserted `actual != expected[: len(actual)]`, which was true on **length
+  alone** (30 ungated entries vs 10). It now compares content bar-by-bar on shared bars.
+
+A third assertion pinned the wrong value — see "the half-dead parameter" below.
+
+## Defects fixed
+
+| # | Defect | Fix |
+|---|---|---|
+| P1 | **Frontier race.** The frame was copied, indicator/ML prep ran, and only then was `last_closed_bar_time` read. A bar closing inside that window let `min(frontier, df.index[-1])` certify the frame's own forming tail as closed — contamination reintroduced silently, reported as `decision_bar_closed=True`. | `KlineBuffer.snapshot()` returns frame and frontier from **one** lock acquisition; the coordinator records it on `_buffer_frontier`, cleared on REST fallback/resync/error. |
+| P1 | **A jammed gate is invisible.** `_last_evaluated_bar` is an unbounded high-water mark; one bad timestamp silences evaluation permanently while the heartbeat keeps firing. Only symptom: an absent log line. | `ClosedCandleGate.stall_observation()` + a `CLOSED_CANDLE_GATE_STALLED` condition in `LatchedConditionMonitor` — a positive assertion, like #1103. |
+| P1 | **The monotonic guard could raise.** `_closed_frontier` caught `TypeError` for mixed tz-awareness; `bar_time <= self._last_evaluated_bar` two lines later repeated the same comparison unguarded, so it escaped into the loop's handler and counted toward `consecutive_errors`. | Shared `_le` helper that fails closed; latched WARNING (was DEBUG, which understated a parity downgrade). |
+| P2 | **Index desync.** `view.index` is a post-`dropna` frame position; `runtime.process` indexes `dataset.data` positionally and ignores the frame it is handed. | `runtime_index_for(bar_time)` resolves the bar by **timestamp** against the dataset actually indexed. |
+| P2 | **Bar consumed before execution.** A raising `_check_entry_conditions` was swallowed, and the bar was already marked evaluated — up to a full timeframe of lost entry where the ungated path retried next tick. | `LoopSignalDecision.commit_bar`; the loop calls `mark_evaluated` **after** the entry block. |
+| P2 | **Hot-swap kept stale state.** The retired strategy's decision drove signal-reversal exits and its high-water mark blocked the new strategy from deciding the current bar. | `_reset_closed_candle_gate()` on a successful swap. |
+| P2 | **Write-only observability.** Nothing read the `decision_bar_*` keys, so the staging A/B and flip-rate soak had no data source. | Added to `_ML_SIGNAL_METADATA_KEYS`, so they land in `strategy_executions.ml_predictions`. |
+| P2 | **No-WS path degraded silently.** Against a provider whose REST tail is already closed, frame-shape evidence lags one bar, making gating quietly *worse* for parity than leaving it off. | Latched WARNING naming the degradation. See "declined" below. |
+| P2 | **The `_tail_closed` latch protected the flag, not the data.** A late duplicate still rewrote a closed bar's OHLCV through `_update_current_candle`, contradicting the latch's own comment. | Once closed, non-`x` events for that bar are dropped; a repeated `x: true` still applies (identical values, idempotent). |
+| P3 | `stamp_decision_signal` unguarded on the flag-OFF path — a raising `pd.Timestamp` would break inertness. | Wrapped; never raises. |
+
+## Declined, with reasons
+
+**Bar-clock promotion of the REST tail.** Suggested as an alternative to warning about the
+no-WS path. It is unsound: after a REST frame's tail bar passes its close time, the row still
+holds the *partial* snapshot captured when it was fetched. Promoting it by wall clock would
+certify incomplete data as final — precisely the defect this change exists to remove. The
+degradation is now loud instead; the frame-shape fallback remains sound, only possibly stale.
+
+**Strict-inequality frontier fix** (`frontier < df.index[-1]`), offered as a cheaper
+alternative to the atomic snapshot. It does kill the race, but it also makes the frontier
+*entirely redundant*: since the index is sorted, `frontier < tail` implies `frontier <=
+df.index[-2]`, so the merged evidence collapses to frame shape alone and the `x: true` signal
+stops contributing anything. The snapshot keeps that evidence and its lower latency, and with
+the `_tail_closed` data fix above the clamp is now sound. Flagged for the record because it is
+a deliberate divergence from the suggested fix.
+
+## Correction to a review finding: `current_price` is NOT dead
+
+The review reported `decision_price`/`decision_time` as dead, on the grounds that
+`build_runtime_context` discards both. It discards `current_time` only. `current_price` flows
+into `build_component_positions` and sets `ComponentPosition.current_price` — the value a
+strategy reads for anti-pyramiding and correlation-aware sizing. Freezing it to the closed
+bar's close is therefore a **real parity property**, matching how backtest values open
+positions at that bar, not a no-op.
+
+Acting on the finding as written would have removed a live parameter. The dead half
+(`current_time` and its tz gymnastics) is gone; `current_price` stays, with the reasoning in
+the test that pins it.
+
+The reviewer's underlying point still landed: `test_decision_reference_price_is_the_bars_final_close`
+was asserting on the argument passed *in*, not on what the strategy read. It now asserts on
+the close recorded in the probe generator's signal metadata — the value the strategy actually
+consumed.
+
+## Precise protection claim
+
+The blanket "protection is never delayed" is not literally true and has been corrected in the
+PR body. Precisely:
+
+- **Hard protective paths are tick-driven and ungated** in both flag states: stop-loss,
+  trailing stops, exit checks, partial operations, PnL/MFE-MAE, drawdown guard, account
+  monitoring, reconciliation.
+- **Policy hydration** (trailing-stop / partial-exit / dynamic-risk config) and
+  **strategy-signal exits** ride on the decision, so with the flag ON they refresh at *bar*
+  cadence rather than tick cadence. Both are parity-correct — backtest behaves identically —
+  so this is a parity gain, not a protection loss. But it is a real cadence change and should
+  not be described as "unchanged".
+
+## Known limitation for the prod flip
+
+"Exactly once per bar" does not survive a restart: `_last_evaluated_bar` is in-memory, so a
+process restart mid-bar can re-evaluate the current bar once. Harmless (entry guards prevent
+duplicate positions) but it should be understood before the flag is flipped in production.
+
+## Test coverage added
+
+`tests/unit/engines/live/test_closed_candle_gate_hardening.py` — 28 tests, one class per
+defect: atomic snapshot (including a concurrent-writer consistency loop), closed-bar
+immutability, tz fail-closed, degraded-frontier warning, stall observation + monitor wiring,
+hot-swap reset, commit-after-execution, cached-decision non-mutation, runtime index by
+timestamp, and an end-to-end class driving a **real** `KlineBuffer` through the real
+coordinator into the gate — the path no previous test exercised, which is why both P1s
+survived a 61-test suite.
+
+Three fixes were verified load-bearing by reverting the source and confirming the matching
+test fails: the closed-bar rewrite (`assert 99.0 == 150.0`), commit-after-execution
+(`assert 1 == 3`), and the tz guard (`TypeError: Cannot compare tz-naive and tz-aware`).
+
+## Second correction round
+
+**The gate's own unit test codified the unsound inference.**
+`test_stale_buffer_frontier_ahead_of_frame_clamps_to_tail` justified the clamp as "a stale
+REST fallback frontier proves the tail closed". That is exactly the reasoning that is unsound
+for a non-atomic frame. Note the test did **not** fail after the race fix, because the fix
+removes the unsound *input* at the source (the frontier is either captured with the frame or
+None) rather than changing the clamp. So it would have sat there asserting a true outcome for
+a false reason. Rewritten as `test_frontier_ahead_of_frame_clamps_to_tail`, driving the case
+that can actually still arise — a frame truncated downstream by `dropna` — and stating the
+invariant that makes the clamp sound.
+
+**Parity test: only the count-blindness was real.** Two reviewers disagreed; both were right
+about different properties. The test detects *wrong* decisions well (eight mutations caught)
+and was blind to *missing* ones, because `expected[: len(actual)]` slices the count away. Only
+that was changed. Re-ran four mutations against the final code — decision index reverted to
+the forming bar, `_closed_frontier` using `df.index[-1]`, `searchsorted` losing its `-1`, and
+`mark_evaluated` no-op'd — all still caught (3/4, 3/4, 3/4, 2/4 tests failing respectively).
+The test was strengthened, not weakened.
+
+**Flag-OFF is inert, not byte-identical.** `stamp_decision_signal` writes three keys into
+`Signal.metadata` every tick in both modes, and `Strategy._extract_indicators` fans metadata
+into the indicator snapshot, so they reach persisted rows. Nothing reads them to make a
+decision — that is what inertness means here. Claims corrected in the gate docstring, the loop
+test module docstring, and the PR body.
+
+## Suite result
+
+6008 passed, 1 skipped, 2 failed. **Both failures are pre-existing or environmental, neither
+attributable to this PR:**
+
+- `test_models_tft::test_create_model_lightgbm_dispatches_to_directional_classifier` — the
+  known lightgbm failure; reproduced with the branch stashed.
+- `test_indicators::test_indicators_performance` — wall-clock assertion (`< 3.0s`) that
+  measured 6.5s under 4-way parallel load; **0.32s in isolation**. Timing flake in an
+  untouched file.

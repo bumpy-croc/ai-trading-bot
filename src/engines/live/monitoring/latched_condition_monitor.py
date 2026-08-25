@@ -44,7 +44,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from src.config.feature_flags import is_enabled
 from src.database.models import EventType
@@ -74,6 +74,7 @@ class LatchedConditionEngineState(Protocol):
 
     _close_only_mode: bool
     _close_only_reason: str | None
+    _closed_candle_gate: Any
 
     def _record_event(
         self,
@@ -151,6 +152,14 @@ CONDITIONS: tuple[_Condition, ...] = (
         cleared_code="SYSTEM_HALT_LATCH_CLEARED",
         label="Manual system halt",
         predicate=lambda monitor: monitor.observe_entry_gate("system_halt"),
+    ),
+    _Condition(
+        key="closed_candle_gate",
+        component="parity",
+        latched_code="CLOSED_CANDLE_GATE_STALLED",
+        cleared_code="CLOSED_CANDLE_GATE_STALL_CLEARED",
+        label="Closed-candle gating stalled",
+        predicate=lambda monitor: monitor.observe_closed_candle_gate(),
     ),
     _Condition(
         key="entry_pause",
@@ -241,6 +250,27 @@ class LatchedConditionMonitor:
         if getattr(self._state, "_close_only_mode", False) is not True:
             return Observation(False)
         return Observation(True, getattr(self._state, "_close_only_reason", None))
+
+    def observe_closed_candle_gate(self) -> Observation:
+        """Is closed-candle gating still evaluating bars?
+
+        A gate that stops deciding is silent by construction — no error, no
+        alert, just an absent log line, which is indistinguishable from a quiet
+        market. That is the #1094/#1095 failure shape, so it gets a latched
+        condition like any other thing that blocks entries: while it holds,
+        entries cannot happen, and the hourly rows say so instead of the
+        monitor inferring health from silence.
+
+        Inert with the flag OFF — every tick evaluates, so the concept does not
+        apply and the gate reports healthy.
+        """
+        gate = getattr(self._state, "_closed_candle_gate", None)
+        if gate is None:
+            return Observation(False)
+        observation = gate.stall_observation()
+        if not observation.stalled:
+            return Observation(False)
+        return Observation(True, observation.reason)
 
     def observe_entry_gate(self, key: str) -> Observation:
         """Read one lever from the gate the entry path itself consults.
