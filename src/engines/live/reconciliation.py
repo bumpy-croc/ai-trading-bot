@@ -3127,7 +3127,8 @@ class PositionReconciler:
 class PeriodicReconciler:
     """Background daemon that periodically verifies positions/orders/balance.
 
-    Runs in a separate daemon thread. Configurable interval (default 60s).
+    Runs in a separate daemon thread. Configurable interval
+    (DEFAULT_RECONCILIATION_INTERVAL_SECONDS, 120s).
     Uses per-position mutation locks to prevent double-close races.
     NOT instantiated in paper mode.
     """

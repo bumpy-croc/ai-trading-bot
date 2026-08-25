@@ -177,6 +177,31 @@ since model promotion for a live symbol is autonomous under the charter.
   mean the bundles are interchangeable. Earned: GH #1049 (found during the 2026-08-09 retrain,
   #1048 — it blocked the backtest rather than corrupting it, which is the good outcome).
 
+### 1.13 A silently *shrunk* exchange order is worse than a rejected one
+Two SELL paths cap quantity at the **free** base balance to dodge -2010, then snap down to a lot.
+Both assume the shortfall is a fee-rounding sliver. In #1104 an orphaned stop-loss locked the whole
+position, so a full close was capped to **1.1%** of its size — and the caller books a **FULL** close
+on success, abandoning the rest untracked and unprotected. The stop-loss variant is worse still: an
+undersized stop is recorded and audited as full protection (the reconciler checks order *status*,
+never *quantity*).
+- **Rule:** after any mechanical quantity adjustment (holdings cap, lot floor), compare the
+  **submitted** quantity against the **intended** one and refuse below `HOLDINGS_CAP_MIN_RATIO`.
+  Gate on the final value, not on the input — the lot floor can shrink a few-lot position by 25%
+  on its own, so a check placed before it does not enforce its own invariant.
+- **Meta-rule:** this bug came in pairs too (close path *and* stop-loss placement, #1104/#1109).
+  When you find a silent-shrink site, grep for every `quantity = free_*` / `floor(q/step)` cap.
+
+### 1.14 Cancelling your own order fires the "unexpected cancel" escalation
+Binance emits the terminal `executionReport` on the already-open user socket **before** the DELETE
+response returns, so a deliberate cancel is observed as an unexpected termination. In #1104 that
+paged a false UNPROTECTED alert *and* nulled `stop_loss_order_id`, which made the reconciler stack a
+duplicate stop on one still resting — the orphan that locked the inventory.
+- **Rule:** mark the id as self-cancelled (`OrderTracker.mark_self_cancelled`) before issuing the
+  cancel and suppress only the *escalation*. Do **NOT** untrack first: a stop is cancelled at the
+  exact moment price is touching it, so a genuine FILL in that window is the likely case, and
+  `process_execution_event` discards events for unknown ids. Polling is disabled while the WS is
+  primary, so nothing would re-deliver it.
+
 ---
 
 ## 2. Process mistakes I made (avoid these)
@@ -773,6 +798,14 @@ keep the skill generic and let the specifics live here.
 - `code=-1111` (price precision) / `code=51077` (qty precision) — order precision rejection (should
   be fixed; recurrence = regression, see §1.1).
 - `-2010` / "insufficient balance" on a stop-loss → unprotected position.
+- `CLOSE_INVENTORY_LOCKED` (`system_events`) / `ABORTING close of <SYM>` — the engine refused to
+  submit a close because the base asset is locked (usually an **orphaned stop-loss** it lost track
+  of) or the position cannot be lot-sized honestly. The position is still OPEN and cannot be
+  exited. Three in a row latch close-only. Check `get_open_orders(<SYM>)` for a resting protective
+  order the tracker does not know about (#1104).
+- `Stop-loss for <SYM> can only cover X of the required Y` — refused to place an undersized stop
+  that would be recorded as full protection. Same root cause as above; the position is genuinely
+  UNPROTECTED until the lock clears (#1109).
 - `MANUAL SYSTEM HALT ENFORCED` / `error_code=SYSTEM_HALT` (#922) — the manual kill-switch
   (`atb live-control halt`) is in force: entries + scale-ins blocked, exits/stops continue.
   Expected if an operator just pulled it (a `SYSTEM_HALT_COMMAND` event precedes it); if nobody
@@ -811,6 +844,9 @@ keep the skill generic and let the specifics live here.
 - `[ERRO] Task exception was never retrieved → KeyError('margin_subscription:0')` (binance
   `threaded_stream.py:74`) at user-stream circuit-open — benign teardown noise (fix tracked in #716;
   disappears once it ships).
+- `[INFO] Order <id>: CANCELED is our own deliberate cancel — not escalating` — the close path
+  cancelling a resting stop before a market exit. Expected on every exit; the absence of a
+  matching `STOP_LOSS_CANCELLED` beside it is the CORRECT behaviour, not a missing alert (#1104).
 - The kline self-heal sequence (`Kline WS error: Connection closed` → `RESYNCING` → `KlineBuffer
   resynced … candles` → `Kline WebSocket recovered … WS primary again (#662)`) — the GOOD path,
   ~30 s, no data gap. Do NOT alarm.

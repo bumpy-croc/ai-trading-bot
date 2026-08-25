@@ -575,22 +575,26 @@ class TestCloseSellHoldingsGuard:
     def test_close_sell_floored_quantity_quantized_to_step(
         self, execution_engine_with_exchange, mock_exchange
     ):
-        """LESSONS 1.1: `floor(q/step)*step` artifacts (0.00030000000000000003) are quantized."""
-        self._configure_exchange(mock_exchange, free_base=0.00037, step_size=0.0001)
+        """LESSONS 1.1: `floor(q/step)*step` artifacts (0.04999000000000001) are quantized."""
+        # The SUBMITTED quantity must stay inside HOLDINGS_CAP_MIN_RATIO — cap and lot
+        # snap may only shave a sliver, and a larger gap now aborts the close (#1104).
+        # 0.049999 held against an intended 0.05 still floors to the artifact-producing
+        # 4999 lots, at ratio 0.9998.
+        self._configure_exchange(mock_exchange, free_base=0.049999, step_size=0.00001)
 
         result = execution_engine_with_exchange.execute_exit(
             symbol="ETHUSDT",
             side=PositionSide.LONG,
             order_id="entry123",
-            base_price=100000.0,
-            position_notional=40.0,  # derived quantity 0.0004 > held 0.00037
+            base_price=50000.0,
+            position_notional=2500.0,  # derived quantity 0.05 > held 0.049999
         )
 
         assert result.success is True
         sent = mock_exchange.place_order.call_args.kwargs["quantity"]
-        assert sent == pytest.approx(0.0003)
-        # No more decimals than the 0.0001 step implies (else Binance 51077)
-        assert Decimal(str(sent)).as_tuple().exponent >= -4
+        assert sent == pytest.approx(0.04999)
+        # No more decimals than the 0.00001 step implies (else Binance 51077)
+        assert Decimal(str(sent)).as_tuple().exponent >= -5
 
     @pytest.mark.fast
     def test_close_buy_short_cover_keeps_nearest_and_ignores_base_holdings(

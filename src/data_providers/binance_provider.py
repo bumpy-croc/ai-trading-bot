@@ -34,6 +34,7 @@ from src.config.constants import (
     DEFAULT_WS_RECONNECT_MAX_RETRIES,
     DEFAULT_WS_USER_LIVENESS_PROBE_TIMEOUT,
     DEFAULT_WS_USER_STALENESS_THRESHOLD,
+    HOLDINGS_CAP_MIN_RATIO,
 )
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
 from src.infrastructure.timeout import run_with_timeout
@@ -1989,6 +1990,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # coverable. This runs even when symbol_info is missing — a transient
             # get_symbol_info failure must not silently disable the protection. A BUY
             # (short cover) is funded from quote, so it isn't constrained by base holdings.
+            # What the caller asked us to protect. The cap and lot snap below are
+            # mechanical adjustments that must only ever shave a sliver; the gate after
+            # them enforces that against what is actually sent.
+            intended_quantity = quantity
             if side == OrderSide.SELL:
                 free_base = self._free_base_balance(base_asset or base_asset_from_symbol(symbol))
                 error_params["free_base_balance"] = free_base
@@ -2030,6 +2035,39 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                         "asset to protect; order not sent"
                     ),
                     error_type="ZeroQuantityAfterSizing",
+                    params=error_params,
+                )
+                return None
+
+            # A stop that covers only a fraction of the position is worse than none: it
+            # is recorded and tracked as full protection, and the reconciler's SL audit
+            # checks the order's STATUS, never its quantity — so an undersized stop reads
+            # as protected forever. This fires under exactly the #1104 condition, where
+            # an orphaned stop has locked the inventory the replacement needs. Refuse,
+            # and let the honest UNPROTECTED escalation run instead (#1109).
+            if quantity < intended_quantity * HOLDINGS_CAP_MIN_RATIO:
+                logger.critical(
+                    "Stop-loss for %s can only cover %.8f of the required %.8f — the base "
+                    "asset is locked (orphaned stop?). Refusing to place a stop that would "
+                    "be recorded as full protection; leaving the position visibly "
+                    "UNPROTECTED for the reconciler to escalate.",
+                    symbol,
+                    quantity,
+                    intended_quantity,
+                )
+                error_params["quantity"] = quantity
+                error_params["intended_quantity"] = intended_quantity
+                self._record_order_error(
+                    "place_stop_loss_order",
+                    symbol,
+                    error_message=(
+                        f"Stop-loss would cover only {quantity} of the required "
+                        f"{intended_quantity} (below "
+                        f"{HOLDINGS_CAP_MIN_RATIO:.0%}) - base asset locked by an untracked "
+                        "order; order not sent so the position is not falsely recorded as "
+                        "protected"
+                    ),
+                    error_type="UndersizedProtection",
                     params=error_params,
                 )
                 return None
