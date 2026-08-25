@@ -13,6 +13,7 @@ from unittest.mock import Mock
 from sqlalchemy.exc import IntegrityError
 
 from src.database.models import EventType
+from src.trading.exit_reason import coerce_exit_category
 
 
 class MockDatabaseManager:
@@ -208,6 +209,8 @@ class MockDatabaseManager:
             "exit_time": exit_time,
             "pnl": pnl,
             "exit_reason": exit_reason,
+            # Typed exit category (#1115); str() so callers see the DB representation.
+            "exit_category": str(coerce_exit_category(kwargs.get("exit_category"))),
             "strategy_name": strategy_name,
             "source": source,
             # Mirror the real log_trade: Trade.order_id is set from exit_order_id (used by

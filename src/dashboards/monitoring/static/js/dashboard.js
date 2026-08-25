@@ -188,7 +188,10 @@ function normalizeTrade(t, idx) {
     entry: Number(t.entry_price) || 0,
     exit: Number(t.exit_price) || 0,
     pnl: Number(t.pnl) || 0,
-    reason: t.exit_reason || '—',
+    // Prefer the typed category (#1115) — it distinguishes a protective stop from a
+    // trailing stop that took profit; the prose reason cannot. Older rows have none.
+    reason: t.exit_category || t.exit_reason || '—',
+    reasonDetail: t.exit_reason || '',
     time: exitTime,
     raw: t,
   };
@@ -929,7 +932,7 @@ function V2TradesViewMobile({ filter, setFilter }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 600, fontSize: 13 }}>{t.symbol}</span>
               <span className={`tbm-tag ${t.side === 'L' ? 'long' : 'short'}`}>{t.side === 'L' ? 'LONG' : 'SHORT'}</span>
-              <span className="tbm-tag">{t.reason}</span>
+              <span className="tbm-tag" title={t.reasonDetail}>{t.reason}</span>
             </div>
             <span style={{ fontSize: 16, fontWeight: 600, color: t.pnl >= 0 ? 'var(--accent-2)' : 'var(--danger)' }}>
               {fmtUSD(t.pnl, { sign: true })}
@@ -1440,7 +1443,7 @@ function V2InspectTrade({ id, setSelected }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ fontSize: 22, fontWeight: 600 }}>{t.symbol}</span>
           <span className={`tbm-tag ${t.side === 'L' ? 'long' : 'short'}`}>{t.side === 'L' ? 'LONG' : 'SHORT'}</span>
-          <span className="tbm-tag">{t.reason}</span>
+          <span className="tbm-tag" title={t.reasonDetail}>{t.reason}</span>
         </div>
         <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>closed · {fmtTimeAgo(t.time)}</div>
       </div>
@@ -1460,6 +1463,7 @@ function V2InspectTrade({ id, setSelected }) {
           <HRow k="entry" v={Number(t.entry).toLocaleString()} />
           <HRow k="exit" v={Number(t.exit).toLocaleString()} />
           <HRow k="reason" v={t.reason} />
+          <HRow k="detail" v={t.reasonDetail} />
         </div>
       </div>
     </div>
@@ -1678,7 +1682,7 @@ function V2TradesView({ filter, setFilter }) {
                   <td>{Number(t.entry).toLocaleString()}</td>
                   <td>{Number(t.exit).toLocaleString()}</td>
                   <td style={{ color: t.pnl >= 0 ? 'var(--accent-2)' : 'var(--danger)', fontWeight: 600 }}>{fmtUSD(t.pnl, { sign: true })}</td>
-                  <td><span className="tbm-tag">{t.reason}</span></td>
+                  <td><span className="tbm-tag" title={t.reasonDetail}>{t.reason}</span></td>
                   <td>{fmtTimeAgo(t.time)}</td>
                 </tr>
               ))}

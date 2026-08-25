@@ -45,6 +45,7 @@ from src.engines.shared.validation import is_same_bar_entry
 from src.infrastructure.logging.events import log_order_event
 from src.performance.metrics import Side, pnl_percent
 from src.tech.adapters.row_extractors import extract_ml_predictions_from_signal
+from src.trading.exit_reason import ExitReason, coerce_exit_category
 
 if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
@@ -117,6 +118,7 @@ class LiveExitEngineState(Protocol):
         candle_low: float | None,
         candle: Any,
         skip_live_close: bool = ...,
+        exit_category: ExitReason = ...,
     ) -> None: ...
 
 
@@ -302,6 +304,7 @@ class LiveExitCoordinator:
                     candle_high,
                     candle_low,
                     candle,
+                    exit_category=coerce_exit_category(getattr(exit_check, "exit_category", None)),
                 )
 
     def execute_exit(
@@ -314,6 +317,7 @@ class LiveExitCoordinator:
         candle_low: float | None,
         candle: Any,
         skip_live_close: bool = False,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
     ) -> None:
         """Serialise the close on the position's base-asset lock, then execute it (#703).
 
@@ -334,6 +338,7 @@ class LiveExitCoordinator:
                 candle_low,
                 candle,
                 skip_live_close=skip_live_close,
+                exit_category=exit_category,
             )
 
     def execute_exit_locked(
@@ -346,6 +351,7 @@ class LiveExitCoordinator:
         candle_low: float | None,
         candle: Any,
         skip_live_close: bool = False,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
     ) -> None:
         """Close a position using shared execution modules."""
         state = self._state
@@ -396,6 +402,7 @@ class LiveExitCoordinator:
                     exit_reason=reason,
                     filled_price=base_price,
                     current_balance=state.current_balance,
+                    exit_category=exit_category,
                 )
             else:
                 # #710: On margin a resting stop-loss order reserves the position's
@@ -456,6 +463,7 @@ class LiveExitCoordinator:
                     candle_high=candle_high,
                     candle_low=candle_low,
                     data_provider=state.data_provider,
+                    exit_category=exit_category,
                 )
                 if not exit_result.success and protective_order_cancelled:
                     # The close failed after we cancelled a clean (zero-fill) stop, so
@@ -584,6 +592,7 @@ class LiveExitCoordinator:
                 pnl=gross_pnl,
                 pnl_percent=pnl_percent,
                 exit_reason=reason,
+                exit_category=exit_category,
             )
 
             # Include margin interest in performance tracker fees so
@@ -635,6 +644,7 @@ class LiveExitCoordinator:
                     pnl=gross_pnl,
                     strategy_name=state._strategy_name(),
                     exit_reason=reason,
+                    exit_category=exit_category,
                     entry_time=position.entry_time,
                     exit_time=datetime.now(UTC),
                     session_id=state.trading_session_id,

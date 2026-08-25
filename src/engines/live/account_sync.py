@@ -27,6 +27,7 @@ from src.data_providers.exchange_interface import OrderStatus as ExchangeOrderSt
 from src.database.manager import DatabaseManager
 from src.database.models import EventType, PositionSide, TradeSource
 from src.engines.live.reconciliation import Severity
+from src.trading.exit_reason import ExitReason
 
 logger = logging.getLogger(__name__)
 
@@ -750,6 +751,7 @@ class AccountSynchronizer:
                             exit_time=trade.time,
                             pnl=0.0,  # Cannot calculate without entry price
                             exit_reason="recovered_from_exchange",
+                            exit_category=ExitReason.RECOVERED,
                             strategy_name="exchange_recovery",
                             source=TradeSource.LIVE,
                             exit_order_id=trade.order_id,

@@ -22,6 +22,7 @@ from src.engines.live.reconciliation import (
     Severity,
     classify_severity,
 )
+from src.trading.exit_reason import ExitReason
 
 pytestmark = pytest.mark.fast
 
@@ -3249,6 +3250,7 @@ class TestReconciliationFeeAccounting:
             exit_fee=0.60,
             log_trade=True,
             exit_order_id="reconcile_exit_42",
+            exit_category=ExitReason.RECOVERED,
         )
 
     def test_stop_loss_recovery_passes_commission_to_pnl(
