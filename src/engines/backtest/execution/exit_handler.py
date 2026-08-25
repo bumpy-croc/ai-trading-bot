@@ -39,6 +39,11 @@ from src.engines.shared.strategy_exit_checker import StrategyExitChecker
 from src.engines.shared.trailing_stop_manager import TrailingStopManager
 from src.engines.shared.validation import is_position_fully_closed
 from src.performance.metrics import Side, pnl_percent
+from src.trading.exit_reason import (
+    STOP_EXIT_CATEGORIES,
+    ExitReason,
+    classify_stop_exit,
+)
 
 if TYPE_CHECKING:
     from src.engines.backtest.execution.execution_engine import ExecutionEngine
@@ -78,6 +83,9 @@ class ExitCheckResult:
     should_exit: bool
     exit_reason: str
     exit_price: float
+    # Typed category behind the free-text reason. Control flow branches on this;
+    # exit_reason stays prose for operators and the balance-ledger key (#1115).
+    exit_category: ExitReason = ExitReason.UNKNOWN
     is_stop_loss: bool = False
     is_take_profit: bool = False
     is_time_limit: bool = False
@@ -237,17 +245,18 @@ class ExitHandler:
         self,
         trade: ActiveTrade,
         exit_reason: str,
+        exit_category: ExitReason,
         order_side: OrderSide,
     ) -> OrderIntent:
-        """Build an OrderIntent for the exit based on the exit reason."""
+        """Build an OrderIntent for the exit based on the exit category."""
         order_type = OrderType.MARKET
         limit_price = None
         stop_price = None
 
-        if "Stop loss" in exit_reason:
+        if exit_category in STOP_EXIT_CATEGORIES:
             order_type = OrderType.STOP_LOSS
             stop_price = trade.stop_loss
-        elif "Take profit" in exit_reason:
+        elif exit_category is ExitReason.TAKE_PROFIT:
             order_type = OrderType.TAKE_PROFIT
             limit_price = trade.take_profit
 
@@ -680,28 +689,35 @@ class ExitHandler:
         # Determine exit reason and price (priority: SL > TP > Time > Early cut > Signal)
         if hit_stop_loss:
             exit_reason = "Stop loss"
+            exit_category = classify_stop_exit(trade)
             exit_price = sl_exit_price
         elif hit_take_profit:
             exit_reason = "Take profit"
+            exit_category = ExitReason.TAKE_PROFIT
             exit_price = tp_exit_price
         elif hit_time_limit:
             # Use the policy-specific reason for parity with the live engine.
             # Default fallback string also matches live ("Time exit").
             exit_reason = time_reason or "Time exit"
+            exit_category = ExitReason.TIME_EXIT
             exit_price = current_price
         elif hit_early_cut:
             exit_reason = early_cut_reason or "Early cut"
+            exit_category = ExitReason.EARLY_CUT
             exit_price = current_price
         elif exit_signal:
             exit_reason = runtime_reason
+            exit_category = ExitReason.SIGNAL_EXIT
             exit_price = current_price
         else:
             exit_reason = "Hold"
+            exit_category = ExitReason.UNKNOWN
             exit_price = current_price
 
         return ExitCheckResult(
             should_exit=should_exit,
             exit_reason=exit_reason,
+            exit_category=exit_category,
             exit_price=exit_price,
             is_stop_loss=hit_stop_loss,
             is_take_profit=hit_take_profit,
@@ -763,12 +779,14 @@ class ExitHandler:
         balance: float,
         symbol: str,
         candle: pd.Series | None = None,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
     ) -> tuple[Trade, float, float, float]:
         """Execute exit and close position.
 
         Args:
             exit_price: Base exit price (before slippage).
-            exit_reason: Reason for exit.
+            exit_reason: Free-text exit detail recorded on the trade.
+            exit_category: Typed exit category driving order-type selection.
             current_time: Current timestamp.
             current_price: Current market price.
             balance: Current account balance.
@@ -798,7 +816,7 @@ class ExitHandler:
             current_price=current_price,
             candle=candle,
         )
-        order_intent = self._build_exit_intent(trade, exit_reason, order_side)
+        order_intent = self._build_exit_intent(trade, exit_reason, exit_category, order_side)
         decision = self.execution_model.decide_fill(order_intent, snapshot)
 
         base_exit_price = exit_price
@@ -849,6 +867,7 @@ class ExitHandler:
             exit_price=final_exit_price,
             exit_time=current_time,
             exit_reason=exit_reason,
+            exit_category=exit_category,
             basis_balance=basis_balance,
         )
 

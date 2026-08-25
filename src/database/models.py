@@ -193,7 +193,13 @@ class Trade(Base):
     # Risk management
     stop_loss = Column(Numeric(18, 8))
     take_profit = Column(Numeric(18, 8))
+    # Free-text exit detail as written by the engines. Historical record — its values
+    # also appear in account_balances.update_reason keys, so they are never rewritten.
     exit_reason = Column(String(100))
+    # Typed exit category (src.trading.exit_reason.ExitReason). NULL on rows
+    # written before #1115; agents/research/1115-exit-taxonomy.md documents how those
+    # map, and v_trades_exit_category exposes the mapping with an `inferred` flag.
+    exit_category = Column(String(32), index=True)
 
     # Strategy information
     strategy_name = Column(String(100), nullable=False, index=True)
