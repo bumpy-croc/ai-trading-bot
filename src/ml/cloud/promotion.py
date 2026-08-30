@@ -9,6 +9,7 @@ The ``basic/latest`` symlink is only touched when ``set_latest`` is passed.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shutil
@@ -17,6 +18,7 @@ from pathlib import Path
 from src.infrastructure.runtime.paths import get_model_registry_root
 from src.ml.cloud.artifacts.latest_link import update_latest_symlink
 from src.ml.cloud.exceptions import ModelPromotionError
+from src.ml.model_metadata import validate_bundle_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +90,24 @@ def promote_model_version(
         raise ModelPromotionError(
             f"Target version already exists, refusing to overwrite: {target_dir}"
         )
+
+    # Refuse to move a bundle into a live-loaded namespace unless it carries the
+    # keys the prediction path needs; promotion is autonomous, so nothing
+    # downstream would catch normalized output served as real prices (#1049).
+    metadata_path = source_dir / "metadata.json"
+    if metadata_path.exists():
+        try:
+            with open(metadata_path, encoding="utf-8") as handle:
+                source_metadata = json.load(handle)
+        except (OSError, json.JSONDecodeError) as e:
+            raise ModelPromotionError(f"Unreadable metadata.json in {source_dir}: {e}") from e
+        if isinstance(source_metadata, dict):
+            try:
+                validate_bundle_metadata(
+                    source_metadata, bundle_id=f"{symbol}/{source_type}/{version_id}"
+                )
+            except ValueError as e:
+                raise ModelPromotionError(str(e)) from e
 
     target_dir.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source_dir, target_dir)

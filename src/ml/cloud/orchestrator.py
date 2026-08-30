@@ -32,6 +32,7 @@ from src.ml.cloud.providers.base import (
     TrainingJobSpec,
     TrainingJobStatus,
 )
+from src.ml.model_metadata import ensure_bundle_metadata_complete
 
 logger = logging.getLogger(__name__)
 
@@ -485,6 +486,12 @@ class CloudTrainingOrchestrator:
                 model_type=model_type,
                 version_id=version_id,
             )
+
+            # The in-container trainer does not write the keys the prediction
+            # path reads off a regression bundle (#1049). Backfill them here so
+            # cloud and local bundles are schema-identical before anything can
+            # load or promote this one.
+            ensure_bundle_metadata_complete(final_path)
 
             return final_path
 
