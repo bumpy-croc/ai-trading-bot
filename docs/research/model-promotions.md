@@ -148,3 +148,79 @@ bundle can be honestly evaluated against an incumbent, let alone promoted.
   too long". Read the config blob with a direct `curl "$url"` instead.
 - Issue #1041 ("ECR image stale — blocks weekly retrain") is still open, but the rebuild it asks for
   was done on 2026-08-13. Looks closeable.
+
+---
+
+## 2026-08-30 — ETHUSDT/basic — NO CHANGE (weekly retrain evaluated, incumbent retained)
+
+No symlink moved. Third consecutive weekly retrain to decline promotion — but the first in which
+the challenger was measurable at all, because #1049 was fixed in the same session (PR #1122).
+
+- **Incumbent (retained)**: `basic/2026-07-04_22h_v1`
+- **Challenger (rejected)**: `price/2026-08-30_07h33m07s_v1`, SageMaker job
+  `atb-ethusdt-1h-20260830-071253`, full-history price-only retrain (2017-08-17 → 2026-08-30),
+  hyperparameters matched to the incumbent (cnn_lstm, 50 epochs, batch 256, sequence length 120)
+  so fresh data was the only changed variable. **790 billable seconds** vs 1149s wall clock
+  (~31% managed-spot saving) on `ml.g4dn.xlarge` ≈ **$0.16**.
+- **Training image**: ECR `latest`, pushed 2026-08-13 — newer than the newest `develop` commit
+  touching `src/ml/training_pipeline/` (2026-07-12). Precondition satisfied. Provenance caveat from
+  the 08-23 entry still stands: the image was built from `bcedb26c`, which lives only on the
+  unmerged branch `fix/ecr-training-image-1041`.
+
+| Metric | Incumbent `2026-07-04_22h_v1` | Challenger `2026-08-30_07h33m07s_v1` | Winner |
+|---|---|---|---|
+| Test RMSE (temporal holdout) | **0.065141** | 0.066347 | incumbent (challenger +1.85% worse) |
+| Train RMSE | 0.063904 | 0.063833 | challenger |
+| OOS profit factor | **999.0** (sentinel: zero losing trades) | 999.0 (sentinel) | tie |
+| OOS total return | **3.39%** | 3.22% | incumbent |
+| OOS max drawdown | 1.347% | **1.339%** | challenger (immaterial) |
+| OOS win rate | 100% (8 trades) | 100% (8 trades) | tie |
+| Sharpe | **0.054** | 0.053 | incumbent |
+| Final balance | **$87.91** | $87.83 | incumbent |
+
+Backtests: hyper_growth, ETHUSDT 1h, 2026-07-01 → 2026-08-30, `--initial-balance 85
+--risk-per-trade 0.02 --max-risk-per-trade 0.03 --max-position-size 0.20`, each model pinned with
+`--model-version`. Neither run early-stopped on the drawdown cap. Buy-and-hold over the same
+window: **+56.12%** — both models underperform hold by ~53pp, which is the far more important
+number on this page and is discussed below.
+
+- **Decision**: incumbent retained. Gate is >= incumbent on 2 of 3 (test RMSE, OOS PF, OOS return);
+  the challenger scores **1 of 3** — it only ties the profit-factor sentinel, and loses on both
+  metrics that discriminate.
+- **Why the verdict is safe despite the contaminated window**: the challenger was trained through
+  2026-08-30, so all 60 evaluation days are inside its training set, while the incumbent has only
+  ~3 of them. The contamination therefore favours the *challenger* — and it lost anyway. A loss
+  under a biased-favourable comparison is a fortiori a real loss, so no held-out re-run was
+  purchased. (Had it won, the number would have been untrustworthy and a second fixed-cutoff job
+  with `--end-date` 60 days back would have been required before recommending anything.)
+
+### #1049 fixed this session — the challenger was measurable for the first time
+
+The 08-09 entry flagged that cloud bundles omit `price_normalization`; the 08-23 entry measured the
+damage (1321 SELL / 0 BUY at 1.00 confidence on every bar). This run reproduced the defect a fourth
+time — the freshly synced bundle again carried neither `price_normalization` nor
+`model_file`/`framework` — and then fixed it (PR #1122, closes #1049).
+
+Evidence the fix restores correct behaviour, from this run's own backtests:
+
+| | Incumbent | Challenger (08-23, unfixed) | Challenger (08-30, fixed) |
+|---|---|---|---|
+| Decision mix | 631 BUY / 98 HOLD / 592 SELL | **1321 SELL / 0 BUY / 0 HOLD** | 604 BUY / 99 HOLD / 618 SELL |
+| Trades | 8 | 0 | 8 |
+
+The fix also revealed that the defect was never cloud-only: `BTCUSDT/basic/2025-10-26_21h_v1` and
+`2025-10-27_14h_v1` are **locally**-trained bundles with the same gap, predating the local writer
+emitting these keys (2025-10-30). Neither is a `latest` symlink, so nothing live was ever affected,
+but both are now rejected at load rather than silently mis-served.
+
+### The finding that matters more than the gate
+
+Three consecutive retrains have now produced a challenger that is neither better nor much worse than
+a model trained in early July. Meanwhile both models return ~3.2–3.4% over a window in which simply
+holding ETH returned **+56%**. Retraining is not the lever here: the gate is working correctly and
+is being asked to choose between two models that are both far from the thing to beat. The open
+question this page cannot answer is whether the strategy's edge exists at all in a strong trend —
+which is what the vol/regime program (#1119, preregistered in PR #1118) was set up to test. Feeding
+that question is a better use of the next slot than a fourth retrain.
+
+- **Refs**: weekly-model-retrain scheduled task; branch `docs/retrain-2026-08-30`; fix PR #1122; #1049
