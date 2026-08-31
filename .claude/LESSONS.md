@@ -20,6 +20,16 @@ much precision", on **stopPrice**/limit price / PRICE_FILTER `tickSize`).
   which then exposed the *price* version (-1111, #699/#701) on the very next step. **When you find
   a float-artifact precision bug, `grep` for ALL `round(... / ...) * ...` sites — don't fix only
   the one in front of you.**
+- **Corollary — a quantize guarded by an optional lookup is not a quantize (earned twice).** In
+  `binance_provider.place_stop_loss_order` the tick quantize sits **inside** `if symbol_info:`, so a
+  transient `get_symbol_info()` failure passes the raw `stop_price * (1 - slippage)` float straight
+  to Binance. The quantity cap **twelve lines below it** carries the opposite, explicit treatment —
+  *"This runs even when `symbol_info` is missing — a transient `get_symbol_info` failure must not
+  silently disable the protection."* Same function, same precondition, one guard hardened and one
+  not. **-1111 recurred in prod on 2026-08-27, 82 days after #699/#701 "fixed" it** (#1121), and the
+  rejection cascade latched close-only for four days. **Rule:** when you harden one consumer of a
+  best-effort lookup against its absence, harden *every* consumer of that lookup in the same
+  function — and prefer a fail-loud refusal to send over an un-normalized send.
 
 ### 1.2 Decimal × float `TypeError` from DB-loaded fields
 SQLAlchemy `Numeric` columns load as `Decimal`. Mixing a DB-loaded value with a `float` raises
@@ -201,6 +211,27 @@ duplicate stop on one still resting — the orphan that locked the inventory.
   exact moment price is touching it, so a genuine FILL in that window is the likely case, and
   `process_execution_event` discards events for unknown ids. Polling is disabled while the WS is
   primary, so nothing would re-deliver it.
+
+### 1.15 A safety feature that borrows another feature's field — and then reports "armed"
+Two restart-safe risk seeders (#1001, #1032) resolve the session to seed the drawdown peak/baseline
+from by reading `_recovered_inactive_session_id`. That field's lifetime is owned by an **unrelated**
+feature: the #668 carry-forward re-entry guard clears it before the first loop iteration. So on a
+carry-forward boot — the boot shape the seeding exists for — the field is already `None` and the
+seeding shipped by #1032 had **never once run**. It went 30 days undetected on staging because the
+miss logged as an ordinary "unavailable" and the provenance field reported `self_anchored`, which is
+also the value meaning *"legitimately nothing to seed from"*.
+- **Rule (a):** a consumer must not depend on a field whose lifetime another feature controls. Give
+  it its own field, or resolve the value itself. Cross-feature field reuse turns an unrelated
+  refactor into a silent safety-feature regression, and nothing in either feature's tests fails.
+- **Rule (b):** a provenance / "armed" telemetry value must distinguish **nothing to do** from
+  **could not do it**. Collapse them and a permanently broken safety feature reads healthy in every
+  log line and every dashboard forever. Emit `self_anchored` vs `seed_unavailable` as distinct
+  values, and alert on the second.
+- **Rule (c):** boot verification for a restart-safety feature must exercise the **carry-forward**
+  path, not just the session-reuse path production happens to take. A feature verified only on the
+  path that never needs it is unverified.
+  Earned: GH #1036 / PR #1060 (found in review, 2026-08-13; reached LESSONS only on 2026-08-31 after
+  the agenda item itself was lost to an unmerged branch — see §2.9).
 
 ---
 
@@ -388,6 +419,24 @@ consumed by exactly one thing — the weekly retro. Detection latency was theref
   discrepancy; GH #1046 (open and unowned 28 days — filing a fifth instance would be §2.11 theatre,
   so the 2026-08-24 retro amended the task file directly instead), #1083, #1084.
 
+- **RESOLVED, and what the fix left behind.** 2026-08-24 → 08-31 is the **first window in five**
+  with durable monitoring output. The 08-24 amendment — a numbered *durable sink* step naming
+  `bot-monitor-live`'s escalation table, written into the task file rather than into a skill the
+  task never loads — worked on its first outing: the standups filed **#1121** (the P0 close-only
+  recurrence, caught on its first covered day with full `system_events` evidence) and **#1125**,
+  and left dated escalation comments on #1121 (×3, including a p1→p0 bump), #1094, #1045 and #1085.
+  The sharpened rule holds: **write the sink as a step, not as a principle.**
+  **Residual:** the sink the amendment named was *a GH issue*, so that is the only artifact any run
+  produced. A P0 was detected, escalated and re-escalated for four days with **no incident file and
+  no `log.md` entry** — `incident-response` §5 requires all three and was never reached, because the
+  standup routes through `bot-monitor-live` (which owns severity triage) and not through
+  `incident-response` (which owns the record). `log.md` gained **zero** entries 08-26 → 08-31.
+  - **Rule:** name the sink **per severity**, not once. "File an issue" is the right sink for a code
+    bug; for a P0/P1 the sink is the incident-response triple (incident file + issue + `log.md`), and
+    the procedure must say so at the point where severity is decided.
+    Earned: #1121 (P0, 4 days, issue-only); the 08-24 P1 record still `status: open`,
+    `mitigated_at: null` on 08-31 though its fix reached prod on 08-25 (`d6c46b71`).
+
 ### 2.11 Filing an issue is not delegating the work
 The 2026-07-27 retro filed #1044, #1045, #1046 and commented on #1041, #1038. Fourteen days later
 **all five had zero activity** — no owner, no comment, no branch. This was already visible once (the
@@ -509,6 +558,67 @@ old"*) could not have said anything else, for two independent reasons:
   nothing did not run. Both are answered by checking the artifact, never the invocation.
   Earned: the missed 08-19 standup slot and the 08-20→08-24 false PASSes; `prune-worktrees`
   08-17→08-21; GH #1085, #1050, #1051.
+
+- **A transcript is not an artifact — audit the slot against the run's OUTPUT.** §2.15 replaced one
+  self-witnessing instrument (`lastRunAt`) with a weaker one than it looks: *"match each slot to a
+  dated session transcript"*. A transcript proves a process **started**. On **2026-08-28** the
+  standup fired, ran seven data-collection calls, and died mid-run on
+  `API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)` — no synthesis, no
+  assertions, no issue, no report. Its 46-line transcript exists, so the 08-29 run scored the slot
+  *"PASS — fired Aug 25/26/27/**28**/29"*. That was the day production latched close-only; detection
+  slipped a full day into #1121's ~96h.
+  - **Rule:** a slot is HIT only if the run left the layer-2 artifact §2.10 requires of it — an
+    issue, a comment, an incident file, a `log.md` append, a PR. Absent a finding, a green run must
+    still leave *something* dated (even a one-line "nominal" comment) or its slot is unauditable.
+    Grade the transcript's **ending**, not its existence: any transcript ending in an API/network
+    error, a quota message, or mid-tool-call is a **MISS**, at any length.
+  - **New failure mode for the list above: fired, ran, and died mid-run on a transient API error.**
+    Unlike the turn-1 deaths it leaves a *plausible-length* transcript, so a size heuristic
+    ("treat any ~20-line transcript as failed") does not catch it. Grep transcripts for
+    `API Error` / `ENOTFOUND` alongside the quota and stale-provider strings.
+  - **Consecutive audits that disagree are themselves the signal:** 08-29 reported a
+    `prune-worktrees` MISS on 08-27; 08-30 reported *"zero missed slots across all 4 enabled tasks"*.
+    Both used the transcript instrument. When two runs of the same check disagree, fix the
+    instrument before believing either.
+- **Credit where the corollary earned it:** the effect-assertion added on 08-24 worked —
+  `prune-worktrees` took the repo from **9 worktrees to 5** across this window, and the standup
+  reported the *count*, not the firing. The two survivors were filed as #1125 rather than assumed
+  benign.
+  Earned: the 08-28 mid-run death and the 08-29 false PASS over it; #1121, #1125.
+
+### 2.16 Detection plus escalation, with no scheduled actor, is not a control
+Production latched **close-only** on 2026-08-27 08:35 UTC and was still latched on 2026-08-31 —
+**~96h of blocked entries**, the same duration as #1094, which this whole quarter of work existed to
+prevent recurring. Nothing was missed. Every layer-3 rule fired exactly as written: #1103's
+re-announcement kept the latch visible, §5.7's positive-state assertion caught it (`CLOSE_ONLY_LATCHED`
+where `ENTRIES_ENABLED` was expected), §2.10's sink filed #1121 with full evidence, §2.10's corollary
+turned the second sighting into an escalation (comment + p1→p0 bump + PushNotification), and the
+third into another. **Detection: 10/10. Response: zero.** The charter's P0 SLA is **1 hour**; the
+observed response was ~96h and counting.
+The gap is structural, not procedural. Every enabled scheduled task is **monitor-only by design** —
+`bot-monitor-live` §"Why monitor-only" is a good rule and the standup obeyed it correctly. `live-ops`
+is likewise barred from live-capital processes and escalates to `pm`. The **only** actor whose
+autonomy envelope covers this (`charter.md` permits deployment to production and changes affecting
+live capital) is the PM daemon — and the PM daemon runs only when a human starts one. It did not run
+between 08-25 and 08-31: `log.md` gained zero entries, no triage pass, nothing merged for six days.
+So the system had **100% detection coverage and 0% response coverage**, and could not tell the
+difference, because every instrument it owns measures detection.
+- **Rule:** for any condition with a pre-committed remediation, name the **authorized actor and its
+  trigger** in the same artifact that defines the detection. A monitoring stack in which every job is
+  monitor-only has no response path at all — however many alerts it delivers.
+- **Rule:** "no automated agent is authorized" is a claim to **check against `charter.md`**, not a
+  default. Here it was true only because no *scheduled* agent has the envelope — not because the
+  envelope forbids the action. Say which, and escalate the difference; they need opposite fixes
+  (a new scheduled actor vs. a Board amendment).
+- **Rule:** when a delivered escalation produces no state change within its SLA, the **non-response**
+  becomes the finding and outranks the original condition. Re-reporting the same evidence at a higher
+  priority is still reporting; the condition to raise is *"a P0 has had no owner for N× its SLA."*
+- **Corollary:** an alert whose only remediation is a human-authorized action has an unbounded
+  worst case equal to the human's absence. Either build the automated clear path or have the Board
+  accept an explicit opportunity-cost budget for that class — the choice is the Board's, but leaving
+  it unmade is what costs the four days.
+  Earned: #1121 (2026-08-27→08-31), recurrence of #1094 (2026-08-20→08-24) with the identical
+  "in-process latch, no durable row, restart-only recovery" gap named in both records.
 
 ---
 
