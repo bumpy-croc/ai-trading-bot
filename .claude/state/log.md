@@ -1193,3 +1193,107 @@ Per #1105's full-grid null (0/20 cells clear cost on direction; ARCH clustering 
 Experiment (GH #1067, Phase 1 gate): does model confidence carry exploitable signal for FlatRiskManager to size on? → REJECTED (null), Phase 2 not started
 Evidence: docs/research/experiments/2026-08-25_conviction-sizing-phase1.md, agents/research/1067-conviction-sizing.md, script docs/research/experiments/scripts/2026-08-25_confidence_bucket_oos_check.py
 Prior work (#912, 2026-07-05) already found H0 supported (flat hit-rate-by-magnitude-decile, CA p=0.669, Spearman p=0.477) on a frozen exam against a different model instance. Rather than blindly re-run, ran a light confirmatory check on the genuinely fresh, previously-untouched OOS window 2026-07-06→2026-08-24 (n=1,177 bars) using the CURRENTLY DEPLOYED production model (ETHUSDT/basic/2026-07-04_22h_v1, point-in-time pinned via GH #988's mechanism, not `latest` resolution) and the real production inference path (MLBasicSignalGenerator.generate_signal(), no proxy signal). Result replicates #912 exactly: three bucket definitions (magnitude quintile, magnitude decile, confidence quintile — confidence is a monotone transform of magnitude under the current formula, so these aren't independent tests but all are reported) all null (Cochran-Armitage p=0.967–0.996, Spearman p=0.747–0.920), non-monotonic, every bucket's 95% Wilson CI overlaps every other's. One real secondary finding reported in full despite not helping the sizing question: |predicted_return| does correlate with |realized_return| (Spearman ρ=0.204, p=1.5e-12) — the model weakly tracks volatility regime, not direction; sizing up on this would be "amplify noise," the exact failure mode the issue named as the plausible null. Reconciled explicitly with PR #1010 (EV-conditioning null, previously confounded by FlatRiskManager's binary gate — this experiment scores unconditionally and independently confirms it) and #1105 (model-free scan, 0/20 cells clear costs). Per the issue's pre-registered gate: STOP before building/backtesting any sizer. No code change, no proposal file (recommendation is "do not build," i.e. status quo). Recommended pm close #1067 and cross-reference/update #938 (HyperGrowth "blind to model quality" framing no longer applies with force — there is no confidence information to be blind to).
+
+---
+
+## [D-2026-08-31-01] 2026-08-31 ~10:45 · note · daemon(weekly-retro)
+**Weekly retro, window 2026-08-24 → 2026-08-31. Distillate-only PR to `develop`.**
+
+**Input 0b — previous retro PASSED cleanly.** #1086 created 2026-08-24 09:45Z, merged 10:50Z —
+**time-to-merge 65 minutes**, no stranding, nothing to recover. First retro in four with no
+recovery job.
+
+**Headline: 100% detection coverage, 0% response coverage.** Prod latched close-only 2026-08-27
+08:35 UTC and is *still latched* at this writing — **~96h**, the same duration as #1094, the
+incident the whole quarter of visibility work existed to prevent recurring. Nothing was missed:
+#1103's re-announcement kept it visible, §5.7's positive-state assertion caught it, the 08-24
+durable-sink amendment filed **#1121** on day 1 with full `system_events` evidence, and the second
+and third sightings escalated (comment + p1→p0 + PushNotification) rather than re-reported. The
+charter's P0 SLA is 1 hour. The gap is structural: **every enabled scheduled task is monitor-only
+by design** (`bot-monitor-live`'s "why monitor-only" rule, correctly obeyed), `live-ops` is barred
+from live-capital processes, and the only actor whose envelope covers a prod restart is the PM
+daemon — which runs only when a human starts one, and did not run 08-25 → 08-31. → LESSONS **§2.16**,
+GH **#1127** (p0).
+
+**Second finding — the 08-28 standup died mid-run and the audit called it a HIT.** It fired, ran
+seven data collections, and terminated on `API Error: … (ENOTFOUND)` with no synthesis, no
+assertions, no artifact. Its 46-line transcript exists, so the 08-29 run scored the slot
+*"PASS — fired Aug 25/26/27/28/29"*. That was the day prod latched; detection slipped a full day.
+§2.15's own instrument was the cause — it replaced `lastRunAt` with transcript *existence*, which
+proves a run started, not that it produced anything. → §2.15 amended: grade the transcript's
+**ending**, prefer the run's own layer-2 output as the artifact, and treat any transcript ending in
+an API/network error or quota message as a MISS at any length.
+
+**Scheduled-task audit (registry + slot enumeration + effect).** 19 directories, 13 registered,
+**4 enabled** — unchanged; the same six unregistered directories Alex confirmed as deliberate
+retirements on 08-13, no new drift. Slots in window: `daily-trading-standup` 8/8 fired, **7 HIT /
+1 MISS** (08-28, above); `prune-worktrees` 5 weekday slots, 08-29 reported a MISS on 08-27 while
+08-30 reported "zero missed slots" — the disagreement is itself the instrument failing;
+`weekly-model-retrain` 1/1 → PR #1124; `weekly-retro` 1/1 (this run). **Effect verified:**
+worktrees went **9 → 5**, and the two survivors were filed as #1125 rather than assumed benign —
+the 08-24 effect-assertion corollary earning a green.
+
+**§2.10 RESOLVED after four windows.** First window in five with durable monitoring output:
+#1121, #1125, and dated escalation comments on #1121 (×3), #1094, #1045, #1085. The amendment that
+worked was writing the sink as a numbered *step in the task file*, not as a principle in a skill the
+task never loads. **Residual:** the sink named was "a GH issue", so that is all any run produced —
+a P0 ran four days with **no incident file and no `log.md` entry**; `incident-response` §5 requires
+all three and was never reached. → §2.10 amended (name the sink *per severity*), `incident-response`
+§5 amended, standup task file amended.
+
+**Diffs shipped (this PR):**
+- `.claude/LESSONS.md` — **§1.1** corollary (a quantize guarded by an optional lookup is not a
+  quantize; -1111 recurred 82 days after #699/#701 because the tick snap sits inside
+  `if symbol_info:` while the quantity cap below it is explicitly hardened against the same
+  failure); **§1.15** new (borrowed field lifetime / provenance conflating "nothing to do" with
+  "could not do it" / carry-forward boot verification — the carried #1036 agenda item); **§2.10**
+  amended (resolved + sink-per-severity); **§2.15** amended (transcript ≠ artifact; new mid-run-death
+  failure mode; effect-assertion credit); **§2.16** new (detection + escalation with no scheduled
+  actor is not a control).
+- `.claude/skills/weekly-retro/SKILL.md` — input 0: check open PRs for `AGENDA.md` before clearing;
+  input 6: grade the transcript's ending, prefer layer-2 output.
+- `.claude/skills/incident-response/SKILL.md` — §5: all three artifacts required even when a monitor
+  already filed the issue; a recurrence opens its own record; stamp `mitigated_at` when the
+  mitigation reaches the affected *environment*, not when its PR merges.
+- `.claude/skills/weekly-retro/AGENDA.md` — cleared; both carried items actioned.
+
+**Amended outside this PR** (lives outside the repo, recorded here per the 08-24 precedent):
+`~/.claude/scheduled-tasks/daily-trading-standup/SKILL.md` — slot audit now grades transcript
+endings; the durable sink for **P0/P1** now routes through `incident-response` §5 in full (incident
+file + issue + log append), and a still-unactioned prior escalation is redefined as a finding about
+the **non-response**, led with in the first line.
+
+**Issues filed:** **#1126** (p1 — SL price quantization skipped when `get_symbol_info()` fails;
+cheap verification named against #1097's captured `symbol_info_available` flag), **#1127** (p0 — no
+scheduled actor). Commented, not resolved: **#1121** (retro cross-references), **#1079** (queue
+escalation as one item per §2.11: zero merges 08-26→08-31, zero `log.md` entries, 100+ open issues
+with 60/60 sampled unowned, oldest from 2026-07-09).
+
+**Calibration.**
+- `quant-researcher` — **well calibrated, best of the fleet.** #1081's provenance audit reported
+  6 VERIFIED-CLEAN / 6 AT-RISK / **2 UNKNOWABLE** rather than guessing, and issued a correction to
+  #1081's *own* prior label. The #1019 rerun found "genuinely ambiguous" and said so instead of
+  picking a side, while separating the mechanism that survived (short-side P&L negative in all four
+  windows) from the magnitude claim that did not. The #1067 gate was honored exactly as
+  pre-registered (STOP before building a sizer) and the vol/regime program states its own honest
+  caveat: *"a risk-quality program, not a return-improvement program."* No overclaim found.
+- `ml-engineer` / weekly-retrain — **well calibrated.** Third consecutive declined promotion, with
+  four caveats volunteered including "both backtest legs are biased toward the challenger and it lost
+  anyway." No `latest` symlink moved this week, so nothing to append to
+  `docs/research/model-promotions.md` — PR #1124 is the retrain's own row and is still open.
+- `daily-trading-standup` / live-ops — **calibrated on the thing that mattered, miscalibrated on its
+  own uptime.** Detected, evidenced and escalated the P0 correctly and repeatedly. But it scored the
+  08-28 slot HIT when that run produced nothing, and consecutive runs contradicted each other on
+  `prune-worktrees`. Instrument fixed, not the agent.
+- **Prior prediction → outcome:** [D-2026-08-24-01]'s "the durable-sink amendment will fix §2.10" →
+  **CORRECT**. Its "§2.15 slot enumeration will catch missed slots" → **PARTIALLY WRONG** (caught
+  `prune-worktrees`, false-PASSed the standup death that mattered). #1104/PR #1108 was framed as
+  *the* root cause of the 08-20 halt → **OVERCONFIDENT**: promoted to prod 08-25, the class recurred
+  08-27 through a different proximate failure. #1103's "this makes a stuck latch visible" →
+  **CORRECT**, and is the reason this week's recurrence was seen on day 1 rather than day 4.
+
+**For the Board (layer 1, not decided here):** #1127 asks a question only the Board can answer —
+either build the automated clear path / a scheduled actor with the envelope, or accept an explicit
+opportunity-cost budget for the "human-authorized-only remediation" class. Leaving the choice
+unmade is what cost the four days. Route via `risk-ratification` if it becomes a charter amendment.
+Ref: #1121, #1094, #1127, #1126, #1125, #1079, #1090, #1036/#1060, [D-2026-08-24-01].
