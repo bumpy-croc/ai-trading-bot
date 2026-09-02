@@ -11,6 +11,25 @@ affected_components: [live-engine, reconciliation, stop-loss-placement, close-on
 affected_symbols: [ETHUSDT]
 ---
 
+## UPDATE — 2026-09-02 08:00 UTC (Day 6, still unactioned)
+
+Sixth daily-trading-standup sighting since GH #1121 was filed (2026-08-29). Newest `system_events`
+row (2026-09-02 07:53:14 UTC) is still `CLOSE_ONLY_LATCHED`: *"STILL BLOCKED — DAY 5: Close-only
+mode still active after 5d 23h..."* — elapsed now **~5d 23h18m (~143.3h) against the 1h P0 SLA**,
+i.e. **143x over SLA**. No change in root cause, no new CRITICAL `system_events` since the
+2026-08-27 latch-confirmation entries, `FEATURE_ENTRY_PAUSE` still `false` (not a contributing
+lever). Book still flat: 0 open positions, equity $87.50216036 (unchanged to the cent since
+2026-08-27, i.e. genuinely idle, not silently bleeding). This PR (#1129) — which itself carries
+the incident-file + log.md record this run is updating — has sat open and unmerged for the same
+window; the durable-sink artifact for the finding is itself part of the unactioned backlog.
+
+**The finding as of today is the non-response, not the underlying condition** (per the standup's
+own escalation rule): the same evidence has now been reported five times without a human clearing
+the latch or an authorized agent restarting the service. Re-describing the condition further adds
+no information; what would move this is either (a) a human running the documented restart
+playbook, or (b) the Board deciding GH #1127's structural question (does any scheduled actor get
+restart authority, or is human-only remediation an accepted opportunity-cost budget).
+
 ## What happened
 
 Production latched **close-only mode** at **2026-08-27 08:35:28 UTC** after a stop-loss
@@ -89,7 +108,10 @@ concern. No unresolved capital-at-risk from the halt itself.
 2026-08-31 08:05 UTC     — standup comment on #1121: day 3, ~95.5h, reaches #1094 precedent scale
 2026-08-31 09:38 UTC     — weekly-retro comments on #1121 (missing record noted); files GH #1126
                            (mechanism) and #1127 (structural: no scheduled actor can act)
-2026-09-01 08:04 UTC     — this record: ~119.5h elapsed, still CLOSE_ONLY_LATCHED, still unactioned
+2026-09-01 08:04 UTC     — standup writes this record + log.md entry (day 5), PR #1129 opened
+2026-09-02 07:53 UTC     — newest system_events row: still CLOSE_ONLY_LATCHED, 5d23h elapsed
+2026-09-02 08:00 UTC     — standup update (day 6): ~143.3h elapsed (143x the 1h P0 SLA), PR #1129
+                           still open/unmerged; non-response is now the finding, not the condition
 ```
 
 ## Actions taken
@@ -103,12 +125,14 @@ escalation state before filing this record (per the standup's own non-duplicatio
 
 ## Current state
 
-Close-only mode still latched. 0 open positions. Equity flat at $87.50216036. Decision loop
-live (`Decision:` lines at normal ~2min cadence through 08:04 UTC today, including genuine
-non-zero-size BUY signals that are being blocked, not just near-zero noise). `FEATURE_ENTRY_PAUSE`
-separately confirmed `false` (not a contributing lever). No new CRITICAL `system_events` since
-the 2026-08-27 09:37 UTC latch-confirmation entries other than the hourly `CLOSE_ONLY_LATCHED`
-re-announcements themselves.
+**As of 2026-09-02 08:00 UTC (day 6):** close-only mode still latched, ~143.3h elapsed. 0 open
+positions. Equity flat at $87.50216036 — unchanged since the halt began. `FEATURE_ENTRY_PAUSE`
+confirmed `false` (not a contributing lever). No new CRITICAL `system_events` beyond the hourly
+`CLOSE_ONLY_LATCHED` re-announcements. Nothing has changed mechanically since day 5 — the only
+change is that the non-response window has grown by another 24h.
+
+Prior (2026-09-01, day 5): close-only mode latched, 0 open positions, equity $87.50216036,
+decision loop live with genuine non-zero-size BUY signals being blocked, not just near-zero noise.
 
 ## Recovery requirements (NOT executed — human/authorized-agent action required)
 
