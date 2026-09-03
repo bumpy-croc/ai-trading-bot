@@ -11,6 +11,27 @@ affected_components: [live-engine, reconciliation, stop-loss-placement, close-on
 affected_symbols: [ETHUSDT]
 ---
 
+## UPDATE — 2026-09-03 08:01 UTC (Day 7, still unactioned)
+
+Seventh daily-trading-standup sighting since GH #1121 was filed (2026-08-29). Newest `system_events`
+row (2026-09-03 07:05:27.82 UTC) is still `CLOSE_ONLY_LATCHED`: *"STILL BLOCKED — DAY 6: Close-only
+mode still active after 6d 22h..."* — elapsed now **~6d 23h (~167h) against the 1h P0 SLA, i.e.
+~167x over SLA**. No change in root cause, no new CRITICAL `system_events` since the 2026-08-27
+latch-confirmation entries, `FEATURE_ENTRY_PAUSE` still `false`, no macro-event window covers now
+(`config/macro_events.json` next window is CPI 2026-09-11, not active). Book still flat: 0 open
+positions, equity $87.50216036 — unchanged to the cent for the seventh consecutive day. GH #1126
+(proximate mechanism) and #1127 (structural response-gap, Board decision) both remain `OPEN`,
+untouched since 2026-08-31. PR #1129 — the durable-sink artifact for this very finding — remains
+open, green CI, mergeable, unreviewed since it was opened six days ago for the day-5 record.
+
+**Escalating the non-response itself, not re-describing the condition** (per the standup's own
+rule for a repeat sighting): this is the **seventh** consecutive daily report of the same
+unactioned P0. Cross-session sweep this run confirms no daemon/PM session has run in this repo
+since the last dated log.md entries — no restart, no clear, no Board sitting on #1127 has
+happened. The only two things that would change this outcome are still (a) a human running the
+documented restart playbook, or (b) the Board resolving #1127's structural question. Both remain
+open.
+
 ## UPDATE — 2026-09-02 08:00 UTC (Day 6, still unactioned)
 
 Sixth daily-trading-standup sighting since GH #1121 was filed (2026-08-29). Newest `system_events`
