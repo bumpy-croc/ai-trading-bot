@@ -11,6 +11,33 @@ affected_components: [live-engine, reconciliation, stop-loss-placement, close-on
 affected_symbols: [ETHUSDT]
 ---
 
+## UPDATE — 2026-09-05 08:05 UTC (Day 9, still unactioned)
+
+Ninth daily-trading-standup sighting since GH #1121 was filed (2026-08-29). Newest `system_events`
+row (2026-09-05 07:31:15.30 UTC) is still `CLOSE_ONLY_LATCHED`: *"STILL BLOCKED — DAY 8: Close-only
+mode still active after 8d 22h..."* — elapsed from the 2026-08-27 08:35:28 UTC onset is now
+**~8d 23.5h (~215.5h) against the 1h P0 SLA, i.e. ~215x over SLA**. Book still flat: 0 open
+positions, equity $87.50216036 — unchanged to the cent for nine consecutive days (session peak
+equity over the trailing 30d is $87.50798970, i.e. current drawdown ≈0.01%, not a capital-at-risk
+condition). `FEATURE_ENTRY_PAUSE` confirmed `false`; no macro-event window covers now (next is CPI
+2026-09-11). Decision loop is alive and generating real (non-zero) decisions at normal ~2min
+cadence — this remains a control-plane halt, not a frozen process.
+
+**Day 8 (2026-09-04) update was comment-only** — the prior run flagged PR #1129 as itself stalled
+(CI-green, mergeable, zero reviews, open 3 days at the time) but did not add a file/log record.
+This entry restores that continuity and folds in day 8's finding: **the durable-sink artifact for
+this incident is now also part of the unactioned backlog**, unmerged for **4 days** as of today.
+
+GH #1126 (proximate `-1111` mechanism) and #1127 (structural response-gap, Board decision) both
+remain `OPEN`, untouched since 2026-08-31 — 5 days of no engagement on either. Cross-session sweep
+this run found no daemon/PM session activity in the repo since the day-7 record; no restart, no
+latch clear, no Board sitting on #1127.
+
+**Escalating the non-response itself for the ninth consecutive day** (per the standup's own rule):
+the two things that would change this outcome — a human running the documented restart playbook,
+or the Board resolving #1127 — remain both untaken. This is now the longest-running unactioned P0
+in this repo's incident history (exceeds the #1094 precedent of ~96h by more than double).
+
 ## UPDATE — 2026-09-03 08:01 UTC (Day 7, still unactioned)
 
 Seventh daily-trading-standup sighting since GH #1121 was filed (2026-08-29). Newest `system_events`
