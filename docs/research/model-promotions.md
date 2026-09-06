@@ -148,3 +148,95 @@ bundle can be honestly evaluated against an incumbent, let alone promoted.
   too long". Read the config blob with a direct `curl "$url"` instead.
 - Issue #1041 ("ECR image stale — blocks weekly retrain") is still open, but the rebuild it asks for
   was done on 2026-08-13. Looks closeable.
+
+---
+
+## 2026-09-06 — ETHUSDT/basic — NO CHANGE (weekly retrain evaluated, promotion NOT recommended)
+
+No symlink moved. Third consecutive weekly retrain; the first in which the challenger technically
+clears the 2-of-3 gate, and the first in which clearing it means nothing.
+
+- **Incumbent (retained)**: `basic/2026-07-04_22h_v1`
+- **Challenger**: `price/2026-09-06_07h21m47s_v1`, SageMaker job `atb-ethusdt-1h-20260906-071131`,
+  full-history price-only retrain (2017-08-17 → 2026-09-06), 50 epochs, batch 256, sequence
+  length 120. **345 billable seconds** vs 591 training seconds (~42% managed-spot saving) on
+  `ml.g4dn.xlarge` ≈ **$0.07**.
+- **Training image**: ECR `latest`, OCI provenance label `bcedb26c`
+  (branch `fix/ecr-training-image-1041`). `git diff bcedb26c origin/develop --
+  src/ml/training_pipeline` is **empty**, so the baked-in pipeline is byte-identical to develop.
+
+| Metric | Incumbent `2026-07-04_22h_v1` | Challenger as-shipped | Challenger + #1049 patch | Gate |
+|---|---|---|---|---|
+| Test RMSE (temporal holdout) | **0.0651406** | 0.0676403 | 0.0676403 | incumbent (+3.84% worse) — **FAIL** |
+| Train RMSE | 0.0639041 | 0.0654346 | 0.0654346 | incumbent |
+| OOS profit factor | 999.0 (sentinel) | 0.0 | 999.0 (sentinel) | **tie — PASS** |
+| OOS total return | 3.279229% | 0.00% | 3.284429% | challenger by **+0.0052pp** — **PASS** |
+| OOS max drawdown | 1.34693% | 0.00% | 1.34700% | incumbent (negligible) |
+| OOS win rate | 100% (7 trades) | — (0 trades) | 100% (7 trades) | tie |
+| Sharpe | 0.051208 | 0.000 | 0.051290 | challenger (negligible) |
+| Final balance | $87.6855 | $85.00 | $87.6879 | challenger (+$0.0024) |
+
+Backtests: hyper_growth, ETHUSDT 1h, 2026-07-08 → 2026-09-06, `--initial-balance 85
+--risk-per-trade 0.02 --max-risk-per-trade 0.03 --max-position-size 0.20`, each model pinned with
+`--model-version` (no symlink was ever moved). Buy-and-hold over the same window: **+44.23%** —
+both models underperform hold by ~41pp.
+
+- **Gate arithmetic**: challenger is >= incumbent on 2 of 3 (PF tie, return by 0.0052pp), so the
+  mechanical gate opens a PR.
+- **Recommendation: do NOT merge / do NOT promote.** The gate pass is an artifact, not evidence:
+  - the profit-factor "win" is a tie between two sentinel 999.0 values (both runs had zero losing
+    trades), so that criterion carries no information and is unwinnable-but-untieable by design;
+  - the return "win" is +0.0052 percentage points — $0.0024 on an $85 book, across 7 trades that
+    are otherwise identical in count, direction and duration to the incumbent's;
+  - the only criterion with discriminating power, test RMSE, the challenger **loses** by 3.84%.
+  Two of three criteria are degenerate this week, so "2 of 3" reduces to "lost the only real one".
+
+### #1049 reproduced for the third consecutive week — still unfixed
+
+`price/2026-09-06_07h21m47s_v1/metadata.json` again ships without `price_normalization`,
+`feature_strategy`, `model_file` or `framework`. As-shipped the bundle trades **0 times** over the
+60-day window (contained only by ETHUSDT's long-only guard, #1020). Injecting those four keys
+restored a normal decision mix and the 7 trades in the patched column above. The committed artifacts
+are the **unmodified** pipeline output; the patch existed only in the evaluation worktree and was
+deleted afterwards. Until #1049 lands, no cloud bundle can be promoted without hand-editing
+metadata, which is not an acceptable promotion path.
+
+### New defect found this run: `--model-type lstm` silently builds a CNN-LSTM
+
+Previous entries carried a caveat that the incumbent is a pure LSTM while the pipeline's price-only
+path builds `cnn_lstm`, confounding architecture with data. This run passed `--model-type lstm` to
+remove that confound. It did not work, and the reason is a mislabelled alias:
+
+`create_model(model_type="lstm")` (`src/ml/training_pipeline/models.py:314`) calls
+`build_price_only_model()`, which at `models.py:405-415` returns
+`create_model("cnn_lstm", ...)`. The `lstm` branch is a pass-through to `cnn_lstm`.
+
+Verified against the emitted graphs:
+
+| | ONNX op types |
+|---|---|
+| Incumbent `2026-07-04_22h_v1` | `Conv=0  Loop=2  GRU=0`, 27 nodes — a real LSTM |
+| Challenger `2026-09-06_07h21m47s_v1` | `Conv=2  Loop=0  GRU=2`, 75 nodes — a CNN-GRU |
+
+Meanwhile the challenger's `metadata.json` records `"architecture": "lstm"`. The provenance field
+therefore states something the artifact contradicts. Consequences:
+
+- there is **no CLI path to train a pure LSTM**, so the architecture confound in this and the two
+  prior weekly comparisons cannot currently be removed;
+- any tournament or study that treated `lstm` and `cnn_lstm` as two distinct entrants was comparing
+  a model against itself;
+- `metadata["architecture"]` cannot be trusted for provenance until this is fixed.
+
+### Caveats on this comparison
+
+1. **The backtest is not out-of-sample for the challenger.** It trains through 2026-09-06, so all 60
+   evaluation days are in-sample; the window is genuinely held out only for the incumbent (trained
+   through 2026-07-04). The comparison is biased **toward** the challenger — which makes its RMSE
+   loss robust and its 0.0052pp return "win" worthless. A clean read needs a second
+   `--end-date`-shifted job (~$0.07 more).
+2. **RMSE is not like-for-like** — each model's holdout is its own chronological split, and the
+   challenger's split ends ~2 months later than the incumbent's.
+3. **n=7 trades**, 100% win rate on both sides — far too small to separate two models.
+4. **The cloud pipeline computes no `directional_accuracy`**, so the incumbent's 0.5312 has no
+   counterpart and that metric could not be compared at all.
+- **Refs**: weekly-model-retrain scheduled task; branch `chore/weekly-retrain-20260906`; #1049, #1041
