@@ -21,6 +21,7 @@ try:
     from tensorflow.keras import callbacks
     from tensorflow.keras.layers import (
         GRU,
+        LSTM,
         BatchNormalization,
         Conv1D,
         Dense,
@@ -42,6 +43,7 @@ except ImportError:
         Dropout = None
         Input = None
         GRU = None
+        LSTM = None
         MaxPooling1D = None
         Model = None
         BatchNormalization = None
@@ -313,7 +315,7 @@ def create_model(
     # Price-only LSTM (simple baseline)
     elif model_type_lower == "lstm":
         sequence_length, num_features = input_shape
-        return build_price_only_model(sequence_length, num_features)
+        return build_lstm_model(sequence_length, num_features)
 
     # LightGBM directional classifier. Reachable from this factory (per
     # Phase 2b item 3 -- "models_lightgbm.py's classifier isn't reachable
@@ -405,6 +407,10 @@ MODEL_VARIANTS = {
 def build_price_only_model(sequence_length: int, num_features: int) -> Any:
     """Provides backwards compatibility for code using the old function signature.
 
+    NOTE: despite the name, this builds the CNN-LSTM (Conv1D+GRU) architecture, not a plain
+    LSTM — see `build_lstm_model` for that (GH #1131). Kept as-is for callers already
+    depending on CNN-LSTM output under this name.
+
     Args:
         sequence_length: Length of input sequences
         num_features: Number of features per timestep
@@ -413,3 +419,45 @@ def build_price_only_model(sequence_length: int, num_features: int) -> Any:
         Compiled Keras model
     """
     return create_model("cnn_lstm", (sequence_length, num_features), has_sentiment=False)
+
+
+def build_lstm_model(sequence_length: int, num_features: int) -> Any:
+    """Build a plain stacked-LSTM price regression model (the actual `'lstm'` architecture).
+
+    Mirrors the legacy local-training architecture in
+    `cli/commands/train_commands.py::_build_price_only_model` (LSTM128 -> Dropout -> LSTM64 ->
+    Dense64 -> Dropout -> Dense1) so `--model-type lstm` produces a model that is architecturally
+    distinct from `cnn_lstm`, matching what `create_model`'s `model_type` choices advertise.
+
+    Args:
+        sequence_length: Length of input sequences
+        num_features: Number of features per timestep
+
+    Returns:
+        Compiled Keras model
+
+    Raises:
+        ValueError: If sequence_length or num_features is not positive
+    """
+    _ensure_tensorflow_available()
+
+    if sequence_length < 1:
+        raise ValueError(f"sequence_length must be >= 1, got {sequence_length}")
+    if num_features <= 0:
+        raise ValueError(f"num_features must be positive, got {num_features}")
+
+    inputs = Input(shape=(sequence_length, num_features))
+    x = LSTM(128, return_sequences=True)(inputs)
+    x = Dropout(0.2)(x)
+    x = LSTM(64)(x)
+    x = Dense(64, activation="relu")(x)
+    x = Dropout(0.2)(x)
+    outputs = Dense(1, activation="linear")(x)
+
+    model = Model(inputs=inputs, outputs=outputs)
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+        loss="mse",
+        metrics=[tf.keras.metrics.RootMeanSquaredError(name="rmse")],
+    )
+    return model
