@@ -5,6 +5,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from src.ml.model_metadata import validate_bundle_metadata
+
 from ..config import PredictionConfig
 from ..utils.caching import PredictionCacheManager
 from .exceptions import ModelLoadError, ModelNotAvailableError
@@ -282,6 +284,15 @@ class PredictionModelRegistry:
             parts = version_id.split("_")
             if len(parts) >= 2:
                 timeframe = parts[1]
+
+        # A regression bundle whose features are rolling-minmax normalized emits
+        # normalized output; without price_normalization both denormalization
+        # sites return it unchanged and it gets compared against real prices.
+        # Fail at load rather than serve silently wrong predictions (#1049).
+        try:
+            validate_bundle_metadata(metadata, bundle_id=f"{symbol}/{model_type}/{version_id}")
+        except ValueError as e:
+            raise ModelLoadError(str(e)) from e
 
         # Optional schema/metrics
         def _load_json(p: Path) -> dict[str, Any] | None:
