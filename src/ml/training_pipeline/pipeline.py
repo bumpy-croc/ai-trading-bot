@@ -30,6 +30,7 @@ from src.config.constants import (
     DEFAULT_STOP_LOSS_PCT,
     DEFAULT_TAKE_PROFIT_PCT,
 )
+from src.ml.model_metadata import enrich_bundle_metadata
 from src.ml.training_pipeline import TrainingContext
 from src.ml.training_pipeline.artifacts import (
     ArtifactPaths,
@@ -711,6 +712,19 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
             },
             **target_type_metadata,
         }
+
+        # Shared prediction-path contract (model_metadata.py, #1049/#1132): a
+        # regression bundle whose target was fed in rolling-minmax normalized
+        # form (currently only the force_price_only branch above, detected
+        # here from feature_names rather than the branch flag so any future
+        # rolling-minmax producer is covered too) must declare
+        # price_normalization/model_file/framework, or its raw ONNX output
+        # can't be denormalized back to a real price. Writing it here --
+        # instead of leaving it to orchestrator._sync_artifacts's backfill --
+        # means a bundle from this function is already complete before any
+        # cloud sync step runs; the backfill remains as a safety net for
+        # pre-existing/external bundles only.
+        enrich_bundle_metadata(metadata)
 
         output_dir = ctx.paths.models_dir
         version_id = _generate_version_id(output_dir, ctx.config.symbol, metadata["model_type"])

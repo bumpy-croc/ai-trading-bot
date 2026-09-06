@@ -37,6 +37,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.ml.model_metadata import missing_prediction_keys
 from src.ml.training_pipeline.config import (
     DiagnosticsOptions,
     TrainingConfig,
@@ -315,6 +316,115 @@ class TestPipelineWritesClassificationMetadata:
         assert on_disk["task_type"] == "regression"
         assert "class_labels" not in on_disk
         assert "target_distribution" not in on_disk
+        # create_robust_features' "close_scaled" feature is globally-scaled,
+        # not rolling-minmax -- see TestPipelineWritesRollingMinmaxPriceNormalization
+        # below for the branch that must set this.
+        assert "price_normalization" not in on_disk
+
+
+class TestPipelineWritesRollingMinmaxPriceNormalization:
+    """Producer-side regression test for #1132.
+
+    #1049/PR #1122 fixed cloud bundles missing price_normalization/model_file/
+    framework, but only at the *consumption* boundary
+    (orchestrator._sync_artifacts's ensure_bundle_metadata_complete backfill).
+    The actual writer -- run_training_pipeline's force_price_only branch,
+    which is the only current producer of rolling-minmax-normalized
+    ("close_normalized") features -- never wrote these keys itself. Any
+    direct caller of run_training_pipeline that skips the orchestrator's sync
+    step (a script, a test harness, a tournament runner) would still produce
+    an incomplete bundle.
+
+    This test calls run_training_pipeline() directly and never touches
+    orchestrator._sync_artifacts or ensure_bundle_metadata_complete -- so a
+    complete bundle here proves the trainer is the fix, not the backfill.
+    save_artifacts is NOT mocked (json.dump runs against a real tmp_path),
+    matching TestPipelineWritesClassificationMetadata's pattern above.
+    """
+
+    def _pipeline_mocks_except_save_artifacts(self):
+        stack = ExitStack()
+        names = [
+            "configure_gpu",
+            "download_price_data",
+            "load_sentiment_data",
+            "create_sequences",
+            "split_sequences",
+            "build_tf_datasets",
+            "create_model",
+            "validate_model_robustness",
+            "evaluate_model_performance",
+            "create_training_plots",
+            "enable_mixed_precision",
+        ]
+        mocks = {
+            name: stack.enter_context(patch(f"src.ml.training_pipeline.pipeline.{name}"))
+            for name in names
+        }
+        mocks["configure_gpu"].return_value = None
+        return stack, mocks
+
+    def test_force_price_only_bundle_has_full_contract_without_backfill(self, tmp_path):
+        price_df = _make_ohlcv_df(periods=150)
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 1, 31),
+            epochs=1,
+            sequence_length=10,
+            force_price_only=True,
+            diagnostics=DiagnosticsOptions(
+                generate_plots=False, evaluate_robustness=False, convert_to_onnx=False
+            ),
+        )
+        paths = TrainingPaths(
+            project_root=tmp_path, data_dir=tmp_path / "data", models_dir=tmp_path / "models"
+        )
+        ctx = TrainingContext(config=config, paths=paths)
+
+        stack, mocks = self._pipeline_mocks_except_save_artifacts()
+        with stack:
+            mocks["download_price_data"].return_value = price_df
+            mocks["load_sentiment_data"].return_value = None
+            # force_price_only routes through the real PriceOnlyFeatureExtractor
+            # (not mocked here) -- create_robust_features is never called.
+            sequences = np.random.rand(50, 10, 5).astype(np.float32)
+            targets = np.random.rand(50).astype(np.float32)
+            mocks["create_sequences"].return_value = (sequences, targets)
+            mocks["split_sequences"].return_value = (
+                sequences[:40],
+                targets[:40],
+                sequences[40:],
+                targets[40:],
+            )
+            mocks["build_tf_datasets"].return_value = (MagicMock(), MagicMock())
+            model = MagicMock()
+            model.fit.return_value = MagicMock(history={"loss": [0.1], "val_loss": [0.2]})
+            mocks["create_model"].return_value = model
+            mocks["validate_model_robustness"].return_value = {}
+            mocks["evaluate_model_performance"].return_value = {
+                "error": "diagnostics skipped in test"
+            }
+            mocks["create_training_plots"].return_value = None
+
+            result = run_training_pipeline(ctx)
+
+        assert result.success is True, result.metadata
+        on_disk = json.loads(result.artifact_paths.metadata_path.read_text())
+
+        assert on_disk["price_normalization"] == {
+            "method": "rolling_minmax",
+            "window": 10,
+            "target_feature": "close",
+        }
+        assert on_disk["model_file"] == "model.onnx"
+        assert on_disk["framework"] == "onnx"
+        assert on_disk["feature_strategy"] == "price_only_rolling_minmax"
+
+        # Exactly the check registry.py/promotion.py run before serving or
+        # promoting a bundle -- must already be satisfied pre-backfill.
+        assert missing_prediction_keys(on_disk) == []
 
 
 class TestTargetDistributionSeededFromModelPredictions:

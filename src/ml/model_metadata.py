@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -124,8 +125,13 @@ def ensure_bundle_metadata_complete(bundle_dir: Path) -> list[str]:
 
     added = enrich_bundle_metadata(metadata)
     if added:
-        with open(metadata_path, "w", encoding="utf-8") as handle:
-            json.dump(metadata, handle, indent=2)
+        # Atomic write (write-temp-then-rename, matching gate.py/meta_labels.py's
+        # checkpoint pattern) so a crash mid-write never leaves a torn
+        # metadata.json -- this file gates whether the registry will serve the
+        # bundle at all.
+        tmp_path = metadata_path.with_suffix(f"{metadata_path.suffix}.tmp")
+        tmp_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        os.replace(tmp_path, metadata_path)
         logger.warning(
             "Backfilled prediction metadata %s into %s -- the training path should "
             "have written these (see #1049)",
