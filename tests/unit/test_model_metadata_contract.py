@@ -8,7 +8,9 @@ sites treat its absence as "nothing to do", so a model emitting normalized
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -89,6 +91,44 @@ def test_cloud_bundle_reaches_local_schema_after_enrichment(tmp_path: Path):
         "target_feature": "close",
     }
     validate_bundle_metadata(enriched, bundle_id="ETHUSDT/price/v1")
+
+
+def test_enrichment_writes_atomically(tmp_path: Path):
+    """#1132: ensure_bundle_metadata_complete must write metadata.json via
+    write-temp-then-rename (matching gate.py's validation_audit.json and
+    meta_labels.py's checkpoint pattern), not a direct in-place json.dump, so
+    a crash mid-write never leaves a torn metadata.json -- the exact file the
+    registry's fail-loud check gates loading on.
+
+    Real atomicity is a timing property that can't be forced from an
+    interrupted process in a test; this pins the write-temp-then-rename
+    shape (a distinct temp path is written first, then os.replace()'d onto
+    the real path) rather than the previous single json.dump(..., handle).
+    """
+    bundle = _write_bundle(tmp_path, "ETHUSDT", "price", "v1", _cloud_style_metadata())
+    metadata_path = bundle / "metadata.json"
+    tmp_path_expected = metadata_path.with_suffix(".json.tmp")
+
+    real_replace = os.replace
+    calls: list[tuple[Path, Path]] = []
+
+    def _spy_replace(src, dst):
+        src, dst = Path(src), Path(dst)
+        # The temp file must be fully written (and the real metadata.json
+        # must still hold its pre-enrichment content) at the moment of
+        # rename -- proves the write happens before, not during, the swap.
+        assert src.exists()
+        calls.append((src, dst))
+        return real_replace(src, dst)
+
+    with patch("src.ml.model_metadata.os.replace", side_effect=_spy_replace):
+        added = ensure_bundle_metadata_complete(bundle)
+
+    assert added
+    assert calls == [(tmp_path_expected, metadata_path)]
+    assert not tmp_path_expected.exists()
+    enriched = json.loads(metadata_path.read_text())
+    assert enriched["price_normalization"]["method"] == "rolling_minmax"
 
 
 def test_enrichment_is_idempotent_and_never_overwrites(tmp_path: Path):
