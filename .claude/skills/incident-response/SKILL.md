@@ -82,6 +82,12 @@ scheduler makes a live bot look 1h stale).
 2. GH issue, labels `type:incident` + `priority:p<n>` + `area:live-ops`. P0 scopes the whole
    session to it (CLAUDE.md daemon rule).
 3. `log.md` append via `decision-record` (`[D-…]` id, kind `incident-open`).
+   **None of 1 and 3 exist until they are on `develop`.** If you cannot merge your own PR, the GH
+   issue is the **primary** record and the file/log entry are its archive: say so in the issue,
+   name the PR number carrying them, and re-state on each escalation that the record is still
+   unmerged. A docs-only PR that is a live incident's record is merge-first — it ages against the
+   incident, not the backlog (LESSONS §2.17). Earned: #1121's incident file and all six of its daily
+   `log.md` entries sat in PR #1129 for 6 days while `develop` showed no open P0 at all.
 4. Escalate per charter.md Escalation section (method + SLA); while waiting: freeze new
    entries, maintain stops, keep monitoring. One escalation per state, not per tick.
 

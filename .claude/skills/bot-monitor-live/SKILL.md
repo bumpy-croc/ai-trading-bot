@@ -1,6 +1,6 @@
 ---
 name: bot-monitor-live
-description: Use when monitoring the LIVE production trading bot — routine health checks, log triage, incident detection. MONITOR-ONLY: it detects, reports, and delegates fixes to another agent or the human; it never restarts, deploys, moves money, repays loans, flips flags, or modifies any state. It reads the concrete log signatures to grep from .claude/LESSONS.md (§5).
+description: Use when monitoring the LIVE production trading bot — routine health checks, log triage, incident detection. MONITOR-ONLY: it detects, reports, and delegates fixes to another agent or the human; it never restarts, deploys, moves money, repays loans, flips flags, or modifies live-system state — it does write the durable record (issue, incident file, log entry, PR) that every finding requires. It reads the concrete log signatures to grep from .claude/LESSONS.md (§5).
 ---
 
 # bot-monitor-live
@@ -15,10 +15,24 @@ is auto-loaded at session start. **Read LESSONS.md §5 on every pass and treat i
 what to grep for.** When you learn a new signature, add it there, not here.
 
 ## Hard rules
-1. **Read-only.** Allowed: log reads, deploy-status reads, `gh`/DB reads, exchange `get_*` reads.
-   **Forbidden:** any deploy / restart / redeploy, any feature-flag flip, any order place / cancel,
-   any repay / transfer / money move, any merge or git mutation, any config or state edit. If you're
-   unsure whether an action mutates, treat it as forbidden.
+1. **Read-only with respect to SYSTEM state.** The boundary is drawn around what the action
+   touches, not around the word "write" (LESSONS §2.16).
+   - **Allowed — reads:** log reads, deploy-status reads, `gh`/DB reads, exchange `get_*` reads.
+   - **Forbidden — system state:** any deploy / restart / redeploy, any feature-flag flip, any order
+     place / cancel, any repay / transfer / money move, any config edit, any DB write, any edit to
+     the production checkout's working tree. If you're unsure whether an action mutates the running
+     system, treat it as forbidden.
+   - **Required — record state:** commits on your own worktree branch, opening a PR, filing or
+     commenting on an issue, writing an incident file and a `log.md` entry. These are not exceptions
+     to the rule; §2.10 and `incident-response` §5 **oblige** you to produce them, and a monitoring
+     run that leaves none did not happen.
+   - **Undefined — merging to `develop`.** The fleet has answered this inconsistently: on 2026-09-06
+     the standup commissioned a review of PR #1122 and merged it (unblocking four retrain cycles),
+     while leaving its own docs-only PR #1129 unmerged for eleven days. The question is with the
+     Board as **GH #1127**. Until it rules: do not merge as a matter of routine; if a specific merge
+     is genuinely blocking your task, require an independent review verdict first and write a
+     `decision-record` entry naming the PR, the reviewer and the rule you relied on. Never merge to
+     `main` — that is a production deploy (`deploy-prod`).
    - **`railway domain` is NOT a read.** It's get-or-create with no dry-run — running it "to check
      a URL" created an unauthorized public domain on the production Trading Bot service
      (2026-07-08 incident, GH #941). To check whether a service has a public domain, use
@@ -99,3 +113,7 @@ a fix you applied — you don't apply fixes.
 On a live-capital system, a monitor that also mutates state is the dangerous kind of automation: it
 can act on a misread. Keeping detection and remediation in separate agents means a wrong read costs
 a wasted report, not a wrong trade. **Detect, report, delegate — and stop.**
+
+"Stop" means stop *acting on the system*, not stop writing. The report is worthless unless it lands
+somewhere durable, and the split only works when the delegate actually acts — when it does not, the
+**non-response** is your next finding and outranks the original condition (LESSONS §2.16).

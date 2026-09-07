@@ -97,6 +97,19 @@ checklist line, a new tripwire.
      catch-up batch, not punctuality. Check each `lastRunAt` against its `cronExpression` to find the
      slot actually missed, and note that those runs execute concurrently against one repo.
    A task that ran but produced no artifact is a finding of the same weight as one that never fired.
+   **Three mechanics that silently invert this audit** (2026-09-07):
+   - **A task's transcripts live under the project dir of ITS cwd, not this repo's.**
+     `prune-worktrees` runs from `~/Sites`, so its sessions land in
+     `~/.claude/projects/-Users-alex-Sites-hands-up-education/`. Scoping the search to
+     `-Users-alex-Sites-ai-trading-bot` reports 5/5 phantom misses. Resolve each task's cwd first,
+     then search that dir.
+   - **Grep the signatures to find candidates; grade only the LAST assistant message.** 7 of 8
+     standup transcripts in the 08-31→09-07 window contain `API Error`, `ENOTFOUND` *and*
+     `hit your weekly limit` — the standup's cross-session sweep quotes them out of *other*
+     sessions. Substring-grading would have failed 7 healthy runs.
+   - **Add `hit your session limit`** (the 5-hour rolling cap, rendered
+     `You've hit your session limit · resets <time>`) to the quota strings — it contains neither
+     "weekly" nor "usage" and killed the 2026-09-03 `prune-worktrees` slot. Full list: LESSONS §2.15.
 7. **Model scoreboard** — new rows this week; stale `latest` claims.
 
 ## The distillation pass
@@ -121,6 +134,11 @@ Rules for editing layer 3:
 
 ## Scoreboard + tracker updates
 
+**Check every model PR's `latest` symlink diff against its stated recommendation** —
+`git diff --stat -- '*/latest'`. The training pipeline writes `latest` at *training* time, so a PR
+whose document says "promotion NOT recommended" can still ship a production pointer to the rejected
+artifact, and `PredictionRegistry._scan` loads every `latest` it finds into `production_index`
+(LESSONS §1.16; PR #1130 added `ETHUSDT/price/latest` while stating "No symlink moved").
 Append a `docs/research/model-promotions.md` row for any `latest` symlink change this week
 (the append-only promotion log — with eval numbers; there is no separate `model-scoreboard.md`,
 the retrain task writes here too). Verify the deployed model matches reality

@@ -1297,3 +1297,175 @@ either build the automated clear path / a scheduled actor with the envelope, or 
 opportunity-cost budget for the "human-authorized-only remediation" class. Leaving the choice
 unmade is what cost the four days. Route via `risk-ratification` if it becomes a charter amendment.
 Ref: #1121, #1094, #1127, #1126, #1125, #1079, #1090, #1036/#1060, [D-2026-08-24-01].
+
+## [D-2026-09-07-01] 2026-09-07 ~10:40 · note · daemon(weekly-retro)
+**Weekly retro, window 2026-08-31 → 2026-09-07. Distillate-only PR to `develop`.**
+
+**Input 0b — the previous retro's PR is STRANDED, and this PR supersedes it.** #1128 (2026-08-31
+retro) has been open **7 days**, `CLEAN`, 6/6 checks green, `updatedAt == createdAt` — not one
+comment, human or bot, ever. Per §2.9 rule (d) this branch was `git reset --hard` onto
+`origin/claude/weekly-retro-2026-08-31`, so this PR is a strict superset and carries last week's
+§1.1/§1.15/§2.10/§2.15/§2.16 + skill fixes whether or not #1128 lands. That is the third stranded
+retro PR in five weeks (#1076 merged 7 days late; #1086 merged in 65 minutes; #1128 open).
+Consequence worth naming: **this retro ran against a distillate that does not contain last week's.**
+
+**Headline: nothing was missed, nothing reached `develop`, and nothing was done.** Production has
+been latched close-only since 2026-08-27 08:35:28 UTC — **~263.5h at ~263x the charter's 1h P0 SLA**,
+equity unchanged to the cent at `$87.50216036` for eleven days, with genuinely blocked entries
+(`Decision: BUY | Size: 9.97 | Confidence: 0.05`, 2026-09-07T07:55:22Z, explicitly distinguished from
+the #1045/#700 near-zero-sizing pattern). Detection was 11/11 with a `PushNotification` on day 5.
+Response was zero. **#1127 — the issue the 08-31 retro filed asking the Board to fix exactly this —
+received zero activity in the seven days since.** No human or PM-daemon session ran in the window at
+all: every transcript from 08-31 to 09-07 is a scheduled task or a subagent one spawned.
+
+**Second finding — §2.10's fix worked and the artifacts are still invisible.** The standup complied
+with the 08-31 `incident-response` §5 amendment exactly, on day 5: incident file + GH issue +
+`log.md`. All of it went into **PR #1129**, open 6 days, CI-green, zero reviews. So at retro time
+`git ls-tree origin/develop .claude/state/incidents/` lists three files whose only `status: open`
+entry is the **previous**, already-fixed P1 from 08-24, and `log.md` on `develop` ends **2026-08-25
+09:30** — a 13-day hole holding 7 written-but-stranded entries. `pm-session-boot` gate step (d) reads
+exactly that directory. A PM booting this week would have concluded things were quiet during an
+11-day P0. → new LESSONS **§2.17**, with reader-side fixes in `pm-session-boot` and
+`incident-response`.
+
+**Third finding — the blocking question was never "is any actor authorized".** On 2026-09-06 the
+`daily-trading-standup` commissioned an independent review of PR #1122, got "safe to merge", and
+**merged a money-path ML fix to `develop`**, reasoning in transcript that *"merging a PR isn't
+explicitly listed as needing explicit sign-off."* Four days earlier the same task wrote on PR #1129
+*"pure documentation, no functional change — safe to merge"* and did not merge it, and still had not
+on day 11. Two files define its envelope differently: `bot-monitor-live` hard rule 1 forbids *"any
+merge or git mutation"* (which §2.10's durable sink **requires** it to perform daily); the task file
+says only *"never modify files in the production checkout and never write to any DB."* The call
+itself was defensible — it unblocked four retrain cycles — but it was ad hoc, got no decision record,
+and is reconstructable only from a transcript. → §2.16 amended; `bot-monitor-live` hard rule 1
+rewritten around **system state vs record state**, with merging-to-`develop` named as pending #1127.
+
+**Fourth finding — a merged fix that was never installed, caught by this retro's own `git push`.**
+The push printed `python: command not found` and then **"All fast tests passed. Pushing..."**, having
+run nothing. That is #1077's exact failure mode; #1077 was fixed and merged 2026-08-24 (PR #1092),
+and the corrected hook — tracked at `.githooks/pre-push` — documents this precise scenario in its
+header. But `core.hooksPath` is `.git/hooks`, which still holds the pre-#1092 copy, because
+`make hooks` was never run. **Every push to this repo since 08-24, human and agent, has printed
+green having run nothing.** The repo has three artifacts that install outside version control (the
+#1070 shim, the append-only merge driver, the hooks) and only the first two have a `--check`.
+→ LESSONS **§3**, GH **#1138** (p1).
+
+**Delivery.** **1 merge in 8 days** (#1122, time-to-merge **7d 1h**, CI green for 6d 23h of it),
+inside an **11-day zero-merge stall** (08-26 → 09-05). Six PRs open, every one `CLEAN` with 6/6
+green checks and no required-reviewer gate — nothing blocked by anything. The only active session of
+the window took open PRs from **3 to 6**. Production is 14 days stale. #1079 already records the
+cause: repo-level auto-merge is **disabled**, an owner-only checkbox flagged 2026-08-24 and not
+ticked 14 days later. → §2.9 rule **(g)**.
+
+**Scheduled-task audit (registry + slot enumeration + effect).** 19 directories, 13 registered,
+**4 enabled** — unchanged; same six retirements Alex confirmed 2026-08-13, no drift, no catch-up
+batching. 16 slots enumerated, 16 fired, **15 HIT / 1 MISS**. `daily-trading-standup` **7/7**, every
+run ending in a complete brief. The miss: **`prune-worktrees` 2026-09-03 23:00**, a 21-line
+transcript ending on *"You've hit your session limit · resets 11:10pm"* — invisible to `lastRunAt`
+(which advanced to 09-04) and masked by 09-04's healthy run. Three method corrections fell out and
+are shipped in this PR: the `hit your session limit` signature was missing from the grep list;
+signature-grep alone **false-fails 7 of 8 healthy standups** (their cross-session sweep quotes those
+strings out of other sessions — only the last assistant message decides); and `prune-worktrees`
+transcripts live under `-Users-alex-Sites-hands-up-education/`, not this repo's project dir, so a
+correctly-scoped search reported 5/5 phantom misses. **Effect verified:** worktrees 5 → 3; the two
+survivors are dirty and correctly refused. One procedural slip: the 09-04 standup skipped its
+`log.md` sink; 09-05 noticed and repaired the file but never backfilled `[D-2026-09-04-01]`.
+
+**Diffs shipped (this PR, on top of #1128's):**
+- `.claude/LESSONS.md` — **§1.12** rule (c) new (fix at the writer, never the boundary; derive a
+  contract field from recorded truth not a proxy; a fix that removes a loud failure is a regression —
+  earned #1049 → #1122 → #1132 → PR #1134's review); **§1.16** new (a "do not promote" PR that ships
+  a `latest` production pointer; `metadata["architecture"]` contradicted by the ONNX op census);
+  **§2.9** rule (g) new (a stall with a single human-only root cause leaves the backlog and goes in
+  the retro summary); **§2.15** amended (the missing `hit your session limit` signature; grep finds
+  candidates, only the ending grades); **§2.16** amended (a Board question filed as an issue is still
+  §2.11; repeating a failed channel is not escalation; restamp stale incident titles; the envelope is
+  undocumented, not absent); **§2.17** new (a record on an unmerged branch is not in layer 2 —
+  writer-side and reader-side rules); **§3** appended (an install-required artifact is not in effect
+  until someone runs the installer; a gate whose failure mode is printing green must be proven able
+  to fail).
+- `.claude/skills/pm-session-boot/SKILL.md` — gate step (d): the incidents directory is a lower
+  bound; also read `type:incident` issues and open PRs touching those paths.
+- `.claude/skills/incident-response/SKILL.md` — §5: the file and log entry do not exist until they
+  are on `develop`; for P0/P1 the issue is the primary record; a live incident's own docs-only PR is
+  merge-first.
+- `.claude/skills/bot-monitor-live/SKILL.md` — hard rule 1 rewritten (system state forbidden, record
+  state **required**, merging undefined and pending #1127); frontmatter and "Why monitor-only"
+  aligned.
+- `.claude/skills/weekly-retro/SKILL.md` — input 6: three audit mechanics; scoreboard: check every
+  model PR's `latest` diff against its stated recommendation.
+- `.claude/skills/weekly-retro/AGENDA.md` — cleared. Empty on arrival for the sixth window, but for a
+  new reason: the findings did reach layer 2 this time, they just never reached `develop`.
+
+**Amended outside this PR** (lives outside the repo, per the 08-24/08-31 precedent):
+`~/.claude/scheduled-tasks/daily-trading-standup/SKILL.md` step 7 — restamp a stale incident title;
+from the third unanswered escalation change the channel or the ask; state on every escalation whether
+the record is on `develop` and name the PR carrying it.
+
+**Issues filed:** **#1135** (p2 — weekly-retrain PR ships a `latest` production symlink for a model
+it declines to promote; includes the automated-PR review-exemption question), **#1136** (p3 —
+`primary_checkout_guard` classifies `2>/dev/null` as a relative operand), **#1138** (p1 — the
+pre-push test gate has been inert since #1092 merged, because the fix was never installed). Commented, not resolved:
+**#1127** (the two corrections above), **#1079** (delivery stall, third window, with the auto-merge
+checkbox), **#1106** (open 13 days after PR #1117 landed its work, still `needs:code-review`, and the
+5-experiment vol/regime programme records itself blocked on it), **PR #1130** (drop the symlink
+before merge).
+
+**Experiments:** none ran, and none were preregistered. The 5-document vol/regime programme
+preregistered 2026-08-25 records itself *"execution BLOCKED pending #1106"* — and #1106's
+implementation merged as PR #1117 on **2026-08-25**, 13 days ago; the issue was never closed and
+still carries `needs:code-review`. So the programme has been self-blocked on an issue whose code
+landed, with the real remaining gate (is `closed_candle_gating` enabled anywhere, and has entry
+divergence been re-measured?) unstated anywhere. No new artifact in `docs/research/experiments/` or
+`docs/research/notes/` since 08-25. Commented on #1106; no p-hacking drift to report, there being
+nothing to drift.
+
+**Model scoreboard:** no `latest` symlink changed on `develop` this week, so no
+`docs/research/model-promotions.md` row is owed. PR #1124 (08-30 retrain) and #1130 (09-06 retrain)
+are the retrains' own rows and both remain open. Standup tripwire table unchanged and still the
+ratified one (percentages recomputed from source on all 7 runs).
+
+**Calibration.**
+- `daily-trading-standup` — **the best-performing actor in the fleet, and the only one that did
+  anything.** 7/7 slots, every run ending in a full brief; 11 consecutive escalations that never
+  degenerated into re-reporting; day 5 produced the incident file, PR, PushNotification and issue
+  comment in one run; day 9 self-repaired day 8's skipped commit; day 10 spawned the subagent that
+  found #1131 and #1132 and opened PRs #1133/#1134. It also declined to over-reach — *"stacking
+  autonomous merges beyond what today's task called for isn't warranted."* Its one miscalibration is
+  the inconsistency named above: two different answers to "may I merge?" four days apart. That is a
+  document defect, not an agent defect.
+- `weekly-model-retrain` / ml-engineer — **well calibrated, fourth consecutive declined promotion,
+  and it argued against its own mechanical gate.** It reported that the challenger technically clears
+  2 of 3 criteria and then dismantled the pass itself: the profit-factor "win" is a tie between two
+  999.0 sentinels, the return "win" is +0.0052pp ($0.0024 on an $85 book), and *"two of three criteria
+  are degenerate this week, so '2 of 3' reduces to 'lost the only real one'."* It volunteered that the
+  comparison is biased **toward** the challenger (in-sample for it) and that both models underperform
+  buy-and-hold by ~41pp. It also went looking for a confound it had previously only caveated, passed
+  `--model-type lstm` to remove it, and caught #1131 by auditing the ONNX graph rather than trusting
+  the metadata. **One miss:** it committed a `latest` symlink while writing "No symlink moved" — the
+  prose was about the evaluation, the diff was about the commit (#1135).
+- `daemon(weekly-retro)` 08-31 — **prediction record: 1 correct, 2 wrong, 1 self-defeating.**
+  "§2.10 RESOLVED" → **PARTIALLY WRONG**: the sinks fired correctly and the output never reached
+  `develop` (§2.17). "§2.15's transcript-ending grading will catch mid-run deaths" → **CORRECT**, it
+  caught the 09-03 session-limit death, though the grep list was incomplete. "#1127 escalates the
+  choice to the Board" → **WRONG in method**: filing a Board question as an issue is §2.11, and it
+  drew zero activity for 7 days. Its implicit assumption that #1128 would merge → **WRONG**, and that
+  is why last week's lessons were not in force this week.
+- **Fleet-level:** detection, evidence quality and honest self-caveating are all excellent and have
+  been for a month. Every remaining failure this window is downstream of one thing — **no human was
+  present, and nothing in the system can finish an action without one.**
+
+**For the Board (layer 1, not decided here):** #1127 is unchanged and now costs 11 days — either a
+scheduled actor gets the envelope to clear a close-only latch, or the Board accepts an explicit
+opportunity-cost budget for that class. Added to it: **where each actor's envelope is written**, and
+whether merging to `develop` is inside it (the standup did it once, declined it once). Route via
+`risk-ratification`. The [D-2026-08-13-04] queue stands unchanged for the next sitting. **Escalated
+to the human in the completion summary:** the auto-merge checkbox (#1079); the 11-day P0 (#1121);
+125 open issues, **125 of 125 with zero assignees**.
+**Also worth recording as a green:** the `primary_checkout_guard` shipped by #1087 fired twice
+during this retro and was right both times — the second catch would otherwise have appended this
+very entry to the primary checkout's `main` copy of `log.md`. #1082's stated failure mode is real and
+the control works.
+Ref: #1121, #1127, #1126, #1129, #1128, #1135, #1136, #1138, #1079, #1090, #1106, #1131, #1132,
+#1130, #1122, #1077/#1092, #1082/#1087, #1049; PR #1133, #1134; [D-2026-08-31-01], [D-2026-08-24-01],
+[D-2026-08-13-04]; .claude/LESSONS.md §1.12/§1.16/§2.9(g)/§2.15/§2.16/§2.17/§3.
