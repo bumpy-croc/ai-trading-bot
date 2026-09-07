@@ -11,6 +11,35 @@ affected_components: [live-engine, reconciliation, stop-loss-placement, close-on
 affected_symbols: [ETHUSDT]
 ---
 
+## UPDATE — 2026-09-07 08:06 UTC (Day 11, still unactioned)
+
+Eleventh daily-trading-standup sighting since GH #1121 was filed (2026-08-29). Newest
+`system_events` row (2026-09-07 07:59:17.5 UTC) is still `CLOSE_ONLY_LATCHED`: *"STILL BLOCKED —
+DAY 10: Close-only mode still active after 10d 23h..."* — elapsed from the 2026-08-27 08:35:28 UTC
+onset is now **~10d 23.5h (~263.5h) against the 1h P0 SLA, i.e. ~263x over SLA**. Book still flat:
+0 open positions, equity $87.50216036 — unchanged to the cent for eleven consecutive days (session
+peak equity since onset is $87.50798970, current drawdown ≈0.007%, not a capital-at-risk
+condition). `FEATURE_ENTRY_PAUSE` confirmed `false`; no macro-event window covers now. Decision
+loop confirmed alive with a genuine non-zero signal blocked today: `2026-09-07T07:55:22 Decision:
+BUY | Size: 9.97 | Confidence: 0.05` — this is a real blocked entry, not the pre-existing
+#1045/#700 near-zero-sizing pattern. No new CRITICAL `system_events` beyond the hourly
+`CLOSE_ONLY_LATCHED` re-announcement.
+
+GH #1126 (proximate `-1111` mechanism) and #1127 (structural response-gap, Board decision) both
+remain `OPEN`, untouched since 2026-08-31 — 7 days of no engagement on either. PR #1129 (this
+incident's durable-sink record) remains open, CI-green, `MERGEABLE`, zero reviews, now unmerged
+for 6 days. Cross-session sweep this run found no daemon/PM session activity addressing this
+incident since the day-10 record; no restart, no latch clear, no Board sitting on #1127. Also
+flagged this run (not directly part of this incident but touching the same fleet): two long-running
+`claude` processes observed at ~2d10.5h wall-clock (pids 34640/34641 and 39019/39027, both
+`--resume`d sessions) — outside this incident's scope to investigate further, noted for the
+cross-session sweep.
+
+**Escalating the non-response itself for the eleventh consecutive day** (per the standup's own
+rule): the two things that would change this outcome — a human running the documented restart
+playbook, or the Board resolving #1127 — remain both untaken. Elapsed duration is now ~2.75x the
+#1094 precedent (~96h).
+
 ## UPDATE — 2026-09-06 08:04 UTC (Day 10, still unactioned)
 
 Tenth daily-trading-standup sighting since GH #1121 was filed (2026-08-29). Newest `system_events`
