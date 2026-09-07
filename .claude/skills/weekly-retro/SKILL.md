@@ -20,6 +20,12 @@ checklist line, a new tripwire.
    disposition in the retro PR — never silently dropped. After actioning, **clear the file back
    to its header template in the same PR**. An empty agenda is not a skipped step: still sweep
    inputs 1–7 below; the agenda supplements the sweep, it does not replace it.
+   **Before clearing, `gh pr list --state open` and check every open PR's file list for
+   `AGENDA.md`** — an item can be lost to a *branch*: the retro clears the file on `develop` while an
+   unmerged PR still carries an unactioned item, and the merge resolves to the cleared version. Carry
+   any such item into this retro, or leave it and say so explicitly. Earned: the #1036 item rode
+   PR #1060 through the 2026-08-24 retro's clear and reached LESSONS only on 08-31; structural fix
+   tracked as #1090.
 0b. **The previous retro's own PR — verify it MERGED, and that anything it deferred landed.**
    `gh pr list --state merged --search "retro"` / check the branch is on `develop`. If last week's
    retro deferred distillate to another PR, open that PR: **merged → fine; closed or still open →
@@ -62,6 +68,12 @@ checklist line, a new tripwire.
    artifact: a session transcript dated by the first internal `"timestamp"` in
    `~/.claude/projects/<slug>/*.jsonl` (**not** file mtime — claude-mem rewrites mtimes), a PR, or a log
    entry. A slot with no artifact is a miss.
+   **A transcript proves the run STARTED, not that it produced anything — grade its ending, and
+   prefer the run's own layer-2 output as the artifact** (the issue / comment / incident file /
+   `log.md` append §2.10 requires of it). Any transcript ending in `API Error` / `ENOTFOUND`, a quota
+   message, or mid-tool-call is a **MISS at any length**: on 2026-08-28 the standup fired, ran seven
+   data collections and died on ENOTFOUND, leaving a plausible 46-line transcript that the next day's
+   run scored as a clean HIT — on the day production latched close-only (#1121, LESSONS §2.15).
    **`lastRunAt` cannot answer this and no task can audit itself** (LESSONS §2.15): it records the last
    *attempt*, the task's own firing has just refreshed it, and a "within N intervals" tolerance passes any
    single miss by construction. On 2026-08-19 the standup did not fire at all, and the five standups that
@@ -85,6 +97,19 @@ checklist line, a new tripwire.
      catch-up batch, not punctuality. Check each `lastRunAt` against its `cronExpression` to find the
      slot actually missed, and note that those runs execute concurrently against one repo.
    A task that ran but produced no artifact is a finding of the same weight as one that never fired.
+   **Three mechanics that silently invert this audit** (2026-09-07):
+   - **A task's transcripts live under the project dir of ITS cwd, not this repo's.**
+     `prune-worktrees` runs from `~/Sites`, so its sessions land in
+     `~/.claude/projects/-Users-alex-Sites-hands-up-education/`. Scoping the search to
+     `-Users-alex-Sites-ai-trading-bot` reports 5/5 phantom misses. Resolve each task's cwd first,
+     then search that dir.
+   - **Grep the signatures to find candidates; grade only the LAST assistant message.** 7 of 8
+     standup transcripts in the 08-31→09-07 window contain `API Error`, `ENOTFOUND` *and*
+     `hit your weekly limit` — the standup's cross-session sweep quotes them out of *other*
+     sessions. Substring-grading would have failed 7 healthy runs.
+   - **Add `hit your session limit`** (the 5-hour rolling cap, rendered
+     `You've hit your session limit · resets <time>`) to the quota strings — it contains neither
+     "weekly" nor "usage" and killed the 2026-09-03 `prune-worktrees` slot. Full list: LESSONS §2.15.
 7. **Model scoreboard** — new rows this week; stale `latest` claims.
 
 ## The distillation pass
@@ -109,6 +134,11 @@ Rules for editing layer 3:
 
 ## Scoreboard + tracker updates
 
+**Check every model PR's `latest` symlink diff against its stated recommendation** —
+`git diff --stat -- '*/latest'`. The training pipeline writes `latest` at *training* time, so a PR
+whose document says "promotion NOT recommended" can still ship a production pointer to the rejected
+artifact, and `PredictionRegistry._scan` loads every `latest` it finds into `production_index`
+(LESSONS §1.16; PR #1130 added `ETHUSDT/price/latest` while stating "No symlink moved").
 Append a `docs/research/model-promotions.md` row for any `latest` symlink change this week
 (the append-only promotion log — with eval numbers; there is no separate `model-scoreboard.md`,
 the retrain task writes here too). Verify the deployed model matches reality
