@@ -11,6 +11,50 @@ affected_components: [live-engine, reconciliation, stop-loss-placement, close-on
 affected_symbols: [ETHUSDT]
 ---
 
+## UPDATE — 2026-09-09 08:10 UTC (Day 12/13, still unactioned — Day 12 GH comment was comment-only, same gap as Day 8)
+
+Newest `system_events` row (2026-09-09 07:25:14.86 UTC) is still `CLOSE_ONLY_LATCHED`: *"STILL
+BLOCKED — DAY 12: Close-only mode still active after 12d 22h..."* — elapsed from the verified
+2026-08-27 08:35:28.14 UTC onset (re-queried directly from `system_events`, not cited from a prior
+record — LESSONS §2.13) to this run (~08:10 UTC) is **~12d 23.5h (~311.6h) against the 1h P0 SLA,
+i.e. ~311.6x over SLA**. This is the **thirteenth calendar day** of the incident.
+
+**Day 12 (2026-09-08) was comment-only, same gap as Day 8**: that day's GH #1121 comment restamped
+the issue title (it had been mislabeled P1-duration text despite carrying `priority:p0`) and stated
+"switching channel: sending a direct push notification" — but no incident-file or `log.md` update
+landed, and PR #1129's branch has no day-12 commit (last commit is the day-11 record, `da1ba65f`,
+2026-09-07). Whether the claimed push notification actually reached the human cannot be verified
+from this record; note it did not change the outcome (latch is still active two days later). This
+run restores file/log continuity, matching the day-9 recovery of the day-8 gap.
+
+**State, unchanged:** 0 open positions, equity $87.50216036 — unchanged to the cent for the entire
+incident. Session peak equity (trailing 30d) $87.50798970 → drawdown ≈0.0067%, not a capital-at-risk
+condition. `FEATURE_ENTRY_PAUSE` reconfirmed `false` via `railway variables` (not the cause).
+Decision loop confirmed alive: 91 `Decision:` lines in the last ~200-line prod log window, latest
+at 08:09:41 UTC — all SELL/HOLD at `Size: 0.00` this run (no non-zero blocked BUY observed today,
+unlike day 11's example; this does not change the diagnosis — the newest state row is
+`CLOSE_ONLY_LATCHED`, not `ENTRIES_ENABLED`, so flatness is attributed to the latch per the
+standup's own rule, not to #1045/#700 signal drought). 7 CRITICAL `system_events` in the last 7
+days, all the same hourly `CLOSE_ONLY_LATCHED` re-announcement — no new failure mode.
+
+GH #1126 (proximate `-1111` mechanism): `OPEN`, **zero comments**, untouched since filing
+(2026-08-31) — 9 days. GH #1127 (structural response-gap, Board decision): `OPEN`, one comment,
+last activity 2026-09-07 — 2 days. **PR #1129 remains `OPEN`, `MERGEABLE`, CI-green, zero reviews,
+now unmerged for 8 days** (opened 2026-09-01) — the durable-sink artifact for this very finding is
+itself part of the unactioned backlog, per §2.9(f)'s "time-to-merge, not PR-opened" rule.
+
+**This standup subagent has no PushNotification tool available** (a main-daemon-session capability
+this run does not carry) — escalation channel for this run is limited to the GH comment + this file
++ `log.md`, the same channel used for 12 prior days. Per the task's own 3rd-escalation rule this
+should already be a different channel/ask; that a claimed Day-12 push notification (if it happened)
+produced no change reinforces treating the response gap itself, not the detection mechanism, as
+what needs the human/Board decision on #1127.
+
+**Escalating the non-response for a twelfth-plus consecutive day**: the two things that would
+change this outcome — a human running the documented restart playbook, or the Board resolving
+#1127's structural question — remain both untaken. Elapsed duration is now ~3.25x the #1094
+precedent (~96h).
+
 ## UPDATE — 2026-09-07 08:06 UTC (Day 11, still unactioned)
 
 Eleventh daily-trading-standup sighting since GH #1121 was filed (2026-08-29). Newest
@@ -223,6 +267,12 @@ concern. No unresolved capital-at-risk from the halt itself.
                            continuity; PR #1129 unmerged 4 days
 2026-09-06 08:04 UTC     — standup update (day 10): ~239.2h elapsed (239x SLA), PR #1129 unmerged
                            5 days; GH #1126/#1127 untouched 6 days
+2026-09-07 08:06 UTC     — standup update (day 11): ~263.5h elapsed (263x SLA), PR #1129 unmerged
+                           6 days; genuine non-zero blocked BUY signal observed
+2026-09-08 08:05 UTC     — standup comment-only (day 12): title restamped, claimed push
+                           notification sent; no file/log update landed (same gap as day 8)
+2026-09-09 08:10 UTC     — standup update (day 12/13): ~311.6h elapsed (311.6x SLA), restores
+                           file/log continuity; PR #1129 unmerged 8 days; GH #1126 untouched 9 days
 ```
 
 ## Actions taken
@@ -236,12 +286,12 @@ escalation state before filing this record (per the standup's own non-duplicatio
 
 ## Current state
 
-**As of 2026-09-06 08:04 UTC (day 10):** close-only mode still latched, ~239.2h elapsed. 0 open
-positions. Equity flat at $87.50216036 — unchanged since the halt began, ten consecutive days.
-`FEATURE_ENTRY_PAUSE` confirmed `false` (not a contributing lever). No new CRITICAL
+**As of 2026-09-09 08:10 UTC (day 12/13):** close-only mode still latched, ~311.6h elapsed. 0 open
+positions. Equity flat at $87.50216036 — unchanged since the halt began, thirteen consecutive
+calendar days. `FEATURE_ENTRY_PAUSE` confirmed `false` (not a contributing lever). No new CRITICAL
 `system_events` beyond the hourly `CLOSE_ONLY_LATCHED` re-announcements. Nothing has changed
-mechanically since day 9 — the only change is that the non-response window has grown by another
-24h, and PR #1129 is now 5 days unmerged.
+mechanically since day 11 — the only change is that the non-response window has grown by ~2 more
+days (including one comment-only day), and PR #1129 is now 8 days unmerged.
 
 Prior (2026-09-01, day 5): close-only mode latched, 0 open positions, equity $87.50216036,
 decision loop live with genuine non-zero-size BUY signals being blocked, not just near-zero noise.
