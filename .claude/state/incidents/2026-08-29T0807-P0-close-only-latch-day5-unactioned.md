@@ -11,6 +11,35 @@ affected_components: [live-engine, reconciliation, stop-loss-placement, close-on
 affected_symbols: [ETHUSDT]
 ---
 
+## UPDATE — 2026-09-10 08:06 UTC (Day 14, still unactioned — PushNotification actually sent this run)
+
+Newest `system_events` row (2026-09-10 07:39:46.9 UTC) is still `CLOSE_ONLY_LATCHED`: *"STILL
+BLOCKED — DAY 13: Close-only mode still active after 13d 23h..."* — elapsed from the verified
+2026-08-27 08:35:28.14 UTC onset to this run (~08:06 UTC) is **13d 23.5h (~335.5h) against the 1h
+P0 SLA, i.e. ~335.5x over SLA**. This is the **fourteenth calendar day**.
+
+No mechanical change in the condition: 0 open positions, equity unchanged to the cent at
+$87.50216036 (session peak $87.50798970, DD ≈0.0067%, no capital at risk), `FEATURE_ENTRY_PAUSE`
+reconfirmed `false` (no active macro-event window — next is CPI 2026-09-11, still >12h out),
+decision loop alive (`Decision:` lines flowing at normal ~60-120s cadence in the prod log tail,
+mix of BUY/HOLD at Size 0.00 — correctly attributed to the latch, not #1045/#700, since the
+newest state row is `CLOSE_ONLY_LATCHED` not `ENTRIES_ENABLED`). One transient WS reconnect at
+06:12 UTC today, self-healed within ~30s per the known #662/#663 pattern — not a new issue.
+
+GH #1126 (proximate `-1111` mechanism): `OPEN`, zero comments, now 10 days untouched. GH #1127
+(structural response-gap, Board decision): `OPEN`, one comment, now 3 days untouched. **PR #1129
+(this incident's durable-sink record) remains `OPEN`, `MERGEABLE`, CI-green, zero human reviews,
+now unmerged for 9 days** — the record of this incident is still not on `develop`.
+
+**Escalation channel change, per this task's own third-escalation rule:** this is the 14th daily
+sighting and the 13th GH comment; the GH-comment channel alone has not produced a human response
+in 13 days. Unlike the 2026-09-09 run (which reported no `PushNotification` tool available) and
+the 2026-09-08 run (which *claimed* a push notification without producing any file/log evidence
+one was sent), **this run actually has the `PushNotification` tool and used it** — see the log.md
+entry for confirmation of what was sent. The decision put to the human: **merge PR #1129, and
+either authorize a restart to clear the latch or explicitly say the halt is accepted so the daily
+re-filing stops.**
+
 ## UPDATE — 2026-09-09 08:10 UTC (Day 12/13, still unactioned — Day 12 GH comment was comment-only, same gap as Day 8)
 
 Newest `system_events` row (2026-09-09 07:25:14.86 UTC) is still `CLOSE_ONLY_LATCHED`: *"STILL
