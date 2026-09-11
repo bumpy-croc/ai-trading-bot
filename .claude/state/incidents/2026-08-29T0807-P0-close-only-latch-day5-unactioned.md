@@ -11,6 +11,46 @@ affected_components: [live-engine, reconciliation, stop-loss-placement, close-on
 affected_symbols: [ETHUSDT]
 ---
 
+## UPDATE — 2026-09-11 08:51 UTC (Day 15, still unactioned)
+
+Newest `system_events` row (2026-09-11 07:51:46.3 UTC) is still `CLOSE_ONLY_LATCHED`: *"STILL
+BLOCKED — DAY 14: Close-only mode still active after 14d 23h..."* Onset re-verified directly from
+`system_events`: 2026-08-27 08:35:28.14 UTC. Elapsed to this run (~07:51 UTC) is **14d 23h16m
+(~359.3h) against the 1h P0 SLA, i.e. ~359x over SLA**. This is the **fifteenth calendar day**.
+
+**State, unchanged:** 0 open positions, equity $87.50216036 (session peak $87.50798970, DD
+≈0.0067%, no capital at risk). `FEATURE_ENTRY_PAUSE` reconfirmed `false` via `railway variables`.
+Today's CPI print (2026-09-11 12:30 UTC) puts the current time inside `config/macro_events.json`'s
+pre-event de-risking window (00:30–18:30 UTC) — that window independently blocks/derisks entries
+around the print, but is unrelated to and does not explain the close-only latch, which predates it
+by two weeks and is driven by the frozen `_close_only_mode` bool, not the macro-event guard.
+Decision loop alive: prod log tail shows `Decision:` lines every ~60-120s through 08:48 UTC, mostly
+Size 0.00 with several non-zero blocked SELLs (e.g. `Size: 9.64/9.77/9.88/9.96/118.28` between
+08:32-08:46 UTC) — real signals, still suppressed by the latch (newest state row is
+`CLOSE_ONLY_LATCHED`, not `ENTRIES_ENABLED`). No unresolved CRITICAL beyond the same hourly
+re-announcement (7 in the last 7 days, all this incident).
+
+GH #1126 (proximate `-1111` mechanism): `OPEN`, zero comments, now **11 days** untouched (since
+2026-08-31). GH #1127 (structural response-gap, Board decision): `OPEN`, one comment, now **4
+days** untouched (since 2026-09-07). **PR #1129 (this incident's durable-sink record) remains
+`OPEN`, `MERGEABLE`, CI-green, zero human reviews, now unmerged for 10 days** (opened 2026-09-01)
+— the record of this incident is still not on `develop`.
+
+**Widened cross-session finding this run:** the open-PR sweep found the *entire* open queue (6
+PRs: #1124, #1128, #1129, #1130, #1133, #1134, #1137) is CI-green/`MERGEABLE` and has had **zero
+human review activity** for 4-12 days each — this is not unique to PR #1129. The unmerged-incident-
+record problem is a specific instance of a wider merge-velocity stall across the whole repo, which
+is itself further evidence for #1127's structural question (no actor besides a human is merging
+anything). Noted on #1127, not filed as a separate issue.
+
+**Fifteenth consecutive daily sighting, still unactioned.** Per this task's own escalation rules
+(3rd-escalation channel change, already exercised via GH-comment title restamp on day 12 and
+`PushNotification` on day 14 — which reported mobile delivery did not go through, "Remote Control
+inactive"): re-attempting `PushNotification` this run (see log.md for the literal result). The
+decision needed is unchanged and answerable in one line either way: **merge PR #1129, and either
+authorize a restart of the "Trading Bot" Railway service to clear the latch, or explicitly accept
+the halt here so the daily re-filing stops being pure noise.**
+
 ## UPDATE — 2026-09-10 08:06 UTC (Day 14, still unactioned — PushNotification actually sent this run)
 
 Newest `system_events` row (2026-09-10 07:39:46.9 UTC) is still `CLOSE_ONLY_LATCHED`: *"STILL
