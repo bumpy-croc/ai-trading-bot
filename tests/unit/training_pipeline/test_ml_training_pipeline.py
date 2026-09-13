@@ -742,6 +742,21 @@ class TestRunTrainingPipeline:
         # live-loaded basic/latest symlink as a training side effect)
         assert mocks["save_artifacts"].call_args.args[2] == "price"
 
+        # #1132 root-cause regression: run_training_pipeline itself (not
+        # orchestrator._sync_artifacts's backfill) must already carry the
+        # prediction-path contract for a rolling-minmax bundle -- this is the
+        # in-memory dict handed to save_artifacts, i.e. exactly what would be
+        # persisted to metadata.json.
+        assert result.metadata["price_normalization"] == {
+            "method": "rolling_minmax",
+            "window": 10,
+            "target_feature": "close",
+        }
+        assert result.metadata["model_file"] == "model.onnx"
+        assert result.metadata["framework"] == "onnx"
+        assert result.metadata["feature_strategy"] == "price_only_rolling_minmax"
+        assert mocks["save_artifacts"].call_args.args[4] is result.metadata
+
     def test_default_path_regresses_raw_close(self, tmp_path):
         """Without force_price_only the existing contract is unchanged.
 
@@ -787,6 +802,9 @@ class TestRunTrainingPipeline:
         _, target_array, _ = mocks["create_sequences"].call_args.args
         np.testing.assert_allclose(target_array, feature_df["close"].to_numpy(dtype=np.float32))
         assert result.metadata["model_type"] == "price"
+        # create_robust_features' "close_scaled" feature is globally-scaled,
+        # not rolling-minmax -- the #1132 enrichment must not fire here.
+        assert "price_normalization" not in result.metadata
 
     @patch("src.ml.training_pipeline.pipeline.download_price_data")
     def test_handles_download_failure(self, mock_download, tmp_path):
