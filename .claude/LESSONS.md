@@ -20,6 +20,16 @@ much precision", on **stopPrice**/limit price / PRICE_FILTER `tickSize`).
   which then exposed the *price* version (-1111, #699/#701) on the very next step. **When you find
   a float-artifact precision bug, `grep` for ALL `round(... / ...) * ...` sites — don't fix only
   the one in front of you.**
+- **Corollary — a quantize guarded by an optional lookup is not a quantize (earned twice).** In
+  `binance_provider.place_stop_loss_order` the tick quantize sits **inside** `if symbol_info:`, so a
+  transient `get_symbol_info()` failure passes the raw `stop_price * (1 - slippage)` float straight
+  to Binance. The quantity cap **twelve lines below it** carries the opposite, explicit treatment —
+  *"This runs even when `symbol_info` is missing — a transient `get_symbol_info` failure must not
+  silently disable the protection."* Same function, same precondition, one guard hardened and one
+  not. **-1111 recurred in prod on 2026-08-27, 82 days after #699/#701 "fixed" it** (#1121), and the
+  rejection cascade latched close-only for four days. **Rule:** when you harden one consumer of a
+  best-effort lookup against its absence, harden *every* consumer of that lookup in the same
+  function — and prefer a fail-loud refusal to send over an un-normalized send.
 
 ### 1.2 Decimal × float `TypeError` from DB-loaded fields
 SQLAlchemy `Numeric` columns load as `Decimal`. Mixing a DB-loaded value with a `float` raises
@@ -176,6 +186,26 @@ since model promotion for a live symbol is autonomous under the charter.
   trusting any head-to-head number. Identical `feature_schema.json` + `feature_names` does **not**
   mean the bundles are interchangeable. Earned: GH #1049 (found during the 2026-08-09 retrain,
   #1048 — it blocked the backtest rather than corrupting it, which is the good outcome).
+- **Rule (c) — added 2026-09-07, after the fix chain was narrower than the contract three times in
+  a row.** #1122 (merged 09-06) closed #1049 by backfilling the missing keys in
+  `orchestrator._sync_artifacts` — the *consumption* boundary. The writer,
+  `training_pipeline/pipeline.py::run_training_pipeline`, was untouched, so any caller that does not
+  go through the orchestrator still emits the same defective bundle (#1132). The follow-up (PR
+  #1134) then reintroduced the class in mirror image: it *infers* `price_normalization` from
+  `feature_names` + `task_type` instead of reading the `target_type` already persisted two lines
+  above, so `--force-price-only --target-type smoothed_return` gets stamped
+  `{method: rolling_minmax}` on a model that outputs a ~0.002-scale return. Review's words:
+  *"this PR converts that fail-loud into a silent mislabel."*
+  - **Rule:** fix a contract violation at the **writer**, and enforce it at the reader. A backfill
+    at the boundary is defense-in-depth, never the fix — while the writer still produces the defect,
+    every new consumer re-opens the bug.
+  - **Rule:** derive a contract field from the **recorded truth** (`target_type`), never from a
+    proxy that correlates with it (`feature_names`, architecture, directory name). A proxy is right
+    until someone combines flags in a way nobody tried, and then it is confidently wrong.
+  - **Rule:** a fix that removes a loud failure is a **regression** unless it replaces it with a
+    correct value on every path the loud failure used to cover. Ask of every metadata fix: what did
+    this used to reject, and what does it now accept?
+    Earned: #1049 → #1122 → #1132 → PR #1134's review finding (2026-09-06, unaddressed at retro).
 
 ### 1.13 A silently *shrunk* exchange order is worse than a rejected one
 Two SELL paths cap quantity at the **free** base balance to dodge -2010, then snap down to a lot.
@@ -201,6 +231,64 @@ duplicate stop on one still resting — the orphan that locked the inventory.
   exact moment price is touching it, so a genuine FILL in that window is the likely case, and
   `process_execution_event` discards events for unknown ids. Polling is disabled while the WS is
   primary, so nothing would re-deliver it.
+
+### 1.15 A safety feature that borrows another feature's field — and then reports "armed"
+Two restart-safe risk seeders (#1001, #1032) resolve the session to seed the drawdown peak/baseline
+from by reading `_recovered_inactive_session_id`. That field's lifetime is owned by an **unrelated**
+feature: the #668 carry-forward re-entry guard clears it before the first loop iteration. So on a
+carry-forward boot — the boot shape the seeding exists for — the field is already `None` and the
+seeding shipped by #1032 had **never once run**. It went 30 days undetected on staging because the
+miss logged as an ordinary "unavailable" and the provenance field reported `self_anchored`, which is
+also the value meaning *"legitimately nothing to seed from"*.
+- **Rule (a):** a consumer must not depend on a field whose lifetime another feature controls. Give
+  it its own field, or resolve the value itself. Cross-feature field reuse turns an unrelated
+  refactor into a silent safety-feature regression, and nothing in either feature's tests fails.
+- **Rule (b):** a provenance / "armed" telemetry value must distinguish **nothing to do** from
+  **could not do it**. Collapse them and a permanently broken safety feature reads healthy in every
+  log line and every dashboard forever. Emit `self_anchored` vs `seed_unavailable` as distinct
+  values, and alert on the second.
+- **Rule (c):** boot verification for a restart-safety feature must exercise the **carry-forward**
+  path, not just the session-reuse path production happens to take. A feature verified only on the
+  path that never needs it is unverified.
+  Earned: GH #1036 / PR #1060 (found in review, 2026-08-13; reached LESSONS only on 2026-08-31 after
+  the agenda item itself was lost to an unmerged branch — see §2.9).
+
+### 1.16 The registry's promotion state and its provenance are both self-reported — verify each against the artifact
+Two independent instances in one retrain run (2026-09-06, PR #1130), both of which read as healthy
+in prose and are contradicted by bytes on disk.
+
+**(a) A "do NOT promote" PR that ships a production pointer.** `run_training_pipeline` updates
+`{symbol}/{model_type}/latest` at *training* time (`training_pipeline/artifacts.py:353`,
+`pipeline.py:410`), so the symlink exists locally before any decision is made; `git add`-ing the new
+version directory sweeps it into the commit. PR #1130's evaluation says *"No symlink moved"* and
+*"Recommendation: do NOT merge / do NOT promote"*, while its diff adds
+`src/ml/models/ETHUSDT/price/latest -> 2026-09-06_07h21m47s_v1` as a **new** symlink (`new file mode
+120000`; `ETHUSDT/price/` has no `latest` on `develop`). `PredictionRegistry._scan` eagerly loads
+**every** `{symbol}/{model_type}/latest` it finds and writes it into `production_index`
+(`src/prediction/models/registry.py:139-175`), so merging it would publish, as production for
+`ETHUSDT/price`, the exact artifact the document rejects — one that trades **0 times** as shipped
+(#1049 metadata) and whose architecture label is wrong (#1131). The live strategy asks for
+`model_type="basic"` and so would not have selected it today; the registry state would still be a lie.
+- **Rule:** the promotion decision is the **symlink diff**, not the prose. Every model PR states
+  `git diff --stat -- '*/latest'` explicitly, and a PR whose recommendation is "do not promote"
+  contains **zero** `latest` changes. "No symlink moved" is a claim about the evaluation, not about
+  the commit — say which.
+
+**(b) A provenance field the artifact contradicts.** `--model-type lstm` routes through
+`build_price_only_model` straight back to `create_model("cnn_lstm", ...)`
+(`training_pipeline/models.py:314`, `:405-415`) — `LSTM` is not even imported — while
+`metadata.json` records `"architecture": "lstm"`. The emitted graphs settle it: incumbent
+`Conv=0 Loop=2 GRU=0` (27 nodes, a real LSTM) vs challenger `Conv=2 Loop=0 GRU=2` (75 nodes, a
+CNN-GRU). Any tournament that entered `lstm` and `cnn_lstm` as two competitors compared a model
+against itself.
+- **Rule:** a metadata field the artifact can contradict is a **label**, not provenance. Verify
+  architecture from the ONNX op-type census, not from `metadata["architecture"]` — the same
+  discipline §1.10 applies to *which code ran*, applied to *which model this is*.
+- **Meta-rule:** #1130's PR review was skipped under the "automated PR" exemption (*"Skipped the
+  full review pipeline per the automated-PR criterion"*). Generated model metadata is the
+  highest-defect-density surface in this repo (§1.12, #1049/#1131/#1132/#1134) — an automated-drop
+  exemption must not cover it.
+  Earned: GH #1131, #1132, PR #1130 (2026-09-06).
 
 ---
 
@@ -345,6 +433,24 @@ recovered them.
   Earned: the 2026-08-17→24 zero-merge week; PR #1076/#1074/#1072/#1078 drained 08-24 08:52-09:21Z;
   GH #1079.
 
+- **Rule (g) — when the stall has a single human-only root cause, it stops being a backlog item.**
+  The 2026-08-31 → 09-07 window is the third consecutive stall and the worst measured: **11
+  consecutive zero-merge days** (08-26 → 09-05), then **one** merge (#1122, time-to-merge **7d 1h**,
+  CI green for 6d 23h of it). Six PRs sit open, every one `CLEAN` with 6/6 green checks and no
+  required-reviewer gate — nothing is blocked by anything. The only active session of the window
+  *raised* the open count from 3 to 6. Meanwhile #1079 already records the cause: repo-level **auto-
+  merge is disabled** (`enablePullRequestAutoMerge` → "Auto merge is not allowed for this
+  repository"), a single checkbox only the repo owner can tick, flagged 2026-08-24 and still not
+  ticked 14 days later.
+  **Rule:** when the delivery bound is one human-only setting, filing it (§2.11) is not progress and
+  re-flagging it in a sweep is not escalation. It goes in the retro's completion summary, as its own
+  line, addressed to the human, every week until it is done — because the retro's summary is the only
+  channel in this system that a human reliably reads.
+  **Corollary:** measure the stall's *safety* cost, not only its delivery cost. In this window the
+  queue held the live P0's own incident record (#1129) and the previous retro's distillate (#1128),
+  so `develop` carried neither — see §2.17.
+  Earned: 2026-08-31→09-07 (1 merge / 8 days); GH #1079; PR #1128, #1129.
+
 ### 2.10 A monitoring run that writes nothing durable did not happen
 Between 2026-07-20 and 2026-07-27 the scheduled fleet ran ~25 times (`daily-trading-standup` 8/8
 days, `alert-monitor` 6-hourly, `staging-cohort-observer` 1–3x/day) and `log.md` gained **zero**
@@ -387,6 +493,24 @@ consumed by exactly one thing — the weekly retro. Detection latency was theref
   Earned: 2026-08-17→24, 7 runs / 0 artifacts; the 08-18 time-exit trace and the 08-20 peak-anchor
   discrepancy; GH #1046 (open and unowned 28 days — filing a fifth instance would be §2.11 theatre,
   so the 2026-08-24 retro amended the task file directly instead), #1083, #1084.
+
+- **RESOLVED, and what the fix left behind.** 2026-08-24 → 08-31 is the **first window in five**
+  with durable monitoring output. The 08-24 amendment — a numbered *durable sink* step naming
+  `bot-monitor-live`'s escalation table, written into the task file rather than into a skill the
+  task never loads — worked on its first outing: the standups filed **#1121** (the P0 close-only
+  recurrence, caught on its first covered day with full `system_events` evidence) and **#1125**,
+  and left dated escalation comments on #1121 (×3, including a p1→p0 bump), #1094, #1045 and #1085.
+  The sharpened rule holds: **write the sink as a step, not as a principle.**
+  **Residual:** the sink the amendment named was *a GH issue*, so that is the only artifact any run
+  produced. A P0 was detected, escalated and re-escalated for four days with **no incident file and
+  no `log.md` entry** — `incident-response` §5 requires all three and was never reached, because the
+  standup routes through `bot-monitor-live` (which owns severity triage) and not through
+  `incident-response` (which owns the record). `log.md` gained **zero** entries 08-26 → 08-31.
+  - **Rule:** name the sink **per severity**, not once. "File an issue" is the right sink for a code
+    bug; for a P0/P1 the sink is the incident-response triple (incident file + issue + `log.md`), and
+    the procedure must say so at the point where severity is decided.
+    Earned: #1121 (P0, 4 days, issue-only); the 08-24 P1 record still `status: open`,
+    `mitigated_at: null` on 08-31 though its fix reached prod on 08-25 (`d6c46b71`).
 
 ### 2.11 Filing an issue is not delegating the work
 The 2026-07-27 retro filed #1044, #1045, #1046 and commented on #1041, #1038. Fourteen days later
@@ -509,6 +633,158 @@ old"*) could not have said anything else, for two independent reasons:
   nothing did not run. Both are answered by checking the artifact, never the invocation.
   Earned: the missed 08-19 standup slot and the 08-20→08-24 false PASSes; `prune-worktrees`
   08-17→08-21; GH #1085, #1050, #1051.
+
+- **A transcript is not an artifact — audit the slot against the run's OUTPUT.** §2.15 replaced one
+  self-witnessing instrument (`lastRunAt`) with a weaker one than it looks: *"match each slot to a
+  dated session transcript"*. A transcript proves a process **started**. On **2026-08-28** the
+  standup fired, ran seven data-collection calls, and died mid-run on
+  `API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)` — no synthesis, no
+  assertions, no issue, no report. Its 46-line transcript exists, so the 08-29 run scored the slot
+  *"PASS — fired Aug 25/26/27/**28**/29"*. That was the day production latched close-only; detection
+  slipped a full day into #1121's ~96h.
+  - **Rule:** a slot is HIT only if the run left the layer-2 artifact §2.10 requires of it — an
+    issue, a comment, an incident file, a `log.md` append, a PR. Absent a finding, a green run must
+    still leave *something* dated (even a one-line "nominal" comment) or its slot is unauditable.
+    Grade the transcript's **ending**, not its existence: any transcript ending in an API/network
+    error, a quota message, or mid-tool-call is a **MISS**, at any length.
+  - **New failure mode for the list above: fired, ran, and died mid-run on a transient API error.**
+    Unlike the turn-1 deaths it leaves a *plausible-length* transcript, so a size heuristic
+    ("treat any ~20-line transcript as failed") does not catch it. Grep transcripts for
+    `API Error` / `ENOTFOUND` alongside the quota and stale-provider strings.
+  - **Consecutive audits that disagree are themselves the signal:** 08-29 reported a
+    `prune-worktrees` MISS on 08-27; 08-30 reported *"zero missed slots across all 4 enabled tasks"*.
+    Both used the transcript instrument. When two runs of the same check disagree, fix the
+    instrument before believing either.
+- **Credit where the corollary earned it:** the effect-assertion added on 08-24 worked —
+  `prune-worktrees` took the repo from **9 worktrees to 5** across this window, and the standup
+  reported the *count*, not the firing. The two survivors were filed as #1125 rather than assumed
+  benign.
+  Earned: the 08-28 mid-run death and the 08-29 false PASS over it; #1121, #1125.
+
+- **The grep list was incomplete, and grepping alone produces FALSE misses (2026-09-07 audit).**
+  Two corrections, in opposite directions:
+  - **Missing signature — the 5-hour rolling cap.** `prune-worktrees` fired 2026-09-03 23:00 and did
+    zero work, ending on `You've hit your session limit · resets 11:10pm (Europe/London)`. That
+    string contains neither "weekly" nor "usage", so the list in the previous bullet does not match
+    it. **Grep all three: `hit your session limit`, `hit your weekly limit`, `hit your usage limit`.**
+  - **Grep-grading fails healthy runs.** 7 of the 8 standup transcripts in the same window contain
+    `API Error`, `ENOTFOUND` *and* `hit your weekly limit` — because the standup's cross-session
+    sweep greps *other* sessions for those strings and quotes the hits into its own transcript.
+    Grading by substring would have failed 7 runs that each ended with a complete brief.
+  - **Rule:** the signatures locate candidates; only the transcript's **last assistant message**
+    decides. A run is a MISS when *that message* is an error/quota notice or a truncated tool call —
+    not when the string appears anywhere in the file.
+  Earned: the 2026-09-03 `prune-worktrees` session-limit death (masked downstream by 09-04's healthy
+  5-worktree cleanup, and invisible to `lastRunAt`, which advanced to 09-04).
+
+### 2.16 Detection plus escalation, with no scheduled actor, is not a control
+Production latched **close-only** on 2026-08-27 08:35 UTC and was still latched on 2026-08-31 —
+**~96h of blocked entries**, the same duration as #1094, which this whole quarter of work existed to
+prevent recurring. Nothing was missed. Every layer-3 rule fired exactly as written: #1103's
+re-announcement kept the latch visible, §5.7's positive-state assertion caught it (`CLOSE_ONLY_LATCHED`
+where `ENTRIES_ENABLED` was expected), §2.10's sink filed #1121 with full evidence, §2.10's corollary
+turned the second sighting into an escalation (comment + p1→p0 bump + PushNotification), and the
+third into another. **Detection: 10/10. Response: zero.** The charter's P0 SLA is **1 hour**; the
+observed response was ~96h and counting.
+The gap is structural, not procedural. Every enabled scheduled task is **monitor-only by design** —
+`bot-monitor-live` §"Why monitor-only" is a good rule and the standup obeyed it correctly. `live-ops`
+is likewise barred from live-capital processes and escalates to `pm`. The **only** actor whose
+autonomy envelope covers this (`charter.md` permits deployment to production and changes affecting
+live capital) is the PM daemon — and the PM daemon runs only when a human starts one. It did not run
+between 08-25 and 08-31: `log.md` gained zero entries, no triage pass, nothing merged for six days.
+So the system had **100% detection coverage and 0% response coverage**, and could not tell the
+difference, because every instrument it owns measures detection.
+- **Rule:** for any condition with a pre-committed remediation, name the **authorized actor and its
+  trigger** in the same artifact that defines the detection. A monitoring stack in which every job is
+  monitor-only has no response path at all — however many alerts it delivers.
+- **Rule:** "no automated agent is authorized" is a claim to **check against `charter.md`**, not a
+  default. Here it was true only because no *scheduled* agent has the envelope — not because the
+  envelope forbids the action. Say which, and escalate the difference; they need opposite fixes
+  (a new scheduled actor vs. a Board amendment).
+- **Rule:** when a delivered escalation produces no state change within its SLA, the **non-response**
+  becomes the finding and outranks the original condition. Re-reporting the same evidence at a higher
+  priority is still reporting; the condition to raise is *"a P0 has had no owner for N× its SLA."*
+- **Corollary:** an alert whose only remediation is a human-authorized action has an unbounded
+  worst case equal to the human's absence. Either build the automated clear path or have the Board
+  accept an explicit opportunity-cost budget for that class — the choice is the Board's, but leaving
+  it unmade is what costs the four days.
+  Earned: #1121 (2026-08-27→08-31), recurrence of #1094 (2026-08-20→08-24) with the identical
+  "in-process latch, no durable row, restart-only recovery" gap named in both records.
+
+- **Update 2026-09-07 — the same latch reached day 11 (~263.5h, ~263x SLA), and the escalation of
+  the non-response failed too.** Detection stayed perfect: 7/7 standup slots, 11 consecutive daily
+  records, one PushNotification (day 5), a retroactive incident file, precise blocked-entry evidence
+  (`Decision: BUY | Size: 9.97` at 2026-09-07T07:55:22Z). Equity unchanged to the cent —
+  `$87.50216036` for eleven days. Response stayed zero, and **#1127, the issue that asks the Board to
+  fix exactly this, received zero activity in the seven days after the retro filed it.**
+  - **Rule — a Board question filed as a GH issue is subject to §2.11.** "Escalated to the Board"
+    means it is in the `risk-ratification` queue *and* named in a human-facing summary. A
+    `state:proposed` label on an issue in a 125-issue backlog where **125 of 125 have no assignee**
+    is a note to yourself, and P0 on it changes nothing.
+  - **Rule — repeating an escalation on a channel that has already failed N times is not
+    escalation.** Days 5-11 delivered the identical ask through the identical channel. After the
+    second unanswered escalation, change the *channel* or change the *ask* (accept the halt
+    explicitly, or hand the decision to the one channel with a different failure mode). The daily
+    re-file has a real cost: it converts a P0 into background noise.
+  - **Rule — keep duration and severity out of an incident issue's TITLE, or restamp it.** #1121
+    still reads *"P1 incident: close-only latch stuck again 2026-08-27 -> present (~46h+)"* while
+    carrying `priority:p0` and 263 hours. Eleven comments updated the body; `gh issue list` and every
+    board view still show the day-1 framing, so the item is systematically under-triaged by anyone
+    scanning rather than reading.
+- **The blocking question turned out NOT to be "is any actor authorized" — it is "which actor,
+  where, and who wrote it down."** Two skill files define the same actor's envelope differently, and
+  the run followed the looser one. `bot-monitor-live` hard rule 1 forbids *"any merge or git
+  mutation"*; the `daily-trading-standup` task file says only *"READ-ONLY — never modify files in
+  the production checkout and never write to any DB."* Under the second, the standup has been
+  committing to worktrees and opening PRs every day — which §2.10's durable-sink amendment
+  **requires** it to do — and on 2026-09-06 it went further: it commissioned an independent review of
+  PR #1122, got "safe to merge", and **merged a money-path ML fix to `develop`** after reasoning in
+  transcript that *"merging a PR isn't explicitly listed as needing explicit sign-off."* The call
+  unblocked four retrain cycles and was defensible. But the same task, on the same rule set, had
+  four days earlier written on PR #1129 *"pure documentation, no functional change — safe to merge"*
+  and **not merged it** — and still had not on day 11.
+  - **Rule:** an actor's envelope must be written in **one** place, and the boundary drawn around
+    what the action touches — **system state** (live capital, deploys, flag flips, orders, DB
+    writes) versus **record state** (branch commits, PRs, issue comments, incident files). §2.10
+    mandates the second; a blanket "read-only / no git mutation" that contradicts it will simply be
+    ignored, and then every boundary in that file loses force.
+  - **Rule:** when an agent resolves an authority question ad hoc mid-run, that reasoning is a
+    **decision**, not an aside — it gets a `decision-record` entry naming the action, the reviewer
+    and the rule relied on. The 09-06 merge got none; it is reconstructable only from the transcript.
+  - **Rule:** inconsistent answers from one actor to the same question ("may I merge?") are the
+    signal that the rule is missing, not that the actor is unreliable. Fix the document.
+    Earned: #1121 days 5-11; #1127 (7 days, zero activity); the 2026-09-06 standup merge of PR #1122
+    vs its 6-day non-merge of PR #1129.
+
+### 2.17 A record on an unmerged branch is not in layer 2 — and layer-2 readers must look in the queue
+The 2026-08-31 retro closed §2.10 by routing P0/P1 findings through `incident-response` §5: incident
+file **plus** GH issue **plus** `log.md` append. The standup complied exactly, on day 5. Every one of
+those artifacts then went into **PR #1129, which has been open, CI-green, `MERGEABLE`, zero reviews,
+for six days**. The result at retro time:
+- `git ls-tree origin/develop .claude/state/incidents/` lists **three** files, unchanged for 14 days.
+  The only `status: open` one is the **previous**, already-fixed P1 from 2026-08-24. There is **no
+  file on `develop` for the live P0**.
+- `log.md` on `origin/develop` ends **2026-08-25 09:30** — a 13-day hole. Seven entries were written
+  in the window (`[D-2026-09-01-01]` … `[D-2026-09-07-01]`, `[D-2026-08-31-01]`); all seven are on
+  unmerged branches. On `origin/main` the log ends 2026-08-24.
+- `pm-session-boot` gate step **(d)** reads `incidents/` filtered `status: open` and scopes the
+  session to any P0. A PM booting in this window would have read a stale 08-24 P1 and a 13-day-old
+  log, and concluded things were quiet — during an 11-day P0.
+This is the exact inverse of §2.10. There, monitors ran and wrote nothing. Here they ran, wrote the
+right things in the right places, and the writes never reached the branch anyone reads.
+- **Rule (writer):** an artifact counts as layer 2 only when it is on `develop` (§2.9 rule (b)). An
+  actor that can write a record but cannot merge it must say so **in the record's own durable
+  channel** — the GH issue — because the issue is the only sink that lands without a merge. For P0/P1
+  the **issue is the primary record**; the incident file and `log.md` entry are the archive.
+- **Rule (reader):** any procedure that reads `.claude/state/incidents/` or `log.md` to establish
+  current state must also read `gh issue list --state open --label type:incident` **and** open PRs
+  touching those paths (`gh pr list --state open --json number,title,files`). A directory listing is
+  a lower bound on what is happening, never the picture — and the busier the incident, the more
+  likely its record is still in the queue.
+- **Rule:** a docs-only PR that is a live incident's own record is **merge-first**, ranked with the
+  corrections of §2.9 rule (e) — the record ages against the incident, not against the backlog.
+  Earned: PR #1129 (opened 2026-09-01, unmerged at retro), PR #1128; incident
+  `2026-08-29T0807-P0-close-only-latch-day5-unactioned.md` invisible on `develop` for 6 days.
 
 ---
 
@@ -740,6 +1016,29 @@ old"*) could not have said anything else, for two independent reasons:
   **Rule:** when several tasks share a `lastRunAt` to the second, that is an app-reopen batch: check
   each against its `cronExpression` to find the slot it actually missed, and expect concurrent-agent
   contention in that window.
+
+- **A merged fix that installs OUTSIDE version control is not in effect until someone runs the
+  installer — and nothing tells you.** Observed live on 2026-09-07: a `git push` from a worktree
+  printed `python: command not found` and then **`All fast tests passed. Pushing...`**. That is
+  #1077's exact failure (pytest piped into `tail`, so `$?` is `tail`'s; `.venv/bin/python` resolved
+  against the cwd, so a linked worktree falls through to a `python` that does not exist on this
+  machine). #1077 was fixed and merged on 2026-08-24 (PR #1092) — the corrected hook is tracked at
+  `.githooks/pre-push` and its header documents this precise scenario. But `core.hooksPath` is
+  `/Users/alex/Sites/ai-trading-bot/.git/hooks`, which still contains the **old** copy, because
+  `make hooks` was never run. **Every push in this repo since 2026-08-24 has printed green having
+  run nothing.**
+  This repo now has **three** artifacts that live outside version control and must be installed:
+  the worktree shim (`make shim`, verifiable with `python tools/install_worktree_shim.py --check`),
+  the append-only merge driver (`make merge-drivers`, verifiable with `make merge-drivers-check`),
+  and the git hooks (`make hooks`) — and only the first two have a checker.
+  - **Rule:** every install-required artifact ships with a `--check` and is asserted somewhere that
+    runs on a schedule, not only in a `make` target a human might run. Without that, "merged" and
+    "in effect" diverge silently and the gap is invisible in git.
+  - **Rule:** a gate whose failure mode is *printing green* is worse than no gate, so verify it can
+    actually fail before trusting it: break something on purpose once, or grep the installed copy —
+    never the tracked one — for the invariant you think it enforces. `git log` showing the fix
+    merged is not evidence the fix is running.
+  Earned: GH #1077 / PR #1092 fixed 2026-08-24, still not in effect 14 days later (GH #1138).
 
 ---
 

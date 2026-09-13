@@ -73,11 +73,28 @@ scheduler makes a live bot look 1h stale).
 
 1. `.claude/state/incidents/YYYY-MM-DDTHHMM-P<n>-<slug>.md` — `status: open` frontmatter,
    timeline (UTC), evidence paths, containment applied, severity rationale.
+   **All three of 1–3 are required, including when the detection path is an automated monitor that
+   has already filed the GH issue.** A monitor routing through `bot-monitor-live` gets severity
+   triage, not a record; it must still land here. A **recurrence of an already-recorded class opens
+   its own record** cross-referencing the prior one — reusing or merely re-commenting on the old
+   record loses the recurrence interval, which is usually the finding. Earned: #1121 (P0, four days,
+   GH issue only — no incident file, no `log.md` entry), the recurrence of #1094.
 2. GH issue, labels `type:incident` + `priority:p<n>` + `area:live-ops`. P0 scopes the whole
    session to it (CLAUDE.md daemon rule).
 3. `log.md` append via `decision-record` (`[D-…]` id, kind `incident-open`).
+   **None of 1 and 3 exist until they are on `develop`.** If you cannot merge your own PR, the GH
+   issue is the **primary** record and the file/log entry are its archive: say so in the issue,
+   name the PR number carrying them, and re-state on each escalation that the record is still
+   unmerged. A docs-only PR that is a live incident's record is merge-first — it ages against the
+   incident, not the backlog (LESSONS §2.17). Earned: #1121's incident file and all six of its daily
+   `log.md` entries sat in PR #1129 for 6 days while `develop` showed no open P0 at all.
 4. Escalate per charter.md Escalation section (method + SLA); while waiting: freeze new
    entries, maintain stops, keep monitoring. One escalation per state, not per tick.
+
+**Stamping `mitigated_at`:** set it when the mitigation reaches the **affected environment**, not
+when its PR merges — and re-check open records every retro. The 2026-08-24 P1's fix shipped to prod
+on 08-25 (`d6c46b71`) while its record still read `status: open` / `mitigated_at: null` a week later,
+which makes the open-incident list unusable as a queue.
 
 ## 6. Postmortem (before `status: closed`)
 
