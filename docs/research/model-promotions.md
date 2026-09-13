@@ -313,3 +313,103 @@ therefore states something the artifact contradicts. Consequences:
 4. **The cloud pipeline computes no `directional_accuracy`**, so the incumbent's 0.5312 has no
    counterpart and that metric could not be compared at all.
 - **Refs**: weekly-model-retrain scheduled task; branch `chore/weekly-retrain-20260906`; #1049, #1041
+---
+
+## 2026-09-13 — ETHUSDT/basic — NO CHANGE (weekly retrain evaluated, incumbent retained)
+
+No symlink moved. Fifth consecutive weekly retrain to decline promotion (2026-08-09, 08-23, 08-30,
+09-06, 09-13). The 08-30 and 09-06 entries are still on unmerged PRs #1124 and #1130, so this file
+on `develop` jumps from 08-23 to 09-13.
+
+- **Incumbent (retained)**: `basic/2026-07-04_22h_v1` — `basic/latest` still points at it.
+- **Challenger (rejected)**: `price/2026-09-13_07h54m24s_v1`, SageMaker job
+  `atb-ethusdt-1h-20260913-071302`, full-history price-only retrain (2017-08-17 → 2026-09-13),
+  hyperparameters matched to the incumbent (50 epochs, batch 256, sequence length 120).
+  **549 billable seconds** vs 1043s training time (~47% managed-spot saving) on `ml.g4dn.xlarge`
+  ≈ **$0.11**. Wall clock was 2464s — the extra ~24 min is unbilled spot provisioning wait.
+- **Artifacts not committed.** The gate failed, so per the weekly-retrain contract this is a
+  docs-only PR. The bundle remains recoverable from S3 via the job name above.
+- **Training image**: ECR `latest`, provenance label `bcedb26c`, pushed 2026-08-13.
+  `git log bcedb26c..origin/develop -- src/ml/training_pipeline src/ml/cloud/entrypoint.py` is
+  **empty**, so no in-container training code is missing from the image. Five develop commits since
+  the image do touch baked paths (`f17e997c`, `5c8a1cdc`, `61d603b5`, `d2023f66`, `acb36b74`) but
+  all are local-side (orchestrator, CLI, backtest, risk, import shim) — no training skew.
+
+### Gate
+
+Gate is >= incumbent on at least 2 of 3: test RMSE, OOS profit factor, OOS return.
+**Challenger scores 1 of 3 — and that one leg carries no information. FAIL.**
+
+| Metric | Incumbent `2026-07-04_22h_v1` | Challenger `2026-09-13_07h54m24s_v1` | Gate leg |
+|---|---|---|---|
+| Test RMSE (temporal holdout) | **0.06514055281877518** | 0.06689316034317017 | incumbent, +2.69% worse — **FAIL** |
+| Train RMSE | 0.06390408426523209 | 0.0638900101184845 | challenger (negligible) |
+| OOS profit factor | 999.0 (sentinel) | 999.0 (sentinel) | **tie — PASS, but see below** |
+| OOS total return | **3.05578853579338%** | 2.8790194788483436% | incumbent, −0.177pp — **FAIL** |
+| OOS max drawdown | 1.3469336866548614% | 1.3469844547356729% | incumbent (5e-5 pp) |
+| OOS win rate | 100% (6 trades) | 100% (6 trades) | tie |
+| Sharpe | 0.04920607688787586 | 0.048183541044156626 | incumbent |
+| Sortino | 0.044877073070028195 | 0.04653845303385545 | challenger |
+| Expectancy | $0.334849351098119 | $0.3034521470460862 | incumbent |
+| Final balance | **$87.79732551332995** | $87.60464980259944 | incumbent, −$0.19 |
+| Fees + slippage | $0.2635 | $0.2709 | incumbent |
+
+Backtests: `hyper_growth`, ETHUSDT 1h, 2026-07-15 → 2026-09-13, `--initial-balance 85
+--risk-per-trade 0.02 --max-risk-per-trade 0.03 --max-position-size 0.20`, `drawdown_cap_mode
+enforce`. Both legs `early_stopped: false` and `drawdown_cap_breached: false` — complete runs,
+neither truncated. Both pinned with `--model-version`; `basic/latest` was never moved at any point.
+The challenger was copied into the `basic/` namespace with `atb train cloud-promote ... --to basic`
+(no `--set-latest`) purely so `--model-version` could resolve it.
+
+- **Decision**: incumbent retained. The challenger loses on both legs that can discriminate.
+- **Refs**: weekly-model-retrain scheduled task; branch `chore/weekly-retrain-20260913`;
+  #938, #1131, #1132, #1135
+
+### #1049 is fixed and this run proves it
+
+This is the **first cloud bundle that is honestly evaluable**. The 08-23 and 09-06 runs both had to
+patch metadata by hand before the challenger would trade at all. This bundle shipped
+`price_normalization`, `model_file`, `framework` and `feature_strategy` correctly straight out of
+the sync, produced a normal decision mix with no intervention, and traded 6 times as shipped.
+No hand-patching was needed anywhere in this evaluation.
+
+### The profit-factor leg of the gate is degenerate, for the fourth week running
+
+Both runs had **zero losing trades**, so both report the 999.0 sentinel and the leg ties. A tie
+counts as ">= incumbent", so the challenger banks a free gate point from a comparison that
+distinguished nothing. On 09-06 this arithmetic let a challenger pass the gate 2-of-3 on a sentinel
+tie plus a **+0.005pp** return difference, in a document that simultaneously said it must not be
+promoted. The gate needs a minimum-losing-trades precondition before the PF leg can score, and a
+material-difference threshold on the return leg. Filed separately.
+
+### Why both models backtest almost identically — #938
+
+The two bundles are different networks (see below) and yet produce 6 trades each, the same
+`largest_win` to 16 significant figures ($0.7318016484737367), max drawdowns 5e-5 pp apart, and
+returns 0.18pp apart. That is #938: HyperGrowth's flat position sizing makes the strategy
+structurally blind to model quality above a low confidence gate. **Until #938 lands, this
+backtest pair cannot rank two models** — it mostly measures the strategy, not the model. The RMSE
+leg is currently the only leg doing real work, and it is the leg the challenger lost.
+
+### #1131 reproduces on this bundle
+
+`training_params.architecture` says `cnn_lstm`. The shipped ONNX graph contains **`Conv` ×2 and
+`GRU` ×2, no LSTM** — it is a CNN-GRU. The incumbent's graph is a plain LSTM (`Loop` ×2, no `Conv`).
+So this is **not a pure data refresh**: architecture and data both changed, and the comparison
+cannot attribute the RMSE regression to either one.
+
+### Other caveats
+
+1. **The challenger's backtest window is fully in-sample.** It trains through 2026-09-13, so all 60
+   evaluation days are in-sample; the incumbent trains through 2026-07-04, so its window is
+   genuinely out-of-sample. The bias runs **toward** the challenger and it still lost both real
+   legs, which strengthens the retain decision. A clean read needs a second `--end-date`-shifted
+   job (~$0.11 more) — outside this task's stated workflow and budget.
+2. **RMSE is not strictly like-for-like** — each model's holdout is its own chronological split, and
+   the cloud path emits no `dataset` block (no `row_count`, no `val_start_timestamp`), so the
+   challenger's holdout window cannot be verified from its metadata. The local path does emit it.
+3. **n=6 trades per leg, 100% win rate on both.** Far too small to separate two models even if the
+   strategy were sensitive to them.
+4. **Both models lose badly to buy-and-hold**: +34.21% hold vs +3.06% / +2.88% traded, i.e. ~31pp
+   of underperformance over the window. That is a strategy-level finding, not a model one, but it
+   is now the fifth consecutive week it has appeared.
