@@ -15,6 +15,7 @@ except ImportError:
 
 from src.ml.training_pipeline.artifacts import evaluate_model_performance
 from src.ml.training_pipeline.models import (
+    build_lstm_model,
     build_price_only_model,
     create_model,
     default_callbacks,
@@ -162,6 +163,61 @@ class TestCreateAdaptiveModel:
 
         # Assert
         assert prediction.shape == (1, 1)
+
+
+@pytest.mark.fast
+@pytest.mark.skipif(not _TENSORFLOW_AVAILABLE, reason="TensorFlow not installed")
+class TestBuildLstmModel:
+    """Regression coverage for GH #1131: 'lstm' must build a genuine plain LSTM,
+    architecturally distinct from 'cnn_lstm', instead of silently aliasing to it."""
+
+    def test_creates_model(self):
+        model = build_lstm_model(sequence_length=120, num_features=10)
+
+        assert isinstance(model, tf.keras.Model)
+        assert model.input_shape == (None, 120, 10)
+        assert model.output_shape == (None, 1)
+
+    def test_model_is_compiled_with_adam_and_mse(self):
+        model = build_lstm_model(sequence_length=120, num_features=10)
+
+        assert isinstance(model.optimizer, tf.keras.optimizers.Adam)
+        assert model.loss == "mse" or "mean_squared_error" in str(model.loss).lower()
+        assert len(model.metrics) >= 1
+
+    def test_architecture_has_lstm_and_no_conv_layers(self):
+        model = build_lstm_model(sequence_length=120, num_features=10)
+
+        layer_types = [type(layer).__name__ for layer in model.layers]
+        assert "LSTM" in layer_types
+        assert "Conv1D" not in layer_types
+
+    def test_model_can_predict(self):
+        model = build_lstm_model(sequence_length=120, num_features=10)
+        test_input = np.random.rand(1, 120, 10).astype(np.float32)
+
+        prediction = model.predict(test_input, verbose=0)
+
+        assert prediction.shape == (1, 1)
+
+    def test_rejects_non_positive_dimensions(self):
+        with pytest.raises(ValueError):
+            build_lstm_model(sequence_length=0, num_features=10)
+        with pytest.raises(ValueError):
+            build_lstm_model(sequence_length=120, num_features=0)
+
+    def test_create_model_lstm_routes_to_genuine_lstm_architecture(self):
+        """The 'lstm' choice in create_model must not alias to 'cnn_lstm' (GH #1131)."""
+        lstm_model = create_model("lstm", (120, 10))
+        cnn_lstm_model = create_model("cnn_lstm", (120, 10), has_sentiment=False)
+
+        lstm_layer_types = {type(layer).__name__ for layer in lstm_model.layers}
+        cnn_lstm_layer_types = {type(layer).__name__ for layer in cnn_lstm_model.layers}
+
+        assert "LSTM" in lstm_layer_types
+        assert "Conv1D" not in lstm_layer_types
+        assert "Conv1D" in cnn_lstm_layer_types
+        assert lstm_layer_types != cnn_lstm_layer_types
 
 
 @pytest.mark.fast
