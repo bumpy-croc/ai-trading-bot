@@ -2265,3 +2265,56 @@ class TestMarginErrorCodes:
                 quantity=0.05,
                 side_effect_type="MARGIN_BUY",
             )
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+class TestConvertOrderType:
+    """Regression tests for #1152: STOP_LOSS_LIMIT/TAKE_PROFIT_LIMIT silently mapped to MARKET.
+
+    `place_stop_loss_order` sends `"type": "STOP_LOSS_LIMIT"` and Binance echoes that same
+    string back on every order lookup — not the bare "STOP_LOSS" the old mapping expected.
+    The missing key meant `.get(..., OrderType.MARKET)` fell back to MARKET for every
+    stop-loss order ever parsed.
+    """
+
+    def _make_provider(self):
+        with patch("src.data_providers.binance_provider.get_config") as mock_config:
+            mock_config_obj = Mock()
+            mock_config_obj.get_required.return_value = "fake_key"
+            mock_config.return_value = mock_config_obj
+            return BinanceProvider()
+
+    def test_stop_loss_limit_maps_to_stop_loss(self):
+        from src.data_providers.exchange_interface import OrderType
+
+        provider = self._make_provider()
+        assert provider._convert_order_type("STOP_LOSS_LIMIT") == OrderType.STOP_LOSS
+
+    def test_take_profit_limit_maps_to_take_profit(self):
+        from src.data_providers.exchange_interface import OrderType
+
+        provider = self._make_provider()
+        assert provider._convert_order_type("TAKE_PROFIT_LIMIT") == OrderType.TAKE_PROFIT
+
+    def test_stop_loss_limit_order_parses_with_correct_order_type(self):
+        from src.data_providers.exchange_interface import OrderType
+
+        provider = self._make_provider()
+        order_data = {
+            "orderId": 12345,
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "type": "STOP_LOSS_LIMIT",
+            "origQty": "0.01",
+            "price": "49000.00",
+            "stopPrice": "49500.00",
+            "status": "NEW",
+            "executedQty": "0",
+            "time": 1700000000000,
+            "updateTime": 1700000000000,
+        }
+
+        order = provider._parse_order_data(order_data)
+
+        assert order is not None
+        assert order.order_type == OrderType.STOP_LOSS
