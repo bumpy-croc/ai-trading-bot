@@ -396,14 +396,22 @@ until day 5, despite the gap being named explicitly on day 3 (#1121 weekly-retro
 GH #1121 (this incident, live), #1126 (proximate mechanism), #1127 (structural response gap,
 Board decision needed).
 
-## UPDATE — 2026-09-14T07:07:18Z (CLOSED — cleared as a side effect of an unrelated deploy)
+## UPDATE — 2026-09-14T07:07:18Z (CLOSED — cleared by a deliberate PM-authorized promote+restart)
 
-Closed via GH #1121 (`closedAt` `2026-09-14T07:07:18Z`). The close-only latch cleared not through a
-deliberate remediation of this incident, but as a side effect of an unrelated routine deploy: the
-weekly ML-retrain promotion, commit `be451698`, deployed 2026-09-14 06:54:11 UTC, which restarted
-the "Trading Bot" Railway service. The latch was a plain in-process bool with no remote-clear path
-(see Root cause, item 2 above) — any restart, for any reason, would have cleared it; this one
-arrived via a scheduled model-retrain promotion, not an authorized incident response.
+Closed via GH #1121 (`closedAt` `2026-09-14T07:07:18Z`). CORRECTION to this section's original
+draft (opened by GH #1140, which characterized the clearing deploy as an unrelated routine
+ML-retrain promotion): it was not incidental. A PM daemon session ran 2026-09-13/14, was briefed
+on the stuck latch by the human operator, explicitly proposed a promote of `develop` to `main`
+plus restart AS THE REMEDIATION for this incident, received explicit authorization ("proceed"),
+and executed it for that stated purpose. Commit `be451698` (deployed 2026-09-14 06:54:11 UTC,
+restarting the "Trading Bot" Railway service) carries this in its own message: "clears the stuck
+close-only latch via the required restart." That the same batched promote also shipped the
+accumulated `develop` backlog (including, among other things, a weekly ML-retrain record) does not
+make the restart's *purpose* incidental — it was one deliberate action serving two ends.
+GH #1140's inference was reasonable from what a monitor-only automated task can see (a commit
+touching an ML-retrain record, no visibility into the PM session that authored it), but the
+conclusion drawn from it was wrong, and this file is corrected here rather than silently editing
+that section — see `.claude/LESSONS.md` on append-only correction norms.
 
 Elapsed from the 2026-08-27 08:35:28 UTC onset to the 2026-09-14 07:07:18Z GH close is **~17d
 22.5h**, roughly 430x the charter's 1h P0 SLA. No capital loss for the entire window — the book
@@ -412,10 +420,11 @@ incident was pure opportunity cost, never an ongoing risk exposure.
 
 **This closure does not resolve GH #1127.** #1127 remains open and tracks the structural gap named
 in Root cause item 2: no scheduled agent in the fleet has authority to deliberately clear a
-close-only latch. This incident ended because an unrelated deploy happened to restart the service —
-not because that gap was closed. The same failure mode (a P0-class latch paging correctly for weeks
-with clearance arriving only by accident of an unrelated restart) can recur until #1127 is resolved.
+close-only latch on its own — clearance still required a human starting a PM session, 17 days after
+onset. That this particular clearance was a deliberate action once a session finally ran does not
+close the gap: the same failure mode (a P0-class latch paging correctly for weeks with no automated
+actor able to clear it) can recur for the same duration until #1127 is resolved.
 
 Frontmatter updated accordingly: `status: closed`, `closed_at: 2026-09-14T07:07:18Z`,
 `mitigated_at: 2026-09-14T07:07:18Z` (mirrored — no separately-verifiable mitigation timestamp).
-Ref: GH #1121 (closed), #1127 (open, structural gap), #1140 (this correction).
+Ref: GH #1121 (closed), #1127 (open, structural gap), #1140 (opened this correction).
