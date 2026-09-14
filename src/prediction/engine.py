@@ -100,6 +100,13 @@ class PredictionEngine:
         self.config = config or PredictionConfig.from_config_manager()
         self.config.validate()
 
+        # Bundle keys already warned for an out-of-range rolling-minmax denormalization
+        # (GH #1145). The condition is a per-bundle property, not a per-call one, so it
+        # only needs saying once -- an unthrottled warning would log on every inference
+        # for a genuinely misclassified bundle (the log-spam shape already fixed nearby
+        # in onnx_runner.py for #948).
+        self._warned_misclassified_bundles: set[str] = set()
+
         # Initialize prediction cache manager if enabled
         self.cache_manager = None
         if self.config.prediction_cache_enabled and database_manager:
@@ -1184,6 +1191,28 @@ class PredictionEngine:
         if price_norm.get("method") != "rolling_minmax":
             # Not a rolling minmax model, return as-is (handled by ONNX runner)
             return normalized_price
+
+        # Defense in depth (GH #1145): a rolling-minmax price target is trained
+        # to land inside its own window's [0, 1], with only mild overshoot from
+        # model error. A target misclassified as price (e.g. a smoothed_return
+        # bundle wrongly carrying this metadata) is not bounded that way and
+        # can be negative or far outside [0, 1]. This can't catch every
+        # misclassification -- a small positive return looks like a plausible
+        # normalized value -- so it only logs; the actual fix is refusing to
+        # stamp price_normalization on a non-price target in the first place
+        # (model_metadata.py::uses_rolling_minmax_features).
+        if not -0.5 <= normalized_price <= 1.5:
+            bundle_key = getattr(bundle, "key", None) or repr(bundle)
+            if bundle_key not in self._warned_misclassified_bundles:
+                self._warned_misclassified_bundles.add(bundle_key)
+                logger.warning(
+                    "Rolling-minmax prediction %.6f for %s is far outside the expected "
+                    "[0, 1] normalized-price range. This may indicate price_normalization "
+                    "metadata was stamped on a non-price target (see GH #1145). Logged "
+                    "once per bundle; further occurrences for this bundle are suppressed.",
+                    normalized_price,
+                    bundle_key,
+                )
 
         # Get target feature (typically "close")
         target_feature = price_norm.get("target_feature", "close")
