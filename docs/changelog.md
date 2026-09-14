@@ -57,6 +57,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the ungated path still diverges.
 
 ### Fixed
+- **Reconciler stop-loss audit checked order status only, never price** (#1172, follow-up to
+  #1167). `PositionReconciler._verify_stop_loss` (startup) and `PeriodicReconciler._reconcile_cycle`
+  (runtime, every ~120s) confirmed a resting stop-loss order existed and read its fill/cancel
+  status, but never compared its actual `stop_price` against the tracked `position.stop_loss`.
+  A trailing-stop ratchet advances the tracked stop before cancelling and re-placing the
+  exchange order; if that cancel fails or is unconfirmed, the old order is deliberately left
+  resting (to avoid stacking a duplicate) while the tracked price has already moved — and
+  nothing caught the resulting divergence. Both verification paths now compare the resting
+  order's price against the tracked stop within the existing `_ADOPT_PRICE_TOLERANCE_FRACTION`
+  (2%) tolerance, escalate CRITICAL (audit row + alert) on divergence, and attempt the same
+  cancel-then-guarded-replace correction used elsewhere (`place_or_adopt_stop_loss`) — skipping
+  the re-place if the cancel itself cannot be confirmed, so a duplicate is never stacked.
 - **`exit_reason` was free text with substring-matched control flow** (#1115). The backtest
   engine chose an exit's order type with `if "Stop loss" in exit_reason:`, so the `stop_loss`
   and `stop_loss_filled_offline` spellings silently skipped it and exited as market orders with
