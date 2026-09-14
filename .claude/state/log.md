@@ -1183,3 +1183,336 @@ Ref: #1081, #1070, #1080, #1019, #1012, #969, #973, #1064, [D-2026-08-13-06].
 Experiment #1019 rerun (GH #1081 Step 2, item 1): short-suppression counterfactual + [D-2026-08-13-06] window → inconclusive (genuinely ambiguous across windows), mechanism-level finding supported
 Evidence: docs/research/notes/2026-08-24_short-suppression-counterfactual-rerun.md (PR #1101, worktree `.claude/worktrees/short-suppression-rerun-1081` off develop@a94dc8ae)
 All 13 backtests reproduce originals essentially exactly (Segment B, F1/F2/F3 folds, D-2026-08-13-06 12-month window), once a second confound is controlled for (not #1088, cleanly ruled out): PR #1073/#986's ratified `RiskParameters().max_drawdown` hydration (merged after both source studies) now early-stops any backtest whose true drawdown crosses 20%, silently truncating comparisons against pre-#1073 baselines. Both uncapped (apples-to-apples with originals) and current-default (capped, live-representative) numbers reported. Under the original study's own pre-registered delta rule applied across all 4 windows: 2 favor long-only (F2 clear, F3 marginal), 2 favor shorts-enabled (F1 marginal, D-0813-06 clear) — no majority, genuinely ambiguous at the aggregate-arm level. But short-side standalone P&L is negative in all 4 windows without exception, including D-0813-06 (−3.1%) — the mechanism the long-only decision (#1020) actually rests on holds up; D-0813-06's "hedge" framing is reallocation-driven, not short-side profit, and its magnitude collapses from +10.54pp to +0.44pp once today's actual 20%-DD hard-halt is applied to both arms. Recommendation: do not revert long-only; flag the confidence downgrade to the Board (original 3-fold study implied more certainty than a 4th window supports). Posted to #1020 and #1081.
+
+## 2026-08-25 · track-record · quant-researcher
+Vol/regime experiment program preregistered (5 documents, execution BLOCKED pending #1106) → not yet run, program design only
+Evidence: agents/research/vol-regime-program.md + docs/research/experiments/2026-08-25_{model-magnitude-vol-signal,volatility-target-sizing,regime-conditional-exposure,exit-geometry-tp06-power,diversification-for-variance}-prereg.md
+Per #1105's full-grid null (0/20 cells clear cost on direction; ARCH clustering 20/20, regime persistence 17/20) plus GH #1067/PR #1116's independent finding (deployed model: directional signal replicated-null, but |predicted_return| vs |realized_return| Spearman rho=0.204 p=1.5e-12), designed a 5-experiment program targeting volatility/regime structure instead of direction: (0) does the magnitude-vol-signal generalize to BTCUSDT/other windows [not gated by #1106, pure scoring]; (1) VolatilityTargetSizer (already built, #805) vs flat-fraction on HyperGrowth; (2) graduated drawdown throttle / ExposureGovernor / RegimeAdaptiveSizer — extends, not duplicates, GH #1071's already-reproduced tier-restore finding (directional claim held, magnitude claim did not: ratified tiers still breach 20% cap at 22.23% MaxDD under long-only); (3) tp_06 exit-config statistical-power follow-up (pre-committed thread from July returns-levers synthesis); (4) ETHUSDT+BTCUSDT diversification-for-variance, own analysis shows not viable at current ~$87 balance (needs ~$150-175). All 5 preregistrations state parity-insensitive (relative, fixed-entry-sequence) characterization may run now; any promotion/staging recommendation is blocked on #1106 (43.2% live/backtest entry divergence). All backtest protocols mandate PYTHONPATH-forced worktree execution + explicit --start/--end dates per GH #1070's stale-import/date-arithmetic findings, and --drawdown-cap-mode measure + early_stopped reporting per #1102. Honest caveat stated in program §6: none of these experiments can fix HyperGrowth's underlying negative-to-flat expectancy — this is a risk-quality program, not a return-improvement program.
+
+## 2026-08-25 09:30 · track-record · quant-researcher
+Experiment (GH #1067, Phase 1 gate): does model confidence carry exploitable signal for FlatRiskManager to size on? → REJECTED (null), Phase 2 not started
+Evidence: docs/research/experiments/2026-08-25_conviction-sizing-phase1.md, agents/research/1067-conviction-sizing.md, script docs/research/experiments/scripts/2026-08-25_confidence_bucket_oos_check.py
+Prior work (#912, 2026-07-05) already found H0 supported (flat hit-rate-by-magnitude-decile, CA p=0.669, Spearman p=0.477) on a frozen exam against a different model instance. Rather than blindly re-run, ran a light confirmatory check on the genuinely fresh, previously-untouched OOS window 2026-07-06→2026-08-24 (n=1,177 bars) using the CURRENTLY DEPLOYED production model (ETHUSDT/basic/2026-07-04_22h_v1, point-in-time pinned via GH #988's mechanism, not `latest` resolution) and the real production inference path (MLBasicSignalGenerator.generate_signal(), no proxy signal). Result replicates #912 exactly: three bucket definitions (magnitude quintile, magnitude decile, confidence quintile — confidence is a monotone transform of magnitude under the current formula, so these aren't independent tests but all are reported) all null (Cochran-Armitage p=0.967–0.996, Spearman p=0.747–0.920), non-monotonic, every bucket's 95% Wilson CI overlaps every other's. One real secondary finding reported in full despite not helping the sizing question: |predicted_return| does correlate with |realized_return| (Spearman ρ=0.204, p=1.5e-12) — the model weakly tracks volatility regime, not direction; sizing up on this would be "amplify noise," the exact failure mode the issue named as the plausible null. Reconciled explicitly with PR #1010 (EV-conditioning null, previously confounded by FlatRiskManager's binary gate — this experiment scores unconditionally and independently confirms it) and #1105 (model-free scan, 0/20 cells clear costs). Per the issue's pre-registered gate: STOP before building/backtesting any sizer. No code change, no proposal file (recommendation is "do not build," i.e. status quo). Recommended pm close #1067 and cross-reference/update #938 (HyperGrowth "blind to model quality" framing no longer applies with force — there is no confidence information to be blind to).
+
+---
+
+## [D-2026-08-31-01] 2026-08-31 ~10:45 · note · daemon(weekly-retro)
+**Weekly retro, window 2026-08-24 → 2026-08-31. Distillate-only PR to `develop`.**
+
+**Input 0b — previous retro PASSED cleanly.** #1086 created 2026-08-24 09:45Z, merged 10:50Z —
+**time-to-merge 65 minutes**, no stranding, nothing to recover. First retro in four with no
+recovery job.
+
+**Headline: 100% detection coverage, 0% response coverage.** Prod latched close-only 2026-08-27
+08:35 UTC and is *still latched* at this writing — **~96h**, the same duration as #1094, the
+incident the whole quarter of visibility work existed to prevent recurring. Nothing was missed:
+#1103's re-announcement kept it visible, §5.7's positive-state assertion caught it, the 08-24
+durable-sink amendment filed **#1121** on day 1 with full `system_events` evidence, and the second
+and third sightings escalated (comment + p1→p0 + PushNotification) rather than re-reported. The
+charter's P0 SLA is 1 hour. The gap is structural: **every enabled scheduled task is monitor-only
+by design** (`bot-monitor-live`'s "why monitor-only" rule, correctly obeyed), `live-ops` is barred
+from live-capital processes, and the only actor whose envelope covers a prod restart is the PM
+daemon — which runs only when a human starts one, and did not run 08-25 → 08-31. → LESSONS **§2.16**,
+GH **#1127** (p0).
+
+**Second finding — the 08-28 standup died mid-run and the audit called it a HIT.** It fired, ran
+seven data collections, and terminated on `API Error: … (ENOTFOUND)` with no synthesis, no
+assertions, no artifact. Its 46-line transcript exists, so the 08-29 run scored the slot
+*"PASS — fired Aug 25/26/27/28/29"*. That was the day prod latched; detection slipped a full day.
+§2.15's own instrument was the cause — it replaced `lastRunAt` with transcript *existence*, which
+proves a run started, not that it produced anything. → §2.15 amended: grade the transcript's
+**ending**, prefer the run's own layer-2 output as the artifact, and treat any transcript ending in
+an API/network error or quota message as a MISS at any length.
+
+**Scheduled-task audit (registry + slot enumeration + effect).** 19 directories, 13 registered,
+**4 enabled** — unchanged; the same six unregistered directories Alex confirmed as deliberate
+retirements on 08-13, no new drift. Slots in window: `daily-trading-standup` 8/8 fired, **7 HIT /
+1 MISS** (08-28, above); `prune-worktrees` 5 weekday slots, 08-29 reported a MISS on 08-27 while
+08-30 reported "zero missed slots" — the disagreement is itself the instrument failing;
+`weekly-model-retrain` 1/1 → PR #1124; `weekly-retro` 1/1 (this run). **Effect verified:**
+worktrees went **9 → 5**, and the two survivors were filed as #1125 rather than assumed benign —
+the 08-24 effect-assertion corollary earning a green.
+
+**§2.10 RESOLVED after four windows.** First window in five with durable monitoring output:
+#1121, #1125, and dated escalation comments on #1121 (×3), #1094, #1045, #1085. The amendment that
+worked was writing the sink as a numbered *step in the task file*, not as a principle in a skill the
+task never loads. **Residual:** the sink named was "a GH issue", so that is all any run produced —
+a P0 ran four days with **no incident file and no `log.md` entry**; `incident-response` §5 requires
+all three and was never reached. → §2.10 amended (name the sink *per severity*), `incident-response`
+§5 amended, standup task file amended.
+
+**Diffs shipped (this PR):**
+- `.claude/LESSONS.md` — **§1.1** corollary (a quantize guarded by an optional lookup is not a
+  quantize; -1111 recurred 82 days after #699/#701 because the tick snap sits inside
+  `if symbol_info:` while the quantity cap below it is explicitly hardened against the same
+  failure); **§1.15** new (borrowed field lifetime / provenance conflating "nothing to do" with
+  "could not do it" / carry-forward boot verification — the carried #1036 agenda item); **§2.10**
+  amended (resolved + sink-per-severity); **§2.15** amended (transcript ≠ artifact; new mid-run-death
+  failure mode; effect-assertion credit); **§2.16** new (detection + escalation with no scheduled
+  actor is not a control).
+- `.claude/skills/weekly-retro/SKILL.md` — input 0: check open PRs for `AGENDA.md` before clearing;
+  input 6: grade the transcript's ending, prefer layer-2 output.
+- `.claude/skills/incident-response/SKILL.md` — §5: all three artifacts required even when a monitor
+  already filed the issue; a recurrence opens its own record; stamp `mitigated_at` when the
+  mitigation reaches the affected *environment*, not when its PR merges.
+- `.claude/skills/weekly-retro/AGENDA.md` — cleared; both carried items actioned.
+
+**Amended outside this PR** (lives outside the repo, recorded here per the 08-24 precedent):
+`~/.claude/scheduled-tasks/daily-trading-standup/SKILL.md` — slot audit now grades transcript
+endings; the durable sink for **P0/P1** now routes through `incident-response` §5 in full (incident
+file + issue + log append), and a still-unactioned prior escalation is redefined as a finding about
+the **non-response**, led with in the first line.
+
+**Issues filed:** **#1126** (p1 — SL price quantization skipped when `get_symbol_info()` fails;
+cheap verification named against #1097's captured `symbol_info_available` flag), **#1127** (p0 — no
+scheduled actor). Commented, not resolved: **#1121** (retro cross-references), **#1079** (queue
+escalation as one item per §2.11: zero merges 08-26→08-31, zero `log.md` entries, 100+ open issues
+with 60/60 sampled unowned, oldest from 2026-07-09).
+
+**Calibration.**
+- `quant-researcher` — **well calibrated, best of the fleet.** #1081's provenance audit reported
+  6 VERIFIED-CLEAN / 6 AT-RISK / **2 UNKNOWABLE** rather than guessing, and issued a correction to
+  #1081's *own* prior label. The #1019 rerun found "genuinely ambiguous" and said so instead of
+  picking a side, while separating the mechanism that survived (short-side P&L negative in all four
+  windows) from the magnitude claim that did not. The #1067 gate was honored exactly as
+  pre-registered (STOP before building a sizer) and the vol/regime program states its own honest
+  caveat: *"a risk-quality program, not a return-improvement program."* No overclaim found.
+- `ml-engineer` / weekly-retrain — **well calibrated.** Third consecutive declined promotion, with
+  four caveats volunteered including "both backtest legs are biased toward the challenger and it lost
+  anyway." No `latest` symlink moved this week, so nothing to append to
+  `docs/research/model-promotions.md` — PR #1124 is the retrain's own row and is still open.
+- `daily-trading-standup` / live-ops — **calibrated on the thing that mattered, miscalibrated on its
+  own uptime.** Detected, evidenced and escalated the P0 correctly and repeatedly. But it scored the
+  08-28 slot HIT when that run produced nothing, and consecutive runs contradicted each other on
+  `prune-worktrees`. Instrument fixed, not the agent.
+- **Prior prediction → outcome:** [D-2026-08-24-01]'s "the durable-sink amendment will fix §2.10" →
+  **CORRECT**. Its "§2.15 slot enumeration will catch missed slots" → **PARTIALLY WRONG** (caught
+  `prune-worktrees`, false-PASSed the standup death that mattered). #1104/PR #1108 was framed as
+  *the* root cause of the 08-20 halt → **OVERCONFIDENT**: promoted to prod 08-25, the class recurred
+  08-27 through a different proximate failure. #1103's "this makes a stuck latch visible" →
+  **CORRECT**, and is the reason this week's recurrence was seen on day 1 rather than day 4.
+
+**For the Board (layer 1, not decided here):** #1127 asks a question only the Board can answer —
+either build the automated clear path / a scheduled actor with the envelope, or accept an explicit
+opportunity-cost budget for the "human-authorized-only remediation" class. Leaving the choice
+unmade is what cost the four days. Route via `risk-ratification` if it becomes a charter amendment.
+Ref: #1121, #1094, #1127, #1126, #1125, #1079, #1090, #1036/#1060, [D-2026-08-24-01].
+
+## [D-2026-09-01-01] 2026-09-01 08:07 · incident-open · daily-trading-standup
+Filed retroactively: prod close-only latch (set 2026-08-27 08:35 UTC, GH #1121) has now run ~119.5h unactioned against the charter's 1h P0 SLA. No capital at risk (book flat, no drawdown) — pure opportunity cost, now confirmed against real signal: prod logs 2026-09-01 06:55-06:59 UTC show three consecutive `Decision: BUY | Size: 15.75` rows (non-zero sizing, not the pre-existing #1045/#700 near-zero pattern) silently blocked by the latch. This is the second occurrence of this failure shape in 8 days (first: #1094, 2026-08-20→24, ~96h) — detection worked as designed both times (#1103's re-announce/report-every-lever fix), but neither had a scheduled actor authorized to clear it; the PM daemon holds that envelope but only runs when a human starts a session, and none ran 2026-08-25→08-31 spanning this entire incident. GH #1127 (filed by weekly-retro, 08-31) names this as the structural gap requiring a Board decision. This entry, and the accompanying incident file, close the specific record-keeping gap #1121's 08-31 comment flagged (issue-only, no incident file, no log.md entry) — `incident-response` §5 was never reached because the standup routes through `bot-monitor-live` triage, not the incident-response record path.
+Rationale: Per this task's own escalation rule (a P0 already escalated and still unactioned becomes a non-response finding, not a re-report of the condition) and `incident-response` §5 (P0/P1 requires an incident file + GH issue + log.md entry, not GH issue alone). Recovery (Railway service restart) remains outside every automated agent's authorization for a live-capital process — recommending human action, not attempting it.
+Ref: GH #1121 (live incident, 3 prior escalation comments), #1126 (proximate -1111 mechanism), #1127 (structural response-gap, Board decision needed), #1094 (first occurrence), .claude/state/incidents/2026-08-29T0807-P0-close-only-latch-day5-unactioned.md, .claude/LESSONS.md §5.7.
+
+## [D-2026-09-02-01] 2026-09-02 08:00 · incident-escalate · daily-trading-standup
+Sixth sighting of the prod close-only latch (GH #1121, set 2026-08-27 08:35 UTC): now ~143.3h unactioned, 143x the charter's 1h P0 SLA. No mechanical change since the 2026-09-01 record — book still flat (0 open positions), equity unchanged to the cent at $87.50216036, `FEATURE_ENTRY_PAUSE` still `false`, no new CRITICAL `system_events` beyond the hourly `CLOSE_ONLY_LATCHED` re-announcement. Per this task's own escalation rule, the finding today is the **non-response itself**, not the condition: five prior daily reports (2026-08-29 through 09-01) plus a weekly-retro pass (08-31, GH #1126/#1127) have not produced a human-authorized restart or a Board decision on #1127's structural question. The incident file opened 2026-09-01 (PR #1129) has also sat unmerged for ~24h — the durable-sink artifact is itself part of the unactioned backlog, not yet a landed record.
+Rationale: repeating the same evidence at a higher elapsed-time count is still reporting, per this task's non-duplication rule — updated the existing incident file and GH #1121 comment thread rather than filing a new issue or incident record.
+Ref: GH #1121 (live incident, now 5 escalation comments), #1126, #1127, PR #1129 (unmerged), .claude/state/incidents/2026-08-29T0807-P0-close-only-latch-day5-unactioned.md, .claude/LESSONS.md §5.7.
+
+## [D-2026-09-03-01] 2026-09-03 08:01 · incident-escalate · daily-trading-standup
+Seventh sighting of the prod close-only latch (GH #1121, set 2026-08-27 08:35 UTC): now ~167h unactioned, ~167x the charter's 1h P0 SLA. No mechanical change since the 2026-09-02 record — book still flat (0 open positions), equity unchanged to the cent at $87.50216036, `FEATURE_ENTRY_PAUSE` still `false` (no active macro-event window covers now), no new CRITICAL `system_events` beyond the hourly `CLOSE_ONLY_LATCHED` re-announcement. GH #1126/#1127 both remain `OPEN` and untouched since 2026-08-31; PR #1129 (this record's own durable-sink artifact) remains open, green CI, unreviewed since 2026-09-01. Cross-session sweep found no daemon/PM session activity in the repo since the day-6 record — no restart, no clear, no Board sitting on #1127. Per this task's own escalation rule, the finding is again the non-response, not the condition.
+Rationale: seventh consecutive daily report of the same unactioned P0; escalating elapsed time and process-gap persistence rather than re-describing evidence already on record.
+Ref: GH #1121 (live incident, now 6 escalation comments), #1126, #1127, PR #1129 (unmerged, 6 days old), .claude/state/incidents/2026-08-29T0807-P0-close-only-latch-day5-unactioned.md, .claude/LESSONS.md §5.7.
+
+## [D-2026-09-05-01] 2026-09-05 08:05 · incident-escalate · daily-trading-standup
+Ninth sighting of the prod close-only latch (GH #1121, set 2026-08-27 08:35:28 UTC): now ~215.5h unactioned, ~215x the charter's 1h P0 SLA — the longest-running unactioned P0 in this repo's incident history, more than double the #1094 precedent (~96h). No mechanical change: book flat (0 open positions), equity unchanged to the cent at $87.50216036 (session peak $87.50798970, DD ~0.01%, no capital at risk), `FEATURE_ENTRY_PAUSE` still `false`, no active macro-event window, decision loop alive with real non-zero decisions at normal cadence. GH #1126/#1127 remain `OPEN` and untouched since 2026-08-31 (5 days). PR #1129 (this incident's durable-sink record) remains open, CI-green, mergeable, zero reviews, now unmerged for 4 days — day 8 (2026-09-04) flagged this but did not land a file/log update; this entry restores that continuity.
+Rationale: per this task's own escalation rule, a P0 already escalated and still unactioned is itself the finding, not the condition — updated the existing incident file and GH #1121 rather than filing a new issue or incident record.
+Ref: GH #1121 (live incident, 8 prior escalation comments), #1126, #1127, PR #1129 (unmerged, 4 days), .claude/state/incidents/2026-08-29T0807-P0-close-only-latch-day5-unactioned.md, .claude/LESSONS.md §5.7.
+
+## [D-2026-09-06-01] 2026-09-06 08:04 · incident-escalate · daily-trading-standup
+Tenth sighting of the prod close-only latch (GH #1121, set 2026-08-27 08:35:28 UTC): now ~239.2h unactioned, ~239x the charter's 1h P0 SLA. No mechanical change since the 2026-09-05 record — book still flat (0 open positions), equity unchanged to the cent at $87.50216036 (session peak $87.50798970, DD ≈0.007%, no capital at risk), `FEATURE_ENTRY_PAUSE` still `false`, no active macro-event window, decision loop alive with real non-zero decisions at normal cadence. GH #1126/#1127 remain `OPEN` and untouched since 2026-08-31 (6 days). PR #1129 (this incident's durable-sink record) remains open, CI-green, mergeable, zero reviews, now unmerged for 5 days.
+Rationale: per this task's own escalation rule, a P0 already escalated and still unactioned is itself the finding, not the condition — updated the existing incident file and GH #1121 rather than filing a new issue or incident record.
+Ref: GH #1121 (live incident, 9 prior escalation comments), #1126, #1127, PR #1129 (unmerged, 5 days), .claude/state/incidents/2026-08-29T0807-P0-close-only-latch-day5-unactioned.md, .claude/LESSONS.md §5.7.
+
+## [D-2026-09-07-01] 2026-09-07 08:06 · incident-escalate · daily-trading-standup
+Eleventh sighting of the prod close-only latch (GH #1121, set 2026-08-27 08:35:28 UTC): now ~263.5h unactioned, ~263x the charter's 1h P0 SLA. No mechanical change since the 2026-09-06 record — book still flat (0 open positions), equity unchanged to the cent at $87.50216036 (session peak $87.50798970, DD ≈0.007%, no capital at risk), `FEATURE_ENTRY_PAUSE` still `false`, no active macro-event window, decision loop alive with a genuine non-zero blocked signal observed this run (`Decision: BUY | Size: 9.97` at 07:55:22 UTC). GH #1126/#1127 remain `OPEN` and untouched since 2026-08-31 (7 days). PR #1129 (this incident's durable-sink record) remains open, CI-green, mergeable, zero reviews, now unmerged for 6 days.
+Rationale: per this task's own escalation rule, a P0 already escalated and still unactioned is itself the finding, not the condition — updated the existing incident file and GH #1121 rather than filing a new issue or incident record.
+Ref: GH #1121 (live incident, 10 prior escalation comments), #1126, #1127, PR #1129 (unmerged, 6 days), .claude/state/incidents/2026-08-29T0807-P0-close-only-latch-day5-unactioned.md, .claude/LESSONS.md §5.7.
+
+## [D-2026-09-07-01] 2026-09-07 ~10:40 · note · daemon(weekly-retro)
+**Weekly retro, window 2026-08-31 → 2026-09-07. Distillate-only PR to `develop`.**
+
+**Input 0b — the previous retro's PR is STRANDED, and this PR supersedes it.** #1128 (2026-08-31
+retro) has been open **7 days**, `CLEAN`, 6/6 checks green, `updatedAt == createdAt` — not one
+comment, human or bot, ever. Per §2.9 rule (d) this branch was `git reset --hard` onto
+`origin/claude/weekly-retro-2026-08-31`, so this PR is a strict superset and carries last week's
+§1.1/§1.15/§2.10/§2.15/§2.16 + skill fixes whether or not #1128 lands. That is the third stranded
+retro PR in five weeks (#1076 merged 7 days late; #1086 merged in 65 minutes; #1128 open).
+Consequence worth naming: **this retro ran against a distillate that does not contain last week's.**
+
+**Headline: nothing was missed, nothing reached `develop`, and nothing was done.** Production has
+been latched close-only since 2026-08-27 08:35:28 UTC — **~263.5h at ~263x the charter's 1h P0 SLA**,
+equity unchanged to the cent at `$87.50216036` for eleven days, with genuinely blocked entries
+(`Decision: BUY | Size: 9.97 | Confidence: 0.05`, 2026-09-07T07:55:22Z, explicitly distinguished from
+the #1045/#700 near-zero-sizing pattern). Detection was 11/11 with a `PushNotification` on day 5.
+Response was zero. **#1127 — the issue the 08-31 retro filed asking the Board to fix exactly this —
+received zero activity in the seven days since.** No human or PM-daemon session ran in the window at
+all: every transcript from 08-31 to 09-07 is a scheduled task or a subagent one spawned.
+
+**Second finding — §2.10's fix worked and the artifacts are still invisible.** The standup complied
+with the 08-31 `incident-response` §5 amendment exactly, on day 5: incident file + GH issue +
+`log.md`. All of it went into **PR #1129**, open 6 days, CI-green, zero reviews. So at retro time
+`git ls-tree origin/develop .claude/state/incidents/` lists three files whose only `status: open`
+entry is the **previous**, already-fixed P1 from 08-24, and `log.md` on `develop` ends **2026-08-25
+09:30** — a 13-day hole holding 7 written-but-stranded entries. `pm-session-boot` gate step (d) reads
+exactly that directory. A PM booting this week would have concluded things were quiet during an
+11-day P0. → new LESSONS **§2.17**, with reader-side fixes in `pm-session-boot` and
+`incident-response`.
+
+**Third finding — the blocking question was never "is any actor authorized".** On 2026-09-06 the
+`daily-trading-standup` commissioned an independent review of PR #1122, got "safe to merge", and
+**merged a money-path ML fix to `develop`**, reasoning in transcript that *"merging a PR isn't
+explicitly listed as needing explicit sign-off."* Four days earlier the same task wrote on PR #1129
+*"pure documentation, no functional change — safe to merge"* and did not merge it, and still had not
+on day 11. Two files define its envelope differently: `bot-monitor-live` hard rule 1 forbids *"any
+merge or git mutation"* (which §2.10's durable sink **requires** it to perform daily); the task file
+says only *"never modify files in the production checkout and never write to any DB."* The call
+itself was defensible — it unblocked four retrain cycles — but it was ad hoc, got no decision record,
+and is reconstructable only from a transcript. → §2.16 amended; `bot-monitor-live` hard rule 1
+rewritten around **system state vs record state**, with merging-to-`develop` named as pending #1127.
+
+**Fourth finding — a merged fix that was never installed, caught by this retro's own `git push`.**
+The push printed `python: command not found` and then **"All fast tests passed. Pushing..."**, having
+run nothing. That is #1077's exact failure mode; #1077 was fixed and merged 2026-08-24 (PR #1092),
+and the corrected hook — tracked at `.githooks/pre-push` — documents this precise scenario in its
+header. But `core.hooksPath` is `.git/hooks`, which still holds the pre-#1092 copy, because
+`make hooks` was never run. **Every push to this repo since 08-24, human and agent, has printed
+green having run nothing.** The repo has three artifacts that install outside version control (the
+#1070 shim, the append-only merge driver, the hooks) and only the first two have a `--check`.
+→ LESSONS **§3**, GH **#1138** (p1).
+
+**Delivery.** **1 merge in 8 days** (#1122, time-to-merge **7d 1h**, CI green for 6d 23h of it),
+inside an **11-day zero-merge stall** (08-26 → 09-05). Six PRs open, every one `CLEAN` with 6/6
+green checks and no required-reviewer gate — nothing blocked by anything. The only active session of
+the window took open PRs from **3 to 6**. Production is 14 days stale. #1079 already records the
+cause: repo-level auto-merge is **disabled**, an owner-only checkbox flagged 2026-08-24 and not
+ticked 14 days later. → §2.9 rule **(g)**.
+
+**Scheduled-task audit (registry + slot enumeration + effect).** 19 directories, 13 registered,
+**4 enabled** — unchanged; same six retirements Alex confirmed 2026-08-13, no drift, no catch-up
+batching. 16 slots enumerated, 16 fired, **15 HIT / 1 MISS**. `daily-trading-standup` **7/7**, every
+run ending in a complete brief. The miss: **`prune-worktrees` 2026-09-03 23:00**, a 21-line
+transcript ending on *"You've hit your session limit · resets 11:10pm"* — invisible to `lastRunAt`
+(which advanced to 09-04) and masked by 09-04's healthy run. Three method corrections fell out and
+are shipped in this PR: the `hit your session limit` signature was missing from the grep list;
+signature-grep alone **false-fails 7 of 8 healthy standups** (their cross-session sweep quotes those
+strings out of other sessions — only the last assistant message decides); and `prune-worktrees`
+transcripts live under `-Users-alex-Sites-hands-up-education/`, not this repo's project dir, so a
+correctly-scoped search reported 5/5 phantom misses. **Effect verified:** worktrees 5 → 3; the two
+survivors are dirty and correctly refused. One procedural slip: the 09-04 standup skipped its
+`log.md` sink; 09-05 noticed and repaired the file but never backfilled `[D-2026-09-04-01]`.
+
+**Diffs shipped (this PR, on top of #1128's):**
+- `.claude/LESSONS.md` — **§1.12** rule (c) new (fix at the writer, never the boundary; derive a
+  contract field from recorded truth not a proxy; a fix that removes a loud failure is a regression —
+  earned #1049 → #1122 → #1132 → PR #1134's review); **§1.16** new (a "do not promote" PR that ships
+  a `latest` production pointer; `metadata["architecture"]` contradicted by the ONNX op census);
+  **§2.9** rule (g) new (a stall with a single human-only root cause leaves the backlog and goes in
+  the retro summary); **§2.15** amended (the missing `hit your session limit` signature; grep finds
+  candidates, only the ending grades); **§2.16** amended (a Board question filed as an issue is still
+  §2.11; repeating a failed channel is not escalation; restamp stale incident titles; the envelope is
+  undocumented, not absent); **§2.17** new (a record on an unmerged branch is not in layer 2 —
+  writer-side and reader-side rules); **§3** appended (an install-required artifact is not in effect
+  until someone runs the installer; a gate whose failure mode is printing green must be proven able
+  to fail).
+- `.claude/skills/pm-session-boot/SKILL.md` — gate step (d): the incidents directory is a lower
+  bound; also read `type:incident` issues and open PRs touching those paths.
+- `.claude/skills/incident-response/SKILL.md` — §5: the file and log entry do not exist until they
+  are on `develop`; for P0/P1 the issue is the primary record; a live incident's own docs-only PR is
+  merge-first.
+- `.claude/skills/bot-monitor-live/SKILL.md` — hard rule 1 rewritten (system state forbidden, record
+  state **required**, merging undefined and pending #1127); frontmatter and "Why monitor-only"
+  aligned.
+- `.claude/skills/weekly-retro/SKILL.md` — input 6: three audit mechanics; scoreboard: check every
+  model PR's `latest` diff against its stated recommendation.
+- `.claude/skills/weekly-retro/AGENDA.md` — cleared. Empty on arrival for the sixth window, but for a
+  new reason: the findings did reach layer 2 this time, they just never reached `develop`.
+
+**Amended outside this PR** (lives outside the repo, per the 08-24/08-31 precedent):
+`~/.claude/scheduled-tasks/daily-trading-standup/SKILL.md` step 7 — restamp a stale incident title;
+from the third unanswered escalation change the channel or the ask; state on every escalation whether
+the record is on `develop` and name the PR carrying it.
+
+**Issues filed:** **#1135** (p2 — weekly-retrain PR ships a `latest` production symlink for a model
+it declines to promote; includes the automated-PR review-exemption question), **#1136** (p3 —
+`primary_checkout_guard` classifies `2>/dev/null` as a relative operand), **#1138** (p1 — the
+pre-push test gate has been inert since #1092 merged, because the fix was never installed). Commented, not resolved:
+**#1127** (the two corrections above), **#1079** (delivery stall, third window, with the auto-merge
+checkbox), **#1106** (open 13 days after PR #1117 landed its work, still `needs:code-review`, and the
+5-experiment vol/regime programme records itself blocked on it), **PR #1130** (drop the symlink
+before merge).
+
+**Experiments:** none ran, and none were preregistered. The 5-document vol/regime programme
+preregistered 2026-08-25 records itself *"execution BLOCKED pending #1106"* — and #1106's
+implementation merged as PR #1117 on **2026-08-25**, 13 days ago; the issue was never closed and
+still carries `needs:code-review`. So the programme has been self-blocked on an issue whose code
+landed, with the real remaining gate (is `closed_candle_gating` enabled anywhere, and has entry
+divergence been re-measured?) unstated anywhere. No new artifact in `docs/research/experiments/` or
+`docs/research/notes/` since 08-25. Commented on #1106; no p-hacking drift to report, there being
+nothing to drift.
+
+**Model scoreboard:** no `latest` symlink changed on `develop` this week, so no
+`docs/research/model-promotions.md` row is owed. PR #1124 (08-30 retrain) and #1130 (09-06 retrain)
+are the retrains' own rows and both remain open. Standup tripwire table unchanged and still the
+ratified one (percentages recomputed from source on all 7 runs).
+
+**Calibration.**
+- `daily-trading-standup` — **the best-performing actor in the fleet, and the only one that did
+  anything.** 7/7 slots, every run ending in a full brief; 11 consecutive escalations that never
+  degenerated into re-reporting; day 5 produced the incident file, PR, PushNotification and issue
+  comment in one run; day 9 self-repaired day 8's skipped commit; day 10 spawned the subagent that
+  found #1131 and #1132 and opened PRs #1133/#1134. It also declined to over-reach — *"stacking
+  autonomous merges beyond what today's task called for isn't warranted."* Its one miscalibration is
+  the inconsistency named above: two different answers to "may I merge?" four days apart. That is a
+  document defect, not an agent defect.
+- `weekly-model-retrain` / ml-engineer — **well calibrated, fourth consecutive declined promotion,
+  and it argued against its own mechanical gate.** It reported that the challenger technically clears
+  2 of 3 criteria and then dismantled the pass itself: the profit-factor "win" is a tie between two
+  999.0 sentinels, the return "win" is +0.0052pp ($0.0024 on an $85 book), and *"two of three criteria
+  are degenerate this week, so '2 of 3' reduces to 'lost the only real one'."* It volunteered that the
+  comparison is biased **toward** the challenger (in-sample for it) and that both models underperform
+  buy-and-hold by ~41pp. It also went looking for a confound it had previously only caveated, passed
+  `--model-type lstm` to remove it, and caught #1131 by auditing the ONNX graph rather than trusting
+  the metadata. **One miss:** it committed a `latest` symlink while writing "No symlink moved" — the
+  prose was about the evaluation, the diff was about the commit (#1135).
+- `daemon(weekly-retro)` 08-31 — **prediction record: 1 correct, 2 wrong, 1 self-defeating.**
+  "§2.10 RESOLVED" → **PARTIALLY WRONG**: the sinks fired correctly and the output never reached
+  `develop` (§2.17). "§2.15's transcript-ending grading will catch mid-run deaths" → **CORRECT**, it
+  caught the 09-03 session-limit death, though the grep list was incomplete. "#1127 escalates the
+  choice to the Board" → **WRONG in method**: filing a Board question as an issue is §2.11, and it
+  drew zero activity for 7 days. Its implicit assumption that #1128 would merge → **WRONG**, and that
+  is why last week's lessons were not in force this week.
+- **Fleet-level:** detection, evidence quality and honest self-caveating are all excellent and have
+  been for a month. Every remaining failure this window is downstream of one thing — **no human was
+  present, and nothing in the system can finish an action without one.**
+
+**For the Board (layer 1, not decided here):** #1127 is unchanged and now costs 11 days — either a
+scheduled actor gets the envelope to clear a close-only latch, or the Board accepts an explicit
+opportunity-cost budget for that class. Added to it: **where each actor's envelope is written**, and
+whether merging to `develop` is inside it (the standup did it once, declined it once). Route via
+`risk-ratification`. The [D-2026-08-13-04] queue stands unchanged for the next sitting. **Escalated
+to the human in the completion summary:** the auto-merge checkbox (#1079); the 11-day P0 (#1121);
+125 open issues, **125 of 125 with zero assignees**.
+**Also worth recording as a green:** the `primary_checkout_guard` shipped by #1087 fired twice
+during this retro and was right both times — the second catch would otherwise have appended this
+very entry to the primary checkout's `main` copy of `log.md`. #1082's stated failure mode is real and
+the control works.
+Ref: #1121, #1127, #1126, #1129, #1128, #1135, #1136, #1138, #1079, #1090, #1106, #1131, #1132,
+#1130, #1122, #1077/#1092, #1082/#1087, #1049; PR #1133, #1134; [D-2026-08-31-01], [D-2026-08-24-01],
+[D-2026-08-13-04]; .claude/LESSONS.md §1.12/§1.16/§2.9(g)/§2.15/§2.16/§2.17/§3.
+## [D-2026-09-09-01] 2026-09-09 08:10 · incident-escalate · daily-trading-standup
+Latest sighting of the prod close-only latch (GH #1121, onset re-verified directly from `system_events` at 2026-08-27 08:35:28.14 UTC): now ~311.6h unactioned, ~311.6x the charter's 1h P0 SLA, thirteenth calendar day. Day 12 (2026-09-08) was comment-only — title restamp + a claimed push notification, but no file/log update landed (same gap pattern as day 8); this run restores continuity. No mechanical change in the condition: book still flat (0 open positions), equity unchanged to the cent at $87.50216036 (session peak $87.50798970, DD ≈0.0067%, no capital at risk), `FEATURE_ENTRY_PAUSE` reconfirmed `false` via `railway variables`, decision loop alive (91 `Decision:` lines in the last ~200-line prod log window). GH #1126 remains `OPEN`, zero comments, untouched 9 days; #1127 remains `OPEN`, one comment, untouched 2 days. PR #1129 (this incident's durable-sink record) remains open, CI-green, mergeable, zero reviews, now unmerged for 8 days.
+Rationale: per this task's own escalation rule, a P0 already escalated and still unactioned is itself the finding, not the condition — updated the existing incident file and GH #1121 rather than filing a new issue or incident record. This subagent has no PushNotification tool available, so escalation this run is limited to the GH comment + incident file + this log entry — the same channel used for 12 prior days; flagging to the calling PM/human that a genuine out-of-band page (not a GH comment) is now overdue.
+Ref: GH #1121 (live incident, 12 prior escalation comments), #1126 (9 days untouched), #1127 (2 days untouched), PR #1129 (unmerged, 8 days), .claude/state/incidents/2026-08-29T0807-P0-close-only-latch-day5-unactioned.md, .claude/LESSONS.md §5.7, §2.13.
+
+## [D-2026-09-10-01] 2026-09-10 08:06 · incident-escalate · daily-trading-standup
+Fourteenth sighting of the prod close-only latch (GH #1121, onset 2026-08-27 08:35:28.14 UTC, re-verified from `system_events`): now ~335.5h unactioned, ~335.5x the charter's 1h P0 SLA, fourteenth calendar day. No mechanical change: 0 open positions, equity unchanged to the cent at $87.50216036 (session peak $87.50798970, DD ≈0.0067%, no capital at risk), `FEATURE_ENTRY_PAUSE` still `false`, no active macro-event window, decision loop alive at normal cadence (all Size 0.00, correctly attributed to the latch since the newest state row is `CLOSE_ONLY_LATCHED`). One transient WS reconnect at 06:12 UTC, self-healed in ~30s (#662/#663 pattern) — not a new issue. GH #1126 untouched 10 days, #1127 untouched 3 days, PR #1129 (this record) unmerged 9 days.
+Per this task's third-escalation rule: this session actually had the `PushNotification` tool (unlike 09-09, which reported none available) and used it — `PushNotification({message: "P0 day 14: prod close-only latch (ETHUSDT) still unactioned, 335x the 1h SLA. Decision needed: merge PR #1129 + authorize restart, or accept the halt. GH #1121.", status: "proactive"})`. Result: `"Mobile push not sent (Remote Control inactive)"` — the desktop-notification leg may have fired if a terminal was attached, but phone delivery explicitly did not happen because Remote Control is not connected. Recording the literal tool result rather than assuming delivery, per the pattern that produced the unverifiable "claimed push notification" gap on day 12 (2026-09-08). If Remote Control is not the right channel either, the two GH-comment-only channels (this log + the issue thread) have now run 14 days without producing a human response, and this task cannot itself escalate further — that is being stated explicitly to the human/PM reader rather than repeated silently tomorrow.
+Rationale: per this task's own escalation rule, a P0 already escalated and still unactioned is itself the finding, not the condition — updated the existing incident file and GH #1121 rather than filing a new issue or incident record.
+Ref: GH #1121 (live incident, 13 prior escalation comments), #1126 (10 days untouched), #1127 (3 days untouched), PR #1129 (unmerged, 9 days), .claude/state/incidents/2026-08-29T0807-P0-close-only-latch-day5-unactioned.md, .claude/LESSONS.md §5.7, §2.13, §2.16.
+
+## [D-2026-09-11-01] 2026-09-11 08:51 · incident-escalate · daily-trading-standup
+Fifteenth sighting of the prod close-only latch (GH #1121, onset 2026-08-27 08:35:28.14 UTC, re-verified from `system_events`): now ~359.3h unactioned, ~359x the charter's 1h P0 SLA, fifteenth calendar day. No mechanical change: 0 open positions, equity unchanged to the cent at $87.50216036 (session peak $87.50798970, DD ≈0.0067%, no capital at risk), `FEATURE_ENTRY_PAUSE` still `false`. Today's CPI print (12:30 UTC) puts now inside the macro de-risking window, unrelated to and not explaining the latch. Decision loop alive with several non-zero blocked SELL signals this run (sizes 9.6-118 between 08:32-08:46 UTC). GH #1126 untouched 11 days, #1127 untouched 4 days, PR #1129 (this record) unmerged 10 days.
+Widened finding this run: the entire open-PR queue (6 PRs: #1124, #1128, #1129, #1130, #1133, #1134, #1137) is CI-green/mergeable with zero human review for 4-12 days each — a repo-wide merge-velocity stall, not unique to #1129. Commented on #1127 with this as reinforcing evidence of the structural response-gap rather than filing a new issue.
+Re-attempted `PushNotification` this run per the 3rd-escalation channel-change rule (day 14 attempt reported mobile delivery failed, "Remote Control inactive") — see the literal tool result in this run's transcript.
+Rationale: per this task's own escalation rule, a P0 already escalated and still unactioned is itself the finding, not the condition — updated the existing incident file and GH #1121 rather than filing a new issue or incident record.
+Ref: GH #1121 (live incident, 14 prior escalation comments), #1126 (11 days untouched), #1127 (4 days untouched, PR-backlog comment added), PR #1129 (unmerged, 10 days), .claude/state/incidents/2026-08-29T0807-P0-close-only-latch-day5-unactioned.md, .claude/LESSONS.md §5.7, §2.13, §2.16.

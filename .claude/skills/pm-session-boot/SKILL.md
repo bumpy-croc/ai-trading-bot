@@ -24,6 +24,12 @@ Parallelize into one batch:
 **Record (layer 2):**
 - c. Tail `.claude/state/log.md` (~50 lines) — recent decisions, open threads, corrections.
 - d. `proposals/` + `incidents/` filtered `status: open`. Any P0 → the session scopes to it.
+  **The directory is a lower bound, not the picture** (LESSONS §2.17): the writers of these
+  records cannot merge their own PRs, so an active incident's file is often still in the queue.
+  Run all three, always: the directory listing, `gh issue list --state open --label
+  type:incident`, and `gh pr list --state open --json number,title,files` filtered for
+  `.claude/state/incidents/` or `log.md`. Earned: on 2026-09-07 the directory on `develop`
+  showed one open P1 from 08-24 while a P0 was on day 11 — its record sat in PR #1129.
 - e. `.claude/state/wakeups.jsonl` — lines with `wake_at <= now` are this tick's top priority.
 
 **Backlog + code momentum:**

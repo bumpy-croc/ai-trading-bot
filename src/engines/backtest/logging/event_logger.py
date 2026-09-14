@@ -242,6 +242,7 @@ class EventLogger:
                 exit_time=trade.exit_time,
                 pnl=trade.pnl,
                 exit_reason=trade.exit_reason,
+                exit_category=trade.exit_category,
                 strategy_name=strategy_name,
                 source=source,
                 stop_loss=trade.stop_loss,

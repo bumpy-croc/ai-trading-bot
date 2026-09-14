@@ -11,7 +11,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Closed-candle gating for live signal decisions** (#1106; parity plan decision D1,
+  `docs/refactor/backtest_live_parity_plan.md` §2 divergence #1). Live rewrites the
+  kline-buffer tail on every WebSocket tick and the trading loop decided on `df.iloc[-1]`
+  — a partially formed candle — while backtest is inherently closed-bar. The forming-bar
+  flip-rate study (`docs/research/experiments/2026-07-06_forming-bar-fliprate.md`) measured
+  **43.2% of decisions at minute 5 disagreeing** with the closed-bar decision, driven
+  entirely by the floating reference price (`predicted_return`'s denominator; the ML
+  feature window was already closed-bars-only in both engines).
+
+  Behind the `closed_candle_gating` feature flag (**default OFF**, so the merge is inert),
+  the loop evaluates the strategy signal exactly once per newly closed bar, at that bar's
+  index, freezing the reference price to that bar's final close. `KlineBuffer` now tracks
+  `last_closed_bar_time` from the Binance kline `x: true` flag, and `Signal.metadata` is
+  stamped with the decision bar's identity in **both** flag states so a staging/prod A/B can
+  attribute every decision.
+
+  **Protective paths stay tick-driven and ungated in both modes** — stop-loss, trailing
+  stops, exit checks, partial operations, PnL/MFE-MAE updates, reconciliation, drawdown
+  guard and account monitoring all continue to run on the forming bar every tick. Gating
+  never delays protection. Only the two entry call sites consume the gated index.
+
+  Hardening from the review round: the closed-bar frontier is captured in the
+  **same lock acquisition** as the frame it describes (`KlineBuffer.snapshot`), closing a
+  race where a bar closing during indicator/ML prep let the gate decide on a floating
+  close while reporting `decision_bar_closed=True`; a closed bar's OHLCV can no longer be
+  rewritten by a late duplicate WebSocket event; incomparable timestamps (mixed
+  tz-awareness after a degraded REST fallback) fail closed with a latched warning instead
+  of escaping into `consecutive_errors`; the decision bar resolves against the dataset the
+  strategy runtime actually indexes rather than the loop's post-`dropna` frame; the bar is
+  consumed only **after** entry execution has had its attempt, so a failed entry retries on
+  the next tick instead of losing a full timeframe; a strategy hot-swap clears the cached
+  decision and the evaluated-bar high-water mark; and the decision-bar keys are persisted
+  through `extract_ml_predictions_from_signal` so the staging A/B has a data source.
+
+  A stalled gate is now **observable**: its only symptom is the absence of a decision,
+  which is indistinguishable from a quiet market (the #1094/#1095 failure shape), so
+  `LatchedConditionMonitor` gained a `CLOSED_CANDLE_GATE_STALLED` condition asserting the
+  gate is still evaluating.
+
+  Decision parity is now pinned by `tests/unit/engines/live/test_closed_candle_parity.py`:
+  the same data through the backtest runtime and through the gated live loop produces the
+  same decision, on the same bar, at the same reference price — with a control test proving
+  the ungated path still diverges.
+
 ### Fixed
+- **`exit_reason` was free text with substring-matched control flow** (#1115). The backtest
+  engine chose an exit's order type with `if "Stop loss" in exit_reason:`, so the `stop_loss`
+  and `stop_loss_filled_offline` spellings silently skipped it and exited as market orders with
+  no stop-gap pricing; the live engine used a *different*, case-insensitive matcher, so the two
+  engines disagreed about what counted as a stop exit. A closed `ExitReason` StrEnum
+  (`src/trading/exit_reason.py`) now backs every exit decision in both engines, and every
+  substring match is an enum comparison. `trades.exit_category` (migration
+  `0014_add_exit_category`) persists it; `exit_reason` keeps its exact historical values,
+  which the `account_balances` ledger key and a pre-registered experiment metric depend on.
+  Crucially the taxonomy distinguishes `stop_loss` (a protective stop took the planned loss)
+  from `trailing_stop` (a trailing stop banked a gain) — classified from the position's
+  trailing/breakeven flags, not from the prose. Prod through 2026-08-20 re-reads as trailing
+  stops 11/11 positive (+$6.18) and protective stops 0/2 (−$1.99), a split the old vocabulary
+  hid. Historical rows are not rewritten: `v_trades_exit_category` resolves a category at read
+  time and flags inferred rows, and `agents/research/1115-exit-taxonomy.md` records the per-row
+  prod mapping. The dashboard's "failed orders" tile, which filtered on an `exit_reason` value
+  no producer ever wrote, now counts `emergency_close`.
 - **Stop-loss re-placement loop that left a live ETHUSDT position repeatedly unprotected**
   (#1104, #1109; incident #1094). On 2026-08-19 thirteen stop-loss orders were placed and
   killed ~66s apart while the position stayed open. The cadence was the **trading loop**

@@ -41,6 +41,7 @@ from src.strategies.components import Signal, SignalDirection
 from src.strategies.components import Strategy as ComponentStrategy
 from src.strategies.components.ml_signal_generator import SHORT_ENTRY_SUPPRESSED_KEY
 from src.tech.adapters.row_extractors import extract_ml_predictions_from_signal
+from src.trading.exit_reason import ExitReason
 
 if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
@@ -146,6 +147,7 @@ class LiveEntryEngineState(Protocol):
         candle_low: float | None,
         candle: Any,
         skip_live_close: bool = ...,
+        exit_category: ExitReason = ...,
     ) -> None: ...
 
 
@@ -882,6 +884,7 @@ class LiveEntryCoordinator:
                         None,
                         None,
                         skip_live_close=False,
+                        exit_category=ExitReason.EMERGENCY_CLOSE,
                     )
                     return
 
@@ -1010,6 +1013,7 @@ class LiveEntryCoordinator:
                         None,
                         None,
                         skip_live_close=False,
+                        exit_category=ExitReason.EMERGENCY_CLOSE,
                     )
 
         except Exception as e:

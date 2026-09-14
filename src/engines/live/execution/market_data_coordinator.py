@@ -54,6 +54,7 @@ class LiveMarketDataEngineState(Protocol):
     _active_symbol: str | None
     _ws_kline_provider: Any
     _kline_buffer: Any
+    _buffer_frontier: Any
 
     # Stays on the engine; invoked via this backref so subclass/test overrides
     # on the engine still apply.
@@ -141,6 +142,7 @@ class LiveMarketDataCoordinator:
                 == WebSocketState.RESYNCING
             ):
                 logger.info("WebSocket resyncing — skipping data fetch")
+                state._buffer_frontier = None
                 return None
 
             # If kline buffer detected a gap, trigger REST resync
@@ -152,20 +154,30 @@ class LiveMarketDataCoordinator:
                     state.timeframe or timeframe,
                 )
 
-            # Use WS cache if available and healthy
+            # Use WS cache if available and healthy. The frame and its
+            # closed-bar frontier are captured in ONE lock acquisition
+            # (KlineBuffer.snapshot): reading them separately lets the WS
+            # thread close the tail in between, which would let closed-candle
+            # gating decide on a bar the frame still holds mid-formation.
             if (
                 state._kline_buffer
                 and state._kline_buffer.is_fresh
                 and state._ws_kline_provider
                 and getattr(state._ws_kline_provider, "ws_healthy", False)
             ):
-                return state._kline_buffer.get_dataframe()
+                df, frontier = state._kline_buffer.snapshot()
+                state._buffer_frontier = frontier
+                return df
 
-            # Fallback to REST (existing behavior)
+            # Fallback to REST (existing behavior). No WebSocket closure
+            # evidence accompanies a REST frame, so the frontier is cleared
+            # rather than left stale from an earlier WS snapshot.
+            state._buffer_frontier = None
             df = state.data_provider.get_live_data(symbol, timeframe, limit=500)
             state.last_data_update = datetime.now(UTC)
             return df
         except Exception as e:
+            state._buffer_frontier = None
             logger.error("Failed to fetch market data: %s", e, exc_info=True)
             return None
 

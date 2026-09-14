@@ -34,6 +34,7 @@ from src.engines.live.trade_close_accounting import (
 from src.engines.shared.models import BaseTrade as Trade
 from src.engines.shared.models import PositionSide
 from src.performance.metrics import Side, pnl_percent
+from src.trading.exit_reason import classify_stop_exit
 
 if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
@@ -798,6 +799,7 @@ class LiveSessionRecoverer:
                         pnl=gross_pnl,
                         pnl_percent=pnl_pct_sized,
                         exit_reason="stop_loss_offline",
+                        exit_category=classify_stop_exit(position),
                     )
                     state.performance_tracker.record_trade(
                         trade=trade,
@@ -820,6 +822,7 @@ class LiveSessionRecoverer:
                             pnl=gross_pnl,
                             strategy_name=state._strategy_name(),
                             exit_reason="stop_loss_offline",
+                            exit_category=classify_stop_exit(position),
                             entry_time=position.entry_time,
                             exit_time=datetime.now(UTC),
                             session_id=state.trading_session_id,

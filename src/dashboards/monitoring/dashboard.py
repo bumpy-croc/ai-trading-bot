@@ -62,6 +62,7 @@ from src.data_providers.cached_data_provider import CachedDataProvider
 from src.database.manager import DatabaseManager
 from src.performance.metrics import max_drawdown as perf_max_drawdown
 from src.performance.metrics import sharpe as perf_sharpe
+from src.trading.exit_reason import ExitReason
 
 # Configure logging via centralized config (set by entry points)
 logger = logging.getLogger(__name__)
@@ -174,6 +175,7 @@ class TradeDict(TypedDict):
     exit_time: Any
     pnl: float
     exit_reason: str
+    exit_category: str
 
 
 class MonitoringDashboard:
@@ -1469,10 +1471,15 @@ class MonitoringDashboard:
             return 0.0
 
     def _get_failed_orders(self) -> int:
-        """Get number of failed orders"""
+        """Count trades closed by an operational failure rather than a strategy decision.
+
+        Counts the ``emergency_close`` category. The previous ``exit_reason = 'failed'``
+        filter matched a string no producer ever wrote, so the tile read zero regardless
+        of how many emergency closes had fired (#1115).
+        """
         try:
-            query = "SELECT COUNT(*) as failed_count FROM trades WHERE exit_reason = 'failed'"
-            result = self.db_manager.execute_query(query)
+            query = "SELECT COUNT(*) as failed_count FROM trades WHERE exit_category = %s"
+            result = self.db_manager.execute_query(query, (str(ExitReason.EMERGENCY_CLOSE),))
             if result and "failed_count" in result[0]:
                 return result[0]["failed_count"]
             return 0
@@ -1811,7 +1818,7 @@ class MonitoringDashboard:
             query = """
             SELECT
                 id, symbol, side, entry_price, exit_price, quantity,
-                entry_time, exit_time, pnl, exit_reason
+                entry_time, exit_time, pnl, exit_reason, exit_category
             FROM trades
             WHERE exit_time IS NOT NULL
             ORDER BY exit_time DESC
@@ -1842,6 +1849,8 @@ class MonitoringDashboard:
                         "exit_time": row.get("exit_time"),
                         "pnl": float(pnl_raw) if pnl_raw is not None else 0.0,
                         "exit_reason": str(row.get("exit_reason", "")),
+                        # Typed category (#1115); empty for rows written before it existed.
+                        "exit_category": str(row.get("exit_category") or ""),
                     }
                     trades.append(trade)
                 except Exception as e:

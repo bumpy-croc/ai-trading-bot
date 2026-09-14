@@ -11,6 +11,7 @@ import pytest
 from src.database.manager import DatabaseManager
 from src.engines.live.trading_engine import LiveTradingEngine
 from src.strategies.ml_basic import create_ml_basic_strategy
+from src.trading.exit_reason import ExitReason
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -210,7 +211,14 @@ def test_live_mode_stop_closes_positions():
     engine.stop()
 
     engine._execute_exit.assert_called_once_with(
-        mock_pos, "Engine shutdown", None, 90000.0, None, None, None
+        mock_pos,
+        "Engine shutdown",
+        None,
+        90000.0,
+        None,
+        None,
+        None,
+        exit_category=ExitReason.ENGINE_SHUTDOWN,
     )
 
 

@@ -20,6 +20,10 @@ except ImportError:
     callbacks = None
 
 from src.infrastructure.runtime.paths import get_project_root
+from src.ml.model_metadata import (
+    PRICE_ONLY_FEATURE_STRATEGY,
+    build_price_normalization,
+)
 from src.ml.training_pipeline import DiagnosticsOptions, TrainingConfig, TrainingContext
 from src.ml.training_pipeline.gpu_config import configure_gpu
 from src.ml.training_pipeline.pipeline import TrainingResult, run_training_pipeline
@@ -277,12 +281,8 @@ def train_price_model_main(args) -> int:
         "created_at": datetime.now(UTC).isoformat(),
         "sequence_length": sequence_length,
         "feature_names": feature_cols,
-        "feature_strategy": "price_only_rolling_minmax",
-        "price_normalization": {
-            "method": "rolling_minmax",
-            "window": sequence_length,
-            "target_feature": "close",
-        },
+        "feature_strategy": PRICE_ONLY_FEATURE_STRATEGY,
+        "price_normalization": build_price_normalization(sequence_length),
         "training_params": {
             "epochs": len(history.history.get("loss", [])),
             "batch_size": args.batch_size,

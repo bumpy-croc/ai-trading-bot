@@ -28,10 +28,22 @@ Reference finding: all 5 winners of the June–July streak exited via trailing s
 2026-07-03 verification entry). Low capture across many trades = exit-geometry hypothesis;
 deep MAE on winners = entry-timing/stop hypothesis. Either way: hypothesis, not tweak.
 
-**2. Exit-reason P&L decomposition.** Group realized P&L by `exit_reason` (trailing stop, SL,
-TP, emergency close, external_close_recovery). Emergency-close P&L is an ops signal, not a
-strategy signal (the 2026-06-02 cascade). Fees from the ledger, not `trades.commission`
-(pre-#731 rows are 0 — see `prod-forensics` for denominations).
+**2. Exit-category P&L decomposition.** Group realized P&L by `trades.exit_category`, NOT by
+`exit_reason` — the prose column spells one logical exit several ways (`Stop loss`,
+`stop_loss`, `stop_loss_filled_offline`) and a naive GROUP BY splits it, non-sign-consistently.
+Query `v_trades_exit_category` and group by `exit_category_resolved`; always carry
+`exit_category_inferred` through, and report inferred rows separately — for rows written
+before #1115 the category is reconstructed, and the protective-vs-trailing split is NOT
+recoverable from the prose (see `agents/research/1115-exit-taxonomy.md` for the per-row
+prod mapping and the categories' definitions).
+
+The distinction that carries the signal is `stop_loss` (a protective stop took the planned
+loss) vs `trailing_stop` (a trailing stop banked a gain) vs `breakeven_stop`. Prod through
+2026-08-20: trailing stops 11/11 positive at +$6.18, protective stops 0/2 at −$1.99 — a
+split the old vocabulary hid entirely. `emergency_close` P&L is an ops signal, not a strategy
+signal (the 2026-06-02 cascade); so are `engine_shutdown`, `external_close`, and `recovered`.
+Fees from the ledger, not `trades.commission` (pre-#731 rows are 0 — see `prod-forensics`
+for denominations).
 
 **3. Live-vs-backtest divergence spot check.** Replay the review window through the corrected
 backtest engine (post-#838 ONLY — every pre-#838 partial-exit backtest return is fabricated)

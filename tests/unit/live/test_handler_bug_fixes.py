@@ -25,6 +25,7 @@ from src.engines.live.execution.position_tracker import (
 from src.engines.live.logging.event_logger import LiveEventLogger
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.fill_policy import default_fill_policy
+from src.trading.exit_reason import ExitReason
 
 
 class TestExitFeeCalculation:
@@ -64,6 +65,7 @@ class TestExitFeeCalculation:
         exit_handler.execute_exit(
             position=position,
             exit_reason="take_profit",
+            exit_category=ExitReason.TAKE_PROFIT,
             current_price=55000.0,
             limit_price=55000.0,
             current_balance=1100.0,
@@ -113,6 +115,7 @@ class TestExitFeeCalculation:
         exit_handler.execute_exit(
             position=position,
             exit_reason="stop_loss",
+            exit_category=ExitReason.STOP_LOSS,
             current_price=45000.0,
             limit_price=45000.0,
             current_balance=900.0,
@@ -163,6 +166,7 @@ class TestTakeProfitLimitPricing:
         exit_handler.execute_exit(
             position=position,
             exit_reason="Take profit",
+            exit_category=ExitReason.TAKE_PROFIT,
             current_price=110.0,
             limit_price=100.0,
             current_balance=1100.0,
@@ -206,6 +210,7 @@ class TestTakeProfitLimitPricing:
         exit_handler.execute_exit(
             position=position,
             exit_reason="Take profit",
+            exit_category=ExitReason.TAKE_PROFIT,
             current_price=70.0,
             limit_price=80.0,
             current_balance=1100.0,
@@ -255,6 +260,7 @@ class TestStopLossGapPricing:
         exit_handler.execute_exit(
             position=position,
             exit_reason="Stop loss",
+            exit_category=ExitReason.STOP_LOSS,
             current_price=105.0,
             limit_price=100.0,
             current_balance=1000.0,
@@ -302,6 +308,7 @@ class TestStopLossGapPricing:
         exit_handler.execute_exit(
             position=position,
             exit_reason="Stop loss",
+            exit_category=ExitReason.STOP_LOSS,
             current_price=95.0,
             limit_price=110.0,
             current_balance=1000.0,
@@ -352,6 +359,7 @@ class TestStopLossGapPricing:
         exit_handler.execute_exit(
             position=position,
             exit_reason="Stop loss",
+            exit_category=ExitReason.STOP_LOSS,
             current_price=105.0,
             limit_price=100.0,
             current_balance=1000.0,

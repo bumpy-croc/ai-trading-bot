@@ -15,6 +15,7 @@ from enum import Enum
 from typing import Any, cast
 
 from src.config.constants import DEFAULT_EPSILON
+from src.trading.exit_reason import ExitReason
 
 logger = logging.getLogger(__name__)
 
@@ -301,7 +302,9 @@ class BaseTrade:
         size: Trade size as fraction of balance.
         pnl: Realized profit/loss in account currency.
         pnl_percent: Sized percentage return (decimal, e.g., 0.02 = +2%).
-        exit_reason: Reason for exiting the trade.
+        exit_reason: Free-text detail describing the exit.
+        exit_category: Typed exit category (the analysable field; see
+            src/engines/shared/exit_reason.py).
         stop_loss: Stop loss price that was set.
         take_profit: Take profit price that was set.
         mfe: Maximum favorable excursion — raw unsized price move from entry
@@ -324,6 +327,7 @@ class BaseTrade:
     pnl: float
     pnl_percent: float | None = None
     exit_reason: str = "unknown"
+    exit_category: ExitReason = ExitReason.UNKNOWN
     stop_loss: float | None = None
     take_profit: float | None = None
     # MFE/MAE tracking fields

@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from src.data_providers.binance_provider import WebSocketState
 from src.database.models import EventType
+from src.trading.exit_reason import ExitReason, classify_stop_exit
 
 if TYPE_CHECKING:
     from src.engines.live.execution.position_tracker import LivePosition, LivePositionTracker
@@ -90,6 +91,7 @@ class WebSocketHealthEngineState(Protocol):
         candle_low: float | None,
         candle: Any,
         skip_live_close: bool = ...,
+        exit_category: ExitReason = ...,
     ) -> None: ...
 
     # Engine wrappers the monitor routes sibling calls through so test mocks on
@@ -287,6 +289,9 @@ class WebSocketHealthMonitor:
                     candle_low=None,
                     candle=None,
                     skip_live_close=True,
+                    # Same classifier the in-engine stop check uses, so a trailed
+                    # stop filled on the exchange lands in the same bucket (#1115).
+                    exit_category=classify_stop_exit(position),
                 )
             except Exception as e:
                 # _execute_exit logs and absorbs its own close failures (reconciliation

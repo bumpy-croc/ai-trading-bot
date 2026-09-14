@@ -61,7 +61,10 @@ class TestGetLatestDataWithWebSocket:
         """Returns cached DataFrame when WS is healthy."""
         mock_buffer = MagicMock()
         cached_df = _make_df(10)
-        mock_buffer.get_dataframe.return_value = cached_df
+        # The read path takes frame and closed-bar frontier in ONE lock
+        # acquisition (KlineBuffer.snapshot) so closed-candle gating cannot
+        # see a frontier that disagrees with the frame it came with (#1106).
+        mock_buffer.snapshot.return_value = (cached_df, cached_df.index[-2])
         mock_buffer.is_fresh = True
 
         mock_ws_provider = MagicMock()

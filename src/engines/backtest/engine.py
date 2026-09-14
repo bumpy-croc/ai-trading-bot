@@ -86,6 +86,7 @@ from src.strategies.components import (
 )
 from src.strategies.components import Strategy as ComponentStrategy
 from src.strategies.components.exposure_governor import ExposureGovernor
+from src.trading.exit_reason import ExitReason
 
 if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
@@ -1437,6 +1438,7 @@ class Backtester:
                 exit_reason=(
                     f"Partial exits complete @ level {max(0, trade.partial_exits_taken - 1)}"
                 ),
+                exit_category=ExitReason.PARTIAL_EXIT_COMPLETE,
                 exit_price=current_price,
             )
         else:
@@ -1492,6 +1494,7 @@ class Backtester:
             completed_trade, net_pnl, exit_fee, slippage = self.exit_handler.execute_exit(
                 exit_price=exit_check.exit_price,
                 exit_reason=exit_check.exit_reason,
+                exit_category=exit_check.exit_category,
                 current_time=current_time,
                 current_price=current_price,
                 balance=self.balance,

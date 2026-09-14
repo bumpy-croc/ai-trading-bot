@@ -46,6 +46,11 @@ from src.data_providers.data_provider import DataProvider
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import EventType
+from src.engines.live.closed_candle_gate import (
+    ClosedCandleGate,
+    LoopSignalDecision,
+    stamp_decision_signal,
+)
 from src.engines.live.config import LiveEngineSettings
 
 # Modular handlers (optional injection for testability)
@@ -129,6 +134,7 @@ from src.strategies.components import Position as ComponentPosition
 from src.strategies.components import RuntimeContext, StrategyRuntime
 from src.strategies.components import Strategy as ComponentStrategy
 from src.strategies.components.exposure_governor import ExposureGovernor
+from src.trading.exit_reason import ExitReason
 
 from .account_sync import AccountSynchronizer
 from .order_tracker import OrderTracker
@@ -807,6 +813,12 @@ class LiveTradingEngine:
 
         # WebSocket stream state (populated during start() if provider supports it)
         self._kline_buffer: KlineBuffer | None = None
+        # Closed-bar frontier captured in the SAME lock acquisition as the
+        # frame it describes (KlineBuffer.snapshot), written by
+        # LiveMarketDataCoordinator.get_latest_data. Reading the buffer's
+        # live frontier here instead would race the WS thread closing the
+        # tail during indicator/ML prep. Trading-loop thread only.
+        self._buffer_frontier: pd.Timestamp | None = None
         self._user_data_processor: UserDataProcessor | None = None
         self._ws_kline_active = False
         # Duck-typed: the unwrapped provider exposing WS kline extensions.
@@ -823,6 +835,15 @@ class LiveTradingEngine:
         # bookkeeping exit is deferred to the trading loop so a slow/failing close
         # can't block order polling or force-remove a filled order (#631).
         self._pending_fill_exits: queue.SimpleQueue = queue.SimpleQueue()
+        # Closed-candle gating (parity plan P1.0/D1): signal evaluation runs on
+        # closed bars only when enabled. Flag resolved ONCE here — reading
+        # feature_flags.json is disk I/O that must stay off the per-tick path.
+        self._closed_candle_gate = ClosedCandleGate(
+            enabled=is_enabled("closed_candle_gating", default=False)
+        )
+        # Latest closed-bar decision, replayed to the tick-driven exit path
+        # between bar closes when gating is ON. Trading-loop thread only.
+        self._last_closed_bar_decision: TradingDecision | None = None
 
     def _init_time_exit_policy(self, time_exit_policy: TimeExitPolicy | None) -> None:
         """Construct the time-exit policy from overrides when not injected."""
@@ -1278,6 +1299,105 @@ class LiveTradingEngine:
             df, index, balance, current_price, current_time
         )
 
+    def _evaluate_signal_decision(
+        self,
+        df: pd.DataFrame,
+        current_index: int,
+        current_price: float,
+        current_time: datetime,
+        timeframe: str,
+        safety_mode: bool,
+    ) -> LoopSignalDecision:
+        """Evaluate the strategy signal for this loop tick.
+
+        Flag OFF (default): unchanged behavior — evaluate every tick on the
+        tail (forming) bar; entries may follow every tick.
+
+        Flag ON (``closed_candle_gating``, parity plan P1.0/D1): evaluate
+        exactly once per newly closed bar, at that bar's index, with that
+        bar's final close as the reference price — the inputs backtest uses
+        at the same bar, by construction. Between closes, the cached
+        closed-bar decision keeps flowing to the tick-driven exit path and
+        entries are suppressed. Safety mode defers (never consumes) a bar's
+        evaluation; the gate's monotonic bar-time guard makes evaluation
+        idempotent across ticks, reconnects, and backfills.
+
+        Signal.metadata is stamped with the decision bar's identity in BOTH
+        modes so the staging/prod A/B can attribute every decision.
+
+        Returns:
+            LoopSignalDecision. ``commit_bar`` is set only when a bar was
+            evaluated, and the loop marks it consumed AFTER entry execution.
+        """
+        gate = self._closed_candle_gate
+        view = gate.resolve(df, self._buffer_frontier)
+
+        if not gate.enabled:
+            runtime_decision = self._runtime_process_decision(
+                df,
+                current_index,
+                self.current_balance,
+                float(current_price),
+                current_time,
+            )
+            stamp_decision_signal(
+                runtime_decision,
+                bar_time=view.bar_time,
+                bar_closed=view.bar_closed,
+                timeframe=timeframe,
+            )
+            return LoopSignalDecision(runtime_decision, current_index, True)
+
+        if safety_mode or not view.evaluate:
+            # Between bar closes (or while context readiness holds decisions
+            # back): protective exit checks keep receiving the latest
+            # closed-bar decision, tick-driven — never delayed, never gated.
+            return LoopSignalDecision(self._last_closed_bar_decision, view.index, False)
+
+        # The strategy runtime indexes its OWN prepared dataset positionally
+        # and ignores the frame handed to it, so a frame position is only
+        # valid there while the two align. The loop's dropna can break that
+        # alignment (and the frontier bar is exactly the row it may drop), so
+        # resolve the decision bar by TIMESTAMP against the dataset that will
+        # actually be indexed.
+        runtime_index = self.strategy_coordinator.runtime_index_for(view.bar_time)
+        decision_index = view.index if runtime_index is None else runtime_index
+        runtime_decision = self._runtime_process_decision(
+            df,
+            decision_index,
+            self.current_balance,
+            float(df.iloc[view.index]["close"]),
+            current_time,
+        )
+        stamp_decision_signal(
+            runtime_decision,
+            bar_time=view.bar_time,
+            bar_closed=True,
+            timeframe=timeframe,
+        )
+        logger.info(
+            "Closed-candle gating: decided on closed bar %s (frame index %d of %d rows, "
+            "runtime index %s, %s)",
+            view.bar_time,
+            view.index,
+            len(df),
+            decision_index,
+            timeframe,
+        )
+        self._last_closed_bar_decision = runtime_decision
+        return LoopSignalDecision(runtime_decision, view.index, True, commit_bar=view.bar_time)
+
+    def _reset_closed_candle_gate(self) -> None:
+        """Drop gate state that a retired strategy owns (hot-swap).
+
+        The cached decision drives signal-reversal exits, and the
+        evaluated-bar high-water mark suppresses re-evaluation — both would
+        otherwise let the outgoing strategy speak for the incoming one for up
+        to a full bar.
+        """
+        self._closed_candle_gate.reset()
+        self._last_closed_bar_decision = None
+
     def _finalize_runtime(self) -> None:
         self.strategy_coordinator.finalize_runtime()
 
@@ -1461,6 +1581,7 @@ class LiveTradingEngine:
                             None,
                             None,
                             None,
+                            exit_category=ExitReason.ENGINE_SHUTDOWN,
                         )
                     except Exception as e:
                         logger.error(
@@ -1568,6 +1689,9 @@ class LiveTradingEngine:
         steps = 0
         cfg = get_config()
         self._active_symbol = symbol
+        # Size the gate's stall threshold now that the timeframe is known —
+        # the liveness assertion is meaningless without it.
+        self._closed_candle_gate.configure_timeframe(timeframe)
         try:
             # get() with a non-None default always returns str.
             heartbeat_every = int(cast(str, cfg.get("ENGINE_HEARTBEAT_STEPS", "60")))
@@ -1625,6 +1749,7 @@ class LiveTradingEngine:
                     if self.strategy_manager and self.strategy_manager.has_pending_update():
                         logger.info("🔄 Applying pending strategy/model update...")
                         if self._apply_pending_strategy_update():
+                            self._reset_closed_candle_gate()
                             self._send_alert("Strategy/Model updated in live trading")
                 except Exception as e:
                     logger.error(
@@ -1681,13 +1806,21 @@ class LiveTradingEngine:
                 elif current_time.tzinfo is None:
                     current_time = current_time.replace(tzinfo=UTC)
 
-                runtime_decision = self._runtime_process_decision(
+                # Signal evaluation: every tick on the forming bar (flag OFF,
+                # today's behavior) or once per closed bar (closed_candle_gating
+                # ON — parity plan P1.0/D1). Protective paths below stay on
+                # current_index/current_price (the forming bar) in both modes.
+                signal_decision = self._evaluate_signal_decision(
                     df,
                     current_index,
-                    self.current_balance,
                     float(current_price),
                     current_time,
+                    timeframe,
+                    safety_mode,
                 )
+                runtime_decision = signal_decision.decision
+                entry_index = signal_decision.entry_index
+                allow_entries = signal_decision.allow_entries
                 if steps % heartbeat_every == 0:
                     log_engine_event(
                         "heartbeat",
@@ -1732,14 +1865,21 @@ class LiveTradingEngine:
                         self.current_balance,
                         candle_time=current_time,
                     )
-                # Check entry conditions if not at maximum positions
-                if (not safety_mode) and (
-                    self.live_position_tracker.position_count
-                    < self.risk_manager.get_max_concurrent_positions()
+                # Check entry conditions if not at maximum positions. With
+                # closed-candle gating ON, entries run only on the tick that
+                # evaluated a newly closed bar, at that bar's index; execution
+                # inputs (current_price/current_time) stay live by design.
+                if (
+                    (not safety_mode)
+                    and allow_entries
+                    and (
+                        self.live_position_tracker.position_count
+                        < self.risk_manager.get_max_concurrent_positions()
+                    )
                 ):
                     self._check_entry_conditions(
                         df,
-                        current_index,
+                        entry_index,
                         symbol,
                         current_price,
                         current_time,
@@ -1747,8 +1887,14 @@ class LiveTradingEngine:
                     )
                     # Check for short entry via legacy hook when available
                     self.entry_coordinator.process_legacy_short_entry(
-                        df, current_index, symbol, current_price, current_time
+                        df, entry_index, symbol, current_price, current_time
                     )
+                # Consume the evaluated bar only now that entry execution has
+                # had its attempt. An exception above skips this, so the next
+                # tick retries the bar instead of losing entries for a whole
+                # timeframe — the ungated path retried on the next tick too.
+                if signal_decision.commit_bar is not None:
+                    self._closed_candle_gate.mark_evaluated(signal_decision.commit_bar)
                 # Update performance metrics
                 self._update_performance_metrics()
                 # Enforce the portfolio max-drawdown hard cap (close-only on breach)
@@ -2108,6 +2254,7 @@ class LiveTradingEngine:
         candle_low: float | None,
         candle,
         skip_live_close: bool = False,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
     ) -> None:
         """Serialise the close on the position\'s base-asset lock, then execute it (#703).
 
@@ -2124,6 +2271,7 @@ class LiveTradingEngine:
             candle_low,
             candle,
             skip_live_close=skip_live_close,
+            exit_category=exit_category,
         )
 
     def _execute_exit_locked(
@@ -2136,6 +2284,7 @@ class LiveTradingEngine:
         candle_low: float | None,
         candle,
         skip_live_close: bool = False,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
     ) -> None:
         """Close a position using shared execution modules (delegated to LiveExitCoordinator)."""
         return self.exit_coordinator.execute_exit_locked(
@@ -2147,6 +2296,7 @@ class LiveTradingEngine:
             candle_low,
             candle,
             skip_live_close=skip_live_close,
+            exit_category=exit_category,
         )
 
     def _cancel_stop_loss_order(self, position: Position) -> bool:
@@ -2398,6 +2548,7 @@ class LiveTradingEngine:
                 "pnl": trade.pnl,
                 "pnl_percent": trade.pnl_percent,
                 "exit_reason": trade.exit_reason,
+                "exit_category": str(trade.exit_category),
                 "duration_minutes": (trade.exit_time - trade.entry_time).total_seconds() / 60,
             }
 

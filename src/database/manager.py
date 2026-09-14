@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import QueuePool
 
 from src.config.config_manager import get_config
+from src.trading.exit_reason import ExitReason, coerce_exit_category
 
 from .models import (
     SYSTEM_HALT_FLAG_NAME,
@@ -810,6 +811,7 @@ class DatabaseManager:
         pnl: float,
         exit_reason: str,
         strategy_name: str,
+        exit_category: ExitReason | str = ExitReason.UNKNOWN,
         source: str | TradeSource = TradeSource.LIVE,
         stop_loss: float | None = None,
         take_profit: float | None = None,
@@ -839,8 +841,9 @@ class DatabaseManager:
             entry_time: Time when position was opened
             exit_time: Time when position was closed
             pnl: Profit/loss in currency units
-            exit_reason: Reason for position exit
+            exit_reason: Free-text detail describing the exit
             strategy_name: Name of the strategy that generated the trade
+            exit_category: Typed exit category (ExitReason) — the analysable field
             source: Trade source (LIVE, BACKTEST, or PAPER)
             stop_loss: Stop loss price if set
             take_profit: Take profit price if set
@@ -909,6 +912,7 @@ class DatabaseManager:
                 pnl_percent=pnl_percent,
                 commission=commission or 0.0,
                 exit_reason=exit_reason,
+                exit_category=str(coerce_exit_category(exit_category)),
                 strategy_name=strategy_name,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
@@ -2134,6 +2138,7 @@ class DatabaseManager:
                     "entry_time": t.entry_time,
                     "exit_time": t.exit_time,
                     "exit_reason": t.exit_reason,
+                    "exit_category": t.exit_category,
                     "strategy": t.strategy_name,
                     # Prefer the excursion implied by the _price companion:
                     # pre-2026-07 rows stored sized, fee-netted mfe/mae, so the
@@ -2904,6 +2909,7 @@ class DatabaseManager:
         exit_reason: str,
         trade_data: dict[str, Any],
         session_id: int | None = None,
+        exit_category: ExitReason | str = ExitReason.UNKNOWN,
     ) -> Generator[dict[str, Any], None, None]:
         """
         Context manager for atomic position reconciliation with exchange.
@@ -2915,9 +2921,10 @@ class DatabaseManager:
             position_db_id: Database ID of position to reconcile
             realized_pnl: Realized P&L from position closure
             exit_price: Exit price for the position
-            exit_reason: Reason for position closure (e.g., "stop_loss_offline")
+            exit_reason: Free-text reason for closure (e.g., "stop_loss_offline")
             trade_data: Dict with trade details (symbol, side, size, entry_price, etc.)
             session_id: Trading session ID (uses current if not provided)
+            exit_category: Typed exit category (ExitReason) persisted on the trade
 
         Yields:
             dict with 'new_balance', 'trade_id', 'position_closed' keys
@@ -3016,6 +3023,7 @@ class DatabaseManager:
                         pnl_percent=pnl_percent,
                         commission=trade_data.get("commission", 0.0),
                         exit_reason=exit_reason,
+                        exit_category=str(coerce_exit_category(exit_category)),
                         strategy_name=trade_data.get("strategy_name", "unknown"),
                         stop_loss=trade_data.get("stop_loss"),
                         take_profit=trade_data.get("take_profit"),
