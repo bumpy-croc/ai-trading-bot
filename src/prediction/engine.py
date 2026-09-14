@@ -30,6 +30,14 @@ MIN_SEQUENCE_LENGTH = 120
 # growth while maintaining enough samples for reliable average calculations.
 MAX_INFERENCE_SAMPLES = 1000
 
+# Sanity bounds for a rolling-minmax "price" prediction (GH #1145). A genuine
+# normalized price is trained to land in [0, 1] with only mild model-error
+# overshoot; a misclassified non-price target (e.g. a smoothed_return bundle
+# wrongly carrying this metadata) is not bounded that way. Widened past [0, 1]
+# to tolerate real overshoot without false-positiving on it.
+ROLLING_MINMAX_SANITY_MIN = -0.5
+ROLLING_MINMAX_SANITY_MAX = 1.5
+
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
 from src.infrastructure.timeout import run_with_timeout
 from src.regime.detector import RegimeConfig, RegimeDetector
@@ -80,6 +88,8 @@ class PredictionEngine:
         accessed without locks:
         - _model_inference_times: dict of deques tracking inference performance
         - _last_cache_hit: boolean tracking last cache lookup result
+        - _warned_misclassified_bundles: set of bundle keys already warned for
+          an out-of-range rolling-minmax denormalization (GH #1145)
 
         For concurrent usage, callers should either:
         1. Create separate PredictionEngine instances per thread
@@ -1201,8 +1211,10 @@ class PredictionEngine:
         # normalized value -- so it only logs; the actual fix is refusing to
         # stamp price_normalization on a non-price target in the first place
         # (model_metadata.py::uses_rolling_minmax_features).
-        if not -0.5 <= normalized_price <= 1.5:
-            bundle_key = getattr(bundle, "key", None) or repr(bundle)
+        if not ROLLING_MINMAX_SANITY_MIN <= normalized_price <= ROLLING_MINMAX_SANITY_MAX:
+            # bundle.key is an always-present, non-empty property on the only type
+            # this method is ever called with (StrategyModel) -- no fallback needed.
+            bundle_key = bundle.key
             if bundle_key not in self._warned_misclassified_bundles:
                 self._warned_misclassified_bundles.add(bundle_key)
                 logger.warning(

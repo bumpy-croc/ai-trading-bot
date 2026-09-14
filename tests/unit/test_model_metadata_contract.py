@@ -19,6 +19,7 @@ from src.ml.cloud.promotion import promote_model_version
 from src.ml.model_metadata import (
     enrich_bundle_metadata,
     ensure_bundle_metadata_complete,
+    has_contradictory_price_normalization,
     missing_prediction_keys,
     uses_rolling_minmax_features,
     validate_bundle_metadata,
@@ -101,6 +102,62 @@ def test_smoothed_return_target_is_not_flagged_despite_normalized_features():
     # A non-price-target bundle must load fine even with none of the
     # price-normalization keys -- there is nothing to denormalize.
     validate_bundle_metadata(metadata, bundle_id="ETHUSDT/price/smoothed-return-v1")
+
+
+def test_already_poisoned_bundle_is_refused_at_load(tmp_path: Path):
+    """GH #1145 follow-up: a bundle ENRICHED BEFORE the classifier fix landed
+    can already carry a rolling_minmax price_normalization block despite its
+    target_type being non-price. The classifier fix alone only stops future
+    writes -- PredictionEngine._apply_rolling_denormalization reads the
+    stamped block directly, not the classifier, so a bundle in this state is
+    still silently denormalized as a price. validate_bundle_metadata must
+    refuse to serve it at registry-load time regardless of when it was
+    written."""
+    metadata = _cloud_style_metadata(
+        training_params={"architecture": "lstm", "target_type": "smoothed_return"},
+        price_normalization={"method": "rolling_minmax", "window": 120, "target_feature": "close"},
+        model_file="model.onnx",
+        framework="onnx",
+    )
+
+    # The classifier correctly says this bundle should NOT have the block --
+    # but it already does, which is exactly the poisoned state.
+    assert uses_rolling_minmax_features(metadata) is False
+    assert has_contradictory_price_normalization(metadata) is True
+
+    with pytest.raises(ValueError, match="smoothed_return"):
+        validate_bundle_metadata(metadata, bundle_id="ETHUSDT/price/poisoned-v1")
+
+
+def test_genuine_price_bundle_with_normalization_already_stamped_is_not_flagged():
+    """The counterpart: a genuine price bundle that already has its
+    (correct) price_normalization block must NOT trip the contradiction
+    check -- only a MISMATCH between target_type and the stamped block is a
+    problem."""
+    metadata = _cloud_style_metadata(
+        training_params={"architecture": "lstm", "target_type": "regression"},
+        price_normalization={"method": "rolling_minmax", "window": 120, "target_feature": "close"},
+        model_file="model.onnx",
+        framework="onnx",
+    )
+
+    assert has_contradictory_price_normalization(metadata) is False
+    validate_bundle_metadata(metadata, bundle_id="ETHUSDT/price/genuine-v1")  # must not raise
+
+
+def test_legacy_bundle_with_normalization_and_no_target_type_is_not_flagged():
+    """A target_type-less legacy bundle (predates smoothed_return entirely)
+    with its price_normalization block already correctly stamped -- the
+    still-served ETHUSDT/basic/2026-07-04_22h_v1 shape -- must load fine."""
+    metadata = _cloud_style_metadata(
+        price_normalization={"method": "rolling_minmax", "window": 120, "target_feature": "close"},
+        model_file="model.onnx",
+        framework="onnx",
+    )
+    assert "training_params" not in metadata
+
+    assert has_contradictory_price_normalization(metadata) is False
+    validate_bundle_metadata(metadata, bundle_id="ETHUSDT/basic/legacy-v1")  # must not raise
 
 
 def test_genuine_price_target_still_flagged_with_target_type_recorded():
