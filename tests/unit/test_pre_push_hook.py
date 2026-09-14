@@ -151,6 +151,46 @@ def test_hook_uses_primary_venv_from_linked_worktree(checkout, tmp_path):
     assert ".venv/bin/python" in result.stdout, "should have used the primary checkout's venv"
 
 
+GIT_SHELLOUT_TEST = (
+    "import subprocess\nimport pytest\n\n"
+    "@pytest.mark.fast\n"
+    "def test_shells_out_to_git(tmp_path):\n"
+    "    nested = tmp_path / 'nested'\n"
+    "    nested.mkdir()\n"
+    "    subprocess.run(['git', 'init', '-q', str(nested)], check=True)\n"
+    "    subprocess.run(['git', 'config', 'user.email', 't@t'], cwd=nested, check=True)\n"
+    "    subprocess.run(['git', 'config', 'user.name', 'T'], cwd=nested, check=True)\n"
+    "    (nested / 'f.txt').write_text('x')\n"
+    "    subprocess.run(['git', 'add', 'f.txt'], cwd=nested, check=True)\n"
+    "    subprocess.run(['git', 'commit', '-q', '-m', 'x'], cwd=nested, check=True)\n"
+)
+
+
+@pytest.mark.slow
+def test_hook_passes_when_a_test_shells_out_to_git_under_a_real_pushs_env(checkout):
+    """GH #1148: a real `git push` exports GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE/GIT_PREFIX into
+    the hook process. Any test that does its own `git init`/`git commit` in a throwaway
+    directory must not inherit those and silently corrupt/redirect against the checkout being
+    pushed. `_run_hook`'s default env strips PYTEST_ADDOPTS etc but never simulated git's own
+    injection -- which is exactly why this regression shipped invisibly for 21 days."""
+    repo = checkout(GIT_SHELLOUT_TEST)
+    git_dir = repo / ".git"
+    result = _run_hook(
+        repo,
+        {
+            "GIT_DIR": str(git_dir),
+            "GIT_WORK_TREE": str(repo),
+            "GIT_PREFIX": "",
+            "GIT_INDEX_FILE": str(git_dir / "index"),
+        },
+    )
+    assert result.returncode == 0, (
+        "hook failed with git's own hook-injected env present -- GIT_DIR leaked into the "
+        f"pytest subprocess and corrupted its git fixture (GH #1148):\n{result.stdout}\n{result.stderr}"
+    )
+    assert "fast unit tests passed" in result.stdout
+
+
 def _run_installer(cwd: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(REPO_ROOT / "tools" / "install_git_hooks.py"), *args],
