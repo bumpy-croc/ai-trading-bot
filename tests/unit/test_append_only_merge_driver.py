@@ -7,6 +7,7 @@ so a test that bypasses git's own dispatch would prove nothing about the case th
 
 from __future__ import annotations
 
+import os
 import random
 import subprocess
 import sys
@@ -23,8 +24,16 @@ PREAMBLE = "# Log\n\nAppend-only. Newest last.\n\n"
 BASE_ENTRY = "## 2026-08-01 09:00 · note · base\nThe ancestor entry.\n\n"
 
 
+def _clean_git_env() -> dict[str, str]:
+    """Scrub git's hook-injected GIT_* vars so a nested `git init`/`git commit` in a throwaway
+    repo cannot silently resolve against the outer repository instead (GH #1148)."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True)
+    proc = subprocess.run(
+        ["git", *args], cwd=repo, capture_output=True, text=True, env=_clean_git_env()
+    )
     if check and proc.returncode != 0:
         raise AssertionError(f"git {' '.join(args)} failed:\n{proc.stdout}\n{proc.stderr}")
     return proc

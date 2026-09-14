@@ -48,13 +48,19 @@ def _isolated_home(tmp_path, monkeypatch):
 
 
 def _git(cwd: Path, *args: str) -> None:
+    # Scrub inherited GIT_* vars (GH #1148: GIT_DIR etc from a real `git push` hook, or from
+    # this suite itself running under one, would make git resolve against the OUTER repo
+    # instead of the synthetic checkout under test) before applying the two deliberate overrides.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+    env["GIT_CONFIG_SYSTEM"] = "/dev/null"
     subprocess.run(
         ["git", *args],
         cwd=cwd,
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        env={**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"},
+        env=env,
     )
 
 
@@ -109,7 +115,9 @@ def _payload(tool_name: str, tool_input: dict, cwd: Path, session_id: str = "s1"
 
 
 def _run_hook(payload: dict, env_extra: dict | None = None) -> subprocess.CompletedProcess:
-    env = {k: v for k, v in os.environ.items() if k != guard.ALLOW_ENV}
+    # Scrub GIT_* too: the guard shells out to `git` against payload["cwd"], and an inherited
+    # GIT_DIR would make that resolve against the OUTER repo instead (GH #1148).
+    env = {k: v for k, v in os.environ.items() if k != guard.ALLOW_ENV and not k.startswith("GIT_")}
     env.update(env_extra or {})
     return subprocess.run(
         [sys.executable, str(GUARD_SOURCE)],

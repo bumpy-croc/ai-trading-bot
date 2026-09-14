@@ -668,3 +668,26 @@ def pytest_configure(config):
 
 
 # Test categories for easy selection
+
+
+def clean_git_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """Environment for a subprocess `git` call, with git's own hook-injected variables removed.
+
+    A parent `git` process (a hook, or pytest itself when run via `.githooks/pre-push`) exports
+    GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE / GIT_PREFIX / GIT_QUARANTINE_PATH and similar into
+    every child process. A test that shells out to `git init`/`git commit` in a throwaway repo
+    inherits these and silently operates on the OUTER repository instead of its own fixture,
+    rather than failing — the exact "looks like it ran, didn't" shape this suite exists to catch
+    (GH #1148). Any test driving `git` as a subprocess should build its env through this helper.
+    """
+    env = dict(base if base is not None else os.environ)
+    for key in list(env):
+        if key.startswith("GIT_"):
+            del env[key]
+    return env
+
+
+@pytest.fixture
+def git_env() -> dict[str, str]:
+    """Pytest-fixture form of `clean_git_env`, for tests that prefer fixture injection."""
+    return clean_git_env()
