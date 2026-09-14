@@ -236,9 +236,28 @@ class LiveEntryCoordinator:
         # iteration (e.g. a stop-loss fill) blocks this entry, not the next one.
         state._refresh_drawdown_gate()
 
-        # Close-only mode: skip all entry signals, exits/stops still active
+        # Close-only mode: skip all entry signals, exits/stops still active.
+        # Write the strategy_executions row and log visibly (not debug) so a
+        # halted-but-alive bot is distinguishable from a dead one: freshness
+        # checks that key off this table would otherwise see the same silence
+        # from "correctly blocking entries every cycle" as from "hung" (#1169).
         if state._close_only_mode:
-            logger.debug("Close-only mode active — skipping entry check")
+            logger.warning(
+                "Close-only mode active — blocking entry check for %s (bot is alive; "
+                "entries are being intentionally refused, not hung)",
+                symbol,
+            )
+            if state.db_manager:
+                state.db_manager.log_strategy_execution(
+                    strategy_name=state._strategy_name(),
+                    symbol=symbol,
+                    signal_type="entry",
+                    action_taken="blocked_close_only",
+                    price=current_price,
+                    timeframe="1m",
+                    reasons=["close_only_mode_active"],
+                    session_id=state.trading_session_id,
+                )
             return
 
         if self._entry_paused(f"entry evaluation for {symbol}"):
