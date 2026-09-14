@@ -1176,6 +1176,39 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.warning("Open-orders lookup failed for %s: %s", symbol, e)
             return None
 
+    def get_open_orders_checked(self, symbol: str) -> list[Order] | None:
+        """Fail-closed variant of :meth:`get_open_orders` for ``symbol``.
+
+        Unlike :meth:`get_open_orders` (which fails OPEN and returns ``[]`` on
+        any error — see LESSONS.md #1.8), this returns ``None`` when the
+        lookup cannot be confirmed, so a caller deciding whether it is safe to
+        place a new stop-loss (#1112) can treat ``None`` as "unknown — do not
+        place" rather than silently reading it as "no open orders".
+        """
+        if not BINANCE_AVAILABLE or not self._client:
+            return None
+        try:
+            orders_data = self._call_get_open_orders(symbol=symbol)
+            parsed = [self._parse_order_data(order_data) for order_data in orders_data]
+            if any(order is None for order in parsed):
+                # _parse_order_data already logged the specific failure. Silently
+                # dropping the unparseable row here would make "confirmed empty"
+                # indistinguishable from "the one order we couldn't read might be
+                # a resting stop" -- exactly the ambiguity this accessor exists to
+                # rule out for callers deciding whether it's safe to place (#1112).
+                logger.error(
+                    "get_open_orders_checked(%s): %d/%d orders failed to parse — "
+                    "reporting lookup unconfirmed rather than a possibly-incomplete list",
+                    symbol,
+                    sum(1 for order in parsed if order is None),
+                    len(parsed),
+                )
+                return None
+            return cast(list[Order], parsed)
+        except Exception as e:
+            logger.warning("Open-orders lookup failed for %s: %s", symbol, e)
+            return None
+
     def repay_margin_loan(self, asset: str, amount: Decimal) -> bool:
         """Repay a cross-margin loan for ``asset`` via the modern borrow-repay endpoint.
 
@@ -1386,6 +1419,14 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 logger.error("Invalid orderId type: %s", type(order_id_raw))
                 return None
 
+            # Binance sends "0.00000000" (not "0") for a plain order's stopPrice, which
+            # the previous `!= "0"` check let through as a truthy 0.0 -- indistinguishable
+            # from a genuine stop resting at price 0. Any positive value is a real stop
+            # price; anything else (missing, "0", "0.00000000", negative) means "no stop
+            # leg" (#1112 -- this field is what guard_stop_placement keys resting-stop
+            # detection on, so a false positive here misclassifies every plain order).
+            parsed_stop_price = float(order_data.get("stopPrice") or 0)
+
             return Order(
                 order_id=str(order_id_raw),
                 symbol=str(order_data["symbol"]),
@@ -1400,11 +1441,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 commission_asset="",
                 create_time=datetime.fromtimestamp(int(order_data["time"]) / 1000, tz=UTC),
                 update_time=datetime.fromtimestamp(int(order_data["updateTime"]) / 1000, tz=UTC),
-                stop_price=(
-                    float(order_data["stopPrice"])
-                    if order_data.get("stopPrice") and order_data["stopPrice"] != "0"
-                    else None
-                ),
+                stop_price=parsed_stop_price if parsed_stop_price > 0 else None,
                 time_in_force=order_data.get("timeInForce", "GTC"),
                 client_order_id=order_data.get("clientOrderId"),
             )

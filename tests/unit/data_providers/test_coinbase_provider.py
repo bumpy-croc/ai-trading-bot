@@ -268,3 +268,37 @@ class TestCoinbaseOrderTypeMapping:
 
         assert order is None
         mock_request.assert_not_called()
+
+
+class TestCoinbaseGetOpenOrdersChecked:
+    """#1112: without this override, the base-class default always returns
+    None, so guard_stop_placement would REFUSE every stop-loss placement on
+    this provider unconditionally."""
+
+    @staticmethod
+    def _provider() -> CoinbaseProvider:
+        with patch.dict(os.environ, {"ENV": "test"}, clear=False):
+            for key in ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_API_PASSPHRASE"]:
+                os.environ.pop(key, None)
+            return CoinbaseProvider()
+
+    def test_returns_parsed_list_on_success(self):
+        provider = self._provider()
+        raw_order = {
+            "id": "abc-123",
+            "product_id": "BTC-USD",
+            "side": "sell",
+            "type": "limit",
+            "size": "0.1",
+            "status": "open",
+        }
+        with patch.object(provider, "_request", return_value=[raw_order]):
+            result = provider.get_open_orders_checked("BTC-USD")
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].order_id == "abc-123"
+
+    def test_returns_none_on_request_failure(self):
+        provider = self._provider()
+        with patch.object(provider, "_request", side_effect=Exception("network error")):
+            assert provider.get_open_orders_checked("BTC-USD") is None
