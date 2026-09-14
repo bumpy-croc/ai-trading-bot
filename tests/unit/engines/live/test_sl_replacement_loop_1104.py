@@ -246,12 +246,13 @@ class _CloseHarness:
         self.engine.alert_dispatcher = self.alerts.append
         self.engine.on_critical = self.criticals.append
 
-    def close(self, quantity: float, notional: float = 18.0):
+    def close(self, quantity: float, notional: float = 18.0, *, stop_just_cancelled: bool = False):
         return self.engine._close_live_order(
             symbol="ETHUSDT",
             side=PositionSide.LONG,
             quantity=quantity,
             position_notional=notional,
+            stop_just_cancelled=stop_just_cancelled,
         )
 
 
@@ -328,6 +329,62 @@ class TestCloseIsNeverSilentlyShrunk:
 
         assert (result is None) is aborts
         assert h.exchange.place_order.called is not aborts
+
+
+class TestStaleBalanceRetryAfterStopCancel:
+    """#1165: the recurring ETHUSDT CLOSE_INVENTORY_LOCKED loop of 2026-09-14.
+
+    Binance's cross-margin wallet endpoint is eventually consistent: a close that
+    cancels the resting stop-loss immediately before reading the free balance can
+    still see the stop's pre-cancel `locked` amount for a few hundred ms. That
+    made a fully sellable position abort, re-protect, and re-fire the identical
+    exit on the next ~66s loop iteration forever. The caller signals
+    ``stop_just_cancelled`` so the balance read is retried briefly before the
+    #1104 holdings-cap gate (above) is allowed to trust it.
+    """
+
+    INTENDED = 0.0035008407259148715
+    MIN_REQUIRED = INTENDED * HOLDINGS_CAP_MIN_RATIO  # ~0.0034308
+
+    def test_stale_read_recovers_within_the_retry_budget(self, monkeypatch):
+        h = _CloseHarness(free_base=0.00027109)
+        stale = Mock(free=0.00027109)
+        fresh = Mock(free=0.0035)
+        h.exchange.get_balance.side_effect = [stale, stale, fresh]
+        sleeps: list[float] = []
+        monkeypatch.setattr("src.engines.live.execution.execution_engine.time.sleep", sleeps.append)
+
+        result = h.close(self.INTENDED, notional=9.0, stop_just_cancelled=True)
+
+        assert result is not None
+        h.exchange.place_order.assert_called_once()
+        assert len(sleeps) == 2  # retried twice before the third read cleared the gate
+        assert h.events == []  # no CLOSE_INVENTORY_LOCKED
+
+    def test_stale_read_still_aborts_once_the_retry_budget_expires(self, monkeypatch):
+        """A genuinely locked inventory (#1104) must still abort -- just ~750ms later."""
+        h = _CloseHarness(free_base=0.00027109)
+        monkeypatch.setattr(
+            "src.engines.live.execution.execution_engine.time.sleep", lambda *_: None
+        )
+
+        result = h.close(self.INTENDED, notional=9.0, stop_just_cancelled=True)
+
+        assert result is None
+        assert [code for code, _ in h.events] == ["CLOSE_INVENTORY_LOCKED"]
+
+    def test_ordinary_close_does_not_retry_or_add_latency(self, monkeypatch):
+        """Without stop_just_cancelled the call is unchanged: one read, no sleep."""
+        h = _CloseHarness(free_base=0.00027109)
+        monkeypatch.setattr(
+            "src.engines.live.execution.execution_engine.time.sleep",
+            Mock(side_effect=AssertionError("must not sleep on the ordinary close path")),
+        )
+
+        result = h.close(self.INTENDED, notional=9.0)
+
+        assert result is None
+        assert h.exchange.get_balance.call_count == 1
 
 
 class TestUndersizedStopIsRefused:

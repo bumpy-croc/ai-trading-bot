@@ -464,6 +464,7 @@ class LiveExitCoordinator:
                     candle_low=candle_low,
                     data_provider=state.data_provider,
                     exit_category=exit_category,
+                    stop_just_cancelled=protective_order_cancelled,
                 )
                 if not exit_result.success and protective_order_cancelled:
                     # The close failed after we cancelled a clean (zero-fill) stop, so

@@ -41,6 +41,15 @@ from src.trading.symbols.factory import base_asset_from_symbol
 
 logger = logging.getLogger(__name__)
 
+# #1165: bounded retry for the free-base-balance read right after a close cancels
+# the position's resting stop-loss. Binance's cross-margin wallet endpoint is
+# eventually consistent and can keep reporting the stop's `locked` amount for a
+# few hundred ms, so a same-instant read undercounts a fully sellable position.
+# 3 attempts * 250ms = 750ms max added latency, only on the stop-just-cancelled
+# path, and only until the read clears the required amount.
+_POST_CANCEL_BALANCE_RETRY_ATTEMPTS = 3
+_POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS = 0.25
+
 # Free base-asset value at or below this is ignorable dust for the SHORT
 # inventory guard; above it, MARGIN_BUY would sell held inventory instead of
 # borrowing, so the guard rejects the short.
@@ -807,6 +816,7 @@ class LiveExecutionEngine:
         liquidity: str | None = None,
         apply_slippage: bool = True,
         position_db_id: int | None = None,
+        stop_just_cancelled: bool = False,
     ) -> ExitExecutionResult:
         """Execute an exit order with fees and slippage.
 
@@ -820,6 +830,11 @@ class LiveExecutionEngine:
             apply_slippage: When False, slippage is suppressed.
             position_db_id: Database row ID for the position being closed.
                 Used to link exit journal entries to their position for crash recovery.
+            stop_just_cancelled: True when this close just cancelled the
+                position's resting stop-loss to free its inventory (#710). The
+                free-balance read used to size the close (#1165) then races
+                Binance's eventually-consistent margin wallet, so pass this
+                through to retry that read before trusting it.
 
         Returns:
             ExitExecutionResult with execution details.
@@ -870,6 +885,7 @@ class LiveExecutionEngine:
                     position_notional=position_notional,
                     order_id=order_id,
                     position_db_id=position_db_id,
+                    stop_just_cancelled=stop_just_cancelled,
                 )
                 if not close_order_id:
                     return ExitExecutionResult(
@@ -1209,6 +1225,7 @@ class LiveExecutionEngine:
         position_notional: float,
         order_id: str | None = None,
         position_db_id: int | None = None,
+        stop_just_cancelled: bool = False,
     ) -> str | None:
         """Close a real market order via exchange.
 
@@ -1219,6 +1236,9 @@ class LiveExecutionEngine:
             order_id: Order ID to close.
             position_db_id: Database row ID for the position being closed.
                 Links exit journal entries to their position for crash recovery.
+            stop_just_cancelled: See ``execute_exit``. Passed to
+                ``_free_base_for_close`` to retry a stale post-cancel balance
+                read instead of trusting it on the first try (#1165).
 
         Returns:
             Order ID if successful, None otherwise.
@@ -1250,7 +1270,12 @@ class LiveExecutionEngine:
             intended_quantity = quantity
             free_base: float | None = None
             if order_side == OrderSide.SELL:
-                free_base = self._free_base_for_close(symbol)
+                free_base = self._free_base_for_close(
+                    symbol,
+                    min_required=(
+                        quantity * HOLDINGS_CAP_MIN_RATIO if stop_just_cancelled else None
+                    ),
+                )
                 if free_base is not None and free_base < quantity:
                     logger.warning(
                         "Close sell qty %.8f for %s exceeds free base balance %.8f "
@@ -1392,7 +1417,9 @@ class LiveExecutionEngine:
             logger.error("Live order close failed: %s", e)
             return None
 
-    def _free_base_for_close(self, symbol: str) -> float | None:
+    def _free_base_for_close(
+        self, symbol: str, *, min_required: float | None = None
+    ) -> float | None:
         """Free base-asset balance available to a closing SELL, or None when unknown.
 
         ``free`` is the amount available to sell — reported identically in spot and
@@ -1409,17 +1436,48 @@ class LiveExecutionEngine:
         the latency-sensitive close path (``_normalize_quantity`` already makes
         one). An unrecognized quote degrades safely: the balance lookup finds no
         such asset, returns None, and only the cap is skipped.
+
+        ``min_required`` (#1165): even the stop-loss-just-cancelled case above is
+        NOT always settled by the time this reads it — Binance's cross-margin
+        wallet endpoint (``/sapi/v1/margin/account``) is eventually consistent
+        and can keep reporting the stop's cancelled `locked` amount for a few
+        hundred ms, so the close sizes itself off a pre-cancel snapshot and
+        trips the caller's holdings-cap gate on a fully sellable position. When
+        the caller passes ``min_required`` (the quantity it actually needs
+        freed), poll the read up to ``_POST_CANCEL_BALANCE_RETRY_ATTEMPTS``
+        times, ``_POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS`` apart, and return as
+        soon as a read clears it. If the budget expires the last (still-stale)
+        read is returned unchanged, so the caller's existing gate still aborts a
+        genuinely locked inventory — this only removes the false-positive delay.
         """
         if self.exchange_interface is None:
             return None
 
         base_asset = base_asset_from_symbol(symbol)
-        try:
-            balance = self.exchange_interface.get_balance(base_asset)
-            return float(balance.free) if balance is not None else None
-        except Exception as e:
-            logger.warning("Could not read free %s balance for close sizing: %s", base_asset, e)
-            return None
+        attempts = _POST_CANCEL_BALANCE_RETRY_ATTEMPTS if min_required is not None else 1
+        free: float | None = None
+        for attempt in range(attempts):
+            try:
+                balance = self.exchange_interface.get_balance(base_asset)
+            except Exception as e:
+                logger.warning("Could not read free %s balance for close sizing: %s", base_asset, e)
+                return None
+            free = float(balance.free) if balance is not None else None
+            is_stale = free is not None and min_required is not None and free < min_required
+            if not is_stale or attempt == attempts - 1:
+                return free
+            logger.info(
+                "Free %s balance %.8f for %s is still below the %.8f just freed by a "
+                "stop-loss cancel (attempt %d/%d) — retrying after a short settlement wait.",
+                base_asset,
+                free,
+                symbol,
+                min_required,
+                attempt + 1,
+                attempts,
+            )
+            time.sleep(_POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS)
+        return free
 
     def _normalize_quantity(
         self, symbol: str, quantity: float, value: float, *, floor: bool = False

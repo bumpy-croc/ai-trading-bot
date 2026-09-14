@@ -221,6 +221,53 @@ def test_execute_exit_locked_returns_on_failed_close():
     assert state.completed_trades == []
 
 
+def test_execute_exit_locked_signals_stop_just_cancelled_after_confirmed_cancel():
+    """#1165: the live close must tell the execution engine a stop was just
+    cancelled so it retries a stale post-cancel balance read instead of
+    aborting on Binance's eventually-consistent margin wallet."""
+    position = _make_position()
+    position.stop_loss_order_id = "SL1"
+    state = _make_state(position, _make_exit_check(should_exit=False))
+    state.live_position_tracker.has_position.return_value = True
+    state.enable_live_trading = True
+    state.data_provider = MagicMock()
+    state._check_stop_loss_filled.return_value = (False, None)
+    state._stop_loss_filled_quantity.return_value = 0.0
+    state._cancel_stop_loss_order.return_value = True
+    failed = MagicMock(success=False, error="boom")
+    state.live_exit_handler.execute_exit.return_value = failed
+
+    LiveExitCoordinator(engine_state=state).execute_exit_locked(
+        position, "stop_loss", None, 50100.0, None, None, None
+    )
+
+    state.live_exit_handler.execute_exit.assert_called_once()
+    assert state.live_exit_handler.execute_exit.call_args.kwargs["stop_just_cancelled"] is True
+    # A failed close after a confirmed cancel must still re-protect immediately (#710).
+    state._reprotect_position.assert_called_once_with(position)
+
+
+def test_execute_exit_locked_does_not_claim_a_stop_cancel_that_never_happened():
+    """No resting stop to cancel -> the flag must stay False, never default-True."""
+    position = _make_position()
+    position.stop_loss_order_id = None  # nothing to cancel
+    state = _make_state(position, _make_exit_check(should_exit=False))
+    state.live_position_tracker.has_position.return_value = True
+    state.enable_live_trading = True
+    state.data_provider = MagicMock()
+    state._check_stop_loss_filled.return_value = (False, None)
+    failed = MagicMock(success=False, error="boom")
+    state.live_exit_handler.execute_exit.return_value = failed
+
+    LiveExitCoordinator(engine_state=state).execute_exit_locked(
+        position, "stop_loss", None, 50100.0, None, None, None
+    )
+
+    state.live_exit_handler.execute_exit.assert_called_once()
+    assert state.live_exit_handler.execute_exit.call_args.kwargs["stop_just_cancelled"] is False
+    state._cancel_stop_loss_order.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # ml_predictions logging (#914): signal-metadata prediction context must reach
 # the strategy_executions row instead of the historical always-null value.
