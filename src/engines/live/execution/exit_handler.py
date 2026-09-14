@@ -127,6 +127,7 @@ class LiveExitHandler:
         max_filled_price_deviation: float = DEFAULT_MAX_FILLED_PRICE_DEVIATION,
         close_only_provider: Callable[[], bool] | None = None,
         system_halt: SystemHaltState | None = None,
+        execute_full_exit: Callable[..., None] | None = None,
     ) -> None:
         """Initialize exit handler.
 
@@ -148,6 +149,15 @@ class LiveExitHandler:
             system_halt: The engine's shared manual kill-switch state (#922);
                 scale-ins are suppressed while it is active. None (tests,
                 standalone use) leaves only the feature-flag pause active.
+            execute_full_exit: The engine's ``LiveExitCoordinator.execute_exit``
+                (#486/#1166) — serialises on the base-asset lock (#703) and
+                runs the cancel-then-close sequence (#710) before submitting a
+                market close. Used when a partial exit fully closes a
+                position; calling the handler's own raw ``execute_exit``
+                instead would submit that close with the stop-loss still
+                resting. None (tests, standalone use without an engine) fails
+                safe: the close is skipped and left for the periodic
+                reconciler rather than risking an unprotected market close.
         """
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker
@@ -161,6 +171,7 @@ class LiveExitHandler:
         self.max_position_size = max_position_size
         self.max_filled_price_deviation = max_filled_price_deviation
         self._close_only_provider = close_only_provider
+        self._execute_full_exit = execute_full_exit
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
         self._strategy_exit_checker = StrategyExitChecker()
@@ -185,6 +196,17 @@ class LiveExitHandler:
         only — no behavioral state is lost.
         """
         self._entry_pause = EntryPauseGate(halt_state=system_halt)
+
+    def bind_full_exit(self, execute_full_exit: Callable[..., None] | None) -> None:
+        """Rebind the full-close route to the engine's exit coordinator (#1166).
+
+        A DI-injected handler is constructed before the engine's exit
+        coordinator exists, so the engine rebinds it here once both are built
+        — a partial exit that fully closes a position must never bypass the
+        coordinator's cancel-then-close sequence (#710) and base-asset lock
+        (#703).
+        """
+        self._execute_full_exit = execute_full_exit
 
     def _build_snapshot(
         self,
@@ -1109,14 +1131,32 @@ class LiveExitHandler:
                         "Position %s already closed after partial exits complete", order_id
                     )
                     return
-                self.execute_exit(
-                    position=position,
-                    exit_reason=f"Partial exits complete @ level {target_level}",
-                    exit_category=ExitReason.PARTIAL_EXIT_COMPLETE,
-                    current_price=price,
-                    limit_price=None,
-                    current_balance=current_balance,
-                )
+                # Route through the exit coordinator (not self.execute_exit)
+                # so a partial exit that fully closes the position gets the
+                # same #710 cancel-then-close sequence and #703 base-asset
+                # lock as every other close — calling execute_exit directly
+                # here would submit a market close with the stop-loss still
+                # resting (#1166).
+                if self._execute_full_exit is not None:
+                    self._execute_full_exit(
+                        position,
+                        f"Partial exits complete @ level {target_level}",
+                        None,  # limit_price
+                        price,  # current_price
+                        None,  # candle_high
+                        None,  # candle_low
+                        None,  # candle
+                        exit_category=ExitReason.PARTIAL_EXIT_COMPLETE,
+                    )
+                else:
+                    logger.critical(
+                        "No exit-coordinator route wired for %s — cannot safely "
+                        "close the position fully exited via partials (would "
+                        "bypass the #710 cancel-then-close sequence and #703 "
+                        "base-asset lock). Leaving it for the periodic "
+                        "reconciler.",
+                        position.symbol,
+                    )
 
     def _execute_scale_in(
         self,

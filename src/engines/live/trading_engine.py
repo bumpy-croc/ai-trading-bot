@@ -1074,11 +1074,18 @@ class LiveTradingEngine:
             close_only_provider=self._refresh_drawdown_gate,
             # Manual kill-switch (#922): scale-ins share the engine's halt state.
             system_halt=self._system_halt,
+            # #1166: a partial exit that fully closes a position must route
+            # through the same cancel-then-close + base-asset-lock sequence
+            # (#710/#703) as every other close.
+            execute_full_exit=self.exit_coordinator.execute_exit,
         )
         # A DI-injected handler was built without the engine's halt state —
         # rebind so its scale-ins cannot bypass the kill-switch. Idempotent
         # for the default handler constructed above.
         self.live_exit_handler.bind_system_halt(self._system_halt)
+        # Same rebind for a DI-injected handler, which is built before the
+        # engine's exit coordinator exists (#1166).
+        self.live_exit_handler.bind_full_exit(self.exit_coordinator.execute_exit)
         # #802 follow-up P3: scale-ins respect the same gross exposure cap as
         # entries (share the governor instance; inert unless the flag is on).
         self.live_exit_handler.configure_exposure_gate(exposure_governor)
