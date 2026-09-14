@@ -31,7 +31,10 @@ import pytest
 
 from src.config.constants import CLOSE_ABORT_CLOSE_ONLY_STREAK, HOLDINGS_CAP_MIN_RATIO
 from src.data_providers.exchange_interface import Order, OrderSide, OrderStatus, OrderType
-from src.engines.live.execution.execution_engine import LiveExecutionEngine
+from src.engines.live.execution.execution_engine import (
+    _POST_CANCEL_BALANCE_RETRY_ATTEMPTS,
+    LiveExecutionEngine,
+)
 from src.engines.live.execution.stop_loss_manager import LiveStopLossManager
 from src.engines.live.order_tracker import (
     SELF_CANCEL_SUPPRESSION_TTL_SECONDS,
@@ -344,7 +347,11 @@ class TestStaleBalanceRetryAfterStopCancel:
     """
 
     INTENDED = 0.0035008407259148715
-    MIN_REQUIRED = INTENDED * HOLDINGS_CAP_MIN_RATIO  # ~0.0034308
+    STEP = 0.00001  # _CloseHarness's default LOT_SIZE step
+    # The retry threshold pads the ratio by one lot step (see
+    # LiveExecutionEngine._close_live_order) so a "settled" verdict here
+    # survives the later floor-to-step normalization.
+    MIN_REQUIRED = INTENDED * HOLDINGS_CAP_MIN_RATIO + STEP  # ~0.0034408
 
     def test_stale_read_recovers_within_the_retry_budget(self, monkeypatch):
         h = _CloseHarness(free_base=0.00027109)
@@ -358,11 +365,38 @@ class TestStaleBalanceRetryAfterStopCancel:
 
         assert result is not None
         h.exchange.place_order.assert_called_once()
+        assert h.exchange.get_balance.call_count == 3
         assert len(sleeps) == 2  # retried twice before the third read cleared the gate
         assert h.events == []  # no CLOSE_INVENTORY_LOCKED
 
+    def test_a_read_within_one_lot_step_of_the_threshold_is_not_treated_as_settled(
+        self, monkeypatch
+    ):
+        """Regression for the #1165 review finding: the retry verdicts on the RAW
+        balance, but the #1104 gate below evaluates the quantity AFTER
+        _normalize_quantity floors it to a lot step. A read that clears the raw
+        ratio by less than one step floors back under the gate and aborts
+        anyway -- defeating the retry in exactly the case it exists for. The
+        threshold must be padded by one step so this read is NOT treated as
+        settled, and the retry continues to the genuinely-fresh read.
+        """
+        h = _CloseHarness(free_base=0.00027109)
+        marginal = Mock(free=0.003435)  # clears the raw 98% ratio, floors back under it
+        fresh = Mock(free=0.0035)
+        h.exchange.get_balance.side_effect = [marginal, fresh]
+        monkeypatch.setattr(
+            "src.engines.live.execution.execution_engine.time.sleep", lambda *_: None
+        )
+
+        result = h.close(self.INTENDED, notional=9.0, stop_just_cancelled=True)
+
+        assert result is not None
+        h.exchange.place_order.assert_called_once()
+        assert h.exchange.get_balance.call_count == 2  # did not settle for the marginal read
+        assert h.events == []  # no CLOSE_INVENTORY_LOCKED
+
     def test_stale_read_still_aborts_once_the_retry_budget_expires(self, monkeypatch):
-        """A genuinely locked inventory (#1104) must still abort -- just ~750ms later."""
+        """A genuinely locked inventory (#1104) must still abort -- just ~1.2s later."""
         h = _CloseHarness(free_base=0.00027109)
         monkeypatch.setattr(
             "src.engines.live.execution.execution_engine.time.sleep", lambda *_: None
@@ -372,6 +406,9 @@ class TestStaleBalanceRetryAfterStopCancel:
 
         assert result is None
         assert [code for code, _ in h.events] == ["CLOSE_INVENTORY_LOCKED"]
+        assert h.events[0][1]["stop_just_cancelled"] is True
+        # Pin the retry actually ran its full budget rather than bailing early.
+        assert h.exchange.get_balance.call_count == _POST_CANCEL_BALANCE_RETRY_ATTEMPTS
 
     def test_ordinary_close_does_not_retry_or_add_latency(self, monkeypatch):
         """Without stop_just_cancelled the call is unchanged: one read, no sleep."""

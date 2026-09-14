@@ -44,11 +44,17 @@ logger = logging.getLogger(__name__)
 # #1165: bounded retry for the free-base-balance read right after a close cancels
 # the position's resting stop-loss. Binance's cross-margin wallet endpoint is
 # eventually consistent and can keep reporting the stop's `locked` amount for a
-# few hundred ms, so a same-instant read undercounts a fully sellable position.
-# 3 attempts * 250ms = 750ms max added latency, only on the stop-just-cancelled
-# path, and only until the read clears the required amount.
-_POST_CANCEL_BALANCE_RETRY_ATTEMPTS = 3
-_POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS = 0.25
+# few seconds, so a same-instant read undercounts a fully sellable position.
+# N attempts sleep (N-1) times between them: 5 attempts * 300ms = 1.2s max added
+# sleep (plus up to 4 extra uncached balance reads), only on the stop-just-
+# cancelled path, and only until a read clears the required amount -- a settled
+# wallet costs nothing beyond the first read. The prod incident observed the
+# wallet still settling ~3s after cancel at reprotect time (an upper bound, not
+# a measurement of the earliest settle point); this budget is deliberately
+# generous relative to that, since the base-asset lock it runs under already
+# tolerates multi-second waits elsewhere in this same close path.
+_POST_CANCEL_BALANCE_RETRY_ATTEMPTS = 5
+_POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS = 0.3
 
 # Free base-asset value at or below this is ignorable dust for the SHORT
 # inventory guard; above it, MARGIN_BUY would sell held inventory instead of
@@ -225,21 +231,34 @@ class LiveExecutionEngine:
         intended_quantity: float,
         sellable_quantity: float,
         free_base: float | None,
+        stop_just_cancelled: bool = False,
     ) -> None:
         """Page, persist and latch a close aborted because the inventory is not sellable.
 
         Fully fault-isolated: the abort decision is already made and observability must
         never turn a refused close into a raised exception.
+
+        ``stop_just_cancelled`` (#1165) distinguishes two causes this event has
+        historically conflated: a genuinely orphaned/untracked stop (#1104) vs. a
+        close that DID retry a post-cancel balance settlement and still never
+        cleared the gate within budget. Without this, a future incident emits a
+        byte-identical row to the ones that diagnosed #1165, and there is no way
+        to tell "retried and it never settled" from "was never going to settle."
         """
         with self._short_guard_lock:
             streak = self._close_abort_streaks.get(symbol, 0) + 1
             self._close_abort_streaks[symbol] = streak
         sellable_pct = (sellable_quantity / intended_quantity * 100.0) if intended_quantity else 0.0
+        lock_hypothesis = (
+            "the post-cancel balance settlement retry ran its full budget and never cleared "
+            "the holdings-cap ratio"
+            if stop_just_cancelled
+            else "base asset is locked by an untracked order or cannot be lot-sized"
+        )
         message = (
             f"Close of {symbol} ABORTED: only {sellable_quantity:.8f} of the intended "
-            f"{intended_quantity:.8f} ({sellable_pct:.1f}%) is sellable — base asset is "
-            f"locked by an untracked order or cannot be lot-sized. Position remains OPEN. "
-            f"Consecutive aborts: {streak}."
+            f"{intended_quantity:.8f} ({sellable_pct:.1f}%) is sellable — {lock_hypothesis}. "
+            f"Position remains OPEN. Consecutive aborts: {streak}."
         )
         self._log_execution_event(
             EventType.ERROR,
@@ -253,6 +272,7 @@ class LiveExecutionEngine:
                 "free_base_balance": float(free_base) if free_base is not None else None,
                 "min_ratio": HOLDINGS_CAP_MIN_RATIO,
                 "consecutive_aborts": streak,
+                "stop_just_cancelled": stop_just_cancelled,
             },
         )
         if self.alert_dispatcher is not None:
@@ -1270,12 +1290,17 @@ class LiveExecutionEngine:
             intended_quantity = quantity
             free_base: float | None = None
             if order_side == OrderSide.SELL:
-                free_base = self._free_base_for_close(
-                    symbol,
-                    min_required=(
-                        quantity * HOLDINGS_CAP_MIN_RATIO if stop_just_cancelled else None
-                    ),
-                )
+                min_required = None
+                if stop_just_cancelled:
+                    # Pad by one lot step: the retry below verdicts on the RAW
+                    # balance, but the gate two blocks down evaluates the
+                    # quantity AFTER _normalize_quantity floors it to a lot
+                    # step. A read that clears the ratio by less than one step
+                    # would floor back under it and abort anyway, defeating the
+                    # retry in exactly the case it exists for (#1165 review).
+                    step_size = self._lot_step_size(symbol) or 0.0
+                    min_required = quantity * HOLDINGS_CAP_MIN_RATIO + step_size
+                free_base = self._free_base_for_close(symbol, min_required=min_required)
                 if free_base is not None and free_base < quantity:
                     logger.warning(
                         "Close sell qty %.8f for %s exceeds free base balance %.8f "
@@ -1319,6 +1344,7 @@ class LiveExecutionEngine:
                     intended_quantity=intended_quantity,
                     sellable_quantity=quantity,
                     free_base=free_base,
+                    stop_just_cancelled=stop_just_cancelled,
                 )
                 return None
             # Gate passed: the condition cleared, so a later abort starts a fresh streak.
@@ -1424,12 +1450,14 @@ class LiveExecutionEngine:
 
         ``free`` is the amount available to sell — reported identically in spot and
         margin mode. The close path cancels the position's resting stop-loss first
-        (#710) so its inventory is free again by the time this reads it, but that
-        assumption does NOT hold for a stop the engine has lost track of: #1104 saw an
-        orphaned stop lock the whole position. The caller therefore gates on the
-        submitted-vs-intended ratio rather than trusting this value to be complete.
-        A None return means the cap is skipped, never that the close is blocked: a
-        transient balance-lookup failure must not stop an exit.
+        (#710), intending its inventory to be free again by the time this reads it —
+        but that is NOT guaranteed, for two independent reasons: a stop the engine
+        has lost track of (#1104 saw an orphaned stop lock the whole position), or
+        the read itself outrunning exchange settlement (#1165, see ``min_required``
+        below). The caller therefore gates on the submitted-vs-intended ratio rather
+        than trusting this value to be complete. A None return means the cap is
+        skipped, never that the close is blocked: a transient balance-lookup failure
+        must not stop an exit.
 
         The base asset comes from the quote-suffix strip rather than
         ``get_symbol_info`` — that would add a second full exchange-info fetch to
@@ -1441,13 +1469,15 @@ class LiveExecutionEngine:
         NOT always settled by the time this reads it — Binance's cross-margin
         wallet endpoint (``/sapi/v1/margin/account``) is eventually consistent
         and can keep reporting the stop's cancelled `locked` amount for a few
-        hundred ms, so the close sizes itself off a pre-cancel snapshot and
-        trips the caller's holdings-cap gate on a fully sellable position. When
-        the caller passes ``min_required`` (the quantity it actually needs
-        freed), poll the read up to ``_POST_CANCEL_BALANCE_RETRY_ATTEMPTS``
-        times, ``_POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS`` apart, and return as
-        soon as a read clears it. If the budget expires the last (still-stale)
-        read is returned unchanged, so the caller's existing gate still aborts a
+        seconds, so the close sizes itself off a pre-cancel snapshot and trips
+        the caller's holdings-cap gate on a fully sellable position. When the
+        caller passes ``min_required`` (the quantity it actually needs freed,
+        already padded by one lot step so a "settled" verdict here survives the
+        caller's later floor-to-step normalization — see ``_close_live_order``),
+        poll the read up to ``_POST_CANCEL_BALANCE_RETRY_ATTEMPTS`` times,
+        ``_POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS`` apart, and return as soon
+        as a read clears it. If the budget expires the last (still-stale) read
+        is returned unchanged, so the caller's existing gate still aborts a
         genuinely locked inventory — this only removes the false-positive delay.
         """
         if self.exchange_interface is None:
@@ -1459,10 +1489,16 @@ class LiveExecutionEngine:
         for attempt in range(attempts):
             try:
                 balance = self.exchange_interface.get_balance(base_asset)
+                # Convert INSIDE the try: a malformed balance (e.g. a non-numeric
+                # `.free`) must degrade to None like every other lookup failure
+                # here, never raise past this method. Outside the try, that raise
+                # propagates to a failed close with the stop already cancelled —
+                # the exact storm this retry exists to stop, from a new trigger
+                # (#1165 review).
+                free = float(balance.free) if balance is not None else None
             except Exception as e:
                 logger.warning("Could not read free %s balance for close sizing: %s", base_asset, e)
                 return None
-            free = float(balance.free) if balance is not None else None
             is_stale = free is not None and min_required is not None and free < min_required
             if not is_stale or attempt == attempts - 1:
                 return free
@@ -1478,6 +1514,30 @@ class LiveExecutionEngine:
             )
             time.sleep(_POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS)
         return free
+
+    def _lot_step_size(self, symbol: str) -> float | None:
+        """Best-effort LOT_SIZE step for ``symbol``, or None if unavailable.
+
+        Used only to pad the #1165 post-cancel balance-retry threshold in
+        ``_close_live_order`` so a "settled" verdict there survives
+        ``_normalize_quantity``'s later floor-to-step rounding. Every failure
+        mode (no exchange interface, a fetch error, a missing/invalid field)
+        degrades to None; callers must treat that as "skip the padding," the
+        same fail-open contract ``_free_base_for_close`` uses for a None
+        balance — never as a reason to block the close.
+        """
+        if self.exchange_interface is None:
+            return None
+        try:
+            symbol_info = self.exchange_interface.get_symbol_info(symbol)
+        except Exception:
+            return None
+        if not symbol_info or not isinstance(symbol_info, dict):
+            return None
+        step_size = symbol_info.get("step_size")
+        if not isinstance(step_size, int | float) or step_size <= 0 or not math.isfinite(step_size):
+            return None
+        return float(step_size)
 
     def _normalize_quantity(
         self, symbol: str, quantity: float, value: float, *, floor: bool = False
