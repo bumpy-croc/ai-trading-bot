@@ -1176,6 +1176,39 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.warning("Open-orders lookup failed for %s: %s", symbol, e)
             return None
 
+    def get_open_orders_checked(self, symbol: str) -> list[Order] | None:
+        """Fail-closed variant of :meth:`get_open_orders` for ``symbol``.
+
+        Unlike :meth:`get_open_orders` (which fails OPEN and returns ``[]`` on
+        any error — see LESSONS.md #1.8), this returns ``None`` when the
+        lookup cannot be confirmed, so a caller deciding whether it is safe to
+        place a new stop-loss (#1112) can treat ``None`` as "unknown — do not
+        place" rather than silently reading it as "no open orders".
+        """
+        if not BINANCE_AVAILABLE or not self._client:
+            return None
+        try:
+            orders_data = self._call_get_open_orders(symbol=symbol)
+            parsed = [self._parse_order_data(order_data) for order_data in orders_data]
+            if any(order is None for order in parsed):
+                # _parse_order_data already logged the specific failure. Silently
+                # dropping the unparseable row here would make "confirmed empty"
+                # indistinguishable from "the one order we couldn't read might be
+                # a resting stop" -- exactly the ambiguity this accessor exists to
+                # rule out for callers deciding whether it's safe to place (#1112).
+                logger.error(
+                    "get_open_orders_checked(%s): %d/%d orders failed to parse — "
+                    "reporting lookup unconfirmed rather than a possibly-incomplete list",
+                    symbol,
+                    sum(1 for order in parsed if order is None),
+                    len(parsed),
+                )
+                return None
+            return cast(list[Order], parsed)
+        except Exception as e:
+            logger.warning("Open-orders lookup failed for %s: %s", symbol, e)
+            return None
+
     def repay_margin_loan(self, asset: str, amount: Decimal) -> bool:
         """Repay a cross-margin loan for ``asset`` via the modern borrow-repay endpoint.
 
@@ -1386,6 +1419,14 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 logger.error("Invalid orderId type: %s", type(order_id_raw))
                 return None
 
+            # Binance sends "0.00000000" (not "0") for a plain order's stopPrice, which
+            # the previous `!= "0"` check let through as a truthy 0.0 -- indistinguishable
+            # from a genuine stop resting at price 0. Any positive value is a real stop
+            # price; anything else (missing, "0", "0.00000000", negative) means "no stop
+            # leg" (#1112 -- this field is what guard_stop_placement keys resting-stop
+            # detection on, so a false positive here misclassifies every plain order).
+            parsed_stop_price = float(order_data.get("stopPrice") or 0)
+
             return Order(
                 order_id=str(order_id_raw),
                 symbol=str(order_data["symbol"]),
@@ -1400,11 +1441,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 commission_asset="",
                 create_time=datetime.fromtimestamp(int(order_data["time"]) / 1000, tz=UTC),
                 update_time=datetime.fromtimestamp(int(order_data["updateTime"]) / 1000, tz=UTC),
-                stop_price=(
-                    float(order_data["stopPrice"])
-                    if order_data.get("stopPrice") and order_data["stopPrice"] != "0"
-                    else None
-                ),
+                stop_price=parsed_stop_price if parsed_stop_price > 0 else None,
                 time_in_force=order_data.get("timeInForce", "GTC"),
                 client_order_id=order_data.get("clientOrderId"),
             )
@@ -1951,45 +1988,73 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 else:
                     limit_price = stop_price * (1 + STOP_LOSS_LIMIT_SLIPPAGE_FACTOR)
 
+            # limit_price may have just been computed above (it starts None for a
+            # caller that didn't supply one) -- refresh the recorded value so a
+            # failure from here on reports the price actually being requested,
+            # not the pre-computation None from error_params' initial build.
+            error_params["price"] = limit_price
+
             # Round prices to a valid tick size and size the quantity to a valid lot.
             symbol_info = self.get_symbol_info(symbol)
-            step_size = 0.0
-            base_asset: str | None = None
             error_params["symbol_info_available"] = bool(symbol_info)
-            if symbol_info:
-                # Validate tick_size is numeric before division to prevent TypeError
-                tick_size_raw = symbol_info.get("tick_size", 0.01)
-                tick_size = float(tick_size_raw) if isinstance(tick_size_raw, int | float) else 0.01
-                error_params["tick_size"] = tick_size
-                if tick_size > 0:
-                    # `round(x / tick) * tick` in float math leaves artifacts (e.g.
-                    # round(1648.82 / 0.01) * 0.01 = 1648.8200000000001) that exceed the
-                    # asset's price precision, so Binance rejects the stop-loss with code
-                    # -1111 ("price has too much precision"). Quantize to the tick's decimal
-                    # count, mirroring the quantity quantize at the LOT_SIZE step below.
-                    stop_price = quantize_to_step(
-                        round(stop_price / tick_size) * tick_size, tick_size
-                    )
-                    limit_price = quantize_to_step(
-                        round(limit_price / tick_size) * tick_size, tick_size
-                    )
-
-                # Validate step_size is numeric before division to prevent TypeError
-                step_size_raw = symbol_info.get("step_size", 0.00001)
-                step_size = (
-                    float(step_size_raw) if isinstance(step_size_raw, int | float) else 0.00001
+            if not symbol_info:
+                # A transient get_symbol_info failure leaves tick_size/step_size
+                # unknown. Sending the order anyway (as raw, unquantized floats)
+                # is exactly the shape Binance rejects with -1111 ("price has too
+                # much precision") or 51077 ("precision over maximum") — and by
+                # then the position is already left unprotected with no loud
+                # error (#1126). Fail closed instead: refuse to place, record a
+                # durable CRITICAL row (via order_error_sink -> system_events,
+                # same path as every other failure branch here), and let the
+                # reconciler's existing unprotected-position escalation take it
+                # from there.
+                logger.error(
+                    "get_symbol_info(%s) unavailable - refusing to place stop-loss "
+                    "with unknown tick/lot precision rather than send an "
+                    "unquantized price/quantity that Binance would reject.",
+                    symbol,
                 )
-                base_asset = symbol_info.get("base_asset")
-                error_params["step_size"] = step_size
+                self._record_order_error(
+                    "place_stop_loss_order",
+                    symbol,
+                    error_message=(
+                        f"Symbol info unavailable for {symbol} - refusing to place "
+                        "stop-loss with unknown tick/lot precision"
+                    ),
+                    error_type="SymbolInfoUnavailable",
+                    params=error_params,
+                )
+                return None
+
+            # Validate tick_size is numeric before division to prevent TypeError
+            tick_size_raw = symbol_info.get("tick_size", 0.01)
+            tick_size = float(tick_size_raw) if isinstance(tick_size_raw, int | float) else 0.01
+            error_params["tick_size"] = tick_size
+            if tick_size > 0:
+                # `round(x / tick) * tick` in float math leaves artifacts (e.g.
+                # round(1648.82 / 0.01) * 0.01 = 1648.8200000000001) that exceed the
+                # asset's price precision, so Binance rejects the stop-loss with code
+                # -1111 ("price has too much precision"). Quantize to the tick's decimal
+                # count, mirroring the quantity quantize at the LOT_SIZE step below.
+                stop_price = quantize_to_step(round(stop_price / tick_size) * tick_size, tick_size)
+                limit_price = quantize_to_step(
+                    round(limit_price / tick_size) * tick_size, tick_size
+                )
+
+            # Validate step_size is numeric before division to prevent TypeError
+            step_size_raw = symbol_info.get("step_size", 0.00001)
+            step_size = float(step_size_raw) if isinstance(step_size_raw, int | float) else 0.00001
+            base_asset = symbol_info.get("base_asset")
+            error_params["step_size"] = step_size
 
             # A SELL stop-loss can never order more of the base asset than is actually
             # free: Binance deducts the trade fee from a buy's fill and round-to-nearest
             # can round UP, so the tracked position quantity can exceed holdings and
             # Binance rejects with -2010 (insufficient balance), leaving the position
             # unprotected. Cap at the free balance and round DOWN so the order is always
-            # coverable. This runs even when symbol_info is missing — a transient
-            # get_symbol_info failure must not silently disable the protection. A BUY
-            # (short cover) is funded from quote, so it isn't constrained by base holdings.
+            # coverable. A BUY (short cover) is funded from quote, so it isn't
+            # constrained by base holdings. (Symbol info being missing no longer reaches
+            # this point at all -- that case now returns early, fail-closed, above.)
             # What the caller asked us to protect. The cap and lot snap below are
             # mechanical adjustments that must only ever shave a sliver; the gate after
             # them enforces that against what is actually sent.
@@ -2306,7 +2371,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             "MARKET": OrderType.MARKET,
             "LIMIT": OrderType.LIMIT,
             "STOP_LOSS": OrderType.STOP_LOSS,
+            "STOP_LOSS_LIMIT": OrderType.STOP_LOSS,
             "TAKE_PROFIT": OrderType.TAKE_PROFIT,
+            "TAKE_PROFIT_LIMIT": OrderType.TAKE_PROFIT,
         }
         return mapping.get(binance_type, OrderType.MARKET)
 

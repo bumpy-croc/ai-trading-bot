@@ -88,8 +88,23 @@ scheduler makes a live bot look 1h stale).
    unmerged. A docs-only PR that is a live incident's record is merge-first — it ages against the
    incident, not the backlog (LESSONS §2.17). Earned: #1121's incident file and all six of its daily
    `log.md` entries sat in PR #1129 for 6 days while `develop` showed no open P0 at all.
+   **"Primary" orders these under failure; it does not excuse any of them.** The issue goes first
+   because it lands without a merge — 1 and 3 are still owed in the **same run**, on a branch, even
+   if that branch sits. A comment-only run leaves no archive at all and the log simply stops, which
+   reads exactly like a quiet week. Earned: `daily-trading-standup` 09-08 / 09-12 / 09-13, three
+   comment-only sinks that left `log.md` on `develop` ending 2026-09-11 during a live P0.
 4. Escalate per charter.md Escalation section (method + SLA); while waiting: freeze new
    entries, maintain stops, keep monitoring. One escalation per state, not per tick.
+
+**Closing: say what actually cleared it, from that change's own message.** Before writing a closure
+cause, read the deploy/PR/commit that produced it (`git show <sha>`, the PR body) — do not infer
+intent from timing or contents. #1121's closure was recorded as *"a side effect of an unrelated
+routine deploy"* when the commit (`be451698`) says in its own message that it *"clears the stuck
+close-only latch via the required restart"*: a deliberate remediation, mislabelled as luck, in an
+append-only record. "We got lucky" and "the control worked, late" prescribe opposite fixes
+(LESSONS §2.16, §2.13). And when the recovery step is a **generic** operation — restart, redeploy,
+re-auth — name which routine procedures already perform it and who runs them, or "restart-only"
+will be read as *blocked* when it means *available*.
 
 **Stamping `mitigated_at`:** set it when the mitigation reaches the **affected environment**, not
 when its PR merges — and re-check open records every retro. The 2026-08-24 P1's fix shipped to prod

@@ -19,11 +19,24 @@ from src.engines.shared.models import PositionSide
 pytestmark = pytest.mark.fast
 
 
+def make_exchange(**overrides):
+    """Exchange stand-in that, by default, confirms no resting stop for any
+    symbol (#1112's guard_stop_placement PROCEED case) so existing placement
+    tests keep exercising the actual placement path unless a test overrides
+    ``get_open_orders_checked`` to probe the guard's ADOPT/REFUSE branches.
+    """
+    exchange = Mock()
+    exchange.get_open_orders_checked.return_value = []
+    for key, value in overrides.items():
+        setattr(exchange, key, value)
+    return exchange
+
+
 def make_state(**overrides):
     """Engine-state stand-in with the attributes the manager reads at call time."""
     state = SimpleNamespace(
         enable_live_trading=True,
-        exchange_interface=Mock(),
+        exchange_interface=make_exchange(),
         order_tracker=Mock(),
         live_position_tracker=Mock(),
     )
@@ -147,6 +160,73 @@ class TestPlaceProtection:
         assert state.exchange_interface.place_stop_loss_order.call_count == 3
         state.live_position_tracker.set_stop_loss_order_id.assert_not_called()
         state.order_tracker.track_order.assert_not_called()
+
+
+class TestPlaceProtectionRestingStopGuard1112:
+    """#1112: place_protection must consult the resting-stop guard before
+    calling place_stop_loss_order, so a duplicate can never stack."""
+
+    @staticmethod
+    def _resting_order(side, order_id="already_resting"):
+        return SimpleNamespace(order_id=order_id, side=side, stop_price=48000.0)
+
+    def test_adopts_matching_untracked_resting_stop_without_placing(self):
+        state = make_state()
+        state.exchange_interface.get_open_orders_checked.return_value = [
+            self._resting_order(OrderSide.SELL)
+        ]
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+        position = make_position(stop_loss_order_id=None)
+
+        sl_order_id = manager.place_protection(
+            position=position,
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            quantity=0.5,
+            stop_price=48000.0,
+        )
+
+        assert sl_order_id == "already_resting"
+        state.exchange_interface.place_stop_loss_order.assert_not_called()
+        state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
+            "entry-1", "already_resting"
+        )
+        state.order_tracker.track_order.assert_called_once_with("already_resting", "BTCUSDT")
+
+    def test_refuses_when_resting_order_is_wrong_side(self):
+        state = make_state()
+        state.exchange_interface.get_open_orders_checked.return_value = [
+            self._resting_order(OrderSide.BUY)
+        ]
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        sl_order_id = manager.place_protection(
+            position=make_position(stop_loss_order_id=None),
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            quantity=0.5,
+            stop_price=48000.0,
+        )
+
+        assert sl_order_id is None
+        state.exchange_interface.place_stop_loss_order.assert_not_called()
+        state.order_tracker.track_order.assert_not_called()
+
+    def test_refuses_when_open_orders_lookup_is_unconfirmed(self):
+        state = make_state()
+        state.exchange_interface.get_open_orders_checked.return_value = None
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        sl_order_id = manager.place_protection(
+            position=make_position(stop_loss_order_id=None),
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            quantity=0.5,
+            stop_price=48000.0,
+        )
+
+        assert sl_order_id is None
+        state.exchange_interface.place_stop_loss_order.assert_not_called()
 
 
 class TestCheckFilled:

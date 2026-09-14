@@ -26,7 +26,38 @@ def _binance_provider(mock_client_class, mock_config, client: Mock) -> BinancePr
     mock_config_obj.get_required.return_value = "fake_key"
     mock_config.return_value = mock_config_obj
     mock_client_class.return_value = client
-    client.get_exchange_info.return_value = {"symbols": []}
+    # A real symbol entry, not an empty list: these tests exercise what happens
+    # AFTER symbol_info is resolved (a rejection code, a generic exception, a
+    # missing order id) — an empty "symbols" list makes get_symbol_info() return
+    # None, which #1126's fail-closed check now intercepts before any of that
+    # downstream behavior runs. Tests that specifically want the missing-symbol-
+    # info path should override provider.get_symbol_info directly (see
+    # test_binance_provider.py's pattern), not rely on this fixture being empty.
+    client.get_exchange_info.return_value = {
+        "symbols": [
+            {
+                "symbol": "BTCUSDT",
+                "baseAsset": "BTC",
+                "quoteAsset": "USDT",
+                "status": "TRADING",
+                "filters": [
+                    {
+                        "filterType": "LOT_SIZE",
+                        "minQty": "0.00001",
+                        "maxQty": "9000",
+                        "stepSize": "0.00001",
+                    },
+                    {
+                        "filterType": "PRICE_FILTER",
+                        "minPrice": "0.01",
+                        "maxPrice": "1000000",
+                        "tickSize": "0.01",
+                    },
+                    {"filterType": "MIN_NOTIONAL", "minNotional": "5"},
+                ],
+            }
+        ]
+    }
     return BinanceProvider()
 
 

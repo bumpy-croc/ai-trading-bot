@@ -70,6 +70,13 @@ echo "pre-push: running fast unit tests with $PYTHON"
 # push from a worktree tests the worktree's code and not the venv's install-time checkout.
 export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
+# Git exports GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE/GIT_PREFIX/GIT_QUARANTINE_PATH into hook
+# processes. REPO_ROOT above is already resolved, so nothing downstream needs them -- but any
+# test that shells out to `git` (e.g. to `git init` a throwaway repo) would otherwise inherit
+# GIT_DIR and silently operate on THIS repo instead. That corrupted three test files' git
+# fixtures and made every push fail with a false "tests failed" (GH #1148).
+unset "${!GIT_@}"
+
 # No pipe: pytest's status must reach $? unfiltered. (`set -o pipefail` plus ${PIPESTATUS[0]}
 # would work too, but not piping at all leaves nothing to get wrong.) No -p no:randomly:
 # pytest.ini's addopts pass --randomly-seed, which is unparseable once the plugin is

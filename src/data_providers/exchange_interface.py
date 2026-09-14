@@ -419,8 +419,33 @@ class ExchangeInterface(ABC):
 
         Returns:
             Order ID from exchange, or None on failure
+
+        Callers MUST NOT call this directly to place a NEW protective stop —
+        route through ``src.engines.live.reconciliation.place_or_adopt_stop_loss``
+        (or the equivalent guard in ``LiveStopLossManager``) first, which
+        confirms via :meth:`get_open_orders_checked` that no stop is already
+        resting for the symbol before this is invoked. Skipping that check is
+        exactly how a stale/duplicate resting stop-loss orphans inventory
+        (#1112).
         """
         pass
+
+    def get_open_orders_checked(self, symbol: str) -> list[Order] | None:
+        """Fail-closed variant of :meth:`get_open_orders` for ``symbol``.
+
+        Unlike ``get_open_orders`` (which fails OPEN — returns ``[]`` on any
+        lookup error), this must return ``None`` when the lookup cannot be
+        confirmed, so a safety decision (e.g. "is it safe to place a new
+        stop-loss?", #1112) can treat ``None`` as "unknown — do not act"
+        rather than silently reading it as "confirmed empty".
+
+        Default implementation returns ``None`` (fail-closed) — a provider
+        that does not override this can never assert "no open orders", which
+        is the safe default for any provider that has not explicitly proven
+        the accessor. Providers should override with a real implementation.
+        """
+        logger.warning("get_open_orders_checked not implemented for this exchange")
+        return None
 
     def get_order_by_client_id(self, client_order_id: str, symbol: str) -> Order | None:
         """Get an order by our client_order_id (atb_... idempotency key).
