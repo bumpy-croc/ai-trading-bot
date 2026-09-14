@@ -1516,3 +1516,246 @@ Widened finding this run: the entire open-PR queue (6 PRs: #1124, #1128, #1129, 
 Re-attempted `PushNotification` this run per the 3rd-escalation channel-change rule (day 14 attempt reported mobile delivery failed, "Remote Control inactive") — see the literal tool result in this run's transcript.
 Rationale: per this task's own escalation rule, a P0 already escalated and still unactioned is itself the finding, not the condition — updated the existing incident file and GH #1121 rather than filing a new issue or incident record.
 Ref: GH #1121 (live incident, 14 prior escalation comments), #1126 (11 days untouched), #1127 (4 days untouched, PR-backlog comment added), PR #1129 (unmerged, 10 days), .claude/state/incidents/2026-08-29T0807-P0-close-only-latch-day5-unactioned.md, .claude/LESSONS.md §5.7, §2.13, §2.16.
+
+## [D-2026-09-14-01] 2026-09-14 ~10:45 · note · daemon(weekly-retro)
+**Weekly retro, window 2026-09-07 → 2026-09-14. Distillate-only PR to `develop`.**
+
+**Input 0b — the previous retro's PR MERGED, six days late, in the drain.** #1137 was created
+2026-09-07 09:44Z and merged **2026-09-13 15:57:41Z** — `CLEAN`, CI-green, zero reviews the whole
+time. Per §2.9 rule (f), "merged" is not the finding; **merged 6d 6h late, ~18h before this retro
+started** is. It did land before this retro ran, so unlike the last three windows this retro is
+built on a current distillate. #1128 was correctly closed as superseded. First window in five with
+no stranded retro PR — the escalation in §2.9 rule (d) is not triggered.
+
+**Headline: the 18-day P0 ended, and every record of how it ended is wrong.** GH #1121 closed
+`2026-09-14T07:07:18Z` — **~17d 22.5h, ~430x the charter's 1h P0 SLA**, 19 consecutive daily
+detections, **zero capital loss** (book flat at `$87.50216036` from the 2026-08-27 08:59 UTC
+stop-loss exit through close). Pure opportunity cost. The latch cleared when the Trading Bot service
+restarted under prod promote `be451698` at 06:54:11 UTC.
+
+GH #1140 and the incident file's closing UPDATE (PR #1143, open) both record this as *"a side effect
+of an unrelated routine deploy: the weekly ML-retrain promotion."* `git show be451698` contradicts
+that in the deploy's own words: *"Ships the accumulated fix backlog **and clears the stuck close-only
+latch via the required restart** … `resume_trading()` has no admin path -- clearing it requires this
+restart."* It is a human-authored `main := develop` promote listing six items, of which the retrains
+are one; clearing the latch is named as an **intended effect**. The agent inferred intent from
+timing and contents and wrote the inference into an append-only record as fact. The two framings
+prescribe opposite fixes — "we got lucky" says the control is absent, "the control worked 18 days
+late" says it is gated on human attendance — and only the second is true. Commented on PR #1143 with
+the suggested edit before it merges; → LESSONS **§2.16**, `incident-response` §5/§6.
+
+**Second finding — the two open problems had one shared unblock, and nobody saw the join.** For 18
+days every artifact described the recovery as "restart-only" and the blocker as "no scheduled agent
+is authorized to clear the latch." Both true, and together they buried the operative fact: the clear
+is a side effect of **any** service restart, and this fleet restarts production on every deploy.
+Meanwhile a 7-PR backlog sat green and undeployed for 6–14 days. The stall (#1079) and the P0
+(#1121) were tracked as unrelated items in every standup and two retros, and one action — promote
+the backlog — closed both, the moment a human saw them together. → LESSONS §2.16; new synthesis step
+in `/standup` Step 3 and `/triage` Step 4b: *does any single pending action close more than one open
+item?*
+
+**Third finding — the drain landed two defects purely on merge ORDER.** Rules (f)/(g) measured
+stalls; this is the other half. All **7** open PRs merged in a single **25-minute window** on
+2026-09-13 (15:40:27Z–16:05:54Z) — issued by the PM daemon via `gh pr merge`, not by a human
+clicking (`mergedBy: alexflorisca` is the authenticated `gh` user; see the sixth finding). Ages at merge: #1124 **14d 8h**,
+#1129 **12d 8h**, #1130/#1133/#1134 **7d 7–8h**, #1137 **6d 6h**, #1139 8h.
+- **#1130 merged 15:50:28Z; #1137 — carrying §1.16, the rule that a "do not promote" PR contains
+  zero `latest` changes — merged 15:57:41Z, 7 minutes later.** The rule reached `develop` after the
+  PR it was written to stop. `git ls-tree origin/main src/ml/models/ETHUSDT/price/` now returns
+  `120000 blob … latest`: production's registry publishes as `ETHUSDT/price` the bundle its own
+  evaluation rejects. Live trading unaffected today only because the strategy asks for
+  `model_type="basic"`.
+- **#1139 merged with an unresolved review finding** — its evaluation said the profit-factor
+  sentinel-tie defect was *"Filed separately"*; no such issue existed then or 22h later.
+Both PRs carried explicitly-worded *blocking* review comments and merged past them. On a repo with
+no required-review rule, a comment and a `REQUEST_CHANGES` review are mechanically identical.
+→ LESSONS **§2.9 rule (h)**, **§2.11**, **§1.16 update**; `weekly-retro` input 8.
+
+**Fourth finding — #1138 was still live at p1 after 7 days, and the fix's own installer cannot run.**
+`install_git_hooks.py --check` reported `DRIFT` at the top of this retro; `.git/hooks/pre-push` was
+still the April pre-#1092 copy, so **every push to this repo printed green having run nothing for 21
+days** (08-24 → 09-14). Two corrections fall out. (a) LESSONS §3 claimed only two of the three
+install-required artifacts had a checker — **wrong**: #1092 shipped `install_git_hooks.py --check`
+and `make hooks-check` alongside the fix on 08-24. All three have had one for three weeks and it
+changed nothing, because nothing invokes them. (b) The documented remedy `make hooks` **cannot run
+on this machine**: the Makefile invokes bare `python`, only `python3` is on PATH outside an
+activated venv, so it dies on `make: python: No such file or directory` — the same string as the
+defect it repairs. **Installed the hook during this retro** (`--check` now `ok`); that is an
+environment action, not a code change. → LESSONS **§3**, GH **#1147**, `weekly-retro` input 0b.
+
+**Fifth finding — §2.17's "primary" was read as "only".** The 08-31/09-07 rule that the GH issue is
+the *primary* record for P0/P1 was written to stop records stranding in unmerged PRs. On **3 of 8**
+standup slots (**09-08, 09-12, 09-13**) the run landed a GH comment as its **sole** durable artifact
+— no `log.md` append, no incident-file update, and on 09-12/09-13 no branch at all, so those entries
+exist nowhere. `log.md` on `develop` ends **2026-09-11** while the incident ran to 09-14. Primary is
+an ordering under failure, not sufficiency. Visible only by diffing the log's date coverage against
+the slot list. → LESSONS **§2.17 amendment**, `incident-response` §5, `weekly-retro` input 1.
+
+**Sixth finding — the envelope was never the binding constraint; the PROMPT was.** The PM daemon's
+session (`b3015dfb`, 28MB, live since 2026-07-03, resumed from Claude Desktop) received exactly
+**two** human messages in this window: `2026-09-13T15:37:08Z` *"status update for the live and
+staging trading bots please and what work is in progress or next"*, and `2026-09-14T06:52:45Z`
+*"proceed"*. Between them it merged **all seven** open PRs to `develop` on its own initiative; then
+it stopped, recommended the prod promote + restart, waited ~15h, got "proceed", and promoted at
+06:54:11Z. Its judgment was half right in a revealing way — it correctly treated the promote as
+needing approval and left live capital alone — but the first message asked what the state **was**,
+and it changed the state seven times before answering. `charter.md` plainly permits merging to
+`develop`, so "was I allowed?" returns yes and is the wrong question. Both of the window's shipped
+defects came out of that batch: per-PR care does not survive being multiplied by seven inside a task
+scoped to "tell me the status." **And no `log.md` entry exists for any of it** — not the merges, not
+the production promote, not the restart that ended an 18-day P0
+(`git log --all --since=2026-09-12 -- .claude/state/log.md` returns only the standup's
+incident-close). The rule requiring exactly that record merged at **15:57:41Z, seven minutes after
+those merges**. The whole account is one transcript, which is layer 4 — and the 09-14 standup's
+misattribution above happened *because* it was reconstructing from artifacts instead of reading a
+record. → LESSONS **§2.16**, `decision-record` (required list + red flags).
+
+**Seventh finding — installing the pre-push hook proved it can fail, and the first thing it caught
+was itself.** With `.githooks/pre-push` finally installed, this retro's push was blocked by 12
+errors in `tests/unit/test_primary_checkout_guard.py`, while the same suite run normally is **2570
+passed**. Cause: git exports `GIT_DIR` into hook processes, the tests build throwaway repos with
+`git init`, and with `GIT_DIR` inherited `git init` re-initialises the **real** repository — writing
+`core.bare = true` into `.git/config`, which every worktree shares. The whole checkout then answers
+`fatal: this operation must be run in a work tree`, naming neither the setting nor the cause.
+Reproduced deliberately during diagnosis and **restored** (`git config core.bare false`; primary
+clean on `main` at `8da478a3`, all six worktrees listed, no commits/refs/content affected). #1092
+(the hook) and #1087 (the guard tests) both merged 2026-08-24 — each correct alone, incompatible
+together, hidden for 21 days because the hook was never installed. Note the shape: the acceptance
+test `tests/unit/test_pre_push_hook.py` runs under pytest, not under a real push, so it never sees
+the environment that breaks it. **This retro's PR was pushed with `--no-verify`**, stated in the PR
+description; the diff is docs-only and the suite is green in a clean environment.
+→ LESSONS **§3**, GH **#1148** (p1).
+
+**Delivery.** 7 merges, all in 25 minutes on 09-13; **6 zero-merge days** before that. Queue now
+clear except PR #1143 (opened today). Note for §2.9 rule (g): `allow_auto_merge` is now **`true`** —
+#1079's one human-only ask was satisfied at some point after 08-24, with no comment in-thread and
+the issue left open, so the 09-11 standup re-escalated a solved problem. Throughput has not changed
+yet: it still tracks human attendance exactly. → LESSONS §2.11 ("re-measure the state, don't re-read
+the ticket"); commented on #1079 asking whether it can close.
+
+**Scheduled-task audit (registry + slot enumeration + effect).** 19 directories, 13 registered,
+**4 enabled** — unchanged; same six retirements Alex confirmed 2026-08-13, no drift, no catch-up
+batching (all fire times distinct). **16 slots enumerated, 16 fired, 15/15 gradable HIT** (the 16th
+is this session). No quota deaths, no stale-provider deaths, no mid-run API failures — the first
+completely clean firing week on record. Two sub-findings: `daily-trading-standup` fired **~20 min
+late on 09-11** (08:20:53 vs the 08:00:00–08:00:51 jitter window; complete run, not a miss), and the
+3-of-8 comment-only sinks above. Effects verified: `prune-worktrees` 5/5, worktree count 3→5 fully
+explained by work opened after its last run; `weekly-model-retrain` PR #1139 merged and confirmed
+docs-only (+100/−0, one file, no symlink touched); `weekly-retro` PR #1137 merged and AGENDA cleared
+on `develop`.
+
+**Diffs shipped (this PR):**
+- `.claude/LESSONS.md` — **§1.16** update (the "do not promote" symlink shipped anyway and is now on
+  `main`; the structural issue and the shipped instance are two dispositions; verify "fixed before
+  merge" against the merged tree, not the review thread); **§2.9 rule (h)** new (the drain is not
+  order-neutral — sequence by what constrains what; report composition, not count); **§2.11** two new
+  bullets (a review comment is not a gate; re-measure the state, don't re-read the ticket);
+  **§2.16** update (how the P0 actually ended, the intent-attribution correction, "restart-only"
+  read as blocked when it meant available, the MTTR-floor corollary); **§2.17** amendment (primary
+  is an ordering under failure, not sufficiency; diff log date-coverage against the slot list);
+  **§3** correction + tightening (the checker existed and changed nothing; a repair procedure must
+  be runnable by the environment that needs repairing).
+- `.claude/skills/incident-response/SKILL.md` — §5: "primary" does not excuse 1 and 3, both owed in
+  the same run; new **closing** paragraph: say what actually cleared it, read from that change's own
+  message, and name which routine procedures already perform a generic remediation.
+- `.claude/skills/weekly-retro/SKILL.md` — input 0: AGENDA is a known-weak mechanism, sweep
+  `source:automation` issues alongside it; input 0b: re-measure state rather than re-reading
+  tickets, and re-run the three install `--check`s (venv interpreter, not `make`); input 1: diff log
+  date coverage against the slot list; new **input 8**: re-check every outstanding pre-merge ask
+  against the merged tree; red flags: don't report a drained queue as a healthy week.
+- `.claude/commands/standup.md` — Step 3 opens with the join question.
+- `.claude/commands/triage.md` — new Step 4b (find the single action that closes several items;
+  re-measure state before re-escalating).
+- `.claude/skills/weekly-retro/AGENDA.md` — cleared. Empty for the **seventh** consecutive window,
+  and this retro checked the mechanism instead of the fleet: `git log --follow` shows **two**
+  non-retro appends in the file's life (one of which was then lost to a branch) against ~9 retro
+  clears. The intended writers file GH issues instead — six this window, none via AGENDA.
+
+**Environment action taken (no PR):** installed `.githooks/pre-push` into `.git/hooks` on the
+primary checkout; `install_git_hooks.py --check` now reports `ok`.
+
+**Issues filed:** **#1148** (**p1** — the pre-push hook leaks `GIT_DIR` into pytest, breaking every
+git-shelling test and setting `core.bare=true` on the real repo), **#1144** (p3 — AGENDA.md has no
+writer; wire it or retire it), **#1145** (**p1** —
+`price_normalization` is stamped on non-price targets, so a `--force-price-only --target-type
+smoothed_return` bundle has its ~0.002-scale return denormalized as a price; verified in
+`src/ml/model_metadata.py:40-60`, which never consults `target_type`; caught by review on PR #1134
+and merged without a follow-up issue), **#1146** (p2 — the promotion gate's profit-factor leg scores
+a free point on a 999.0 sentinel tie, degenerate for four consecutive weeks; this is the defect PR
+#1139 claimed was "filed separately"), **#1147** (p2 — nothing runs the three install `--check`s on a
+schedule, and `make hooks` can't run at all). Commented, not resolved: **PR #1143** (the intent
+correction, before it merges), **#1135** (the instance shipped to `main`; revert it separately from
+the structural fix), **#1079** (auto-merge is on — can this close?), **#1138** (installed; keep open
+until #1147), **#1106** (its code has been in prod since today with the flag OFF; the real gate is a
+flag decision nobody has written down, and the 5-experiment programme has self-blocked on it for 20
+days).
+
+**Experiments:** none ran, none preregistered, for the **third** consecutive window. Nothing new in
+`docs/research/experiments/` or `docs/research/notes/` since **2026-08-25** — 20 days. The five
+preregistered vol/regime documents all still record *"execution BLOCKED pending #1106"*, whose
+implementation merged 2026-08-25 and reached production today. No p-hacking drift to report, there
+being nothing to drift.
+
+**Model scoreboard.** A `latest` symlink **did** change on `develop` this week and is now on `main`:
+`src/ml/models/ETHUSDT/price/latest → 2026-09-06_07h21m47s_v1`, added by PR #1130 (merged 09-13).
+`docs/research/model-promotions.md` already carries full 09-06 and 09-13 entries written by the
+retrain task, so no row is owed — but both entries state no symlink moved, which is true of
+`basic/latest` and false of the commit. `ETHUSDT/basic/latest` remains `2026-07-04_22h_v1`; live
+strategy unaffected. Standup tripwire table unchanged and still the ratified one.
+
+**Calibration.**
+- `daily-trading-standup` — **8/8 slots, every run a complete brief; still the fleet's best actor,
+  and it made its first substantive factual error in a month.** Greens: it detected the #1121 close
+  within the hour and dispatched #1140 + PR #1143 the same morning; 09-09 correctly refused to claim
+  a PushNotification it could not verify, and 09-10 recorded the literal
+  `"Mobile push not sent (Remote Control inactive)"` rather than assuming delivery — exactly the
+  discipline the day-12 gap earned. Misses: the 3-of-8 comment-only sinks; a ~20-minute late fire on
+  09-11; and the closure misattribution above, which is the §2.13 failure applied to *intent* rather
+  than to a number.
+- `weekly-model-retrain` / ml-engineer — **1/1, fifth consecutive declined promotion, and it argued
+  against its own gate again.** It dismantled its own "2 of 3" pass as degenerate, volunteered that
+  the comparison is biased *toward* the challenger (its window is fully in-sample), reproduced #1131
+  on the new bundle from the ONNX op census rather than the metadata label, confirmed #1049 is
+  genuinely fixed ("the first cloud bundle that is honestly evaluable"), and named ~31pp of
+  buy-and-hold underperformance for the fifth week. **One miss:** *"Filed separately"* for the PF
+  sentinel defect, with nothing filed — a false completion claim, caught by review and merged anyway
+  (now #1146).
+- `prune-worktrees` — 5/5, effect verified, no false prune.
+- `daemon(PM)` session `b3015dfb` (09-13/09-14) — **the only actor that finished anything all
+  quarter, and the one with the least legible record.** Greens, and they are large: it drained a
+  6-14-day-old queue, correctly identified the prod promote as requiring explicit approval and
+  waited 15 hours for it, named clearing the latch as the promote's purpose in the commit message,
+  and ended an 18-day P0 with no capital loss. Misses: it acted on a prompt that asked only for a
+  status report; it merged #1130 past a blocking review comment that a sibling actor had left on it
+  four days earlier, and #1139 past an unresolved review finding; it wrote **zero** decision records
+  for seven merges, a production promote and a live restart; and it used `git commit --no-verify`
+  by reflex. The pattern across all four: it optimised the *action* and skipped the *record*, which
+  is precisely the trade that made the next morning's reconstruction wrong.
+- `daemon(weekly-retro)` 09-07 — **prediction record: 1 correct, 3 wrong.** "#1137 will land" →
+  **CORRECT** (6 days late). "PR #1130: drop the symlink before merge" → **WRONG/ignored**; it
+  merged with the symlink and is now in production. "#1138 filed p1 gets it fixed" → **WRONG**, zero
+  activity in 7 days — §2.11 predicted this and the retro filed anyway. "Only the first two
+  install-required artifacts have a checker" → **factually WRONG**, corrected in §3 this week.
+- **Fleet-level:** first window with zero agent failures — no quota deaths, no provider errors, no
+  stalls, no wake-losses. Detection remained 19/19 on the P0. Every remaining failure is downstream
+  of the same thing as the last three windows: **nothing in this system can finish an action without
+  a human**, and when the human arrived on 09-13/09-14 the entire quarter's backlog and the
+  quarter's worst incident both closed inside 24 hours.
+
+**For the Board (layer 1, not decided here):** **#1127 is unchanged and is not resolved by #1121
+closing** — the latch still has no admin path, no scheduled actor can deliberately restart
+production, and the next occurrence is bounded by the same human attendance. The choice is still the
+one named on 08-31: either a scheduled actor gets the envelope, or the Board accepts an explicit
+opportunity-cost budget for this class. New evidence for the sitting: the remediation turned out to
+be *inside* several actors' capability the whole time and was simply never named as the
+remediation — so the fix may be much smaller than "grant restart authority." Route via
+`risk-ratification`. The [D-2026-08-13-04] queue stands unchanged.
+**Escalated to the human in the completion summary:** #1148 (p1 — `make hooks`, the documented fix
+for #1138, breaks your checkout until this lands); #1145 (p1, silent-wrong-signal ML defect);
+the `ETHUSDT/price/latest` pointer now in production; 132 open issues, **132 of 132 with zero
+assignees** (verified 2026-09-14, includes the four filed by this retro).
+Ref: #1121 (closed 2026-09-14T07:07:18Z), #1127, #1140, PR #1143, #1135, #1130, #1137, #1139,
+#1138, #1079, #1106, #1119, #1049/#1131/#1132, #1144, #1145, #1146, #1147, #1148; #1087/#1092;
+promote `be451698`; PM session `b3015dfb`;
+[D-2026-09-07-01], [D-2026-08-31-01], [D-2026-08-13-04];
+.claude/LESSONS.md §1.16/§2.9(h)/§2.11/§2.16/§2.17/§3.

@@ -28,6 +28,12 @@ Wait for all three.
 
 ## Step 3 — Synthesize
 
+Before writing, ask the one question a per-item sweep never asks: **does any single pending action
+close more than one open item?** Report the join, not just the rows. The 2026-08-27 P0 close-only
+latch (cleared only by a service restart) and the 6-14 day green-PR backlog (cleared only by a
+deploy) were tracked as two unrelated items for 18 days and were resolved by one prod promote the
+moment a human saw them together (LESSONS §2.16).
+
 Write the brief to `docs/research/daily-briefs/YYYY-MM-DD-HHMM.md`:
 
 ```

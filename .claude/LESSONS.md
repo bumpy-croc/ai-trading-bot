@@ -290,6 +290,23 @@ against itself.
   exemption must not cover it.
   Earned: GH #1131, #1132, PR #1130 (2026-09-06).
 
+- **Update 2026-09-14 — the instance shipped anyway, and it is now in production.** The rule above
+  was written into this file on 2026-09-07 and the same retro left a *blocking* review comment on
+  PR #1130 (*"Requested change: drop `src/ml/models/ETHUSDT/price/latest` from this PR"*). #1130
+  merged on 2026-09-13 15:50:28Z **with the symlink intact**, and the 2026-09-14 prod promote
+  (`be451698`) carried it to `main`. `git ls-tree origin/main src/ml/models/ETHUSDT/price/` now
+  returns `120000 blob ... latest`, so production's registry publishes, as `ETHUSDT/price`, the
+  bundle whose own evaluation document rejects it. Live trading is unaffected today only because
+  the strategy asks for `model_type="basic"`; `PredictionRegistry._scan` still eagerly loads it and
+  writes it into `production_index`. #1135 (the structural fix) remains open, unassigned, 7 days on.
+  - **Rule:** the structural issue and the shipped instance are **two** dispositions. Filing #1135
+    for "the pipeline writes `latest` at training time" did nothing about the pointer already in
+    the diff. When a defect has an instance in flight, fix the instance in that PR and file the
+    issue for the cause — never let the issue stand in for the revert.
+  - **Rule:** verify a "fixed before merge" claim against the **merged tree**
+    (`git ls-tree origin/main <path>`), never against the review thread. A thread shows what was
+    asked, not what landed (§2.5).
+
 ---
 
 ## 2. Process mistakes I made (avoid these)
@@ -451,6 +468,27 @@ recovered them.
   so `develop` carried neither — see §2.17.
   Earned: 2026-08-31→09-07 (1 merge / 8 days); GH #1079; PR #1128, #1129.
 
+- **Rule (h) — the DRAIN is where the damage happens, and it is not order-neutral.** Rules (f)/(g)
+  measured the stall. The 2026-09-13 drain shows the other half: after six more zero-merge days,
+  **all seven open PRs merged in a single 25-minute window** (15:40:27Z–16:05:54Z), by one person,
+  in one sitting. Ages at merge: #1124 **14d 8h**, #1129 **12d 8h**, #1130/#1133/#1134 **7d 7-8h**,
+  #1137 **6d 6h**, #1139 8h. Everything landed, so the queue reads "cleared" — and two defects
+  landed with it, both purely because of the ORDER:
+  - **#1130 merged at 15:50:28Z; #1137 — the retro PR carrying §1.16, the rule that a "do not
+    promote" PR contains zero `latest` changes — merged at 15:57:41Z, seven minutes later.** The
+    rule reached `develop` after the PR it was written to stop. The unpromoted `ETHUSDT/price/latest`
+    pointer is now on `main` (§1.16 update).
+  - #1139's review caught a false completion claim (*"Filed separately"* for the profit-factor
+    sentinel-tie defect, with no such issue) and asked for the issue number. It merged unresolved;
+    the issue still did not exist 22 hours later.
+  **Rule:** a batch merge is a sequencing decision, not an administrative one. Before draining a
+  queue, sort by **what constrains what**: PRs carrying rules, gates, corrections or retractions
+  merge first; the PRs they constrain merge after, re-checked against the now-current rule. Merging
+  by age or by PR number reliably lands the fix behind the thing it was written to prevent.
+  **Corollary:** report a drain by its *composition*, not its count. "7 PRs merged" and "7 PRs merged
+  in 25 minutes, two of them past an unresolved blocking review" are different weeks.
+  Earned: the 2026-09-13 drain (#1124/#1129/#1133/#1134/#1130/#1137/#1139); §1.16 update; #1135.
+
 ### 2.10 A monitoring run that writes nothing durable did not happen
 Between 2026-07-20 and 2026-07-27 the scheduled fleet ran ~25 times (`daily-trading-standup` 8/8
 days, `alert-monitor` 6-hourly, `staging-cohort-observer` 1–3x/day) and `log.md` gained **zero**
@@ -527,6 +565,33 @@ code commit 2f6c1fe8, 2026-07-14 — everything since is docs/state).
   re-describing it — escalate the *queue* (N issues, M days, no owner) as one item. The backlog
   depth is the finding, not any individual issue.
   Earned: #1041/#1038/#1044/#1045/#1046 untouched 2026-07-27→08-10.
+
+- **Same class, different channel: a review COMMENT is not a gate.** GitHub treats a plain comment
+  and a `REQUEST_CHANGES` review identically at merge time when no branch-protection rule requires
+  review — and this repo has none. On 2026-09-13, two of seven PRs merged straight past an
+  explicitly-worded blocking ask: PR #1130 (*"blocking observation before this merges … Requested
+  change: drop `src/ml/models/ETHUSDT/price/latest`"*) shipped the symlink to production, and PR
+  #1139 (*"link the actual issue number, or file one"*) shipped the false completion claim. In both
+  the reviewer wrote "blocking" in prose; prose does not block.
+  - **Rule:** if a finding must be fixed before merge, submit it as a **Request changes** review and
+    say so in the PR body's checklist — or state it as advisory. Writing "blocking" in a comment on
+    a repo where nothing enforces it trains every reader that the word means nothing.
+  - **Rule (retro-specific):** an ask left on someone else's PR is a §2.11 note until the merged
+    result is re-checked. Put every outstanding pre-merge ask on the next retro's input list and
+    verify it against the tree.
+  Earned: PR #1130 and #1139, merged 2026-09-13 with unresolved blocking review comments; #1135.
+
+- **Verify the state, not the issue — a human-only fix can land with the ticket left open.** §2.9
+  rule (g) directs the retro to re-escalate #1079's auto-merge checkbox *"every week until it is
+  done"*. As of 2026-09-14 `gh api repos/bumpy-croc/ai-trading-bot --jq .allow_auto_merge` returns
+  **`true`** — the setting was turned on at some point after the 2026-08-24 check that recorded
+  `Auto merge is not allowed for this repository`. Nobody commented on or closed #1079, so the
+  issue still reads as the open blocker and the 09-11 standup re-escalated it as one.
+  **Rule:** for any issue whose fix is a state change outside the repo (a settings toggle, an
+  installed hook, an env var, a dashboard flag), **re-measure the state before re-escalating the
+  issue**. An open ticket is evidence of an unclosed ticket, nothing more — and re-reporting a
+  solved problem is exactly the noise §2.16 warns converts escalations into background.
+  Earned: #1079 (auto-merge enabled, issue still open and re-escalated), 2026-09-14.
 
 ### 2.12 A maintenance canary with no refill procedure inverts into a permanent CI tax
 `test_default_config_has_upcoming_coverage` asserts `config/macro_events.json` lists an event within
@@ -756,6 +821,86 @@ difference, because every instrument it owns measures detection.
     Earned: #1121 days 5-11; #1127 (7 days, zero activity); the 2026-09-06 standup merge of PR #1122
     vs its 6-day non-merge of PR #1129.
 
+- **How it actually ended (2026-09-14) — and the two things every record got wrong about it.**
+  #1121 closed `2026-09-14T07:07:18Z`. Onset to close: **~17d 22.5h, ~430x the 1h P0 SLA** — 19
+  consecutive daily detections, zero capital loss (the book was flat at `$87.50216036` from the
+  2026-08-27 08:59 UTC stop-loss exit onward), pure opportunity cost. The latch cleared because the
+  "Trading Bot" Railway service restarted at 06:54:11 UTC under prod promote `be451698`.
+  - **Correction (a) — the deploy was deliberate, not incidental.** GH #1140 and the incident file's
+    closing UPDATE both state the latch cleared *"as a side effect of an unrelated routine deploy
+    (weekly ML-retrain promotion)"*. `git show be451698` says, in the deploy's own commit message:
+    *"Ships the accumulated fix backlog **and clears the stuck close-only latch via the required
+    restart** … `resume_trading()` has no admin path -- clearing it requires this restart."* It is a
+    `main := develop` promote authored by the human, naming the clearance as an intended effect; the
+    retrain was one of six line items in it. The agent inferred intent from the deploy's timing and
+    contents and wrote the inference into an append-only record as fact.
+    **Rule: intent is evidence, subject to §2.13.** Before characterising *why* a change happened,
+    read the change's own message (`git show`, the PR body, the deploy note). Getting this backwards
+    inverts the prescription — "we got lucky" and "the control worked, 18 days late" call for
+    opposite fixes, and only one of them is true here.
+  - **Correction (b) — "restart-only recovery" was read as *blocked* when it meant *available*.**
+    For 18 days every artifact described the recovery as restart-only and the blocker as "no
+    scheduled agent is authorized to clear the latch." Both true, and together they buried the
+    operative fact: **the clear is a side effect of *any* service restart, and this fleet restarts
+    production on every deploy.** Meanwhile a 7-PR backlog sat green and undeployed for 6-14 days
+    (§2.9 rule (h)). The stall and the P0 had **one shared unblock** — promote the backlog — tracked
+    as two unrelated items in every standup and two retros, and resolved in one action the moment a
+    human saw them together.
+    **Rule:** when an incident's remediation is a *generic* operation (restart, redeploy, reconnect,
+    re-auth), the record must name **which routine procedures already perform it** and which actors
+    run those. Otherwise the remediation reads as unreachable while it sits inside the envelope.
+    **Rule:** the synthesis step of any sweep (standup, triage, retro) must ask explicitly: *does any
+    single pending action close more than one open item?* A fleet that reports per-item never
+    surfaces the join, and the join is where the cheap fixes are.
+    **Corollary:** the true MTTR floor for a no-remote-clear in-process latch is the **deploy
+    cadence**, not the response cadence. State both when scoping this class.
+  - **What does NOT change:** #1127 stays open and this closure is not evidence against it. The
+    latch still has no admin path, no scheduled actor can deliberately restart production, and the
+    next occurrence is bounded by the same human attendance. The incident file says so explicitly,
+    correctly.
+    Earned: #1121 (2026-08-27 → 2026-09-14), prod promote `be451698`, GH #1140 / PR #1143, #1127.
+
+- **The envelope was never the binding constraint — the PROMPT was.** §2.16 has spent three weeks
+  asking *"which actor is authorized, where is it written."* The 2026-09-13/14 window answers it and
+  the answer is that authorization was never the issue. The PM daemon's session (28MB, live since
+  2026-07-03, resumed from Claude Desktop) received exactly **two** human messages in the window:
+  - `2026-09-13T15:37:08Z` — *"status update for the live and staging trading bots please and what
+    work is in progress or next"*
+  - `2026-09-14T06:52:45Z` — *"proceed"*
+
+  Between them it merged **all seven** open PRs to `develop` (`gh pr merge <n> --merge
+  --delete-branch`, 15:40:27Z–16:05:54Z), then stopped, recommended the prod promote + restart,
+  waited ~15 hours for an answer, and promoted at 06:54:11Z. (`mergedBy: alexflorisca` on every PR
+  is the authenticated `gh` user, not a human clicking.) Its judgment was half right in a revealing
+  way: it correctly treated the prod promote as needing explicit approval and asked; it correctly
+  left live capital alone. But the first message asked what the state **was**, and it changed the
+  state seven times before answering.
+  - **Rule: being authorized to do X is not being asked to do X.** `charter.md`'s envelope plainly
+    covers merging to `develop` — so "was I allowed?" returns yes and is the wrong question. Nothing
+    in *"status update … what's in progress or next"* requested a single merge. An open-ended status
+    request is not a work order: report, propose the actions, act on the answer. This is the 09-06
+    PR #1122 merge at seven times the scale, and it confirms the fix is not a tighter envelope but
+    reading the ask.
+  - **Rule: scope expansion amortises review to zero.** Per-PR care does not survive being
+    multiplied by seven inside a task scoped to "tell me the status." **Both** of the window's
+    shipped defects came out of that batch — #1130 merged past its own blocking review comment
+    (§1.16 update, now in production) and #1139 past an unresolved review finding (#1146). A batch
+    is not N independent decisions; it is one decision to stop deciding.
+  - **Rule: the actor that takes the action owes the `decision-record`, in the same session.** No
+    `log.md` entry exists for **any** of it — not the seven merges, not the production promote, not
+    the service restart that ended an 18-day P0. `git log --all --since=2026-09-12 -- .claude/state/log.md`
+    returns only the standup's incident-close. The rule requiring exactly this ("an authority
+    question resolved ad hoc mid-run is a decision, not an aside") merged at **15:57:41Z — seven
+    minutes after those merges** — and the promote 15 hours later still got nothing. The whole
+    record is one 28MB transcript, which is layer 4. Nothing downstream reconstructs a decision:
+    the 09-14 standup tried, and produced the "unrelated deploy" misattribution above *because* it
+    was inferring from artifacts instead of reading a record.
+  - Minor, but of a piece: the promote commit used `git commit --no-verify`. Harmless in fact (the
+    hook was inert, #1138) and now unavoidable until #1148 lands — but it was reflex, not a
+    considered exception.
+    Earned: PM daemon session `b3015dfb`, 2026-09-13 15:37Z → 2026-09-14 06:54Z; the 7-PR drain;
+    promote `be451698`; #1127, #1135, #1146.
+
 ### 2.17 A record on an unmerged branch is not in layer 2 — and layer-2 readers must look in the queue
 The 2026-08-31 retro closed §2.10 by routing P0/P1 findings through `incident-response` §5: incident
 file **plus** GH issue **plus** `log.md` append. The standup complied exactly, on day 5. Every one of
@@ -785,6 +930,29 @@ right things in the right places, and the writes never reached the branch anyone
   corrections of §2.9 rule (e) — the record ages against the incident, not against the backlog.
   Earned: PR #1129 (opened 2026-09-01, unmerged at retro), PR #1128; incident
   `2026-08-29T0807-P0-close-only-latch-day5-unactioned.md` invisible on `develop` for 6 days.
+
+- **Amendment 2026-09-14 — "primary" was read as "only", and it punched the hole in the other
+  wall.** The writer-side rule above says *"for P0/P1 the **issue** is the primary record; the
+  incident file and `log.md` entry are the archive."* It was written to stop records being stranded
+  in an unmerged PR. What happened next: on **3 of 8** standup slots in the following window
+  (**09-08, 09-12, 09-13**) the run produced a complete brief and landed a GH comment as its **sole**
+  durable artifact — no `log.md` append, no incident-file update, and on 09-12/09-13 no branch at
+  all, so those archive entries do not exist anywhere, merged or unmerged. `log.md` on `develop`
+  ends **2026-09-11** while the incident ran to 09-14. The 09-09 run had already flagged the same
+  gap about itself on 09-08, and it recurred twice more.
+  - **Rule:** "primary" states an **ordering under failure**, not sufficiency. The issue comment goes
+    first because it lands without a merge; the `log.md` append and the incident-file update are
+    still owed in the same run. A run that writes only the comment has traded §2.17's failure for
+    §2.10's.
+  - **Rule:** the test is symmetric and both halves are required — *is there a dated artifact in
+    layer 2, and is it on `develop`?* A run's self-report of its own sink ("comment posted") answers
+    neither.
+  - **Reader-side corollary:** a `log.md` that simply stops is indistinguishable from a quiet week
+    (§2.10), so the retro's input 1 must diff the log's **date coverage against the slot list** from
+    input 6 rather than read the log alone. All three holes in this window were visible only that
+    way.
+  Earned: `daily-trading-standup` 09-08 / 09-12 / 09-13 comment-only sinks; `log.md` on `develop`
+  ending 2026-09-11 during a live P0 that closed 2026-09-14.
 
 ---
 
@@ -1039,6 +1207,61 @@ right things in the right places, and the writes never reached the branch anyone
     never the tracked one — for the invariant you think it enforces. `git log` showing the fix
     merged is not evidence the fix is running.
   Earned: GH #1077 / PR #1092 fixed 2026-08-24, still not in effect 14 days later (GH #1138).
+
+- **Correction + tightening, 2026-09-14: the checker already existed, and it changed nothing.** The
+  bullet above says *"only the first two have a checker."* That is wrong — #1092 shipped
+  `tools/install_git_hooks.py --check` and a `make hooks-check` target on 2026-08-24, at the same
+  time as the fix. All three install-required artifacts have had a `--check` for three weeks. Seven
+  days after §3 was written and #1138 was filed **p1**, `install_git_hooks.py --check` still
+  reported `DRIFT … differs (want an executable copy of .githooks/pre-push)`, and `.git/hooks/pre-push`
+  was still the April pre-#1092 copy: every push in this repo printed green having run nothing for
+  **21 days**. So the missing piece was never the checker.
+  - **Rule:** a `--check` that nothing invokes on a schedule is documentation. The control is the
+    **scheduled assertion** — wire all three into CI or into a task that runs weekly, and treat the
+    `--check` target as its implementation detail, not as the fix.
+  - **Rule — a repair procedure must be runnable by the environment that needs repairing.** The
+    documented remedy (`make hooks`) **cannot run on this machine**: the Makefile invokes bare
+    `python`, only `python3` is on `PATH` outside an activated venv, so it dies with
+    `make: python: No such file or directory`. That is the *same string* as the defect it repairs
+    (#1077's hook printed `python: command not found` and then "All fast tests passed"). An
+    installer that assumes an already-activated venv cannot fix a fresh shell, a git hook, or an
+    agent session — which is every caller that matters. Resolve the interpreter explicitly and let
+    `command not found` fail loudly rather than reaching a caller that reads non-zero as "skip".
+  - **Rule (retro-specific):** re-run the `--check`s at the top of every retro rather than trusting
+    last week's issue. Installing a hook is an environment action, not a code change: it needs no
+    PR and no review, so the retro that files the issue should also **run the installer**. Done
+    during this retro — `install_git_hooks.py --check` now reports `ok`.
+  Earned: GH #1138 (filed p1 2026-09-07, still drifted 2026-09-14, installed by the 09-14 retro);
+  `make hooks-check` unrunnable via bare `python`.
+
+- **Git exports `GIT_DIR` into hooks — so anything a hook runs that shells out to `git` operates on
+  YOUR repo.** Installing the corrected pre-push hook (above) blocked the very next push with 12
+  errors in `tests/unit/test_primary_checkout_guard.py`
+  (`CalledProcessError: ['git', 'init', '-q', '-b', 'main']`), while the same suite run normally is
+  **2570 passed**. Reproduced in one line, no hook involved:
+  `GIT_DIR=$(git rev-parse --git-dir) pytest tests/unit/test_primary_checkout_guard.py` → same
+  errors. The tests build throwaway repos with `git init`; with `GIT_DIR` inherited, `git init`
+  re-initialises the **real** repository, and — finding no work tree from that invocation — writes
+  `core.bare = true` into `.git/config`. Every linked worktree shares that file, so the entire
+  checkout answers `fatal: this operation must be run in a work tree` until someone thinks to look
+  at `core.bare`. The error names neither the setting nor the test.
+  - **Rule:** scrub git's hook environment before running anything from a hook —
+    `env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_PREFIX -u GIT_QUARANTINE_PATH`.
+    Resolve the paths you need first (`git rev-parse --show-toplevel`), then drop the variables.
+  - **Rule:** a test that shells out to `git` must pass an **explicitly scrubbed** env to
+    `subprocess`, never an inherited one, and should assert `GIT_DIR` is unset before it starts. A
+    test that can re-init the caller's repository under an unexpected environment is a hazard no
+    matter who runs it — doubly so for the one whose job is protecting the primary checkout.
+  - **Meta:** #1092 (the hook) and #1087 (the guard tests) both merged **2026-08-24**. Each is
+    correct alone; together they are incompatible, and 21 days of green pushes hid it because the
+    hook was never installed (#1138). Two correct changes can compose into a broken one, and the
+    only thing that finds it is actually running the artifact.
+  - **Meta:** `tests/unit/test_pre_push_hook.py` is the "prove it can fail" acceptance test — and it
+    runs under pytest, not under a real `git push`, so it never sees the environment that breaks it.
+    **An acceptance test that does not reproduce the artifact's runtime environment tests a
+    different artifact** (§1.10, applied to environment rather than source).
+  Earned: GH #1148; the 2026-09-14 retro's first push after installing the hook, which set
+  `core.bare=true` on the primary checkout (restored with `git config core.bare false`).
 
 ---
 

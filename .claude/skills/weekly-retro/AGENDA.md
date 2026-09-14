@@ -13,8 +13,12 @@ becomes a diff or gets a written disposition.
 
 ## Items
 
-_(Cleared by the 2026-09-07 retro. Empty on arrival for the sixth consecutive window — but this
-week that is no longer the §2.10 failure it was: the window's findings all reached layer 2 through
-the standup's own sinks (#1121 ×11 comments, #1131, #1132, the incident file and six `log.md`
-entries on PR #1129). The gap moved downstream: those artifacts are on unmerged branches, so
-`develop` shows none of them. See [D-2026-09-07-01] and LESSONS **§2.17**.)_
+_(Cleared by the 2026-09-14 retro. Empty on arrival for the **seventh** consecutive window. This
+retro stopped treating that as a fleet signal and checked the mechanism instead: `git log --follow`
+on this file records exactly **two** non-retro appends since it was created (`aee03a26`;
+`3f667afe`/#1060, which was then lost to a branch) against ~9 retro clears. The intended writers
+file GH issues instead — six `source:automation` issues were opened in this window (#1135, #1136,
+#1138, #1140, #1141, #1142) and none of them came through here. Dispositioned in [D-2026-09-14-01]
+and GH #1144: either wire the standup's sink to append one line here whenever it reports a process
+gap, or retire this file and make the retro sweep `source:automation` issues. Skill input 0 now
+says to sweep both.)_

@@ -36,6 +36,14 @@ For each proposal with reviews complete:
 - **All approve** and `board_required: true` → leave `status: open`, append an `escalation` entry to `log.md`, include in next brief.
 - **Disagreement**: do not flatten. Log your rationale for going one way explicitly.
 
+## Step 4b — Look for the join
+
+Before housekeeping, scan the whole enumerated set for a **single action that closes several items**
+— one deploy, one merge, one restart, one setting. Per-item triage structurally cannot surface it,
+and it is where the cheap fixes are (LESSONS §2.16). Also re-measure, don't re-read: an item whose
+fix is a state change outside the repo (a settings toggle, an installed hook, an env var) can be
+done while its issue stays open — check the state before re-escalating it (LESSONS §2.11).
+
 ## Step 5 — Housekeeping
 
 - Proposals `status: open` > 14 days with no updates → `status: rejected` with reason "timed out".
