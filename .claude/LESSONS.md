@@ -1230,24 +1230,40 @@ right things in the right places, and the writes never reached the branch anyone
   - **Rule (retro-specific):** re-run the `--check`s at the top of every retro rather than trusting
     last week's issue. Installing a hook is an environment action, not a code change: it needs no
     PR and no review, so the retro that files the issue should also **run the installer**. Done
-    during this retro — `install_git_hooks.py --check` now reports `ok`.
+    during this retro — `install_git_hooks.py --check` now reports `ok`. **Then verify the installed
+    artifact actually works before walking away:** this install immediately broke every push from a
+    worktree (next bullet, GH #1148), which is a worse state than the drift it fixed, and the
+    session could not undo it. An installer's `ok` attests to bytes on disk, not to behaviour — the
+    same distinction as "merged" vs "in effect" one paragraph above. Install, then exercise.
   Earned: GH #1138 (filed p1 2026-09-07, still drifted 2026-09-14, installed by the 09-14 retro);
   `make hooks-check` unrunnable via bare `python`.
 
-- **Git exports `GIT_DIR` into hooks — so anything a hook runs that shells out to `git` operates on
-  YOUR repo.** Installing the corrected pre-push hook (above) blocked the very next push with 12
-  errors in `tests/unit/test_primary_checkout_guard.py`
-  (`CalledProcessError: ['git', 'init', '-q', '-b', 'main']`), while the same suite run normally is
-  **2570 passed**. Reproduced in one line, no hook involved:
-  `GIT_DIR=$(git rev-parse --git-dir) pytest tests/unit/test_primary_checkout_guard.py` → same
-  errors. The tests build throwaway repos with `git init`; with `GIT_DIR` inherited, `git init`
-  re-initialises the **real** repository, and — finding no work tree from that invocation — writes
-  `core.bare = true` into `.git/config`. Every linked worktree shares that file, so the entire
-  checkout answers `fatal: this operation must be run in a work tree` until someone thinks to look
-  at `core.bare`. The error names neither the setting nor the test.
+- **Pushing from a LINKED WORKTREE sets `GIT_DIR` in the pre-push hook; pushing from the primary
+  checkout does not.** Installing the corrected pre-push hook (above) blocked the very next push
+  with 12 errors in `tests/unit/test_primary_checkout_guard.py`
+  (`CalledProcessError: ['git', 'init', '-q', '-b', 'main']`), while the same suite run from a shell
+  is **2570 passed**. The asymmetry is the whole lesson, and it is easy to get wrong — I first
+  concluded "git exports `GIT_DIR` into hooks", which is **false here**. Measured on git 2.50.1 with
+  a hook that just prints its environment:
+  - `git push` from a plain repo / the primary checkout → `GIT_DIR=[UNSET]`
+  - `git push` from a linked worktree → `GIT_DIR=[<primary>/.git/worktrees/<name>]`
+
+  The tests build throwaway repos with `git init`; with that `GIT_DIR` inherited, `git init`
+  re-initialises the **worktree's admin dir**, and — finding no work tree from that invocation —
+  writes `core.bare = true` into the **shared** `.git/config`. Every worktree and the primary
+  checkout read that file, so the whole repo then answers
+  `fatal: this operation must be run in a work tree` until someone thinks to look at `core.bare`.
+  The error names neither the setting nor the test.
+  **Why it survived 21 days undetected is the asymmetry:** CLAUDE.md requires all agent work to
+  happen in `.claude/worktrees/`, so *every agent push* hits this and *no human push from the
+  primary checkout ever does* — and the hook was inert for everyone anyway (#1138).
   - **Rule:** scrub git's hook environment before running anything from a hook —
     `env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_PREFIX -u GIT_QUARANTINE_PATH`.
     Resolve the paths you need first (`git rev-parse --show-toplevel`), then drop the variables.
+  - **Rule:** when a hook misbehaves, **measure its environment** with a hook that prints it, from
+    each checkout shape you actually use. "Git exports X to hooks" is a per-hook, per-shape fact, not
+    a general one, and reasoning about it from documentation or from a plain-repo test gets the
+    answer backwards (§2.13 — reproduce, don't cite).
   - **Rule:** a test that shells out to `git` must pass an **explicitly scrubbed** env to
     `subprocess`, never an inherited one, and should assert `GIT_DIR` is unset before it starts. A
     test that can re-init the caller's repository under an unexpected environment is a hazard no
@@ -1260,8 +1276,8 @@ right things in the right places, and the writes never reached the branch anyone
     runs under pytest, not under a real `git push`, so it never sees the environment that breaks it.
     **An acceptance test that does not reproduce the artifact's runtime environment tests a
     different artifact** (§1.10, applied to environment rather than source).
-  Earned: GH #1148; the 2026-09-14 retro's first push after installing the hook, which set
-  `core.bare=true` on the primary checkout (restored with `git config core.bare false`).
+  Earned: GH #1148; the 2026-09-14 retro's first push from a worktree after installing the hook,
+  which set `core.bare=true` on the shared config (restored with `git config core.bare false`).
 
 ---
 

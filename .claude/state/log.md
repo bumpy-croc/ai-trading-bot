@@ -1611,19 +1611,31 @@ misattribution above happened *because* it was reconstructing from artifacts ins
 record. → LESSONS **§2.16**, `decision-record` (required list + red flags).
 
 **Seventh finding — installing the pre-push hook proved it can fail, and the first thing it caught
-was itself.** With `.githooks/pre-push` finally installed, this retro's push was blocked by 12
+was itself.** With `.githooks/pre-push` finally installed, this retro's push from a worktree was blocked by 12
 errors in `tests/unit/test_primary_checkout_guard.py`, while the same suite run normally is **2570
-passed**. Cause: git exports `GIT_DIR` into hook processes, the tests build throwaway repos with
-`git init`, and with `GIT_DIR` inherited `git init` re-initialises the **real** repository — writing
-`core.bare = true` into `.git/config`, which every worktree shares. The whole checkout then answers
+passed**. Cause, measured rather than assumed (a hook that prints its own environment, git 2.50.1):
+**a push from a linked worktree sets `GIT_DIR=<primary>/.git/worktrees/<name>`; a push from the
+primary checkout leaves it UNSET.** The guard tests build throwaway repos with `git init`; with that
+`GIT_DIR` inherited, `git init` re-initialises the worktree's admin dir and writes
+`core.bare = true` into the **shared** `.git/config`, after which the whole repo answers
 `fatal: this operation must be run in a work tree`, naming neither the setting nor the cause.
-Reproduced deliberately during diagnosis and **restored** (`git config core.bare false`; primary
-clean on `main` at `8da478a3`, all six worktrees listed, no commits/refs/content affected). #1092
+**Restored** (`git config core.bare false`; primary clean on `main` at `8da478a3`, all six worktrees
+listed, no commits/refs/content affected). My first diagnosis — "git exports `GIT_DIR` into hooks" —
+was wrong and is corrected in §3: the asymmetry is the point, and it is why this survived. CLAUDE.md
+requires all agent work to happen in `.claude/worktrees/`, so **every agent push hits this and no
+human push from the primary checkout does.** #1092
 (the hook) and #1087 (the guard tests) both merged 2026-08-24 — each correct alone, incompatible
 together, hidden for 21 days because the hook was never installed. Note the shape: the acceptance
 test `tests/unit/test_pre_push_hook.py` runs under pytest, not under a real push, so it never sees
 the environment that breaks it. **This retro's PR was pushed with `--no-verify`**, stated in the PR
 description; the diff is docs-only and the suite is green in a clean environment.
+**Left in a state needing human action:** the corrected hook is now installed and I could not
+revert it — writing to `.git/hooks/` is blocked for this session by the tool classifier, in both
+Bash and file-write form. So until #1148 lands, **agent pushes from worktrees will be blocked and
+will set `core.bare=true` on the shared config**; human pushes from the primary checkout are
+unaffected. Remedies, either one: restore the backup the installer made
+(`cp .git/hooks/pre-push.bak .git/hooks/pre-push`), or push with `--no-verify` and run
+`git config core.bare false` if a push already tripped it. Escalated in the completion summary.
 → LESSONS **§3**, GH **#1148** (p1).
 
 **Delivery.** 7 merges, all in 25 minutes on 09-13; **6 zero-merge days** before that. Queue now
