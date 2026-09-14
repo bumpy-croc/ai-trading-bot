@@ -1951,45 +1951,73 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 else:
                     limit_price = stop_price * (1 + STOP_LOSS_LIMIT_SLIPPAGE_FACTOR)
 
+            # limit_price may have just been computed above (it starts None for a
+            # caller that didn't supply one) -- refresh the recorded value so a
+            # failure from here on reports the price actually being requested,
+            # not the pre-computation None from error_params' initial build.
+            error_params["price"] = limit_price
+
             # Round prices to a valid tick size and size the quantity to a valid lot.
             symbol_info = self.get_symbol_info(symbol)
-            step_size = 0.0
-            base_asset: str | None = None
             error_params["symbol_info_available"] = bool(symbol_info)
-            if symbol_info:
-                # Validate tick_size is numeric before division to prevent TypeError
-                tick_size_raw = symbol_info.get("tick_size", 0.01)
-                tick_size = float(tick_size_raw) if isinstance(tick_size_raw, int | float) else 0.01
-                error_params["tick_size"] = tick_size
-                if tick_size > 0:
-                    # `round(x / tick) * tick` in float math leaves artifacts (e.g.
-                    # round(1648.82 / 0.01) * 0.01 = 1648.8200000000001) that exceed the
-                    # asset's price precision, so Binance rejects the stop-loss with code
-                    # -1111 ("price has too much precision"). Quantize to the tick's decimal
-                    # count, mirroring the quantity quantize at the LOT_SIZE step below.
-                    stop_price = quantize_to_step(
-                        round(stop_price / tick_size) * tick_size, tick_size
-                    )
-                    limit_price = quantize_to_step(
-                        round(limit_price / tick_size) * tick_size, tick_size
-                    )
-
-                # Validate step_size is numeric before division to prevent TypeError
-                step_size_raw = symbol_info.get("step_size", 0.00001)
-                step_size = (
-                    float(step_size_raw) if isinstance(step_size_raw, int | float) else 0.00001
+            if not symbol_info:
+                # A transient get_symbol_info failure leaves tick_size/step_size
+                # unknown. Sending the order anyway (as raw, unquantized floats)
+                # is exactly the shape Binance rejects with -1111 ("price has too
+                # much precision") or 51077 ("precision over maximum") — and by
+                # then the position is already left unprotected with no loud
+                # error (#1126). Fail closed instead: refuse to place, record a
+                # durable CRITICAL row (via order_error_sink -> system_events,
+                # same path as every other failure branch here), and let the
+                # reconciler's existing unprotected-position escalation take it
+                # from there.
+                logger.error(
+                    "get_symbol_info(%s) unavailable - refusing to place stop-loss "
+                    "with unknown tick/lot precision rather than send an "
+                    "unquantized price/quantity that Binance would reject.",
+                    symbol,
                 )
-                base_asset = symbol_info.get("base_asset")
-                error_params["step_size"] = step_size
+                self._record_order_error(
+                    "place_stop_loss_order",
+                    symbol,
+                    error_message=(
+                        f"Symbol info unavailable for {symbol} - refusing to place "
+                        "stop-loss with unknown tick/lot precision"
+                    ),
+                    error_type="SymbolInfoUnavailable",
+                    params=error_params,
+                )
+                return None
+
+            # Validate tick_size is numeric before division to prevent TypeError
+            tick_size_raw = symbol_info.get("tick_size", 0.01)
+            tick_size = float(tick_size_raw) if isinstance(tick_size_raw, int | float) else 0.01
+            error_params["tick_size"] = tick_size
+            if tick_size > 0:
+                # `round(x / tick) * tick` in float math leaves artifacts (e.g.
+                # round(1648.82 / 0.01) * 0.01 = 1648.8200000000001) that exceed the
+                # asset's price precision, so Binance rejects the stop-loss with code
+                # -1111 ("price has too much precision"). Quantize to the tick's decimal
+                # count, mirroring the quantity quantize at the LOT_SIZE step below.
+                stop_price = quantize_to_step(round(stop_price / tick_size) * tick_size, tick_size)
+                limit_price = quantize_to_step(
+                    round(limit_price / tick_size) * tick_size, tick_size
+                )
+
+            # Validate step_size is numeric before division to prevent TypeError
+            step_size_raw = symbol_info.get("step_size", 0.00001)
+            step_size = float(step_size_raw) if isinstance(step_size_raw, int | float) else 0.00001
+            base_asset = symbol_info.get("base_asset")
+            error_params["step_size"] = step_size
 
             # A SELL stop-loss can never order more of the base asset than is actually
             # free: Binance deducts the trade fee from a buy's fill and round-to-nearest
             # can round UP, so the tracked position quantity can exceed holdings and
             # Binance rejects with -2010 (insufficient balance), leaving the position
             # unprotected. Cap at the free balance and round DOWN so the order is always
-            # coverable. This runs even when symbol_info is missing — a transient
-            # get_symbol_info failure must not silently disable the protection. A BUY
-            # (short cover) is funded from quote, so it isn't constrained by base holdings.
+            # coverable. A BUY (short cover) is funded from quote, so it isn't
+            # constrained by base holdings. (Symbol info being missing no longer reaches
+            # this point at all -- that case now returns early, fail-closed, above.)
             # What the caller asked us to protect. The cap and lot snap below are
             # mechanical adjustments that must only ever shave a sliver; the gate after
             # them enforces that against what is actually sent.
