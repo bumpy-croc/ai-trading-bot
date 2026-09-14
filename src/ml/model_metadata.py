@@ -44,7 +44,24 @@ def uses_rolling_minmax_features(metadata: dict[str, Any]) -> bool:
 
     Detected from the bundle itself rather than from which code path wrote it:
     a regression model whose target feature was fed in normalized form is,
-    by construction, producing normalized output.
+    by construction, producing normalized output -- PROVIDED the target
+    itself is the normalized price. A normalized price feature can also feed
+    a model trained on a different target (e.g. ``--force-price-only
+    --target-type smoothed_return``): same input, wholly different output
+    scale. ``task_type`` alone can't tell these apart -- "regression" covers
+    both "regression" (predicts close_normalized) and "smoothed_return"
+    (predicts a small-scale return) target types (see
+    ``training_pipeline/task_types.py::TARGET_TASK_TYPES``) -- so this also
+    consults the recorded ``training_params.target_type`` (GH #1145).
+
+    When ``target_type`` is absent altogether (bundles predating this field,
+    including the still-served ETHUSDT/basic/2026-07-04_22h_v1), we fall
+    back to the old feature-based inference rather than rejecting the
+    bundle: every target_type-less bundle was trained before smoothed_return
+    existed, so the ambiguity this function exists to resolve cannot arise
+    for it, and refusing it here would break `PredictionModelRegistry` bundle
+    loads (`validate_bundle_metadata`) for models that already carry a
+    correct, explicitly-written `price_normalization` block.
     """
     task_type = str(metadata.get("task_type") or "regression").lower()
     if task_type != "regression":
@@ -57,7 +74,16 @@ def uses_rolling_minmax_features(metadata: dict[str, Any]) -> bool:
     target = str(
         (metadata.get("price_normalization") or {}).get("target_feature", DEFAULT_TARGET_FEATURE)
     )
-    return f"{target}{NORMALIZED_SUFFIX}" in {str(f) for f in feature_names}
+    if f"{target}{NORMALIZED_SUFFIX}" not in {str(f) for f in feature_names}:
+        return False
+
+    training_params = metadata.get("training_params")
+    if not isinstance(training_params, dict):
+        training_params = {}
+    target_type = training_params.get("target_type")
+    if target_type is None:
+        return True
+    return str(target_type).lower() == "regression"
 
 
 def missing_prediction_keys(metadata: dict[str, Any]) -> list[str]:
