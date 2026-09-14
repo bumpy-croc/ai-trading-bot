@@ -177,8 +177,9 @@ lines, which keep flowing at normal cadence because signal generation runs *befo
 close-only gate (#1094).
 
 `LatchedConditionMonitor` (`engines/live/monitoring/latched_condition_monitor.py`) runs once
-per trading-loop iteration, before the data-freshness `continue` paths, and writes **one state
-row per pass** (at most hourly), which is a *positive assertion* about the entry path:
+per trading-loop iteration, before the data-freshness `continue` paths **and before the
+position-count gate that guards entry evaluation**, and writes **one state row per pass** (at
+most hourly), which is a *positive assertion* about the entry path:
 
 | Row | Meaning |
 | --- | --- |
@@ -186,6 +187,14 @@ row per pass** (at most hourly), which is a *positive assertion* about the entry
 | `CLOSE_ONLY_LATCHED` / `SYSTEM_HALT_LATCHED` / `ENTRY_PAUSE_LATCHED` | The loop ran and found entries blocked; the message carries elapsed time and reason. |
 | `*_LATCH_CLEARED` | The condition resolved (elapsed time in the message). |
 | *no row at all* | The loop thread is not running. This is itself the alarm. |
+
+This is deliberately independent of position count: `check_entry_conditions`'s own
+`strategy_executions` row for a close-only block (#1169) is written only when the trading loop
+actually calls it, which is itself gated on `position_count < max_concurrent_positions` — so a
+close-only halt with the position book already full never reaches that code, and #1169's row
+never appears (#1181). `LatchedConditionMonitor`'s row above is the authoritative "halted but
+alive vs. dead" signal in every case, including that one; #1169's row is a best-effort
+supplement, not a substitute.
 
 One query therefore separates all three cases without any external cross-check:
 

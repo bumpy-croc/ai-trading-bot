@@ -1323,6 +1323,25 @@ keep the skill generic and let the specifics live here.
 - **Don't trust the deploy API for liveness.** Railway can show SUCCESS while the loop is dead (a
   DB/DNS outage killed it — see `MEMORY` bots-down-railway-dns). Ground truth = a recent
   `Decision:`/`Status:` log line **and** the hourly `account_history` heartbeat row in the DB.
+- **Close-only (or any latched condition) at capacity is not "hung" — check `LatchedConditionMonitor`
+  first, not `strategy_executions`.** `check_entry_conditions`'s own `strategy_executions` row for a
+  close-only block (#1169) is only written when the trading-loop actually calls it, which
+  `trading_engine.py` gates on `position_count < max_concurrent_positions` — so a close-only halt
+  with the position book already full never reaches that code at all, and the row never appears
+  (#1181: the #1169 fix is a **partial** signal, not the authoritative one). The row that IS
+  authoritative and ungated is `LatchedConditionMonitor`'s (`engines/live/monitoring/
+  latched_condition_monitor.py`, #1095/#1096): it runs unconditionally near the top of every loop
+  iteration, before any position-count or safety-mode check, and writes an hourly
+  `ENTRIES_ENABLED` / `CLOSE_ONLY_LATCHED` / `SYSTEM_HALT_LATCHED` / `ENTRY_PAUSE_LATCHED` row no
+  matter how many positions are open. Query it directly:
+  ```sql
+  SELECT error_code, message, timestamp FROM system_events
+  WHERE error_code = 'ENTRIES_ENABLED' OR error_code LIKE '%\_LATCHED'
+  ORDER BY timestamp DESC, id DESC LIMIT 5;
+  ```
+  Newest row `ENTRIES_ENABLED` and <~2h old → healthy; newest row any `*_LATCHED` → blocked but
+  alive, reason in the message; nothing inside ~2h → loop is actually dead. Full recipe:
+  `docs/live_trading.md` "Latched conditions are re-announced until cleared".
 
 ### 5.2 Escalate immediately (critical markers)
 - `emergency.close` / "Stop-loss placement failed" — opened a position it couldn't protect; repeated
