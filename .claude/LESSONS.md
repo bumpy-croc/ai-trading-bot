@@ -1322,7 +1322,8 @@ keep the skill generic and let the specifics live here.
   (~2 min `Decision:` cadence).
 - **Don't trust the deploy API for liveness.** Railway can show SUCCESS while the loop is dead (a
   DB/DNS outage killed it — see `MEMORY` bots-down-railway-dns). Ground truth = a recent
-  `Decision:`/`Status:` log line **and** the hourly `account_history` heartbeat row in the DB.
+  `Decision:`/`Status:` log line **and** the 30-minute `account_history` heartbeat row in the DB
+  (`DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL` = 1800s in `src/config/constants.py` — not hourly).
 
 ### 5.2 Escalate immediately (critical markers)
 - `emergency.close` / "Stop-loss placement failed" — opened a position it couldn't protect; repeated

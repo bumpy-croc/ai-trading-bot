@@ -35,6 +35,7 @@ from src.config.constants import (
     DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MIN_CHECK_INTERVAL,
     DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_STATUS_LOG_INTERVAL,
     DEFAULT_TAKE_PROFIT_PCT,
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
@@ -808,6 +809,8 @@ class LiveTradingEngine:
         self.last_data_update: datetime | None = None
         # Track when we last logged account state
         self.last_account_snapshot: datetime | None = None
+        # Track when we last logged the status heartbeat
+        self.last_status_log: datetime | None = None
         self.timeframe: str | None = None  # Will be set when trading starts
         self._active_symbol: str | None = None
 
@@ -1902,12 +1905,7 @@ class LiveTradingEngine:
                 # Escalate persistent inference timeouts (#927, observability only)
                 self._check_inference_health()
                 self._log_periodic_account_state()
-                # Log status periodically
-                if (
-                    self.performance_tracker.get_metrics().total_trades % 10 == 0
-                    or self.live_position_tracker.position_count > 0
-                ):
-                    self._log_status(symbol, current_price)
+                self._log_status_heartbeat(symbol, current_price)
                 # Reset error counter on successful iteration
                 self.consecutive_errors = 0
                 self.db_unreachable_since = None
@@ -1991,13 +1989,30 @@ class LiveTradingEngine:
         logger.info("Trading loop ended")
         self._finalize_runtime()
 
+    def _log_status_heartbeat(self, symbol: str, current_price: float) -> None:
+        """Log the periodic status line on a wall-clock cadence.
+
+        Previously gated on ``total_trades % 10 == 0 or position_count > 0``,
+        which went silent for a flat session sitting on a trade count not
+        divisible by 10 — making a live loop look hung even though it was
+        still running. This must fire independent of trade volume so it
+        stays valid liveness evidence.
+        """
+        now = datetime.now(UTC)
+        if (
+            self.last_status_log is None
+            or (now - self.last_status_log).total_seconds() >= DEFAULT_STATUS_LOG_INTERVAL
+        ):
+            self._log_status(symbol, current_price)
+            self.last_status_log = now
+
     def _log_periodic_account_state(self) -> None:
         """Log the periodic account snapshot and run periodic exchange account sync."""
         # Log account snapshot to database periodically (configurable interval)
         now = datetime.now(UTC)
         if self.account_snapshot_interval > 0 and (
             self.last_account_snapshot is None
-            or (now - self.last_account_snapshot).seconds >= self.account_snapshot_interval
+            or (now - self.last_account_snapshot).total_seconds() >= self.account_snapshot_interval
         ):
             self._log_account_snapshot()
             self.last_account_snapshot = now
