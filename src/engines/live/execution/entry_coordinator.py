@@ -238,7 +238,22 @@ class LiveEntryCoordinator:
         current_time: datetime,
         runtime_decision=None,
     ):
-        """Check if new positions should be opened"""
+        """Check if new positions should be opened.
+
+        Observability caveat (#1181): this method is only called by
+        ``trading_engine.py`` when ``position_count < max_concurrent_positions``
+        (see the trading loop), so any row this method writes for a blocked
+        entry — including close-only's own ``strategy_executions`` row (#1169)
+        — is a best-effort signal that goes missing exactly when a latched
+        condition coincides with a full position book. It is NOT the
+        authoritative "halted but alive vs. dead" signal. That's
+        ``LatchedConditionMonitor`` (``engines/live/monitoring/
+        latched_condition_monitor.py``, #1095/#1096): it runs unconditionally
+        near the top of every loop iteration, before any position-count check,
+        and writes an hourly state row regardless of how many positions are
+        open. See `docs/live_trading.md` ("Latched conditions are
+        re-announced until cleared") and `.claude/LESSONS.md` §5.1.
+        """
         state = self._state
 
         # In-line hard-cap gate (#807 pattern): re-assess the drawdown guard
@@ -255,6 +270,8 @@ class LiveEntryCoordinator:
         # other observability write, _record_short_suppression_shadow — so a
         # DB outage (itself a close-only trigger) can't make this path raise
         # and stall exits/stop-loss management on every remaining iteration.
+        # Any row this branch writes is still only a partial signal — see the
+        # docstring above; LatchedConditionMonitor is authoritative (#1181).
         if state._close_only_mode:
             reason = getattr(state, "_close_only_reason", None) or "close_only_mode_active"
             now = time.monotonic()
