@@ -2306,7 +2306,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             "MARKET": OrderType.MARKET,
             "LIMIT": OrderType.LIMIT,
             "STOP_LOSS": OrderType.STOP_LOSS,
+            "STOP_LOSS_LIMIT": OrderType.STOP_LOSS,
             "TAKE_PROFIT": OrderType.TAKE_PROFIT,
+            "TAKE_PROFIT_LIMIT": OrderType.TAKE_PROFIT,
         }
         return mapping.get(binance_type, OrderType.MARKET)
 
