@@ -55,6 +55,7 @@ from src.trading.exit_reason import (
 )
 
 if TYPE_CHECKING:
+    from src.engines.live.execution.stop_loss_manager import LiveStopLossManager
     from src.position_management.early_cut import EarlyCutPolicy
     from src.position_management.time_exits import TimeExitPolicy
     from src.position_management.trailing_stops import TrailingStopPolicy
@@ -171,10 +172,24 @@ class LiveExitHandler:
         # #802 follow-up P3: optional exposure governor to cap scale-in exposure
         # (set by the engine; None => inert). Mirrors the entry handler's gate.
         self._exposure_governor: ExposureGovernor | None = None
+        # Bound after construction (#1167): the engine builds its stop-loss
+        # manager after the exit handler. None => a ratcheted trailing stop
+        # only updates position.stop_loss in memory/DB, matching pre-#1167
+        # behavior (e.g. paper trading, or a handler built without one).
+        self._stop_loss_manager: LiveStopLossManager | None = None
 
     def configure_exposure_gate(self, exposure_governor: ExposureGovernor | None) -> None:
         """Wire the #802 exposure governor so scale-ins respect the gross cap."""
         self._exposure_governor = exposure_governor
+
+    def bind_stop_loss_manager(self, stop_loss_manager: LiveStopLossManager | None) -> None:
+        """Wire the engine's stop-loss manager so a trailing-stop ratchet can
+        move the resting exchange order, not just the in-memory/DB value (#1167).
+
+        Built and bound after construction because the engine assembles its
+        stop-loss manager after the exit handler (mirrors ``bind_system_halt``).
+        """
+        self._stop_loss_manager = stop_loss_manager
 
     def bind_system_halt(self, system_halt: SystemHaltState | None) -> None:
         """Rebind the scale-in gate to the engine's shared manual-halt state (#922).
@@ -811,6 +826,13 @@ class LiveExitHandler:
             new_activated = result.trailing_activated or position.trailing_stop_activated
             new_breakeven = result.breakeven_triggered or position.breakeven_triggered
 
+            # Snapshot BEFORE the tracker mutates the position: `position` is the
+            # same object the tracker holds internally (positions.items() is a
+            # shallow dict copy, not a deep one), so reading it after the call
+            # below would already reflect the new value (CODE.md: "the 'before'
+            # reference may alias the mutated object").
+            previous_stop_loss = position.stop_loss
+
             # Update position via tracker
             changed = self.position_tracker.update_trailing_stop(
                 order_id=order_id,
@@ -829,6 +851,28 @@ class LiveExitHandler:
                     position.trailing_stop_activated,
                     position.breakeven_triggered,
                 )
+
+            # Move the resting exchange stop when the protected PRICE actually
+            # ratcheted (not just an activation/breakeven flag) (#1167): a DB/
+            # memory-only update leaves the exchange order resting at its
+            # original price forever, which is both a real protection gap and
+            # the trigger for the engine's own exit check re-firing every loop
+            # iteration against a stop the exchange will never hit (#1165).
+            if (
+                changed
+                and position.stop_loss is not None
+                and position.stop_loss != previous_stop_loss
+                and self._stop_loss_manager is not None
+            ):
+                try:
+                    self._stop_loss_manager.move(position, float(position.stop_loss))
+                except Exception as e:
+                    logger.warning(
+                        "Failed to move exchange stop-loss for %s to $%.4f: %s",
+                        position.symbol,
+                        position.stop_loss,
+                        e,
+                    )
 
     def check_partial_operations(
         self,

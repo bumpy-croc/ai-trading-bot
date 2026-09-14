@@ -229,6 +229,127 @@ class TestPlaceProtectionRestingStopGuard1112:
         state.exchange_interface.place_stop_loss_order.assert_not_called()
 
 
+class TestMove:
+    """#1167: a trailing-stop ratchet must move the resting exchange order
+    (cancel + re-place), not just the in-memory/DB stop_loss value."""
+
+    @staticmethod
+    def _held_exchange(**overrides):
+        """Spot exchange stand-in confirmed as holding the position's base asset."""
+        exchange = make_exchange(**overrides)
+        exchange.is_margin_mode = False
+        exchange.get_balance.return_value = SimpleNamespace(free=0.5, locked=0.0)
+        exchange.cancel_order.return_value = True
+        return exchange
+
+    def test_cancels_old_order_and_places_new_one_at_new_price(self):
+        exchange = self._held_exchange()
+        exchange.place_stop_loss_order.return_value = "sl-new"
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        moved = manager.move(make_position(), 49000.0)
+
+        assert moved is True
+        exchange.cancel_order.assert_called_once_with("sl-1", "BTCUSDT")
+        exchange.place_stop_loss_order.assert_called_once_with(
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.5,
+            stop_price=49000.0,
+            side_effect_type=SideEffectType.AUTO_REPAY,
+        )
+        state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
+            "entry-1", "sl-new"
+        )
+        state.order_tracker.track_order.assert_called_once_with("sl-new", "BTCUSDT")
+
+    def test_short_position_uses_buy_side(self):
+        exchange = self._held_exchange()
+        exchange.place_stop_loss_order.return_value = "sl-new"
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        manager.move(make_position(side=PositionSide.SHORT), 53000.0)
+
+        call = exchange.place_stop_loss_order.call_args
+        assert call.kwargs["side"] == OrderSide.BUY
+
+    def test_paper_mode_short_circuits_without_exchange_calls(self):
+        state = make_state(enable_live_trading=False)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        moved = manager.move(make_position(), 49000.0)
+
+        assert moved is False
+        state.exchange_interface.cancel_order.assert_not_called()
+
+    def test_no_resting_order_is_a_no_op(self):
+        state = make_state()
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        moved = manager.move(make_position(stop_loss_order_id=None), 49000.0)
+
+        assert moved is False
+        state.exchange_interface.cancel_order.assert_not_called()
+        state.exchange_interface.place_stop_loss_order.assert_not_called()
+
+    def test_skips_when_position_no_longer_held(self):
+        exchange = make_exchange()
+        exchange.is_margin_mode = False
+        exchange.get_balance.return_value = SimpleNamespace(free=0.0, locked=0.0)
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        moved = manager.move(make_position(), 49000.0)
+
+        assert moved is False
+        exchange.cancel_order.assert_not_called()
+
+    def test_does_not_place_when_cancel_fails(self):
+        exchange = self._held_exchange()
+        exchange.cancel_order.return_value = False
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        moved = manager.move(make_position(), 49000.0)
+
+        assert moved is False
+        exchange.place_stop_loss_order.assert_not_called()
+
+    def test_refuses_and_alerts_when_guard_detects_ambiguous_resting_stop(self):
+        exchange = self._held_exchange()
+        # A resting order that survives the exclude_order_id filter (different
+        # id) on the correct side but at an unrelated price -> REFUSE (#1112).
+        exchange.get_open_orders_checked.return_value = [
+            SimpleNamespace(order_id="mystery", side=OrderSide.SELL, stop_price=47000.0)
+        ]
+        send_alert = Mock()
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=send_alert)
+
+        moved = manager.move(make_position(), 49000.0)
+
+        assert moved is False
+        exchange.place_stop_loss_order.assert_not_called()
+        send_alert.assert_called_once()
+
+    @patch("src.engines.live.execution.stop_loss_manager.time.sleep")
+    def test_escalates_when_replacement_fails_after_cancel(self, mock_sleep):
+        exchange = self._held_exchange()
+        exchange.place_stop_loss_order.return_value = None
+        send_alert = Mock()
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=send_alert)
+
+        moved = manager.move(make_position(), 49000.0)
+
+        assert moved is False
+        assert exchange.cancel_order.call_count == 1
+        assert exchange.place_stop_loss_order.call_count == 3
+        send_alert.assert_called_once()
+
+
 class TestCheckFilled:
     def test_filled_order_returns_fill_price(self):
         state = make_state()

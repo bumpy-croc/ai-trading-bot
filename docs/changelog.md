@@ -57,6 +57,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the ungated path still diverges.
 
 ### Fixed
+- **Trailing-stop ratchets never moved the exchange-side stop-loss order** (#1167; found
+  root-causing #1165's abort storm). `LiveExitHandler.update_trailing_stops` updated
+  `position.stop_loss` in memory and the DB as the trail ratcheted, but the resting exchange
+  order stayed at its original (lower) price forever — a real protection gap, since the
+  position was never actually protected at the price the engine (and the DB) believed. It was
+  also the direct trigger of #1165: `_check_stop_loss` evaluates the *engine-side*
+  `position.stop_loss` against the candle low every loop iteration, so the engine's own exit
+  condition kept re-firing every ~66s against a stop the exchange would never hit at that
+  price. `LiveStopLossManager` gains a `move()` method that cancels the resting order and
+  places a new one at the ratcheted price through the same guarded placement path as
+  `reprotect()` (#1112's fail-closed resting-stop check, with `exclude_order_id` so the
+  just-cancelled order is never re-adopted); `update_trailing_stops` calls it only when the
+  tracked stop price itself changed, not on activation/breakeven-flag-only updates. The
+  reconciler's stop-loss audit still checks order status/fill only, not price — tracked
+  separately in #1172 as defense-in-depth for `move()`'s own conservative failure path (a
+  failed cancel leaves the old order resting rather than risk stacking a duplicate).
 - **`exit_reason` was free text with substring-matched control flow** (#1115). The backtest
   engine chose an exit's order type with `if "Stop loss" in exit_reason:`, so the `stop_loss`
   and `stop_loss_filled_offline` spellings silently skipped it and exited as market orders with
