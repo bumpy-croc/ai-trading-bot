@@ -20,6 +20,12 @@ checklist line, a new tripwire.
    disposition in the retro PR — never silently dropped. After actioning, **clear the file back
    to its header template in the same PR**. An empty agenda is not a skipped step: still sweep
    inputs 1–7 below; the agenda supplements the sweep, it does not replace it.
+   **Known-weak mechanism — weight it accordingly.** `git log --follow` on this file shows exactly
+   **two** non-retro appends in its whole life (`aee03a26`, and `3f667afe`/#1060 — which was then
+   lost when the retro cleared `develop`'s copy while the item sat on a branch). Every other commit
+   is a retro clearing it. Seven consecutive empty windows is not evidence of a quiet fleet; it is
+   evidence that the intended writers use GH issues instead. Sweep `--label source:automation`
+   issues opened in the window alongside this file.
    **Before clearing, `gh pr list --state open` and check every open PR's file list for
    `AGENDA.md`** — an item can be lost to a *branch*: the retro clears the file on `develop` while an
    unmerged PR still carries an unactioned item, and the merge resolves to the cleared version. Carry
@@ -31,7 +37,15 @@ checklist line, a new tripwire.
    retro deferred distillate to another PR, open that PR: **merged → fine; closed or still open →
    its distillate is not on `develop` and recovering it is this retro's first job** (diff its
    files against `develop`, re-land the distillate-only subset). Also re-check the issues the last
-   retro filed — an issue that has sat untouched for a week is itself a finding. Earned: #1026
+   retro filed — an issue that has sat untouched for a week is itself a finding. **Re-measure the state, don't re-read the
+   ticket** — an issue whose fix is a toggle outside the repo (a settings checkbox, an installed
+   hook, an env var) can be done while the issue stays open: #1079's auto-merge setting read `true`
+   on 2026-09-14 with the issue still open and being re-escalated. And **re-run the
+   install-required `--check`s here** (`tools/install_git_hooks.py --check`,
+   `install_merge_drivers.py --check`, `install_worktree_shim.py --check`) instead of trusting last
+   week's issue; installing is an environment action, not a code change, so **run the installer
+   yourself** if one has drifted (LESSONS §3). Invoke the venv interpreter directly — the `make`
+   targets call bare `python`, which does not exist on this machine. Earned: #1026
    closed unmerged 2026-07-21 after the 07-20 retro deliberately did not reproduce it; LESSONS §2.9.
    **If that PR is still open: `git reset --hard origin/<its-branch>` and build this retro on top of
    it** — this PR then supersedes it and merges whether or not the old one lands, instead of adding a
@@ -47,6 +61,11 @@ checklist line, a new tripwire.
 1. **log.md** — the week's entries end to end, not just the tail. **A week with no entries is a
    finding, not a quiet week** — cross-check against the scheduled-task traces (input 6): if the
    monitors ran and the log is empty, findings were surfaced and dropped (LESSONS §2.10).
+   **Holes matter as much as emptiness, and only the slot list finds them.** Diff the log's *date
+   coverage* against input 6's enumerated slots: a log that simply stops, or skips three days inside
+   a live incident, reads exactly like a quiet stretch. 09-08, 09-12 and 09-13 were comment-only
+   standup runs and `log.md` on `develop` ended 2026-09-11 while the P0 ran to 09-14 — invisible
+   from the log alone (LESSONS §2.17 amendment).
 2. **Incidents + corrections** — anything opened/closed/corrected. Corrections are retro gold:
    the phantom-peak withdrawal (2026-07-04 13:55) became LESSONS §5.6 (the distinct-count check)
    — that's the pipeline working as designed.
@@ -111,6 +130,11 @@ checklist line, a new tripwire.
      `You've hit your session limit · resets <time>`) to the quota strings — it contains neither
      "weekly" nor "usage" and killed the 2026-09-03 `prune-worktrees` slot. Full list: LESSONS §2.15.
 7. **Model scoreboard** — new rows this week; stale `latest` claims.
+8. **Outstanding pre-merge asks from previous retros.** For every "requested change / blocking
+   observation" this retro or a previous one left on someone else's PR, check the **merged tree**
+   (`git ls-tree origin/main <path>`), never the review thread — a plain comment is not a gate and
+   merges past one routinely. On 2026-09-13 PR #1130 merged with the `ETHUSDT/price/latest` symlink
+   the 09-07 retro had asked it to drop; it is now in production (LESSONS §1.16 update, §2.11).
 
 ## The distillation pass
 
@@ -171,6 +195,9 @@ manufacturing lessons.
   a note to yourself (LESSONS §2.11) — 5/5 issues from the 07-27 retro had zero activity 14 days on.
   Filing is still the right action for code changes; just don't report it as resolved, and escalate
   the *queue* (N unowned, M days) as a single item once it repeats.
+- **Reporting a drained queue as a healthy week.** Report count *and* composition: how many merged,
+  how long each had been green, and in what ORDER. A batch drain lands rule-carrying PRs after the
+  PRs they constrain unless someone sequences it (LESSONS §2.9 rule (h)).
 - **Reporting a green scheduled-task audit from the wrong instrument** — see input 6. "All tasks
   fired" is only sayable from the registry plus per-task artifact evidence.
 - **Bundling a log-consolidation or human-directed log/incident rewrite into the retro PR.** The
