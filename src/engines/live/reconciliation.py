@@ -144,6 +144,132 @@ def lookup_order_fail_closed(
     return exchange.get_order(order_id, symbol), True
 
 
+class StopPlacementCheck(str, Enum):
+    """Outcome of the pre-placement resting-stop check (#1112)."""
+
+    PROCEED = "proceed"  # confirmed no resting stop — safe to place
+    ADOPT = "adopt"  # exactly one untracked resting stop already matches — use it
+    REFUSE = "refuse"  # unknown state, or an ambiguous/mismatched resting stop
+
+
+@dataclass(frozen=True)
+class StopPlacementDecision:
+    check: StopPlacementCheck
+    existing_order_id: str | None = None
+    reason: str = ""
+
+
+def guard_stop_placement(exchange: Any, symbol: str, side: Any) -> StopPlacementDecision:
+    """Fail-closed pre-check every stop-loss PLACEMENT call site must consult.
+
+    #1104/#1108's root enabler: nothing checked whether a protective order was
+    already resting on the exchange before placing another. A stale tracked id
+    — from a race, a crash between placement and the tracker write, or a
+    failed DB persist — let a second stop stack on top of one still resting,
+    orphaning the older order with nothing left to track or cancel it (#1112).
+
+    Looks up open orders for ``symbol`` via the exchange's fail-closed
+    ``get_open_orders_checked`` — unlike ``get_open_orders``, which fails OPEN
+    and returns ``[]`` on error (LESSONS.md #1.8) — and classifies:
+
+    - ``PROCEED``: confirmed no resting stop-type order for this symbol on
+      either side — safe to place a new one.
+    - ``ADOPT``: exactly one resting stop-type order exists AND its side
+      matches ``side`` (the direction we are about to protect). This is the
+      #1104 shape: the id fell out of our tracking, but the order itself is
+      still the right one. Callers should track ``existing_order_id`` instead
+      of placing another.
+    - ``REFUSE``: the lookup could not be confirmed, more than one resting
+      stop-type order already exists, or the single resting one is on the
+      wrong side (so it cannot be the order we are trying to place and
+      adopting it would misprotect the position). All three are states where
+      guessing is unsafe — the caller must NOT place and must run its normal
+      placement-failed path.
+    """
+    checked = getattr(exchange, "get_open_orders_checked", None)
+    if not callable(checked):
+        return StopPlacementDecision(
+            StopPlacementCheck.REFUSE,
+            reason="exchange has no fail-closed open-orders accessor",
+        )
+    try:
+        orders = checked(symbol)
+    except Exception as e:
+        return StopPlacementDecision(StopPlacementCheck.REFUSE, reason=f"lookup raised: {e}")
+    if orders is None:
+        return StopPlacementDecision(StopPlacementCheck.REFUSE, reason="lookup unconfirmed")
+
+    resting = [o for o in orders if getattr(o, "stop_price", None) is not None]
+    if not resting:
+        return StopPlacementDecision(StopPlacementCheck.PROCEED)
+    if len(resting) > 1:
+        return StopPlacementDecision(
+            StopPlacementCheck.REFUSE,
+            reason=(
+                f"{len(resting)} resting stop orders already exist for {symbol}: "
+                f"{[o.order_id for o in resting]}"
+            ),
+        )
+    only = resting[0]
+    if getattr(only, "side", None) == side:
+        return StopPlacementDecision(StopPlacementCheck.ADOPT, existing_order_id=only.order_id)
+    return StopPlacementDecision(
+        StopPlacementCheck.REFUSE,
+        reason=(
+            f"a resting stop {only.order_id} exists for {symbol} but on the "
+            f"wrong side ({only.side} vs expected {side}) — will not adopt or duplicate"
+        ),
+    )
+
+
+def place_or_adopt_stop_loss(
+    exchange: Any,
+    *,
+    symbol: str,
+    side: Any,
+    quantity: float,
+    stop_price: float,
+    side_effect_type: str | None = None,
+) -> str | None:
+    """Place a protective stop, first checking for one already resting (#1112).
+
+    Every call site that places a NEW protective stop (as opposed to
+    re-reading or cancelling a tracked one) must go through this instead of
+    calling ``exchange.place_stop_loss_order`` directly. Returns the order id
+    to track — either a freshly placed order, or an existing untracked
+    resting stop that was adopted — or ``None`` when placement must not
+    proceed. A ``None`` return is deliberately indistinguishable from
+    ``place_stop_loss_order`` itself failing: every call site already treats
+    a falsy result as a placement failure and escalates accordingly (critical
+    log + unprotected-position handling), which is exactly the fail-closed
+    behavior required here too.
+    """
+    decision = guard_stop_placement(exchange, symbol, side)
+    if decision.check == StopPlacementCheck.REFUSE:
+        logger.critical(
+            "Refusing to place a stop-loss for %s: %s — skipping this "
+            "placement (fail-closed, #1112).",
+            symbol,
+            decision.reason,
+        )
+        return None
+    if decision.check == StopPlacementCheck.ADOPT:
+        logger.warning(
+            "Found an untracked resting stop-loss %s for %s — adopting it "
+            "instead of placing a duplicate (#1112).",
+            decision.existing_order_id,
+            symbol,
+        )
+        return decision.existing_order_id
+    return exchange.place_stop_loss_order(
+        symbol=symbol,
+        side=side,
+        quantity=quantity,
+        stop_price=stop_price,
+        side_effect_type=side_effect_type,
+    )
+
+
 @runtime_checkable
 class _HasDbPositionId(Protocol):
     """Structural type for position objects that carry a DB position ID."""
@@ -876,7 +1002,8 @@ class PositionReconciler:
                     from src.data_providers.exchange_interface import OrderSide
 
                     sl_side = OrderSide.SELL if side_lower == "long" else OrderSide.BUY
-                    sl_order_id = self.exchange.place_stop_loss_order(
+                    sl_order_id = place_or_adopt_stop_loss(
+                        self.exchange,
                         symbol=symbol,
                         side=sl_side,
                         quantity=fill_qty,
@@ -1263,7 +1390,8 @@ class PositionReconciler:
             side = getattr(position, "side", "long")
             side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
             sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
-            new_sl_id = self.exchange.place_stop_loss_order(
+            new_sl_id = place_or_adopt_stop_loss(
+                self.exchange,
                 symbol=symbol,
                 side=sl_side,
                 quantity=qty,
@@ -1544,7 +1672,8 @@ class PositionReconciler:
                     original = getattr(position, "original_size", None)
                     if current is not None and original is not None and float(original) > 0:
                         qty = qty * (float(current) / float(original))
-                    new_sl_id = self.exchange.place_stop_loss_order(
+                    new_sl_id = place_or_adopt_stop_loss(
+                        self.exchange,
                         symbol=position.symbol,
                         side=sl_side,
                         quantity=qty,
@@ -1856,7 +1985,8 @@ class PositionReconciler:
                         original = getattr(position, "original_size", None)
                         if current is not None and original is not None and original > 0:
                             qty = qty * (current / original)
-                        new_sl_id = self.exchange.place_stop_loss_order(
+                        new_sl_id = place_or_adopt_stop_loss(
+                            self.exchange,
                             symbol=position.symbol,
                             side=sl_side,
                             quantity=qty,
@@ -2025,7 +2155,8 @@ class PositionReconciler:
                                 position.symbol,
                             )
                             return
-                        new_sl_id = self.exchange.place_stop_loss_order(
+                        new_sl_id = place_or_adopt_stop_loss(
+                            self.exchange,
                             symbol=position.symbol,
                             side=sl_side,
                             quantity=qty,
@@ -3959,7 +4090,8 @@ class PeriodicReconciler:
                                     position.symbol,
                                 )
                                 continue
-                            new_sl_id = self.exchange.place_stop_loss_order(
+                            new_sl_id = place_or_adopt_stop_loss(
+                                self.exchange,
                                 symbol=position.symbol,
                                 side=sl_side,
                                 quantity=qty,
@@ -4318,7 +4450,8 @@ class PeriodicReconciler:
             if current is not None and original is not None and original > 0:
                 qty = qty * (current / original)
 
-            new_sl_id = self.exchange.place_stop_loss_order(
+            new_sl_id = place_or_adopt_stop_loss(
+                self.exchange,
                 symbol=position.symbol,
                 side=sl_side,
                 quantity=qty,

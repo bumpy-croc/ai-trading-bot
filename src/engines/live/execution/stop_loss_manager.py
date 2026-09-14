@@ -84,34 +84,58 @@ class LiveStopLossManager:
         ``None`` when all attempts failed (the caller owns the emergency-close
         escalation).
         """
+        from src.engines.live.reconciliation import StopPlacementCheck, guard_stop_placement
+
         state = self._state
         sl_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
-        sl_order_id = None
-        max_retries = 3
-        retry_delay = 1.0
 
-        for attempt in range(max_retries):
-            try:
-                sl_order_id = state.exchange_interface.place_stop_loss_order(
-                    symbol=symbol,
-                    side=sl_side,
-                    quantity=quantity,
-                    stop_price=stop_price,
-                    side_effect_type=SideEffectType.AUTO_REPAY,
-                )
-                if sl_order_id:
-                    break
-            except Exception as sl_err:
-                logger.warning(
-                    "Stop-loss placement attempt %s/%s failed: %s",
-                    attempt + 1,
-                    max_retries,
-                    sl_err,
-                )
+        # Consult the fail-closed resting-stop check BEFORE placing (#1112): a
+        # stale/nulled tracked id must never cause a second protective order
+        # to stack on one still resting on the exchange.
+        decision = guard_stop_placement(state.exchange_interface, symbol, sl_side)
+        if decision.check == StopPlacementCheck.REFUSE:
+            logger.critical(
+                "Refusing to place a stop-loss for %s: %s — fail-closed "
+                "(#1112); treating as a placement failure.",
+                symbol,
+                decision.reason,
+            )
+            return None
+        if decision.check == StopPlacementCheck.ADOPT:
+            sl_order_id = decision.existing_order_id
+            logger.warning(
+                "Found an untracked resting stop-loss %s for %s — adopting "
+                "it instead of placing a duplicate (#1112).",
+                sl_order_id,
+                symbol,
+            )
+        else:
+            sl_order_id = None
+            max_retries = 3
+            retry_delay = 1.0
 
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay)
-                retry_delay *= 2
+            for attempt in range(max_retries):
+                try:
+                    sl_order_id = state.exchange_interface.place_stop_loss_order(
+                        symbol=symbol,
+                        side=sl_side,
+                        quantity=quantity,
+                        stop_price=stop_price,
+                        side_effect_type=SideEffectType.AUTO_REPAY,
+                    )
+                    if sl_order_id:
+                        break
+                except Exception as sl_err:
+                    logger.warning(
+                        "Stop-loss placement attempt %s/%s failed: %s",
+                        attempt + 1,
+                        max_retries,
+                        sl_err,
+                    )
+
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
 
         if sl_order_id:
             logger.info(
@@ -302,30 +326,59 @@ class LiveStopLossManager:
             )
             return
 
+        from src.engines.live.reconciliation import StopPlacementCheck, guard_stop_placement
+
         sl_side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
-        sl_order_id = None
-        retry_delay = 1.0
-        for attempt in range(3):
-            try:
-                sl_order_id = state.exchange_interface.place_stop_loss_order(
-                    symbol=position.symbol,
-                    side=sl_side,
-                    quantity=float(quantity),
-                    stop_price=float(stop_price),
-                    side_effect_type=SideEffectType.AUTO_REPAY,
-                )
-                if sl_order_id:
-                    break
-            except Exception as e:
-                logger.warning(
-                    "Re-protect attempt %s/3 for %s failed: %s",
-                    attempt + 1,
-                    position.symbol,
-                    e,
-                )
-            if attempt < 2:
-                time.sleep(retry_delay)
-                retry_delay *= 2
+
+        # Consult the fail-closed resting-stop check BEFORE placing (#1112): the
+        # cancel above should have cleared any resting stop, but confirm rather
+        # than assume — a stale tracked id must never let a second order stack.
+        decision = guard_stop_placement(state.exchange_interface, position.symbol, sl_side)
+        if decision.check == StopPlacementCheck.REFUSE:
+            logger.critical(
+                "CRITICAL: %s re-protect refused: %s — fail-closed (#1112); "
+                "position is UNPROTECTED pending the periodic reconciler. "
+                "MANUAL REVIEW REQUIRED.",
+                position.symbol,
+                decision.reason,
+            )
+            self._send_alert(
+                f"🚨 {position.symbol} UNPROTECTED: re-protect refused ({decision.reason}). "
+                f"Reconciler backstop engaged. MANUAL REVIEW REQUIRED."
+            )
+            return
+        if decision.check == StopPlacementCheck.ADOPT:
+            sl_order_id = decision.existing_order_id
+            logger.warning(
+                "Found an untracked resting stop-loss %s for %s — adopting "
+                "it instead of placing a duplicate (#1112).",
+                sl_order_id,
+                position.symbol,
+            )
+        else:
+            sl_order_id = None
+            retry_delay = 1.0
+            for attempt in range(3):
+                try:
+                    sl_order_id = state.exchange_interface.place_stop_loss_order(
+                        symbol=position.symbol,
+                        side=sl_side,
+                        quantity=float(quantity),
+                        stop_price=float(stop_price),
+                        side_effect_type=SideEffectType.AUTO_REPAY,
+                    )
+                    if sl_order_id:
+                        break
+                except Exception as e:
+                    logger.warning(
+                        "Re-protect attempt %s/3 for %s failed: %s",
+                        attempt + 1,
+                        position.symbol,
+                        e,
+                    )
+                if attempt < 2:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
 
         if sl_order_id:
             if position.order_id is not None:

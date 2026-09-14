@@ -1176,6 +1176,28 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.warning("Open-orders lookup failed for %s: %s", symbol, e)
             return None
 
+    def get_open_orders_checked(self, symbol: str) -> list[Order] | None:
+        """Fail-closed variant of :meth:`get_open_orders` for ``symbol``.
+
+        Unlike :meth:`get_open_orders` (which fails OPEN and returns ``[]`` on
+        any error — see LESSONS.md #1.8), this returns ``None`` when the
+        lookup cannot be confirmed, so a caller deciding whether it is safe to
+        place a new stop-loss (#1112) can treat ``None`` as "unknown — do not
+        place" rather than silently reading it as "no open orders".
+        """
+        if not BINANCE_AVAILABLE or not self._client:
+            return None
+        try:
+            orders_data = self._call_get_open_orders(symbol=symbol)
+            return [
+                order
+                for order_data in orders_data
+                if (order := self._parse_order_data(order_data)) is not None
+            ]
+        except Exception as e:
+            logger.warning("Open-orders lookup failed for %s: %s", symbol, e)
+            return None
+
     def repay_margin_loan(self, asset: str, amount: Decimal) -> bool:
         """Repay a cross-margin loan for ``asset`` via the modern borrow-repay endpoint.
 

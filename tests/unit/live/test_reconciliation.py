@@ -2785,6 +2785,270 @@ class TestPeriodicMissingStopLoss:
         assert pos.stop_loss_order_id is None
 
 
+class TestStopPlacementGuard1112:
+    """#1112: nothing checked for an already-resting stop before placing one.
+
+    Definition of done from the issue: drive the reconciler with a stale
+    ``stop_loss_order_id`` (None) and a live resting stop already on the
+    exchange, and assert exactly one protective order exists afterwards —
+    the resting one is adopted, not duplicated.
+    """
+
+    def _resting_stop_order(self, *, order_id="resting_sl_1", side=None):
+        from src.data_providers.exchange_interface import Order, OrderSide, OrderStatus, OrderType
+
+        return Order(
+            order_id=order_id,
+            symbol="BTCUSDT",
+            side=side or OrderSide.SELL,
+            order_type=OrderType.STOP_LOSS,
+            quantity=0.1,
+            price=None,
+            status=OrderStatus.PENDING,
+            filled_quantity=0.0,
+            average_price=None,
+            commission=0.0,
+            commission_asset="",
+            create_time=datetime.now(UTC),
+            update_time=datetime.now(UTC),
+            stop_price=48000.0,
+        )
+
+    def test_adopts_untracked_resting_stop_instead_of_duplicating(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """A stale (None) stop_loss_order_id with a live resting stop on the exchange
+        must adopt that resting order, not place a second one (#1104/#1112 shape)."""
+        pos = MockPosition(
+            entry_price=50000.0,
+            current_size=0.1,
+            exchange_order_id="ex_300",
+            stop_loss=48000.0,
+            stop_loss_order_id=None,
+            quantity=0.1,
+            original_size=0.1,
+            db_position_id=50,
+            side="long",
+        )
+        mock_position_tracker.positions = {"pos_1": pos}
+
+        from src.data_providers.exchange_interface import OrderSide, OrderStatus
+
+        mock_exchange.get_order.return_value = MockExchangeOrder(status=OrderStatus.FILLED)
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=5000.0)
+            if asset == "USDT"
+            else MockBalance(asset=asset, total=0.1, free=0.1, locked=0.0)
+        )
+        # A protective SELL stop already rests on the exchange, untracked.
+        mock_exchange.get_open_orders_checked.return_value = [
+            self._resting_stop_order(order_id="resting_sl_1", side=OrderSide.SELL)
+        ]
+        mock_db.get_current_balance.return_value = 10000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+            on_critical=MagicMock(),
+        )
+        reconciler._reconcile_cycle()
+
+        # No duplicate placement — the resting order was adopted instead.
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        assert pos.stop_loss_order_id == "resting_sl_1"
+
+    def test_refuses_when_resting_stop_lookup_is_unconfirmed(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """A transient open-orders lookup failure must fail CLOSED — no placement,
+        not a silent skip of the check."""
+        pos = MockPosition(
+            entry_price=50000.0,
+            current_size=0.1,
+            exchange_order_id="ex_301",
+            stop_loss=48000.0,
+            stop_loss_order_id=None,
+            quantity=0.1,
+            original_size=0.1,
+            db_position_id=51,
+        )
+        mock_position_tracker.positions = {"pos_1": pos}
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_exchange.get_order.return_value = MockExchangeOrder(status=ExOS.FILLED)
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=5000.0)
+            if asset == "USDT"
+            else MockBalance(asset=asset, total=0.1, free=0.1, locked=0.0)
+        )
+        mock_exchange.get_open_orders_checked.return_value = None  # unconfirmed
+        mock_db.get_current_balance.return_value = 10000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+            on_critical=MagicMock(),
+        )
+        reconciler._reconcile_cycle()
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        assert pos.stop_loss_order_id is None
+
+    def test_refuses_to_adopt_a_resting_stop_on_the_wrong_side(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """A resting stop on the wrong side cannot be the order we are trying to
+        protect with — must refuse rather than adopt or duplicate."""
+        pos = MockPosition(
+            entry_price=50000.0,
+            current_size=0.1,
+            exchange_order_id="ex_302",
+            stop_loss=48000.0,
+            stop_loss_order_id=None,
+            quantity=0.1,
+            original_size=0.1,
+            db_position_id=52,
+            side="long",  # expects a SELL stop
+        )
+        mock_position_tracker.positions = {"pos_1": pos}
+
+        from src.data_providers.exchange_interface import OrderSide
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_exchange.get_order.return_value = MockExchangeOrder(status=ExOS.FILLED)
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=5000.0)
+            if asset == "USDT"
+            else MockBalance(asset=asset, total=0.1, free=0.1, locked=0.0)
+        )
+        mock_exchange.get_open_orders_checked.return_value = [
+            self._resting_stop_order(order_id="wrong_side_sl", side=OrderSide.BUY)
+        ]
+        mock_db.get_current_balance.return_value = 10000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+            on_critical=MagicMock(),
+        )
+        reconciler._reconcile_cycle()
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        assert pos.stop_loss_order_id is None
+
+    def test_refuses_when_multiple_resting_stops_already_exist(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Two+ resting stop-type orders is an already-ambiguous/duplicated state —
+        refuse rather than guess which one is ours."""
+        pos = MockPosition(
+            entry_price=50000.0,
+            current_size=0.1,
+            exchange_order_id="ex_303",
+            stop_loss=48000.0,
+            stop_loss_order_id=None,
+            quantity=0.1,
+            original_size=0.1,
+            db_position_id=53,
+            side="long",
+        )
+        mock_position_tracker.positions = {"pos_1": pos}
+
+        from src.data_providers.exchange_interface import OrderSide
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_exchange.get_order.return_value = MockExchangeOrder(status=ExOS.FILLED)
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=5000.0)
+            if asset == "USDT"
+            else MockBalance(asset=asset, total=0.1, free=0.1, locked=0.0)
+        )
+        mock_exchange.get_open_orders_checked.return_value = [
+            self._resting_stop_order(order_id="dup_sl_1", side=OrderSide.SELL),
+            self._resting_stop_order(order_id="dup_sl_2", side=OrderSide.SELL),
+        ]
+        mock_db.get_current_balance.return_value = 10000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+            on_critical=MagicMock(),
+        )
+        reconciler._reconcile_cycle()
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        assert pos.stop_loss_order_id is None
+
+
+class TestGuardStopPlacementUnit:
+    """Direct unit tests for the #1112 guard/adopt primitives."""
+
+    def test_guard_proceeds_when_no_resting_orders(self):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import StopPlacementCheck, guard_stop_placement
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        decision = guard_stop_placement(exchange, "BTCUSDT", OrderSide.SELL)
+        assert decision.check == StopPlacementCheck.PROCEED
+
+    def test_guard_refuses_when_accessor_missing(self):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import StopPlacementCheck, guard_stop_placement
+
+        class NoAccessor:
+            pass
+
+        decision = guard_stop_placement(NoAccessor(), "BTCUSDT", OrderSide.SELL)
+        assert decision.check == StopPlacementCheck.REFUSE
+
+    def test_place_or_adopt_returns_none_on_refuse_without_calling_exchange(self):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = None  # unconfirmed
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+        )
+        assert result is None
+        exchange.place_stop_loss_order.assert_not_called()
+
+    def test_place_or_adopt_places_when_clear(self):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.return_value = "sl_new"
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+        )
+        assert result == "sl_new"
+        exchange.place_stop_loss_order.assert_called_once()
+
+
 # ---------- Emergency Sell Verification Tests ----------
 
 
