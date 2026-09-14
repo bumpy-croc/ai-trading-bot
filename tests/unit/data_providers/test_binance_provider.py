@@ -483,6 +483,10 @@ class TestPlaceStopLossOrder:
         mock_client.get_exchange_info.return_value = {"symbols": []}
 
         provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={"step_size": 0.0001, "tick_size": 0.01, "base_asset": "BTC"}
+        )
+        provider.get_balance = Mock(return_value=Mock(free=1.0))
 
         # Act
         result = provider.place_stop_loss_order(
@@ -515,6 +519,9 @@ class TestPlaceStopLossOrder:
         mock_client.get_exchange_info.return_value = {"symbols": []}
 
         provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={"step_size": 0.0001, "tick_size": 0.01, "base_asset": "BTC"}
+        )
 
         # Act
         result = provider.place_stop_loss_order(
@@ -605,36 +612,70 @@ class TestPlaceStopLossOrder:
 
     @patch("src.data_providers.binance_provider.Client")
     @patch("src.data_providers.binance_provider.get_config")
-    def test_sell_stop_loss_caps_without_symbol_info(self, mock_config, mock_client_class):
-        """A transient get_symbol_info failure must NOT disable the free-balance cap.
+    def test_sell_stop_loss_fails_closed_without_symbol_info(self, mock_config, mock_client_class):
+        """A transient get_symbol_info failure must refuse to place, not send raw floats.
 
-        With no symbol_info there is no step size, so the capped quantity is sent
-        without lot-rounding — but it is still capped to holdings, so no -2010.
-        The base asset is derived via the fallback suffix-strip.
+        Without symbol_info there is no known tick/lot precision, so quantizing
+        is impossible — sending the order anyway means an unquantized
+        price/quantity that Binance rejects with -1111/51077, leaving the
+        position unprotected with no loud error (#1126). The order must not be
+        sent, and the refusal must be recorded via the durable order-error sink.
 
-        The shortfall is a fee-rounding sliver (0.2%): a larger gap now refuses the
-        order outright rather than placing an undersized stop that would be recorded
-        as full protection (#1104/#1109).
+        Supersedes the pre-#1126 `test_sell_stop_loss_caps_without_symbol_info`,
+        which asserted the opposite for a small (0.2%) shortfall: that a capped,
+        unrounded order was still sent. That is exactly the silently-wrong-order
+        shape #1126 exists to remove — no shortfall size is small enough to skip
+        quantization, since quantization itself is what's impossible without
+        symbol_info. There is no longer a "small enough to proceed" case.
         """
         mock_config_obj = Mock()
         mock_config_obj.get_required.return_value = "fake_key"
         mock_config.return_value = mock_config_obj
         mock_client = Mock()
         mock_client_class.return_value = mock_client
-        mock_client.create_order.return_value = {"orderId": "sl3"}
         provider = BinanceProvider()
         provider.get_symbol_info = Mock(return_value=None)  # transient API failure
-        provider.get_balance = Mock(return_value=Mock(free=0.00499))
+        provider.get_balance = Mock(return_value=Mock(free=0.004))
+        recorded = []
+        provider.order_error_sink = recorded.append
 
         result = provider.place_stop_loss_order(
             symbol="ETHUSDT", side=OrderSide.SELL, quantity=0.005, stop_price=1900.0
         )
 
-        assert result == "sl3"
-        provider.get_balance.assert_called_once_with("ETH")
-        assert mock_client.create_order.call_args.kwargs["quantity"] == pytest.approx(
-            0.00499, abs=1e-9
+        assert result is None
+        mock_client.create_order.assert_not_called()
+        assert len(recorded) == 1
+        assert recorded[0].error_type == "SymbolInfoUnavailable"
+        assert recorded[0].params["symbol_info_available"] is False
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_sell_stop_loss_fails_closed_records_the_actually_requested_price(
+        self, mock_config, mock_client_class
+    ):
+        """The durable SymbolInfoUnavailable row must record the limit price that
+        was actually being requested, not the pre-computation placeholder from
+        before the auto-computed limit_price (stop_price adjusted by the slippage
+        factor) was filled in."""
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        provider = BinanceProvider()
+        provider.get_symbol_info = Mock(return_value=None)
+        provider.get_balance = Mock(return_value=Mock(free=0.004))
+        recorded = []
+        provider.order_error_sink = recorded.append
+
+        provider.place_stop_loss_order(
+            symbol="ETHUSDT", side=OrderSide.SELL, quantity=0.005, stop_price=1900.0
         )
+
+        assert len(recorded) == 1
+        assert recorded[0].params["price"] is not None
+        assert recorded[0].params["price"] < 1900.0  # SELL limit sits below the stop
 
     @patch("src.data_providers.binance_provider.Client")
     @patch("src.data_providers.binance_provider.get_config")
@@ -770,6 +811,10 @@ class TestPlaceStopLossOrder:
         mock_client.get_exchange_info.return_value = {"symbols": []}
 
         provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={"step_size": 0.0001, "tick_size": 0.01, "base_asset": "BTC"}
+        )
+        provider.get_balance = Mock(return_value=Mock(free=1.0))
         stop_price = 50000.0
 
         # Act
@@ -801,6 +846,9 @@ class TestPlaceStopLossOrder:
         mock_client.get_exchange_info.return_value = {"symbols": []}
 
         provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={"step_size": 0.0001, "tick_size": 0.01, "base_asset": "BTC"}
+        )
         stop_price = 50000.0
 
         # Act
@@ -832,6 +880,10 @@ class TestPlaceStopLossOrder:
         mock_client.get_exchange_info.return_value = {"symbols": []}
 
         provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={"step_size": 0.0001, "tick_size": 0.01, "base_asset": "BTC"}
+        )
+        provider.get_balance = Mock(return_value=Mock(free=1.0))
 
         # Act
         provider.place_stop_loss_order(
@@ -864,6 +916,10 @@ class TestPlaceStopLossOrder:
         mock_client.get_exchange_info.return_value = {"symbols": []}
 
         provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={"step_size": 0.0001, "tick_size": 0.01, "base_asset": "BTC"}
+        )
+        provider.get_balance = Mock(return_value=Mock(free=1.0))
 
         # Act
         result = provider.place_stop_loss_order(
@@ -891,6 +947,10 @@ class TestPlaceStopLossOrder:
         mock_client.get_exchange_info.return_value = {"symbols": []}
 
         provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={"step_size": 0.0001, "tick_size": 0.01, "base_asset": "BTC"}
+        )
+        provider.get_balance = Mock(return_value=Mock(free=1.0))
 
         # Act
         result = provider.place_stop_loss_order(
@@ -918,6 +978,10 @@ class TestPlaceStopLossOrder:
         mock_client.get_exchange_info.return_value = {"symbols": []}
 
         provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={"step_size": 0.0001, "tick_size": 0.01, "base_asset": "BTC"}
+        )
+        provider.get_balance = Mock(return_value=Mock(free=1.0))
 
         # Act
         result = provider.place_stop_loss_order(
