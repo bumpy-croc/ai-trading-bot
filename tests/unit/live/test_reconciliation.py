@@ -2996,6 +2996,28 @@ class TestStopPlacementGuard1112:
 class TestGuardStopPlacementUnit:
     """Direct unit tests for the #1112 guard/adopt primitives."""
 
+    def _resting_stop_order(self, *, order_id="resting_sl_1", side=None, stop_price=48000.0):
+        from datetime import UTC, datetime
+
+        from src.data_providers.exchange_interface import Order, OrderSide, OrderStatus, OrderType
+
+        return Order(
+            order_id=order_id,
+            symbol="BTCUSDT",
+            side=side or OrderSide.SELL,
+            order_type=OrderType.STOP_LOSS,
+            quantity=0.1,
+            price=None,
+            status=OrderStatus.PENDING,
+            filled_quantity=0.0,
+            average_price=None,
+            commission=0.0,
+            commission_asset="",
+            create_time=datetime.now(UTC),
+            update_time=datetime.now(UTC),
+            stop_price=stop_price,
+        )
+
     def test_guard_proceeds_when_no_resting_orders(self):
         from src.data_providers.exchange_interface import OrderSide
         from src.engines.live.reconciliation import StopPlacementCheck, guard_stop_placement
@@ -3047,6 +3069,103 @@ class TestGuardStopPlacementUnit:
         )
         assert result == "sl_new"
         exchange.place_stop_loss_order.assert_called_once()
+
+    def test_refuses_to_adopt_a_same_side_resting_stop_at_the_wrong_price(self):
+        """A stale same-side orphan resting at an unrelated price is exactly the
+        mis-protection #1112 guards against -- side alone is not sufficient
+        to adopt (found in architecture + code review, both independently)."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import StopPlacementCheck, guard_stop_placement
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = [
+            self._resting_stop_order(order_id="stale_orphan", side=OrderSide.SELL)
+        ]  # rests at 48000.0
+        decision = guard_stop_placement(
+            exchange, "BTCUSDT", OrderSide.SELL, stop_price=30000.0  # far outside tolerance
+        )
+        assert decision.check == StopPlacementCheck.REFUSE
+        assert "stale_orphan" in decision.reason
+
+    def test_adopts_when_resting_stop_price_is_within_tolerance(self):
+        """A quantization-drift-sized difference (well within tolerance) must
+        still adopt -- the price check narrows adoption, it doesn't require
+        exact equality."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import StopPlacementCheck, guard_stop_placement
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = [
+            self._resting_stop_order(order_id="resting_sl_1", side=OrderSide.SELL)
+        ]  # rests at 48000.0
+        decision = guard_stop_placement(
+            exchange, "BTCUSDT", OrderSide.SELL, stop_price=48005.0  # 0.01% off
+        )
+        assert decision.check == StopPlacementCheck.ADOPT
+        assert decision.existing_order_id == "resting_sl_1"
+        assert decision.existing_order is not None
+        assert decision.existing_order.stop_price == 48000.0
+
+    def test_refuses_rather_than_resurrects_a_just_cancelled_stop(self):
+        """The cancel-then-replace call sites must exclude the id they just
+        cancelled: an eventual-consistency lag on the exchange's open-orders
+        view must not look like a genuine untracked resting stop."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import StopPlacementCheck, guard_stop_placement
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = [
+            self._resting_stop_order(order_id="just_cancelled", side=OrderSide.SELL)
+        ]
+        decision = guard_stop_placement(
+            exchange,
+            "BTCUSDT",
+            OrderSide.SELL,
+            stop_price=48000.0,  # would otherwise be a clean price match
+            exclude_order_id="just_cancelled",
+        )
+        assert decision.check == StopPlacementCheck.REFUSE
+        assert "just_cancelled" in decision.reason
+
+    def test_excluded_order_does_not_block_a_genuinely_different_resting_stop(self):
+        """Excluding the just-cancelled id must not make an UNRELATED resting
+        stop invisible -- REFUSE (ambiguous/duplicate), not silently PROCEED."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import StopPlacementCheck, guard_stop_placement
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = [
+            self._resting_stop_order(order_id="just_cancelled", side=OrderSide.SELL),
+            self._resting_stop_order(order_id="a_different_stop", side=OrderSide.SELL),
+        ]
+        decision = guard_stop_placement(
+            exchange,
+            "BTCUSDT",
+            OrderSide.SELL,
+            stop_price=48000.0,
+            exclude_order_id="just_cancelled",
+        )
+        # After excluding just_cancelled, exactly one resting order remains and
+        # its price matches -- this is a legitimate adopt, not a refuse.
+        assert decision.check == StopPlacementCheck.ADOPT
+        assert decision.existing_order_id == "a_different_stop"
+
+    def test_guard_refuses_rather_than_raises_when_classification_itself_errors(self):
+        """The fail-closed contract covers the classification step too, not just
+        the lookup call -- a provider returning a malformed order object must
+        REFUSE, not propagate an exception out of the caller's placement flow."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import StopPlacementCheck, guard_stop_placement
+
+        class ExplodesOnAttributeAccess:
+            @property
+            def stop_price(self):
+                raise RuntimeError("malformed order")
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = [ExplodesOnAttributeAccess()]
+        decision = guard_stop_placement(exchange, "BTCUSDT", OrderSide.SELL)
+        assert decision.check == StopPlacementCheck.REFUSE
 
 
 # ---------- Emergency Sell Verification Tests ----------

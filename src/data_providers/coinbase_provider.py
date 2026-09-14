@@ -382,6 +382,32 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get open orders: {e}")
             return []
 
+    def get_open_orders_checked(self, symbol: str) -> list[Order] | None:
+        """Fail-closed variant of :meth:`get_open_orders` for ``symbol`` (#1112).
+
+        Mirrors ``BinanceProvider.get_open_orders_checked``: unlike
+        :meth:`get_open_orders` (which fails OPEN and returns ``[]`` on any
+        error), this returns ``None`` when the lookup cannot be confirmed, so
+        ``guard_stop_placement`` treats "unknown" as "do not place" rather
+        than "no open orders". Without this override the base-class default
+        (``ExchangeInterface.get_open_orders_checked``) always returns
+        ``None``, which would make every stop-loss placement on this
+        provider REFUSE unconditionally. Note ``_parse_order_data`` here
+        always returns an ``Order`` (unlike Binance's, it never returns
+        ``None`` on a malformed row), so there is no partial-parse case to
+        guard against on this provider.
+        """
+        try:
+            params = {
+                "status": "open",
+                "product_id": SymbolFactory.to_exchange_symbol(symbol, "coinbase"),
+            }
+            data = self._request("GET", "/orders", params=params, auth=True)
+            return [self._parse_order_data(od) for od in data]
+        except Exception as e:
+            logger.warning(f"Open-orders lookup failed for {symbol}: {e}")
+            return None
+
     def get_order(self, order_id: str, symbol: str) -> Order | None:
         try:
             od = self._request("GET", f"/orders/{order_id}", auth=True)

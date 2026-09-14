@@ -2382,3 +2382,126 @@ class TestConvertOrderType:
 
         assert order is not None
         assert order.order_type == OrderType.STOP_LOSS
+
+
+class TestParseOrderDataStopPrice:
+    """#1112: get_open_orders_checked keys resting-stop detection on stop_price
+    being non-None -- a misparse here would misclassify every order."""
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_plain_order_stop_price_zero_string_parses_to_none(
+        self, mock_config, mock_client_class
+    ):
+        """Binance sends "0.00000000" (not "0") for a plain order's stopPrice.
+        The old `!= "0"` check let this through as a truthy 0.0, indistinguishable
+        from a genuine stop resting at price 0 -- misclassifying every plain
+        limit/market order as a resting stop."""
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client_class.return_value = Mock()
+        provider = BinanceProvider()
+
+        order = provider._parse_order_data(
+            {
+                "orderId": 1,
+                "symbol": "BTCUSDT",
+                "side": "SELL",
+                "type": "LIMIT",
+                "origQty": "0.1",
+                "status": "NEW",
+                "executedQty": "0",
+                "time": 1700000000000,
+                "updateTime": 1700000000000,
+                "stopPrice": "0.00000000",
+            }
+        )
+        assert order is not None
+        assert order.stop_price is None
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_genuine_stop_order_stop_price_parses_correctly(self, mock_config, mock_client_class):
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client_class.return_value = Mock()
+        provider = BinanceProvider()
+
+        order = provider._parse_order_data(
+            {
+                "orderId": 2,
+                "symbol": "BTCUSDT",
+                "side": "SELL",
+                "type": "STOP_LOSS_LIMIT",
+                "origQty": "0.1",
+                "status": "NEW",
+                "executedQty": "0",
+                "time": 1700000000000,
+                "updateTime": 1700000000000,
+                "stopPrice": "48000.00000000",
+            }
+        )
+        assert order is not None
+        assert order.stop_price == pytest.approx(48000.0)
+
+
+class TestGetOpenOrdersCheckedFailClosed:
+    """#1112: get_open_orders_checked must not silently drop an unparseable
+    order -- if that row was the resting stop, dropping it makes "confirmed
+    empty" indistinguishable from "one order we couldn't read might be a stop"."""
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_returns_none_when_any_order_fails_to_parse(self, mock_config, mock_client_class):
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        provider = BinanceProvider()
+
+        good_order = {
+            "orderId": 1,
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "type": "LIMIT",
+            "origQty": "0.1",
+            "status": "NEW",
+            "executedQty": "0",
+            "time": 1700000000000,
+            "updateTime": 1700000000000,
+        }
+        malformed_order = {"orderId": 2}  # missing required fields -> parse fails
+        provider._call_get_open_orders = Mock(return_value=[good_order, malformed_order])
+
+        result = provider.get_open_orders_checked("BTCUSDT")
+        assert result is None
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_returns_full_list_when_all_orders_parse(self, mock_config, mock_client_class):
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        provider = BinanceProvider()
+
+        good_order = {
+            "orderId": 1,
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "type": "LIMIT",
+            "origQty": "0.1",
+            "status": "NEW",
+            "executedQty": "0",
+            "time": 1700000000000,
+            "updateTime": 1700000000000,
+        }
+        provider._call_get_open_orders = Mock(return_value=[good_order])
+
+        result = provider.get_open_orders_checked("BTCUSDT")
+        assert result is not None
+        assert len(result) == 1

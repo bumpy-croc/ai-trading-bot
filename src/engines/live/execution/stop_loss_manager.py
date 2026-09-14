@@ -91,8 +91,14 @@ class LiveStopLossManager:
 
         # Consult the fail-closed resting-stop check BEFORE placing (#1112): a
         # stale/nulled tracked id must never cause a second protective order
-        # to stack on one still resting on the exchange.
-        decision = guard_stop_placement(state.exchange_interface, symbol, sl_side)
+        # to stack on one still resting on the exchange. stop_price is passed
+        # so an untracked resting stop is only adopted when it is actually
+        # protecting at (approximately) the intended price -- a same-side but
+        # stale orphan at an unrelated price is not a legitimate adoption
+        # target, it's the mis-protection this check exists to catch.
+        decision = guard_stop_placement(
+            state.exchange_interface, symbol, sl_side, stop_price=stop_price
+        )
         if decision.check == StopPlacementCheck.REFUSE:
             logger.critical(
                 "Refusing to place a stop-loss for %s: %s — fail-closed "
@@ -104,10 +110,12 @@ class LiveStopLossManager:
         if decision.check == StopPlacementCheck.ADOPT:
             sl_order_id = decision.existing_order_id
             logger.warning(
-                "Found an untracked resting stop-loss %s for %s — adopting "
-                "it instead of placing a duplicate (#1112).",
+                "Found an untracked resting stop-loss %s for %s @ %s — adopting "
+                "it instead of placing a duplicate (#1112). Intended was $%.2f.",
                 sl_order_id,
                 symbol,
+                getattr(decision.existing_order, "stop_price", None),
+                stop_price,
             )
         else:
             sl_order_id = None
@@ -333,7 +341,19 @@ class LiveStopLossManager:
         # Consult the fail-closed resting-stop check BEFORE placing (#1112): the
         # cancel above should have cleared any resting stop, but confirm rather
         # than assume — a stale tracked id must never let a second order stack.
-        decision = guard_stop_placement(state.exchange_interface, position.symbol, sl_side)
+        # exclude_order_id is the id `cancel()` just cancelled (still on
+        # position.stop_loss_order_id -- self-cancel suppression keeps it there
+        # rather than nulling it, see cancel()'s own comment): the exchange's
+        # open-orders view is not guaranteed to reflect that cancel immediately,
+        # so without excluding it a re-appearing cancelled order would be
+        # silently re-adopted as if it were a genuine untracked resting stop.
+        decision = guard_stop_placement(
+            state.exchange_interface,
+            position.symbol,
+            sl_side,
+            stop_price=float(stop_price),
+            exclude_order_id=position.stop_loss_order_id,
+        )
         if decision.check == StopPlacementCheck.REFUSE:
             logger.critical(
                 "CRITICAL: %s re-protect refused: %s — fail-closed (#1112); "
@@ -350,10 +370,12 @@ class LiveStopLossManager:
         if decision.check == StopPlacementCheck.ADOPT:
             sl_order_id = decision.existing_order_id
             logger.warning(
-                "Found an untracked resting stop-loss %s for %s — adopting "
-                "it instead of placing a duplicate (#1112).",
+                "Found an untracked resting stop-loss %s for %s @ %s — adopting "
+                "it instead of placing a duplicate (#1112). Intended was $%.2f.",
                 sl_order_id,
                 position.symbol,
+                getattr(decision.existing_order, "stop_price", None),
+                float(stop_price),
             )
         else:
             sl_order_id = None
