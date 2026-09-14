@@ -487,6 +487,7 @@ def _make_close_only_check_state(**overrides) -> MagicMock:
     state = create_autospec(LiveEntryEngineState, instance=True)
     state._close_only_mode = True
     state.trading_session_id = 7
+    state.timeframe = "1h"
     state.db_manager = MagicMock()
     state._strategy_name.return_value = "test_strategy"
     for k, v in overrides.items():
@@ -515,6 +516,27 @@ def test_close_only_mode_logs_strategy_execution_before_returning():
     assert kwargs["price"] == 50000.0
     assert kwargs["session_id"] == 7
     assert kwargs["strategy_name"] == "test_strategy"
+    assert kwargs["timeframe"] == "1h"
+    assert kwargs["reasons"] == ["close_only_mode_active"]
+
+
+def test_close_only_mode_reasons_include_the_actual_halt_cause():
+    """When the engine recorded *why* it halted, surface that cause in the
+    row instead of the generic marker — makes the row self-explanatory to
+    whoever is investigating (#1169 review)."""
+    state = _make_close_only_check_state(_close_only_reason="max drawdown breached")
+    coordinator = LiveEntryCoordinator(engine_state=state)
+
+    coordinator.check_entry_conditions(
+        df=MagicMock(),
+        current_index=10,
+        symbol="BTCUSDT",
+        current_price=50000.0,
+        current_time=datetime(2024, 1, 1, tzinfo=UTC),
+    )
+
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["reasons"] == ["max drawdown breached"]
 
 
 def test_close_only_mode_skips_db_logging_without_db_manager():
@@ -550,6 +572,52 @@ def test_close_only_mode_logs_at_warning_not_debug(caplog):
     close_only_records = [r for r in caplog.records if "close-only" in r.message.lower()]
     assert close_only_records, "expected a close-only log line"
     assert all(r.levelno >= logging.WARNING for r in close_only_records)
+
+
+def test_close_only_mode_write_failure_does_not_propagate():
+    """A DB outage is itself a close-only trigger (#631) — the observability
+    write must be fault-isolated exactly like this class's other
+    observability write (_record_short_suppression_shadow), otherwise a
+    persistent (non-transient) DB fault raises out of check_entry_conditions
+    on every remaining iteration and can trip the engine's consecutive-error
+    shutdown counter while positions are still open and unmanaged (#1169 review)."""
+    state = _make_close_only_check_state()
+    state.db_manager.log_strategy_execution.side_effect = RuntimeError("db write failed")
+    coordinator = LiveEntryCoordinator(engine_state=state)
+
+    coordinator.check_entry_conditions(
+        df=MagicMock(),
+        current_index=10,
+        symbol="BTCUSDT",
+        current_price=50000.0,
+        current_time=datetime(2024, 1, 1, tzinfo=UTC),
+    )  # must not raise
+
+
+def test_close_only_mode_warning_is_rate_limited(caplog):
+    """A latch can persist for days (#1169 review); only the first skip per
+    interval should log at warning, matching EntryPauseGate's own rate-limit
+    for the identical log-spam shape."""
+    state = _make_close_only_check_state()
+    coordinator = LiveEntryCoordinator(engine_state=state)
+
+    with caplog.at_level(logging.DEBUG, logger="src.engines.live.execution.entry_coordinator"):
+        for _ in range(3):
+            coordinator.check_entry_conditions(
+                df=MagicMock(),
+                current_index=10,
+                symbol="BTCUSDT",
+                current_price=50000.0,
+                current_time=datetime(2024, 1, 1, tzinfo=UTC),
+            )
+
+    close_only_records = [r for r in caplog.records if "close-only" in r.message.lower()]
+    warnings = [r for r in close_only_records if r.levelno >= logging.WARNING]
+    debugs = [r for r in close_only_records if r.levelno < logging.WARNING]
+    assert len(warnings) == 1, "only the first skip in the interval should warn"
+    assert len(debugs) == 2, "subsequent skips in the same interval should log at debug"
+    # The DB row is what monitoring actually reads — it must not be throttled.
+    assert state.db_manager.log_strategy_execution.call_count == 3
 
 
 # ---------------------------------------------------------------------------
