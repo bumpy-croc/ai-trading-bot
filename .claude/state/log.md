@@ -1517,6 +1517,11 @@ Re-attempted `PushNotification` this run per the 3rd-escalation channel-change r
 Rationale: per this task's own escalation rule, a P0 already escalated and still unactioned is itself the finding, not the condition — updated the existing incident file and GH #1121 rather than filing a new issue or incident record.
 Ref: GH #1121 (live incident, 14 prior escalation comments), #1126 (11 days untouched), #1127 (4 days untouched, PR-backlog comment added), PR #1129 (unmerged, 10 days), .claude/state/incidents/2026-08-29T0807-P0-close-only-latch-day5-unactioned.md, .claude/LESSONS.md §5.7, §2.13, §2.16.
 
+## [D-2026-09-14-01] 2026-09-14 · incident-close · daily-trading-standup
+GH #1121 closed 2026-09-14T07:07:18Z: the prod ETHUSDT close-only latch (onset 2026-08-27 08:35:28 UTC, ~17d 22.5h / ~430x the 1h P0 SLA) cleared as a side effect of an unrelated deploy — the weekly ML-retrain promotion, commit `be451698`, deployed 06:54:11 UTC, restarted the "Trading Bot" Railway service. No capital loss across the window; book stayed flat at $87.50 from the original stop-loss exit (2026-08-27 08:59 UTC) onward. Corrected `.claude/state/incidents/2026-08-29T0807-P0-close-only-latch-day5-unactioned.md`, which still carried `status: open` after #1121 closed (flagged by GH #1140): flipped frontmatter to `status: closed` / `closed_at: 2026-09-14T07:07:18Z` (mitigated_at mirrored, no separately-verifiable timestamp) and appended a closing UPDATE section — narrative history left untouched, append-only.
+Rationale: closure was incidental, not a deliberate remediation, so the structural gap in GH #1127 (no scheduled agent has authority to deliberately clear a close-only latch) remains open and unresolved by this event; the incident file now says so explicitly so a future `status: open` filter read isn't misled either way.
+Ref: GH #1121 (closed), #1127 (open, structural gap — Board decision needed), #1140 (this correction, closed by this entry), .claude/state/incidents/2026-08-29T0807-P0-close-only-latch-day5-unactioned.md.
+
 ## [D-2026-09-14-01] 2026-09-14 ~10:45 · note · daemon(weekly-retro)
 **Weekly retro, window 2026-09-07 → 2026-09-14. Distillate-only PR to `develop`.**
 

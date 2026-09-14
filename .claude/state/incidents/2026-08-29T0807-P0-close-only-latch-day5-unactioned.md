@@ -2,10 +2,10 @@
 id: 2026-08-29T0807-P0-close-only-latch-day5-unactioned
 opened_by: daily-trading-standup
 severity: P0
-status: open        # open | mitigated | closed
+status: closed        # open | mitigated | closed
 opened_at: 2026-08-29T08:07:43Z
-mitigated_at: null
-closed_at: null
+mitigated_at: 2026-09-14T07:07:18Z
+closed_at: 2026-09-14T07:07:18Z
 human_paged: true
 affected_components: [live-engine, reconciliation, stop-loss-placement, close-only-latch]
 affected_symbols: [ETHUSDT]
@@ -395,3 +395,27 @@ until day 5, despite the gap being named explicitly on day 3 (#1121 weekly-retro
 ### Action items (each links to a proposal or tracker)
 GH #1121 (this incident, live), #1126 (proximate mechanism), #1127 (structural response gap,
 Board decision needed).
+
+## UPDATE — 2026-09-14T07:07:18Z (CLOSED — cleared as a side effect of an unrelated deploy)
+
+Closed via GH #1121 (`closedAt` `2026-09-14T07:07:18Z`). The close-only latch cleared not through a
+deliberate remediation of this incident, but as a side effect of an unrelated routine deploy: the
+weekly ML-retrain promotion, commit `be451698`, deployed 2026-09-14 06:54:11 UTC, which restarted
+the "Trading Bot" Railway service. The latch was a plain in-process bool with no remote-clear path
+(see Root cause, item 2 above) — any restart, for any reason, would have cleared it; this one
+arrived via a scheduled model-retrain promotion, not an authorized incident response.
+
+Elapsed from the 2026-08-27 08:35:28 UTC onset to the 2026-09-14 07:07:18Z GH close is **~17d
+22.5h**, roughly 430x the charter's 1h P0 SLA. No capital loss for the entire window — the book
+stayed flat at $87.50 from the original stop-loss exit (2026-08-27 08:59 UTC) through close; the
+incident was pure opportunity cost, never an ongoing risk exposure.
+
+**This closure does not resolve GH #1127.** #1127 remains open and tracks the structural gap named
+in Root cause item 2: no scheduled agent in the fleet has authority to deliberately clear a
+close-only latch. This incident ended because an unrelated deploy happened to restart the service —
+not because that gap was closed. The same failure mode (a P0-class latch paging correctly for weeks
+with clearance arriving only by accident of an unrelated restart) can recur until #1127 is resolved.
+
+Frontmatter updated accordingly: `status: closed`, `closed_at: 2026-09-14T07:07:18Z`,
+`mitigated_at: 2026-09-14T07:07:18Z` (mirrored — no separately-verifiable mitigation timestamp).
+Ref: GH #1121 (closed), #1127 (open, structural gap), #1140 (this correction).
