@@ -16,7 +16,7 @@ worse; the problem was the signal, #867). Hunches go through the pipeline.
 Read-only prod psql per `prod-forensics` (public proxy URL, `SET default_transaction_read_only
 = on;` first). Tables: `trades` (exit_reason, pnl; commission/quantity only post-#731),
 `positions`, `strategy_executions` (per-decision signal/confidence trail), `account_balances`
-(ledger truth), `account_history` (hourly equity). Candle data from the local parquet cache
+(ledger truth), `account_history` (30-minute equity). Candle data from the local parquet cache
 (`atb data prefill-cache`) for MFE/MAE reconstruction.
 
 ## The four passes

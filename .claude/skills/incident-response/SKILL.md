@@ -41,7 +41,7 @@ cheaper than a lost account. Forensics then run from Postgres (`prod-forensics` 
 | Auth failure | `-2015` / signature/IP-restriction errors with open positions | kill-switch auto-trigger condition per risk-limits.json |
 | Precision regression | `code=-1111` / `code=51077` (ANCHORED grep — bare digits match timestamps) | LESSONS §1.1; recurrence = regression |
 | DB divergence | "No active trading session for balance update"; balance ≠ exchange equity | #693; phantom-balance era |
-| Zombie bot | Deploy API SUCCESS but no `Decision:` lines and no hourly `account_history` row | 2026-05-19: both bots dead for days, API said SUCCESS |
+| Zombie bot | Deploy API SUCCESS but no `Decision:` lines and no `account_history` row within 30 min | 2026-05-19: both bots dead for days, API said SUCCESS |
 | Degraded-not-down | WS churn + REST fallback, fills still polling, SL intact | 2026-07-05 IP transition: correctly NOT treated as P0 |
 
 ## 3. Contain — pre-committed action per class

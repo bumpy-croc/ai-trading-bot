@@ -64,7 +64,7 @@ grep for those:
 
 | Dimension | What you're asking |
 |---|---|
-| **Liveness** | Is the loop alive? Decisions flowing at the normal cadence; the hourly `account_history` heartbeat present in the DB. |
+| **Liveness** | Is the loop alive? Decisions flowing at the normal cadence; the 30-minute `account_history` heartbeat present in the DB. |
 | **Exposure / position integrity** | Did exposure change unexpectedly — a *new* position, or an *untracked* one (orphan)? (A *tracked* position count is normal trading.) |
 | **Execution / order errors** | Order rejections, failed protective (stop-loss) orders, precision rejections. |
 | **Reconciliation health** | Is the reconciler erroring each cycle? |
@@ -77,7 +77,7 @@ grep for those:
 - **`railway status` / the deploy dashboard — do NOT trust for liveness.** It can read SUCCESS while
   the process loop is dead (e.g. a DB/DNS outage killed it). Liveness = a recent decision log line +
   the DB heartbeat row, *not* the deploy API.
-- **DB reads** — `account_history` (hourly heartbeat / equity), positions, recent trades.
+- **DB reads** — `account_history` (30-minute heartbeat / equity), positions, recent trades.
 - **Exchange `get_*` reads** — open orders, balances. Distinguish a *tracked position* from raw
   wallet balance, and (on margin) `free` vs `borrowed` vs `netAsset`, before calling anything a
   "position".

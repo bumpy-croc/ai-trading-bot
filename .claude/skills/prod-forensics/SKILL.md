@@ -77,7 +77,7 @@ peak = peak TRUE equity since the last reconciled reset (2026-06-05 / session 20
 ## Sessions & liveness
 
 Prod REUSES its active `trading_sessions` row across restarts — a missing "new session row" is
-not an outage signal. Liveness ground truth: the hourly `account_history` heartbeat row + recent
+not an outage signal. Liveness ground truth: the 30-minute `account_history` heartbeat row + recent
 `strategy_executions`. A gap in heartbeats brackets an outage window precisely (the 2026-05-19
 zombie-bot class, where the deploy API said SUCCESS throughout).
 

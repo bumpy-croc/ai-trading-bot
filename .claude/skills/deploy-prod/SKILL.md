@@ -76,7 +76,7 @@ railway logs -e production -s "Trading Bot" | grep -iE \
 
 **Gotcha:** prod REUSES its active session row across restarts — do NOT wait for a new
 `trading_sessions` row as a health signal; watch the startup banner, status ticks, and
-the hourly `account_history` heartbeat instead. Read-only DB ground truth:
+the 30-minute `account_history` heartbeat instead. Read-only DB ground truth:
 `RAILWAY_PRODUCTION_DATABASE_URL` in the main checkout's `.env`, first statement
 `SET default_transaction_read_only = on;`.
 
