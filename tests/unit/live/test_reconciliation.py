@@ -752,6 +752,7 @@ class TestCloseOnlyMode:
 
         state = create_autospec(LiveEntryEngineState, instance=True)
         state._close_only_mode = True
+        state.db_manager = None  # skip strategy-execution DB logging (#1169)
         coordinator = LiveEntryCoordinator(engine_state=state)
         coordinator.check_entry_conditions(
             df=MagicMock(),

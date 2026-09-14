@@ -11,6 +11,7 @@ silently skipped), and the SL-calc / risk-override failure paths log.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, create_autospec
 
@@ -467,6 +468,88 @@ def test_legacy_short_entry_sl_fallback_when_overrides_lack_sl_tp():
     assert kwargs["stop_loss"] == pytest.approx(50000.0 * (1 + DEFAULT_STOP_LOSS_PCT))
     assert kwargs["take_profit"] == pytest.approx(50000.0 * (1 - 0.04))
     state.risk_manager.compute_sl_tp.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Close-only observability (#1169): a close-only block must be as visible as
+# a real entry decision, since freshness monitors key off strategy_executions
+# rows to distinguish a halted-but-alive bot from a hung one.
+# ---------------------------------------------------------------------------
+
+
+def _make_close_only_check_state(**overrides) -> MagicMock:
+    """Backref for check_entry_conditions with close-only mode already active.
+
+    The close-only branch returns immediately after the drawdown-gate refresh,
+    so nothing else check_entry_conditions normally reads (strategy,
+    indicators, entry handler, ...) needs to be wired.
+    """
+    state = create_autospec(LiveEntryEngineState, instance=True)
+    state._close_only_mode = True
+    state.trading_session_id = 7
+    state.db_manager = MagicMock()
+    state._strategy_name.return_value = "test_strategy"
+    for k, v in overrides.items():
+        setattr(state, k, v)
+    return state
+
+
+def test_close_only_mode_logs_strategy_execution_before_returning():
+    """The row must exist so a DB-freshness check sees activity, not silence."""
+    state = _make_close_only_check_state()
+    coordinator = LiveEntryCoordinator(engine_state=state)
+
+    coordinator.check_entry_conditions(
+        df=MagicMock(),
+        current_index=10,
+        symbol="BTCUSDT",
+        current_price=50000.0,
+        current_time=datetime(2024, 1, 1, tzinfo=UTC),
+    )
+
+    state.db_manager.log_strategy_execution.assert_called_once()
+    kwargs = state.db_manager.log_strategy_execution.call_args.kwargs
+    assert kwargs["symbol"] == "BTCUSDT"
+    assert kwargs["signal_type"] == "entry"
+    assert kwargs["action_taken"] == "blocked_close_only"
+    assert kwargs["price"] == 50000.0
+    assert kwargs["session_id"] == 7
+    assert kwargs["strategy_name"] == "test_strategy"
+
+
+def test_close_only_mode_skips_db_logging_without_db_manager():
+    """No DB manager (e.g. backtest reuse) must not raise — mirrors the
+    ``if state.db_manager`` guard used by the normal entry-logging path."""
+    state = _make_close_only_check_state(db_manager=None)
+    coordinator = LiveEntryCoordinator(engine_state=state)
+
+    coordinator.check_entry_conditions(
+        df=MagicMock(),
+        current_index=10,
+        symbol="BTCUSDT",
+        current_price=50000.0,
+        current_time=datetime(2024, 1, 1, tzinfo=UTC),
+    )  # must not raise
+
+
+def test_close_only_mode_logs_at_warning_not_debug(caplog):
+    """Previously debug-only (invisible at default verbosity) — this directly
+    caused a false "prod might be hung" escalation (#1169)."""
+    state = _make_close_only_check_state()
+    coordinator = LiveEntryCoordinator(engine_state=state)
+
+    with caplog.at_level(logging.DEBUG, logger="src.engines.live.execution.entry_coordinator"):
+        coordinator.check_entry_conditions(
+            df=MagicMock(),
+            current_index=10,
+            symbol="BTCUSDT",
+            current_price=50000.0,
+            current_time=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+
+    close_only_records = [r for r in caplog.records if "close-only" in r.message.lower()]
+    assert close_only_records, "expected a close-only log line"
+    assert all(r.levelno >= logging.WARNING for r in close_only_records)
 
 
 # ---------------------------------------------------------------------------
