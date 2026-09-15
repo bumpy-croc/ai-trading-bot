@@ -3278,6 +3278,177 @@ class TestGuardStopPlacementUnit:
         assert decision.check == StopPlacementCheck.REFUSE
 
 
+class TestPlaceOrAdoptStopLossRetry:
+    """#1185: place_or_adopt_stop_loss() grew opt-in retry/backoff so
+    LiveStopLossManager's three inline guard+ADOPT+REFUSE+retry copies could
+    delegate to it instead of duplicating the sequence. The default
+    (max_attempts=1) must stay byte-identical to the pre-#1185 behavior the
+    periodic reconciler's seven call sites already depend on."""
+
+    def test_default_single_attempt_propagates_exceptions(self):
+        """The periodic reconciler's call sites wrap this call in their own
+        try/except and rely on exceptions propagating -- the retry path must
+        not change that for callers that don't opt in."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.side_effect = ConnectionError("boom")
+
+        with pytest.raises(ConnectionError):
+            place_or_adopt_stop_loss(
+                exchange,
+                symbol="BTCUSDT",
+                side=OrderSide.SELL,
+                quantity=0.1,
+                stop_price=48000.0,
+            )
+        exchange.place_stop_loss_order.assert_called_once()
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_retries_on_exception_then_succeeds(self, mock_sleep):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.side_effect = [ConnectionError("boom"), "sl-new"]
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+        )
+
+        assert result == "sl-new"
+        assert exchange.place_stop_loss_order.call_count == 2
+        mock_sleep.assert_called_once_with(1.0)
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_exhausts_retries_and_returns_none(self, mock_sleep):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.return_value = None
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+        )
+
+        assert result is None
+        assert exchange.place_stop_loss_order.call_count == 3
+        # Exponential backoff: 1.0s then 2.0s between the 3 attempts.
+        assert mock_sleep.call_args_list == [call(1.0), call(2.0)]
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_retry_log_prefix_is_used_in_the_per_attempt_warning(self, mock_sleep, caplog):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.side_effect = ConnectionError("boom")
+
+        with caplog.at_level("WARNING"):
+            place_or_adopt_stop_loss(
+                exchange,
+                symbol="BTCUSDT",
+                side=OrderSide.SELL,
+                quantity=0.1,
+                stop_price=48000.0,
+                max_attempts=2,
+                retry_log_prefix="Trailing-stop move",
+            )
+
+        assert any(
+            "Trailing-stop move attempt 1/2 for BTCUSDT failed" in r.message for r in caplog.records
+        )
+
+    def test_on_adopt_is_invoked_with_the_decision_when_adopting(self):
+        from types import SimpleNamespace
+
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import (
+            StopPlacementDecision,
+            place_or_adopt_stop_loss,
+        )
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = [
+            SimpleNamespace(order_id="already_resting", side=OrderSide.SELL, stop_price=48990.0)
+        ]
+        seen: list[StopPlacementDecision] = []
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=49000.0,
+            on_adopt=seen.append,
+        )
+
+        assert result == "already_resting"
+        exchange.place_stop_loss_order.assert_not_called()
+        assert len(seen) == 1
+        assert seen[0].existing_order_id == "already_resting"
+        assert seen[0].existing_order.stop_price == 48990.0
+
+    def test_on_adopt_is_not_invoked_on_a_fresh_placement(self):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.return_value = "sl-new"
+        on_adopt = MagicMock()
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=49000.0,
+            on_adopt=on_adopt,
+        )
+
+        assert result == "sl-new"
+        on_adopt.assert_not_called()
+
+    def test_on_adopt_is_not_invoked_on_refuse(self):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = None  # unconfirmed -> REFUSE
+        on_adopt = MagicMock()
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=49000.0,
+            on_adopt=on_adopt,
+        )
+
+        assert result is None
+        on_adopt.assert_not_called()
+
+
 # ---------- Emergency Sell Verification Tests ----------
 
 

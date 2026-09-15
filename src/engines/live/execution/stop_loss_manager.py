@@ -96,70 +96,37 @@ class LiveStopLossManager:
         """Place a server-side stop-loss after entry, with retry/backoff.
 
         On success the stop order id is recorded on the tracked position and
-        registered with the order tracker. Returns the stop order id, or
-        ``None`` when all attempts failed (the caller owns the emergency-close
-        escalation).
+        registered with the order tracker. On total failure (a fail-closed
+        refusal, or all retries exhausted) persists an UNPROTECTED audit row
+        and returns ``None`` — the caller owns the emergency-close escalation.
         """
-        from src.engines.live.reconciliation import StopPlacementCheck, guard_stop_placement
+        from src.engines.live.reconciliation import (
+            place_or_adopt_stop_loss,
+            write_unprotected_audit,
+        )
 
         state = self._state
         sl_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
 
-        # Consult the fail-closed resting-stop check BEFORE placing (#1112): a
-        # stale/nulled tracked id must never cause a second protective order
-        # to stack on one still resting on the exchange. stop_price is passed
-        # so an untracked resting stop is only adopted when it is actually
+        # Consult the fail-closed resting-stop check BEFORE placing (#1112), with
+        # a 3-attempt exponential-backoff retry on the exchange call itself: a
+        # stale/nulled tracked id must never cause a second protective order to
+        # stack on one still resting on the exchange, and stop_price is passed so
+        # an untracked resting stop is only adopted when it is actually
         # protecting at (approximately) the intended price -- a same-side but
         # stale orphan at an unrelated price is not a legitimate adoption
         # target, it's the mis-protection this check exists to catch.
-        decision = guard_stop_placement(
-            state.exchange_interface, symbol, sl_side, stop_price=stop_price
+        sl_order_id = place_or_adopt_stop_loss(
+            state.exchange_interface,
+            symbol=symbol,
+            side=sl_side,
+            quantity=quantity,
+            stop_price=stop_price,
+            side_effect_type=SideEffectType.AUTO_REPAY,
+            max_attempts=3,
+            retry_delay=1.0,
+            retry_log_prefix="Stop-loss placement",
         )
-        if decision.check == StopPlacementCheck.REFUSE:
-            logger.critical(
-                "Refusing to place a stop-loss for %s: %s — fail-closed "
-                "(#1112); treating as a placement failure.",
-                symbol,
-                decision.reason,
-            )
-            return None
-        if decision.check == StopPlacementCheck.ADOPT:
-            sl_order_id = decision.existing_order_id
-            logger.warning(
-                "Found an untracked resting stop-loss %s for %s @ %s — adopting "
-                "it instead of placing a duplicate (#1112). Intended was $%.2f.",
-                sl_order_id,
-                symbol,
-                getattr(decision.existing_order, "stop_price", None),
-                stop_price,
-            )
-        else:
-            sl_order_id = None
-            max_retries = 3
-            retry_delay = 1.0
-
-            for attempt in range(max_retries):
-                try:
-                    sl_order_id = state.exchange_interface.place_stop_loss_order(
-                        symbol=symbol,
-                        side=sl_side,
-                        quantity=quantity,
-                        stop_price=stop_price,
-                        side_effect_type=SideEffectType.AUTO_REPAY,
-                    )
-                    if sl_order_id:
-                        break
-                except Exception as sl_err:
-                    logger.warning(
-                        "Stop-loss placement attempt %s/%s failed: %s",
-                        attempt + 1,
-                        max_retries,
-                        sl_err,
-                    )
-
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
 
         if sl_order_id:
             logger.info(
@@ -172,6 +139,18 @@ class LiveStopLossManager:
                 state.live_position_tracker.set_stop_loss_order_id(position.order_id, sl_order_id)
             if state.order_tracker:
                 state.order_tracker.track_order(sl_order_id, symbol)
+        else:
+            # Refusal and retry-exhaustion both leave the new entry with no
+            # protective stop; either way the caller's emergency-close is the
+            # escalation, but the position was UNPROTECTED for at least one
+            # cycle and that deserves the same persisted trail as the
+            # cancel-then-re-place failures below (#1185).
+            write_unprotected_audit(
+                state.db_manager,
+                state.trading_session_id,
+                position,
+                "post-entry stop-loss placement failed",
+            )
         return sl_order_id
 
     def cancel(self, position: LivePosition) -> bool:
@@ -319,8 +298,16 @@ class LiveStopLossManager:
         immediately rather than waiting for the ~120s reconciler — but first verify the
         position is still actually held (the close may be ambiguous / already executed)
         to avoid orphaning a stop, and size for any prior partial exits. The reconciler
-        is the ultimate backstop if this attempt cannot run or also fails.
+        is the ultimate backstop if this attempt cannot run or also fails. Every CRITICAL
+        branch below (no valid price/quantity to re-place, or the placement itself
+        failing) also persists an UNPROTECTED audit row, matching ``move()``'s identical
+        cancel-succeeded/re-place-failed escalation (#1185).
         """
+        from src.engines.live.reconciliation import (
+            place_or_adopt_stop_loss,
+            write_unprotected_audit,
+        )
+
         state = self._state
         if not (state.enable_live_trading and state.exchange_interface):
             return
@@ -348,13 +335,18 @@ class LiveStopLossManager:
                 f"cancel and it could not be re-placed inline. Reconciler backstop "
                 f"engaged. MANUAL REVIEW REQUIRED."
             )
+            write_unprotected_audit(
+                state.db_manager,
+                state.trading_session_id,
+                position,
+                "re-protect: no valid stop price or quantity to re-place",
+            )
             return
-
-        from src.engines.live.reconciliation import StopPlacementCheck, guard_stop_placement
 
         sl_side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
 
-        # Consult the fail-closed resting-stop check BEFORE placing (#1112): the
+        # Consult the fail-closed resting-stop check BEFORE placing (#1112), with
+        # a 3-attempt exponential-backoff retry on the exchange call itself: the
         # cancel above should have cleared any resting stop, but confirm rather
         # than assume — a stale tracked id must never let a second order stack.
         # exclude_order_id is the id `cancel()` just cancelled (still on
@@ -363,60 +355,18 @@ class LiveStopLossManager:
         # open-orders view is not guaranteed to reflect that cancel immediately,
         # so without excluding it a re-appearing cancelled order would be
         # silently re-adopted as if it were a genuine untracked resting stop.
-        decision = guard_stop_placement(
+        sl_order_id = place_or_adopt_stop_loss(
             state.exchange_interface,
-            position.symbol,
-            sl_side,
+            symbol=position.symbol,
+            side=sl_side,
+            quantity=float(quantity),
             stop_price=float(stop_price),
+            side_effect_type=SideEffectType.AUTO_REPAY,
             exclude_order_id=position.stop_loss_order_id,
+            max_attempts=3,
+            retry_delay=1.0,
+            retry_log_prefix="Re-protect",
         )
-        if decision.check == StopPlacementCheck.REFUSE:
-            logger.critical(
-                "CRITICAL: %s re-protect refused: %s — fail-closed (#1112); "
-                "position is UNPROTECTED pending the periodic reconciler. "
-                "MANUAL REVIEW REQUIRED.",
-                position.symbol,
-                decision.reason,
-            )
-            self._send_alert(
-                f"🚨 {position.symbol} UNPROTECTED: re-protect refused ({decision.reason}). "
-                f"Reconciler backstop engaged. MANUAL REVIEW REQUIRED."
-            )
-            return
-        if decision.check == StopPlacementCheck.ADOPT:
-            sl_order_id = decision.existing_order_id
-            logger.warning(
-                "Found an untracked resting stop-loss %s for %s @ %s — adopting "
-                "it instead of placing a duplicate (#1112). Intended was $%.2f.",
-                sl_order_id,
-                position.symbol,
-                getattr(decision.existing_order, "stop_price", None),
-                float(stop_price),
-            )
-        else:
-            sl_order_id = None
-            retry_delay = 1.0
-            for attempt in range(3):
-                try:
-                    sl_order_id = state.exchange_interface.place_stop_loss_order(
-                        symbol=position.symbol,
-                        side=sl_side,
-                        quantity=float(quantity),
-                        stop_price=float(stop_price),
-                        side_effect_type=SideEffectType.AUTO_REPAY,
-                    )
-                    if sl_order_id:
-                        break
-                except Exception as e:
-                    logger.warning(
-                        "Re-protect attempt %s/3 for %s failed: %s",
-                        attempt + 1,
-                        position.symbol,
-                        e,
-                    )
-                if attempt < 2:
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
 
         if sl_order_id:
             if position.order_id is not None:
@@ -431,15 +381,26 @@ class LiveStopLossManager:
                 float(quantity),
             )
         else:
+            # A fail-closed refusal and retry-exhaustion both mean the same
+            # thing here: the close already cancelled the old stop, so the
+            # position is naked in either case (#1185 unifies what were two
+            # differently-worded CRITICAL branches into one, since by this
+            # point there is no distinct "still protected" outcome to preserve).
             logger.critical(
-                "CRITICAL: %s close failed AND re-placing its stop-loss failed after "
-                "retries — position is UNPROTECTED pending the periodic reconciler. "
+                "CRITICAL: %s close failed AND re-placing its stop-loss failed — "
+                "position is UNPROTECTED pending the periodic reconciler. "
                 "MANUAL REVIEW REQUIRED.",
                 position.symbol,
             )
             self._send_alert(
                 f"🚨 {position.symbol} UNPROTECTED: close failed and stop-loss "
                 f"re-placement failed. Reconciler is the only backstop. REVIEW NOW."
+            )
+            write_unprotected_audit(
+                state.db_manager,
+                state.trading_session_id,
+                position,
+                "re-protect: cancel succeeded but re-placement failed",
             )
 
     def move(self, position: LivePosition, new_stop_price: float) -> bool:
@@ -537,81 +498,51 @@ class LiveStopLossManager:
             )
             return False
 
-        from src.engines.live.reconciliation import StopPlacementCheck, guard_stop_placement
+        from src.engines.live.reconciliation import (
+            StopPlacementDecision,
+            place_or_adopt_stop_loss,
+            write_unprotected_audit,
+        )
 
         sl_side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
 
-        # Same fail-closed check as reprotect() (#1112), excluding the order
-        # just cancelled above — the exchange's open-orders view is not
-        # guaranteed to reflect that cancel immediately.
-        decision = guard_stop_placement(
+        # The adopted order (if any) is whatever price is actually resting on
+        # the exchange, which the guard only guarantees is within
+        # _ADOPT_PRICE_TOLERANCE_FRACTION of new_stop_price -- not equal to
+        # it. Capture the ACHIEVED price via on_adopt, not the ratchet's
+        # intent, so position.stop_loss (which the engine's own exit check
+        # trusts) never diverges from what the exchange will actually trigger
+        # at.
+        achieved_price: float = new_stop_price
+
+        def _capture_achieved_price(decision: StopPlacementDecision) -> None:
+            nonlocal achieved_price
+            price = getattr(decision.existing_order, "stop_price", None)
+            if price is not None:
+                achieved_price = price
+
+        # Same fail-closed check as reprotect() (#1112), with a 3-attempt
+        # exponential-backoff retry on the exchange call itself, excluding
+        # the order just cancelled above — the exchange's open-orders view is
+        # not guaranteed to reflect that cancel immediately.
+        new_order_id = place_or_adopt_stop_loss(
             state.exchange_interface,
-            position.symbol,
-            sl_side,
+            symbol=position.symbol,
+            side=sl_side,
+            quantity=float(quantity),
             stop_price=new_stop_price,
+            side_effect_type=SideEffectType.AUTO_REPAY,
             exclude_order_id=old_order_id,
+            max_attempts=3,
+            retry_delay=1.0,
+            retry_log_prefix="Trailing-stop move",
+            on_adopt=_capture_achieved_price,
         )
-        if decision.check == StopPlacementCheck.REFUSE:
-            logger.critical(
-                "CRITICAL: %s trailing-stop move refused: %s — fail-closed "
-                "(#1112); position is UNPROTECTED pending the periodic "
-                "reconciler. MANUAL REVIEW REQUIRED.",
-                position.symbol,
-                decision.reason,
-            )
-            self._send_alert(
-                f"🚨 {position.symbol} UNPROTECTED: trailing-stop move refused "
-                f"({decision.reason}). Reconciler backstop engaged. MANUAL REVIEW REQUIRED."
-            )
-            return False
-        if decision.check == StopPlacementCheck.ADOPT:
-            new_order_id = decision.existing_order_id
-            # The adopted order is whatever price/qty is actually resting on the
-            # exchange, which guard_stop_placement only guarantees is within
-            # _ADOPT_PRICE_TOLERANCE_FRACTION of new_stop_price -- not equal to
-            # it. Track the ACHIEVED price below, not the ratchet's intent, so
-            # position.stop_loss (which the engine's own exit check trusts)
-            # never diverges from what the exchange will actually trigger at.
-            achieved_price = getattr(decision.existing_order, "stop_price", None)
-            logger.warning(
-                "Found an untracked resting stop-loss %s for %s @ %s — "
-                "adopting it instead of placing a duplicate (#1112). "
-                "Intended was $%.2f.",
-                new_order_id,
-                position.symbol,
-                achieved_price,
-                new_stop_price,
-            )
-        else:
-            new_order_id = None
-            achieved_price = new_stop_price
-            retry_delay = 1.0
-            for attempt in range(3):
-                try:
-                    new_order_id = state.exchange_interface.place_stop_loss_order(
-                        symbol=position.symbol,
-                        side=sl_side,
-                        quantity=float(quantity),
-                        stop_price=float(new_stop_price),
-                        side_effect_type=SideEffectType.AUTO_REPAY,
-                    )
-                    if new_order_id:
-                        break
-                except Exception as e:
-                    logger.warning(
-                        "Trailing-stop move attempt %s/3 for %s failed: %s",
-                        attempt + 1,
-                        position.symbol,
-                        e,
-                    )
-                if attempt < 2:
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
 
         if new_order_id:
             if position.order_id is not None:
                 state.live_position_tracker.set_stop_loss_order_id(position.order_id, new_order_id)
-                if achieved_price is not None and achieved_price != new_stop_price:
+                if achieved_price != new_stop_price:
                     state.live_position_tracker.set_stop_loss_price(
                         position.order_id, float(achieved_price)
                     )
@@ -622,14 +553,18 @@ class LiveStopLossManager:
                 position.symbol,
                 old_order_id,
                 new_order_id,
-                achieved_price if achieved_price is not None else new_stop_price,
+                achieved_price,
             )
             return True
 
+        # A fail-closed refusal and retry-exhaustion both mean the same thing
+        # here: the cancel above already succeeded, so the position is naked
+        # in either case (#1185 unifies what were two differently-worded
+        # CRITICAL branches into one).
         logger.critical(
             "CRITICAL: %s trailing-stop cancelled at the old price but "
-            "re-placing at the new $%.2f failed after retries — position is "
-            "UNPROTECTED pending the periodic reconciler. MANUAL REVIEW REQUIRED.",
+            "re-placing at the new $%.2f failed — position is UNPROTECTED "
+            "pending the periodic reconciler. MANUAL REVIEW REQUIRED.",
             position.symbol,
             new_stop_price,
         )
@@ -637,8 +572,6 @@ class LiveStopLossManager:
             f"🚨 {position.symbol} UNPROTECTED: trailing-stop cancel succeeded "
             f"but re-placement at the new price failed. Reconciler backstop engaged."
         )
-        from src.engines.live.reconciliation import write_unprotected_audit
-
         write_unprotected_audit(
             state.db_manager,
             state.trading_session_id,

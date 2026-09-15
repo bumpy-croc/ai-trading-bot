@@ -14,6 +14,7 @@ import logging
 import math
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -317,6 +318,10 @@ def place_or_adopt_stop_loss(
     stop_price: float,
     side_effect_type: str | None = None,
     exclude_order_id: str | None = None,
+    max_attempts: int = 1,
+    retry_delay: float = 1.0,
+    retry_log_prefix: str = "Stop-loss placement",
+    on_adopt: Callable[[StopPlacementDecision], None] | None = None,
 ) -> str | None:
     """Place a protective stop, first checking for one already resting (#1112).
 
@@ -334,6 +339,22 @@ def place_or_adopt_stop_loss(
     Pass ``exclude_order_id`` when this call immediately follows cancelling a
     specific tracked stop, so the just-cancelled order (which may still
     briefly appear on the exchange's open-orders view) is never re-adopted.
+
+    By default this makes a single placement attempt with no retry — the
+    periodic reconciler's own call sites rely on that (they already wrap this
+    call in their own try/except and re-place on the next cycle). Pass
+    ``max_attempts`` > 1 to opt into the exponential-backoff retry loop the
+    inline entry/re-protect/trailing-stop-move paths need instead
+    (``retry_delay`` doubles after each failed attempt); ``retry_log_prefix``
+    lets each of those callers keep its own distinct per-attempt warning text.
+    Only the retry path catches exceptions from ``place_stop_loss_order`` —
+    the single-attempt default still propagates them, matching every existing
+    caller's current behavior exactly.
+
+    ``on_adopt``, if given, is invoked with the full ``StopPlacementDecision``
+    when an untracked resting stop is adopted — for a caller (``move()``) that
+    needs the ACTUAL resting price/quantity, not just the order id, without
+    re-running the guard check itself.
     """
     decision = guard_stop_placement(
         exchange, symbol, side, stop_price=stop_price, exclude_order_id=exclude_order_id
@@ -359,14 +380,45 @@ def place_or_adopt_stop_loss(
             stop_price,
             quantity,
         )
+        if on_adopt is not None:
+            on_adopt(decision)
         return decision.existing_order_id
-    return exchange.place_stop_loss_order(
-        symbol=symbol,
-        side=side,
-        quantity=quantity,
-        stop_price=stop_price,
-        side_effect_type=side_effect_type,
-    )
+
+    if max_attempts <= 1:
+        return exchange.place_stop_loss_order(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            stop_price=stop_price,
+            side_effect_type=side_effect_type,
+        )
+
+    order_id = None
+    delay = retry_delay
+    for attempt in range(max_attempts):
+        try:
+            order_id = exchange.place_stop_loss_order(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                stop_price=stop_price,
+                side_effect_type=side_effect_type,
+            )
+            if order_id:
+                break
+        except Exception as e:
+            logger.warning(
+                "%s attempt %s/%s for %s failed: %s",
+                retry_log_prefix,
+                attempt + 1,
+                max_attempts,
+                symbol,
+                e,
+            )
+        if attempt < max_attempts - 1:
+            time.sleep(delay)
+            delay *= 2
+    return order_id
 
 
 def write_unprotected_audit(
