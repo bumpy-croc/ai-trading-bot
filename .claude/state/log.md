@@ -1777,3 +1777,50 @@ Ref: #1121 (closed 2026-09-14T07:07:18Z), #1127, #1140, PR #1143, #1135, #1130, 
 promote `be451698`; PM session `b3015dfb`;
 [D-2026-09-07-01], [D-2026-08-31-01], [D-2026-08-13-04];
 .claude/LESSONS.md §1.16/§2.9(h)/§2.11/§2.16/§2.17/§3.
+
+## [D-2026-09-15-01] 2026-09-15 ~00:40 · fix-promote · pm-session-6ee0f9
+
+**Root-caused and fixed #1165 (recurring `CLOSE_INVENTORY_LOCKED` loop), then promoted to
+production.** Prod re-latched close-only on 2026-09-14 20:52 UTC (position 29, ETHUSDT), the same
+symptom class as #1121's 17-day halt. Diagnosis (`agents/research/1165-recurring-close-inventory-lock.md`):
+the close path cancels the resting stop-loss (#710) then immediately reads free base balance to
+size itself; Binance's cross-margin wallet endpoint (`/sapi/v1/margin/account`) is eventually
+consistent and can still report the just-cancelled stop's `locked` amount for several seconds, so
+the close sized itself off a stale pre-cancel snapshot and tripped #1108's 98% holdings-cap gate on
+a fully sellable position — abort → reprotect → identical exit re-fires next ~66s cycle → latches
+close-only within 3 aborts. Confirmed via a separate read-only investigation (#1166 sub-task) that
+the trading loop itself was never hung; only the latch (and a stale trade-count-gated status line,
+filed as #1170) made it look dead.
+
+Fix (PR #1165, two independent architecture/code review rounds, each surfacing real defects the
+other caught): thread `stop_just_cancelled` from the confirmed cancel down to a bounded balance-read
+retry (5 attempts, 300ms apart), padded by one lot step and capped at the position's own intended
+quantity so the retry's raw-balance verdict survives the caller's later floor-to-step normalization
+without ever exceeding what's actually needed. First review round caught a P0 (a `float()` conversion
+had drifted outside its `try`, turning a malformed-balance edge case into a hard-failed close — the
+exact storm class being fixed, from a new trigger) plus the lot-step-padding gap; second round caught
+the padded threshold could itself exceed a narrow position's own quantity, burning the full retry
+budget on every stop-cancelled close. Both fixed and discrimination-tested before merge.
+
+Promoted `develop @ 6f829d5f` → `main` (`cfc9a506`), zero conflicts, imports/model-symlink verified,
+full fast suite green (2595 passed) both pre-merge and in the promote worktree.
+
+**Not yet done — needs a restart to take effect.** The close-only latch from 20:52 UTC is still
+active in the running prod process (confirmed live at 21:53 UTC via `latched_condition_monitor`'s
+hourly re-page); the fix just merged cannot clear an already-latched process, and `resume_trading()`
+still has zero production callers (#1127, unchanged, commented with this incident's evidence).
+Next action: authorize a promote+restart to (a) deploy this fix and (b) clear the current latch —
+safe now, no open position.
+
+**Also spun out of this session, filed separately, several already reviewed/fixed** (not blockers
+for #1165, not yet promoted): #1166 (partial-exit close bypassed #710's cancel-lock — fixed, PR
+#1183, reviewed clean), #1167 (trailing stop never moves the exchange order — PR #1179, found a P0
+lock-ordering race on first review, fix in progress), #1168 (missing `order_tracker.track_order`
+call — PR #1177), #1169 (`strategy_executions` silent on close-only-blocked entries — PR #1176),
+#1170/#1171/#1172/#1173/#1174/#1181/#1184 (heartbeat/observability/docs follow-ups, several already
+merged-ready). None promoted yet — each needs its own review sign-off and a deliberate promote
+decision, not bundled with #1165's urgency.
+
+Ref: #1165 (PR #1165, merged), #1166 (PR #1183), #1167 (PR #1179), #1168 (PR #1177), #1169 (PR
+#1176), #1121 (closed), #1127 (open, unchanged), #1170/#1171/#1172/#1173/#1174/#1181/#1184;
+promote `cfc9a506`; PM session `6ee0f9`.

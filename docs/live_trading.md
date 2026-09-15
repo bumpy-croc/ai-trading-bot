@@ -27,7 +27,7 @@ continuous polling, account synchronisation, and resilience features required fo
 
 | Component | Module | Responsibility | Lock ownership |
 |-----------|--------|----------------|----------------|
-| `LiveStopLossManager` | `engines/live/execution/stop_loss_manager.py` | All exchange-facing stop-loss calls: placement (with retry), cancel, fill/held queries, re-protect, offline-fill detection | None — stateless; reads `enable_live_trading`/`exchange_interface`/`order_tracker` off the engine at call time; position mutations go through `LivePositionTracker`'s internal lock |
+| `LiveStopLossManager` | `engines/live/execution/stop_loss_manager.py` | All exchange-facing stop-loss calls: placement (with retry), cancel, fill/held queries, re-protect, trailing-stop move (cancel + guarded re-place at the ratcheted price, #1167), offline-fill detection | None — stateless; reads `enable_live_trading`/`exchange_interface`/`order_tracker` off the engine at call time; position mutations go through `LivePositionTracker`'s internal lock |
 | `LiveAccountMonitor` | `engines/live/monitoring/account_monitor.py` | Balance/equity snapshots, status lines, performance summaries | None — stateless; reads positions via `LivePositionTracker.positions` (thread-safe snapshot) |
 | `LiveSessionRecoverer` | `engines/live/recovery.py` | Startup recovery: session balance, persisted-position reload, risk-manager re-registration, startup exchange reconciliation | None — runs on the startup path before the trading loop; engine state it mutates (session id, balance, close-only flag) is written through the engine as before |
 | `LiveStartupSequencer` | `engines/live/startup.py` | Bootstrap orchestration (`start()` delegates to `run()`): session recover/create + wiring, #668 carry-forward, #657 self-heal, account sync, runtime-service startup, main-loop launch | None — runs once on the startup path (main thread) before the trading loop; all engine state written through the backref as before |
@@ -177,8 +177,9 @@ lines, which keep flowing at normal cadence because signal generation runs *befo
 close-only gate (#1094).
 
 `LatchedConditionMonitor` (`engines/live/monitoring/latched_condition_monitor.py`) runs once
-per trading-loop iteration, before the data-freshness `continue` paths, and writes **one state
-row per pass** (at most hourly), which is a *positive assertion* about the entry path:
+per trading-loop iteration, before the data-freshness `continue` paths **and before the
+position-count gate that guards entry evaluation**, and writes **one state row per pass** (at
+most hourly), which is a *positive assertion* about the entry path:
 
 | Row | Meaning |
 | --- | --- |
@@ -186,6 +187,14 @@ row per pass** (at most hourly), which is a *positive assertion* about the entry
 | `CLOSE_ONLY_LATCHED` / `SYSTEM_HALT_LATCHED` / `ENTRY_PAUSE_LATCHED` | The loop ran and found entries blocked; the message carries elapsed time and reason. |
 | `*_LATCH_CLEARED` | The condition resolved (elapsed time in the message). |
 | *no row at all* | The loop thread is not running. This is itself the alarm. |
+
+This is deliberately independent of position count: `check_entry_conditions`'s own
+`strategy_executions` row for a close-only block (#1169) is written only when the trading loop
+actually calls it, which is itself gated on `position_count < max_concurrent_positions` — so a
+close-only halt with the position book already full never reaches that code, and #1169's row
+never appears (#1181). `LatchedConditionMonitor`'s row above is the authoritative "halted but
+alive vs. dead" signal in every case, including that one; #1169's row is a best-effort
+supplement, not a substitute.
 
 One query therefore separates all three cases without any external cross-check:
 

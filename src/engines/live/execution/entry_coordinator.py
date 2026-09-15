@@ -23,12 +23,18 @@ Locking & ordering (unchanged from the engine):
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import pandas as pd
 
-from src.config.constants import DEFAULT_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT
+from src.config.constants import (
+    DEFAULT_STOP_LOSS_MAX_RETRIES,
+    DEFAULT_STOP_LOSS_PCT,
+    DEFAULT_TAKE_PROFIT_PCT,
+    ENTRY_PAUSE_WARNING_INTERVAL_SECONDS,
+)
 from src.data_providers.exchange_interface import OrderSide, OrderType, SideEffectType
 from src.database.models import EventType
 from src.engines.live.execution.entry_handler import LiveEntrySignal
@@ -172,6 +178,10 @@ class LiveEntryCoordinator:
         # would-have-entered-short events when allow_shorts=False suppressed
         # a sized short at signal generation. Live-path only by construction.
         self._short_suppression_monitor = ShortSuppressionMonitor()
+        # Rate-limits the close-only skip warning the same way EntryPauseGate
+        # rate-limits its own skip warning (#1169) — a latch can persist for
+        # days, and this runs once per loop iteration.
+        self._close_only_last_warning: float | None = None
 
     def _entry_paused(self, context: str) -> bool:
         """True when a pause source suppresses new entries (rate-limit logged)."""
@@ -228,7 +238,22 @@ class LiveEntryCoordinator:
         current_time: datetime,
         runtime_decision=None,
     ):
-        """Check if new positions should be opened"""
+        """Check if new positions should be opened.
+
+        Observability caveat (#1181): this method is only called by
+        ``trading_engine.py`` when ``position_count < max_concurrent_positions``
+        (see the trading loop), so any row this method writes for a blocked
+        entry — including close-only's own ``strategy_executions`` row (#1169)
+        — is a best-effort signal that goes missing exactly when a latched
+        condition coincides with a full position book. It is NOT the
+        authoritative "halted but alive vs. dead" signal. That's
+        ``LatchedConditionMonitor`` (``engines/live/monitoring/
+        latched_condition_monitor.py``, #1095/#1096): it runs unconditionally
+        near the top of every loop iteration, before any position-count check,
+        and writes an hourly state row regardless of how many positions are
+        open. See `docs/live_trading.md` ("Latched conditions are
+        re-announced until cleared") and `.claude/LESSONS.md` §5.1.
+        """
         state = self._state
 
         # In-line hard-cap gate (#807 pattern): re-assess the drawdown guard
@@ -236,9 +261,51 @@ class LiveEntryCoordinator:
         # iteration (e.g. a stop-loss fill) blocks this entry, not the next one.
         state._refresh_drawdown_gate()
 
-        # Close-only mode: skip all entry signals, exits/stops still active
+        # Close-only mode: skip all entry signals, exits/stops still active.
+        # Write the strategy_executions row and log visibly (rate-limited, not
+        # debug) so a halted-but-alive bot is distinguishable from a dead one:
+        # freshness checks that key off this table would otherwise see the
+        # same silence from "correctly blocking entries every cycle" as from
+        # "hung" (#1169). The DB write is fault-isolated — like this class's
+        # other observability write, _record_short_suppression_shadow — so a
+        # DB outage (itself a close-only trigger) can't make this path raise
+        # and stall exits/stop-loss management on every remaining iteration.
+        # Any row this branch writes is still only a partial signal — see the
+        # docstring above; LatchedConditionMonitor is authoritative (#1181).
         if state._close_only_mode:
-            logger.debug("Close-only mode active — skipping entry check")
+            reason = getattr(state, "_close_only_reason", None) or "close_only_mode_active"
+            now = time.monotonic()
+            if (
+                self._close_only_last_warning is None
+                or now - self._close_only_last_warning >= ENTRY_PAUSE_WARNING_INTERVAL_SECONDS
+            ):
+                self._close_only_last_warning = now
+                logger.warning(
+                    "Close-only mode active (%s) — blocking entry check for %s "
+                    "(bot is alive; entries are being intentionally refused, not hung)",
+                    reason,
+                    symbol,
+                )
+            else:
+                logger.debug(
+                    "Close-only mode active (%s) — blocking entry check for %s", reason, symbol
+                )
+            if state.db_manager:
+                try:
+                    state.db_manager.log_strategy_execution(
+                        strategy_name=state._strategy_name(),
+                        symbol=symbol,
+                        signal_type="entry",
+                        action_taken="blocked_close_only",
+                        price=current_price,
+                        timeframe=state.timeframe or "1m",
+                        reasons=[reason],
+                        session_id=state.trading_session_id,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Close-only strategy_executions write failed for %s: %s", symbol, e
+                    )
             return
 
         if self._entry_paused(f"entry evaluation for {symbol}"):
@@ -973,7 +1040,7 @@ class LiveEntryCoordinator:
                     logger.critical(
                         "CRITICAL: Failed to place stop-loss after %s attempts for %s - "
                         "closing position on exchange to prevent unprotected exposure",
-                        3,  # placement retry budget lives in LiveStopLossManager
+                        DEFAULT_STOP_LOSS_MAX_RETRIES,
                         symbol,
                     )
                     # Record the structured event and fire the alert in one call

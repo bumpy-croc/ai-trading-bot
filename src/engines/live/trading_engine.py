@@ -35,6 +35,7 @@ from src.config.constants import (
     DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MIN_CHECK_INTERVAL,
     DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_STATUS_LOG_INTERVAL,
     DEFAULT_TAKE_PROFIT_PCT,
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
@@ -808,6 +809,8 @@ class LiveTradingEngine:
         self.last_data_update: datetime | None = None
         # Track when we last logged account state
         self.last_account_snapshot: datetime | None = None
+        # Track when we last logged the status heartbeat
+        self.last_status_log: datetime | None = None
         self.timeframe: str | None = None  # Will be set when trading starts
         self._active_symbol: str | None = None
 
@@ -1074,11 +1077,18 @@ class LiveTradingEngine:
             close_only_provider=self._refresh_drawdown_gate,
             # Manual kill-switch (#922): scale-ins share the engine's halt state.
             system_halt=self._system_halt,
+            # #1166: a partial exit that fully closes a position must route
+            # through the same cancel-then-close + base-asset-lock sequence
+            # (#710/#703) as every other close.
+            execute_full_exit=self.exit_coordinator.execute_exit,
         )
         # A DI-injected handler was built without the engine's halt state —
         # rebind so its scale-ins cannot bypass the kill-switch. Idempotent
         # for the default handler constructed above.
         self.live_exit_handler.bind_system_halt(self._system_halt)
+        # Same rebind for a DI-injected handler, which is built before the
+        # engine's exit coordinator exists (#1166).
+        self.live_exit_handler.bind_full_exit(self.exit_coordinator.execute_exit)
         # #802 follow-up P3: scale-ins respect the same gross exposure cap as
         # entries (share the governor instance; inert unless the flag is on).
         self.live_exit_handler.configure_exposure_gate(exposure_governor)
@@ -1155,6 +1165,10 @@ class LiveTradingEngine:
         exposure_governor = self._init_entry_handler(entry_handler)
         self._init_exit_handler(exit_handler, exposure_governor)
         self._init_risk_guards()
+        # The stop-loss manager is built by _init_risk_guards, after the exit
+        # handler -- bind it now so a trailing-stop ratchet can move the
+        # resting exchange order (#1167), not just the in-memory/DB value.
+        self.live_exit_handler.bind_stop_loss_manager(self.stop_loss_manager)
 
     def _apply_dynamic_risk_adjustment(
         self,
@@ -1902,12 +1916,7 @@ class LiveTradingEngine:
                 # Escalate persistent inference timeouts (#927, observability only)
                 self._check_inference_health()
                 self._log_periodic_account_state()
-                # Log status periodically
-                if (
-                    self.performance_tracker.get_metrics().total_trades % 10 == 0
-                    or self.live_position_tracker.position_count > 0
-                ):
-                    self._log_status(symbol, current_price)
+                self._log_status_heartbeat(symbol, current_price)
                 # Reset error counter on successful iteration
                 self.consecutive_errors = 0
                 self.db_unreachable_since = None
@@ -1991,13 +2000,30 @@ class LiveTradingEngine:
         logger.info("Trading loop ended")
         self._finalize_runtime()
 
+    def _log_status_heartbeat(self, symbol: str, current_price: float) -> None:
+        """Log the periodic status line on a wall-clock cadence.
+
+        Previously gated on ``total_trades % 10 == 0 or position_count > 0``,
+        which went silent for a flat session sitting on a trade count not
+        divisible by 10 — making a live loop look hung even though it was
+        still running. This must fire independent of trade volume so it
+        stays valid liveness evidence.
+        """
+        now = datetime.now(UTC)
+        if (
+            self.last_status_log is None
+            or (now - self.last_status_log).total_seconds() >= DEFAULT_STATUS_LOG_INTERVAL
+        ):
+            self._log_status(symbol, current_price)
+            self.last_status_log = now
+
     def _log_periodic_account_state(self) -> None:
         """Log the periodic account snapshot and run periodic exchange account sync."""
         # Log account snapshot to database periodically (configurable interval)
         now = datetime.now(UTC)
         if self.account_snapshot_interval > 0 and (
             self.last_account_snapshot is None
-            or (now - self.last_account_snapshot).seconds >= self.account_snapshot_interval
+            or (now - self.last_account_snapshot).total_seconds() >= self.account_snapshot_interval
         ):
             self._log_account_snapshot()
             self.last_account_snapshot = now

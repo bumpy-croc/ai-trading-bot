@@ -261,6 +261,7 @@ DEFAULT_CHECK_INTERVAL = 60  # Base check interval in seconds
 DEFAULT_MIN_CHECK_INTERVAL = 30  # Minimum check interval (high activity)
 DEFAULT_MAX_CHECK_INTERVAL = 300  # Maximum check interval (low activity)
 DEFAULT_PERFORMANCE_MONITOR_INTERVAL = 30  # Performance monitoring interval
+DEFAULT_STATUS_LOG_INTERVAL = 60  # Status heartbeat log interval in seconds
 DEFAULT_SLEEP_POLL_INTERVAL = 0.5  # Sleep polling interval (reduced from 0.1s)
 DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL = 1800  # Account snapshot interval (30 minutes)
 DEFAULT_DATA_FRESHNESS_THRESHOLD = 120  # Skip processing if data is older than 2 minutes
@@ -358,6 +359,13 @@ DEFAULT_TRAILING_DISTANCE_PCT = 0.005  # 0.5%
 DEFAULT_TRAILING_DISTANCE_ATR_MULT = 1.5
 DEFAULT_BREAKEVEN_THRESHOLD = 0.02  # 2.0%
 DEFAULT_BREAKEVEN_BUFFER = 0.001  # 0.1%
+
+# Minimum ratchet move (as a fraction of price) before a trailing stop's resting
+# exchange order is actually cancelled and re-placed (#1167). Without this floor,
+# every loop iteration past activation does a real cancel+place round-trip even
+# for sub-tick price noise, needlessly multiplying exposure to the naked window
+# between cancel and re-placement.
+MIN_TRAILING_STOP_MOVE_FRACTION = 0.0005  # 0.05%
 
 # Correlation Control Defaults
 DEFAULT_CORRELATION_WINDOW_DAYS = 30
