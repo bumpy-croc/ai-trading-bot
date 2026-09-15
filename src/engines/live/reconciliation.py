@@ -309,6 +309,61 @@ def _classify_stop_placement(
     )
 
 
+def _invoke_on_adopt(
+    on_adopt: Callable[[StopPlacementDecision], None] | None,
+    decision: StopPlacementDecision,
+    symbol: str,
+) -> None:
+    """Fault-isolated: ``on_adopt`` can run in a window where a preceding
+    cancel already succeeded and the position is naked but for the just-
+    adopted order (``move()``'s cancel-then-place). A bug in the callback
+    must not propagate out and lose the adopted order id (#1186)."""
+    if on_adopt is None:
+        return
+    try:
+        on_adopt(decision)
+    except Exception as e:
+        logger.error(
+            "on_adopt callback failed for %s (adopted order %s is still valid "
+            "and was returned to the caller): %s",
+            symbol,
+            decision.existing_order_id,
+            e,
+        )
+
+
+def _invoke_on_refuse(
+    on_refuse: Callable[[StopPlacementDecision], None] | None,
+    decision: StopPlacementDecision,
+    symbol: str,
+) -> None:
+    """Fault-isolated like ``_invoke_on_adopt``: a callback bug must not mask
+    the REFUSE decision itself, which the caller still needs to return."""
+    if on_refuse is None:
+        return
+    try:
+        on_refuse(decision)
+    except Exception as e:
+        logger.error("on_refuse callback failed for %s (%s): %s", symbol, decision.reason, e)
+
+
+def _log_adoption(
+    decision: StopPlacementDecision, symbol: str, stop_price: float, quantity: float
+) -> None:
+    actual_price = getattr(decision.existing_order, "stop_price", None)
+    actual_qty = getattr(decision.existing_order, "quantity", None)
+    logger.warning(
+        "Found an untracked resting stop-loss %s for %s @ %s (qty=%s) — adopting "
+        "it instead of placing a duplicate (#1112). Intended was $%.2f qty=%.8f.",
+        decision.existing_order_id,
+        symbol,
+        actual_price,
+        actual_qty,
+        stop_price,
+        quantity,
+    )
+
+
 def place_or_adopt_stop_loss(
     exchange: Any,
     *,
@@ -322,6 +377,7 @@ def place_or_adopt_stop_loss(
     retry_delay: float = 1.0,
     retry_log_prefix: str = "Stop-loss placement",
     on_adopt: Callable[[StopPlacementDecision], None] | None = None,
+    on_refuse: Callable[[StopPlacementDecision], None] | None = None,
 ) -> str | None:
     """Place a protective stop, first checking for one already resting (#1112).
 
@@ -349,12 +405,24 @@ def place_or_adopt_stop_loss(
     lets each of those callers keep its own distinct per-attempt warning text.
     Only the retry path catches exceptions from ``place_stop_loss_order`` —
     the single-attempt default still propagates them, matching every existing
-    caller's current behavior exactly.
+    caller's current behavior exactly. The retry loop re-consults
+    ``guard_stop_placement`` at the top of every attempt after the first: a
+    prior attempt can raise on something like a network timeout that the
+    exchange nonetheless accepted (the same ambiguous-submission case the
+    entry path already handles explicitly), so the next attempt must adopt
+    that just-landed order instead of stacking a second one on the same held
+    quantity — exactly the #1104/#1108 duplicate-stop class this guard exists
+    to prevent.
 
     ``on_adopt``, if given, is invoked with the full ``StopPlacementDecision``
     when an untracked resting stop is adopted — for a caller (``move()``) that
     needs the ACTUAL resting price/quantity, not just the order id, without
-    re-running the guard check itself.
+    re-running the guard check itself. ``on_refuse`` is the REFUSE-side
+    equivalent, invoked with the decision (and its specific ``reason``) when
+    the guard refuses — the initial check or a retry re-consult — so a caller
+    can surface that reason in its own alert/audit instead of a generic
+    message. Both callbacks are fault-isolated: an exception from either is
+    logged and swallowed rather than propagated.
     """
     decision = guard_stop_placement(
         exchange, symbol, side, stop_price=stop_price, exclude_order_id=exclude_order_id
@@ -366,22 +434,11 @@ def place_or_adopt_stop_loss(
             symbol,
             decision.reason,
         )
+        _invoke_on_refuse(on_refuse, decision, symbol)
         return None
     if decision.check == StopPlacementCheck.ADOPT:
-        actual_price = getattr(decision.existing_order, "stop_price", None)
-        actual_qty = getattr(decision.existing_order, "quantity", None)
-        logger.warning(
-            "Found an untracked resting stop-loss %s for %s @ %s (qty=%s) — adopting "
-            "it instead of placing a duplicate (#1112). Intended was $%.2f qty=%.8f.",
-            decision.existing_order_id,
-            symbol,
-            actual_price,
-            actual_qty,
-            stop_price,
-            quantity,
-        )
-        if on_adopt is not None:
-            on_adopt(decision)
+        _log_adoption(decision, symbol, stop_price, quantity)
+        _invoke_on_adopt(on_adopt, decision, symbol)
         return decision.existing_order_id
 
     if max_attempts <= 1:
@@ -393,9 +450,69 @@ def place_or_adopt_stop_loss(
             side_effect_type=side_effect_type,
         )
 
-    order_id = None
+    return _place_with_retry(
+        exchange,
+        symbol=symbol,
+        side=side,
+        quantity=quantity,
+        stop_price=stop_price,
+        side_effect_type=side_effect_type,
+        exclude_order_id=exclude_order_id,
+        max_attempts=max_attempts,
+        retry_delay=retry_delay,
+        retry_log_prefix=retry_log_prefix,
+        on_adopt=on_adopt,
+        on_refuse=on_refuse,
+    )
+
+
+def _place_with_retry(
+    exchange: Any,
+    *,
+    symbol: str,
+    side: Any,
+    quantity: float,
+    stop_price: float,
+    side_effect_type: str | None,
+    exclude_order_id: str | None,
+    max_attempts: int,
+    retry_delay: float,
+    retry_log_prefix: str,
+    on_adopt: Callable[[StopPlacementDecision], None] | None,
+    on_refuse: Callable[[StopPlacementDecision], None] | None,
+) -> str | None:
+    """The exponential-backoff retry loop behind ``place_or_adopt_stop_loss``'s
+    ``max_attempts > 1`` path.
+
+    Re-consults ``guard_stop_placement`` at the top of every attempt AFTER
+    the first (the first attempt's decision was already made by the caller
+    before entering this loop). This is the fix for the gap the three inline
+    copies this helper replaced all shared: ``place_stop_loss_order`` can
+    raise after the exchange has already accepted and rested the order (a
+    timeout on the response, not on the submission) — without re-checking,
+    the next attempt would place a SECOND protective stop on the same held
+    quantity, orphaning the first as an untracked resting stop.
+    """
     delay = retry_delay
     for attempt in range(max_attempts):
+        if attempt > 0:
+            decision = guard_stop_placement(
+                exchange, symbol, side, stop_price=stop_price, exclude_order_id=exclude_order_id
+            )
+            if decision.check == StopPlacementCheck.REFUSE:
+                logger.critical(
+                    "Refusing to retry a stop-loss placement for %s: %s — "
+                    "skipping further attempts (fail-closed, #1112).",
+                    symbol,
+                    decision.reason,
+                )
+                _invoke_on_refuse(on_refuse, decision, symbol)
+                return None
+            if decision.check == StopPlacementCheck.ADOPT:
+                _log_adoption(decision, symbol, stop_price, quantity)
+                _invoke_on_adopt(on_adopt, decision, symbol)
+                return decision.existing_order_id
+
         try:
             order_id = exchange.place_stop_loss_order(
                 symbol=symbol,
@@ -405,7 +522,7 @@ def place_or_adopt_stop_loss(
                 side_effect_type=side_effect_type,
             )
             if order_id:
-                break
+                return order_id
         except Exception as e:
             logger.warning(
                 "%s attempt %s/%s for %s failed: %s",
@@ -418,7 +535,7 @@ def place_or_adopt_stop_loss(
         if attempt < max_attempts - 1:
             time.sleep(delay)
             delay *= 2
-    return order_id
+    return None
 
 
 def write_unprotected_audit(

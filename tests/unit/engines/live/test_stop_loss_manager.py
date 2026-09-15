@@ -133,7 +133,7 @@ class TestPlaceProtection:
         call = state.exchange_interface.place_stop_loss_order.call_args
         assert call.kwargs["side"] == OrderSide.BUY
 
-    @patch("src.engines.live.execution.stop_loss_manager.time.sleep")
+    @patch("src.engines.live.reconciliation.time.sleep")
     def test_retries_on_exception_then_succeeds(self, mock_sleep):
         state = make_state()
         state.exchange_interface.place_stop_loss_order.side_effect = [
@@ -153,7 +153,7 @@ class TestPlaceProtection:
         assert sl_order_id == "sl-after-retry"
         assert state.exchange_interface.place_stop_loss_order.call_count == 2
 
-    @patch("src.engines.live.execution.stop_loss_manager.time.sleep")
+    @patch("src.engines.live.reconciliation.time.sleep")
     def test_returns_none_after_exhausting_retries_without_registration(self, mock_sleep):
         state = make_state()
         state.exchange_interface.place_stop_loss_order.return_value = None
@@ -246,6 +246,10 @@ class TestPlaceProtectionRestingStopGuard1112:
         state.order_tracker.track_order.assert_not_called()
         # #1185: a fail-closed refusal is an unprotected entry too.
         state.db_manager.log_audit_event.assert_called_once()
+        # #1186: the guard's specific reason must reach the audit row, not a
+        # generic message.
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert "wrong side" in audit_call["reason"]
 
     def test_refuses_when_open_orders_lookup_is_unconfirmed(self):
         state = make_state()
@@ -263,6 +267,8 @@ class TestPlaceProtectionRestingStopGuard1112:
         assert sl_order_id is None
         state.exchange_interface.place_stop_loss_order.assert_not_called()
         state.db_manager.log_audit_event.assert_called_once()
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert "lookup unconfirmed" in audit_call["reason"]
 
 
 class TestReprotect:
@@ -356,8 +362,13 @@ class TestReprotect:
         exchange.place_stop_loss_order.assert_not_called()
         send_alert.assert_called_once()
         state.db_manager.log_audit_event.assert_called_once()
+        # #1186: the guard's specific reason must reach both the alert and
+        # the audit row, not a generic message.
+        assert "lookup unconfirmed" in send_alert.call_args.args[0]
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert "lookup unconfirmed" in audit_call["reason"]
 
-    @patch("src.engines.live.execution.stop_loss_manager.time.sleep")
+    @patch("src.engines.live.reconciliation.time.sleep")
     def test_writes_audit_when_replacement_fails_after_retries(self, mock_sleep):
         exchange = self._held_exchange()
         exchange.place_stop_loss_order.return_value = None
@@ -486,8 +497,12 @@ class TestMove:
         audit_call = state.db_manager.log_audit_event.call_args.kwargs
         assert audit_call["severity"] == "CRITICAL"
         assert audit_call["field"] == "stop_loss_order_id"
+        # #1186: the guard's specific reason (wrong price, not just "REFUSE")
+        # must reach both the alert and the audit row.
+        assert "outside" in send_alert.call_args.args[0]
+        assert "outside" in audit_call["reason"]
 
-    @patch("src.engines.live.execution.stop_loss_manager.time.sleep")
+    @patch("src.engines.live.reconciliation.time.sleep")
     def test_escalates_when_replacement_fails_after_cancel(self, mock_sleep):
         exchange = self._held_exchange()
         exchange.place_stop_loss_order.return_value = None
