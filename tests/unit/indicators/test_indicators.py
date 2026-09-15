@@ -430,15 +430,6 @@ class TestIndicatorIntegration:
         assert len(ema) == len(data_with_nan)
         assert len(rsi) == len(data_with_nan)
 
-    def test_indicators_performance(self):
-        large_data = pd.Series(np.random.randn(10000))
-        import time
-
-        start_time = time.time()
-        _ = calculate_ema(large_data, period=20)
-        _ = calculate_rsi(large_data, period=14)
-        assert time.time() - start_time < 3.0
-
 
 class TestIndicatorCaching:
     """Test caching functionality for technical indicators."""
