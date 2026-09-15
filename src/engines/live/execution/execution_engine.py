@@ -1298,8 +1298,14 @@ class LiveExecutionEngine:
                     # step. A read that clears the ratio by less than one step
                     # would floor back under it and abort anyway, defeating the
                     # retry in exactly the case it exists for (#1165 review).
+                    # Capped at `quantity`: for a position narrower than
+                    # ~50 lot steps (ETHUSDT's real LOT_SIZE step made this the
+                    # common case, not an edge case) the padded threshold can
+                    # exceed the position itself, burning the full retry
+                    # budget on every stop-cancelled close even when the very
+                    # first read is already the whole, fresh balance.
                     step_size = self._lot_step_size(symbol) or 0.0
-                    min_required = quantity * HOLDINGS_CAP_MIN_RATIO + step_size
+                    min_required = min(quantity, quantity * HOLDINGS_CAP_MIN_RATIO + step_size)
                 free_base = self._free_base_for_close(symbol, min_required=min_required)
                 if free_base is not None and free_base < quantity:
                     logger.warning(

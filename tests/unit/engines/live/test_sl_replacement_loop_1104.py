@@ -369,6 +369,24 @@ class TestStaleBalanceRetryAfterStopCancel:
         assert len(sleeps) == 2  # retried twice before the third read cleared the gate
         assert h.events == []  # no CLOSE_INVENTORY_LOCKED
 
+    def test_a_full_balance_read_is_not_over_padded_for_a_narrow_position(self, monkeypatch):
+        """Regression for a second review finding: for a position narrower than
+        ~50 lot steps, the unclamped pad (`quantity * 0.98 + step`) can exceed
+        `quantity` itself -- so even a fresh, full-balance first read would look
+        'still stale' and burn the whole retry budget on every stop-cancelled
+        close. The padded threshold must never exceed the position being closed.
+        """
+        intended = 0.0002  # 20 lot steps at the harness's 1e-5 step
+        h = _CloseHarness(free_base=intended)
+        sleeps: list[float] = []
+        monkeypatch.setattr("src.engines.live.execution.execution_engine.time.sleep", sleeps.append)
+
+        result = h.close(intended, notional=1.0, stop_just_cancelled=True)
+
+        assert result is not None
+        assert h.exchange.get_balance.call_count == 1  # settled on the very first read
+        assert sleeps == []
+
     def test_a_read_within_one_lot_step_of_the_threshold_is_not_treated_as_settled(
         self, monkeypatch
     ):
