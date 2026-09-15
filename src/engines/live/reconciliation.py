@@ -167,6 +167,13 @@ class StopPlacementDecision:
     existing_order_id: str | None = None
     existing_order: Any | None = None
     reason: str = ""
+    # True only for a REFUSE caused by the guard's own lookup failing or being
+    # unconfirmed (including the exclude_order_id eventual-consistency lag) --
+    # i.e. "we couldn't tell", not "we found a genuine conflict". A retry loop
+    # may treat this as transient and keep its remaining attempts; a genuine
+    # conflict (wrong side, wrong price, multiple resting orders) never will,
+    # since retrying won't change what's actually resting (#1186).
+    unconfirmed: bool = False
 
 
 def guard_stop_placement(
@@ -232,7 +239,9 @@ def guard_stop_placement(
     try:
         orders = checked(symbol)
         if orders is None:
-            return StopPlacementDecision(StopPlacementCheck.REFUSE, reason="lookup unconfirmed")
+            return StopPlacementDecision(
+                StopPlacementCheck.REFUSE, reason="lookup unconfirmed", unconfirmed=True
+            )
         return _classify_stop_placement(
             orders,
             symbol=symbol,
@@ -241,7 +250,9 @@ def guard_stop_placement(
             exclude_order_id=exclude_order_id,
         )
     except Exception as e:
-        return StopPlacementDecision(StopPlacementCheck.REFUSE, reason=f"lookup raised: {e}")
+        return StopPlacementDecision(
+            StopPlacementCheck.REFUSE, reason=f"lookup raised: {e}", unconfirmed=True
+        )
 
 
 def _classify_stop_placement(
@@ -267,6 +278,10 @@ def _classify_stop_placement(
                     "was just cancelled — exchange view has not caught up with the "
                     "cancel (or the cancel did not take); will not resurrect it"
                 ),
+                # Eventual-consistency lag, not a genuine conflict: the exchange's
+                # view of a cancel we already confirmed simply hasn't caught up
+                # yet, and may well clear on the very next lookup.
+                unconfirmed=True,
             )
         resting = remaining
 
@@ -329,6 +344,7 @@ def _invoke_on_adopt(
             symbol,
             decision.existing_order_id,
             e,
+            exc_info=True,
         )
 
 
@@ -344,7 +360,13 @@ def _invoke_on_refuse(
     try:
         on_refuse(decision)
     except Exception as e:
-        logger.error("on_refuse callback failed for %s (%s): %s", symbol, decision.reason, e)
+        logger.error(
+            "on_refuse callback failed for %s (%s): %s",
+            symbol,
+            decision.reason,
+            e,
+            exc_info=True,
+        )
 
 
 def _log_adoption(
@@ -492,46 +514,91 @@ def _place_with_retry(
     timeout on the response, not on the submission) — without re-checking,
     the next attempt would place a SECOND protective stop on the same held
     quantity, orphaning the first as an untracked resting stop.
+
+    A REFUSE from that re-consult is only treated as terminal when it reflects
+    a genuine conflict (wrong side, wrong price, multiple resting orders, or a
+    just-cancelled order the exchange hasn't caught up on yet). When it
+    instead means the guard's own lookup failed or couldn't be confirmed
+    (``StopPlacementDecision.unconfirmed``), this does not place on that
+    attempt but preserves the remaining retry budget — the retry loop only
+    runs because something already failed once, so the same transient
+    condition frequently breaks the re-consult's lookup too, and treating that
+    as terminal would collapse a multi-attempt budget to a single attempt
+    under exactly the conditions retry/backoff exists to survive (#1186).
     """
     delay = retry_delay
     for attempt in range(max_attempts):
+        skip_placement = False
         if attempt > 0:
             decision = guard_stop_placement(
                 exchange, symbol, side, stop_price=stop_price, exclude_order_id=exclude_order_id
             )
             if decision.check == StopPlacementCheck.REFUSE:
-                logger.critical(
-                    "Refusing to retry a stop-loss placement for %s: %s — "
-                    "skipping further attempts (fail-closed, #1112).",
-                    symbol,
-                    decision.reason,
-                )
-                _invoke_on_refuse(on_refuse, decision, symbol)
-                return None
-            if decision.check == StopPlacementCheck.ADOPT:
+                if decision.unconfirmed:
+                    # The retry loop only exists because something already
+                    # failed once -- often the same transient condition (a
+                    # timeout, a rate limit) that just broke this re-consult's
+                    # own lookup. Treating that as a terminal conflict would
+                    # collapse a 3-attempt budget to 1 attempt under exactly
+                    # the conditions the retry/backoff was built to survive
+                    # (#1186). Don't place blind, but don't give up either --
+                    # fall through to the same sleep/continue an exception
+                    # from place_stop_loss_order already gets below.
+                    logger.warning(
+                        "%s attempt %s/%s for %s: guard re-consult could not be "
+                        "confirmed (%s) — not placing this attempt, retry budget "
+                        "preserved.",
+                        retry_log_prefix,
+                        attempt + 1,
+                        max_attempts,
+                        symbol,
+                        decision.reason,
+                    )
+                    if attempt == max_attempts - 1:
+                        logger.critical(
+                            "Exhausted retry attempts for %s stop-loss placement "
+                            "without ever confirming the guard check: %s — "
+                            "skipping further attempts (fail-closed, #1112).",
+                            symbol,
+                            decision.reason,
+                        )
+                        _invoke_on_refuse(on_refuse, decision, symbol)
+                        return None
+                    skip_placement = True
+                else:
+                    logger.critical(
+                        "Refusing to retry a stop-loss placement for %s: %s — "
+                        "skipping further attempts (fail-closed, #1112).",
+                        symbol,
+                        decision.reason,
+                    )
+                    _invoke_on_refuse(on_refuse, decision, symbol)
+                    return None
+            elif decision.check == StopPlacementCheck.ADOPT:
                 _log_adoption(decision, symbol, stop_price, quantity)
                 _invoke_on_adopt(on_adopt, decision, symbol)
                 return decision.existing_order_id
 
-        try:
-            order_id = exchange.place_stop_loss_order(
-                symbol=symbol,
-                side=side,
-                quantity=quantity,
-                stop_price=stop_price,
-                side_effect_type=side_effect_type,
-            )
-            if order_id:
-                return order_id
-        except Exception as e:
-            logger.warning(
-                "%s attempt %s/%s for %s failed: %s",
-                retry_log_prefix,
-                attempt + 1,
-                max_attempts,
-                symbol,
-                e,
-            )
+        if not skip_placement:
+            try:
+                order_id = exchange.place_stop_loss_order(
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    stop_price=stop_price,
+                    side_effect_type=side_effect_type,
+                )
+                if order_id:
+                    return order_id
+            except Exception as e:
+                logger.warning(
+                    "%s attempt %s/%s for %s failed: %s",
+                    retry_log_prefix,
+                    attempt + 1,
+                    max_attempts,
+                    symbol,
+                    e,
+                )
         if attempt < max_attempts - 1:
             time.sleep(delay)
             delay *= 2
@@ -572,7 +639,12 @@ def write_unprotected_audit(
             severity=Severity.CRITICAL.value,
         )
     except Exception as e:
-        logger.error("Failed to persist unprotected-position audit: %s", e)
+        logger.error(
+            "Failed to persist unprotected-position audit for %s: %s",
+            symbol,
+            e,
+            exc_info=True,
+        )
     return detail
 
 

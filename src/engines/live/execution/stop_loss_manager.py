@@ -120,13 +120,14 @@ class LiveStopLossManager:
             refuse_reason = decision.reason
 
         # Consult the fail-closed resting-stop check BEFORE placing (#1112), with
-        # a 3-attempt exponential-backoff retry on the exchange call itself: a
-        # stale/nulled tracked id must never cause a second protective order to
-        # stack on one still resting on the exchange, and stop_price is passed so
-        # an untracked resting stop is only adopted when it is actually
-        # protecting at (approximately) the intended price -- a same-side but
-        # stale orphan at an unrelated price is not a legitimate adoption
-        # target, it's the mis-protection this check exists to catch.
+        # a DEFAULT_STOP_LOSS_MAX_RETRIES-attempt exponential-backoff retry on
+        # the exchange call itself: a stale/nulled tracked id must never cause a
+        # second protective order to stack on one still resting on the exchange,
+        # and stop_price is passed so an untracked resting stop is only adopted
+        # when it is actually protecting at (approximately) the intended price
+        # -- a same-side but stale orphan at an unrelated price is not a
+        # legitimate adoption target, it's the mis-protection this check
+        # exists to catch.
         sl_order_id = place_or_adopt_stop_loss(
             state.exchange_interface,
             symbol=symbol,
@@ -366,9 +367,10 @@ class LiveStopLossManager:
             refuse_reason = decision.reason
 
         # Consult the fail-closed resting-stop check BEFORE placing (#1112), with
-        # a 3-attempt exponential-backoff retry on the exchange call itself: the
-        # cancel above should have cleared any resting stop, but confirm rather
-        # than assume — a stale tracked id must never let a second order stack.
+        # a DEFAULT_STOP_LOSS_MAX_RETRIES-attempt exponential-backoff retry on
+        # the exchange call itself: the cancel above should have cleared any
+        # resting stop, but confirm rather than assume — a stale tracked id
+        # must never let a second order stack.
         # exclude_order_id is the id `cancel()` just cancelled (still on
         # position.stop_loss_order_id -- self-cancel suppression keeps it there
         # rather than nulling it, see cancel()'s own comment): the exchange's
@@ -550,10 +552,11 @@ class LiveStopLossManager:
             nonlocal refuse_reason
             refuse_reason = decision.reason
 
-        # Same fail-closed check as reprotect() (#1112), with a 3-attempt
-        # exponential-backoff retry on the exchange call itself, excluding
-        # the order just cancelled above — the exchange's open-orders view is
-        # not guaranteed to reflect that cancel immediately.
+        # Same fail-closed check as reprotect() (#1112), with a
+        # DEFAULT_STOP_LOSS_MAX_RETRIES-attempt exponential-backoff retry on
+        # the exchange call itself, excluding the order just cancelled above —
+        # the exchange's open-orders view is not guaranteed to reflect that
+        # cancel immediately.
         new_order_id = place_or_adopt_stop_loss(
             state.exchange_interface,
             symbol=position.symbol,

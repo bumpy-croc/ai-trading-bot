@@ -3236,6 +3236,9 @@ class TestGuardStopPlacementUnit:
         )
         assert decision.check == StopPlacementCheck.REFUSE
         assert "just_cancelled" in decision.reason
+        # Eventual-consistency lag, not a genuine conflict -- a retry loop may
+        # spend its budget waiting for the exchange's view to catch up (#1186).
+        assert decision.unconfirmed is True
 
     def test_excluded_order_does_not_block_a_genuinely_different_resting_stop(self):
         """Excluding the just-cancelled id must not make an UNRELATED resting
@@ -3505,12 +3508,14 @@ class TestPlaceOrAdoptStopLossRetry:
         # placing a second one on top of it.
         exchange.place_stop_loss_order.assert_called_once()
 
-    def test_retry_on_adopt_and_on_refuse_fire_on_a_retry_reconsult(self):
-        """The retry loop's guard re-consult must invoke the same on_adopt/
-        on_refuse callbacks the initial check does -- not just decide
-        silently -- so callers like ``move()`` still get the actual resting
-        price on a mid-retry adopt, and callers get the refuse reason for
-        their alert on a mid-retry refuse."""
+    def test_retry_on_adopt_fires_on_a_retry_reconsult(self):
+        """The retry loop's guard re-consult must invoke the same on_adopt
+        callback the initial check does -- not just decide silently -- so
+        callers like ``move()`` still get the actual resting price on a
+        mid-retry adopt. (The on_refuse half of this contract is covered
+        separately by
+        ``test_retry_reconsult_genuine_conflict_refuse_invokes_on_refuse_and_stops_retrying``.)
+        """
         from types import SimpleNamespace
 
         from src.data_providers.exchange_interface import OrderSide
@@ -3551,17 +3556,34 @@ class TestPlaceOrAdoptStopLossRetry:
         assert len(adopted) == 1
         assert adopted[0].existing_order_id == "landed-sl"
 
-    def test_retry_reconsult_refuse_invokes_on_refuse_and_stops_retrying(self):
+    def test_retry_reconsult_genuine_conflict_refuse_invokes_on_refuse_and_stops_retrying(
+        self,
+    ):
+        """A REFUSE from the retry re-consult must remain terminal when it
+        reflects a genuine conflict (``StopPlacementDecision.unconfirmed`` is
+        False), as opposed to the guard's own lookup failing/being
+        unconfirmed -- retrying will never change what's actually resting on
+        the wrong side, so the retry budget must not be spent chasing it
+        (#1186). The unconfirmed-refuse case, where the budget IS preserved,
+        is covered by
+        ``test_retry_survives_unconfirmed_guard_reconsult_and_succeeds_on_next_attempt``."""
+        from types import SimpleNamespace
+
         from src.data_providers.exchange_interface import OrderSide
         from src.engines.live.reconciliation import (
             StopPlacementDecision,
             place_or_adopt_stop_loss,
         )
 
+        wrong_side_order = SimpleNamespace(
+            order_id="wrong-side-sl", side=OrderSide.BUY, stop_price=48000.0
+        )
+
         exchange = MagicMock()
         # First guard check (PROCEED) -> attempt 1 raises. Second guard check
-        # (the retry re-consult) finds the lookup itself unconfirmed -> REFUSE.
-        exchange.get_open_orders_checked.side_effect = [[], None]
+        # (the retry re-consult) finds a resting stop on the WRONG side -- a
+        # genuine conflict, not a lookup failure -- so it must REFUSE and stop.
+        exchange.get_open_orders_checked.side_effect = [[], [wrong_side_order]]
         exchange.place_stop_loss_order.side_effect = ConnectionError("boom")
         refused: list[StopPlacementDecision] = []
 
@@ -3579,7 +3601,53 @@ class TestPlaceOrAdoptStopLossRetry:
         assert result is None
         exchange.place_stop_loss_order.assert_called_once()
         assert len(refused) == 1
-        assert refused[0].reason == "lookup unconfirmed"
+        assert refused[0].unconfirmed is False
+        assert "wrong side" in refused[0].reason
+
+    def test_retry_survives_unconfirmed_guard_reconsult_and_succeeds_on_next_attempt(self):
+        """#1186 regression: a REFUSE from the retry re-consult must NOT
+        collapse the retry budget when it's caused by the guard's own lookup
+        failing/being unconfirmed (``StopPlacementDecision.unconfirmed``),
+        rather than a genuine conflict. The retry loop only runs because
+        something already failed once -- often a transient exchange blip
+        (timeout, rate limit) -- and that SAME condition frequently also
+        breaks the re-consult's own lookup on the very next attempt. Treating
+        every re-consult REFUSE as terminal collapsed a 3-attempt budget to a
+        single attempt under exactly the conditions retry/backoff exists to
+        survive -- which, reached via ``place_protection()``, triggers an
+        unnecessary emergency-close of a position that was just opened.
+
+        Attempt 1's placement raises (transient). Attempt 2's guard
+        re-consult lookup is itself unconfirmed (same transient condition).
+        Attempt 3's guard confirms clear and placement succeeds -- proving
+        the loop preserved its third attempt instead of giving up after the
+        second."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        # Call 1: initial guard check -> PROCEED (empty).
+        # Call 2: attempt 2's re-consult -> lookup itself unconfirmed -> REFUSE.
+        # Call 3: attempt 3's re-consult -> PROCEED (the blip has cleared).
+        exchange.get_open_orders_checked.side_effect = [[], None, []]
+        exchange.place_stop_loss_order.side_effect = [
+            ConnectionError("timed out waiting for the exchange response"),
+            "sl-recovered",
+        ]
+
+        with patch("src.engines.live.reconciliation.time.sleep"):
+            result = place_or_adopt_stop_loss(
+                exchange,
+                symbol="BTCUSDT",
+                side=OrderSide.SELL,
+                quantity=0.1,
+                stop_price=48000.0,
+                max_attempts=3,
+                retry_delay=1.0,
+            )
+
+        assert result == "sl-recovered"
+        assert exchange.place_stop_loss_order.call_count == 2
 
     def test_on_adopt_exception_is_fault_isolated(self, caplog):
         """A bug in the caller's on_adopt callback must not lose the adopted
