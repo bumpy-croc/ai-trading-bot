@@ -20,6 +20,13 @@ concurrent placement for the same base asset and stack a duplicate resting
 stop (#1104/#1108/#1167). ``place_protection()`` and ``reprotect()`` are
 always invoked by a caller that already holds that lock across the whole
 entry/exit sequence, so they do not acquire it themselves.
+
+Any value read from ``position`` before ``move()`` acquires that lock (e.g.
+``stop_loss_order_id``) is only a cheap pre-check for the common no-op case —
+never a value carried into the locked section. The periodic reconciler's own
+stop-loss re-placement serialises on this same lock and mutates that same
+field, so a pre-lock snapshot can go stale by the time the lock is acquired;
+the locked body re-reads it fresh (#1179).
 """
 
 from __future__ import annotations
@@ -123,8 +130,10 @@ class LiveStopLossManager:
                 decision.reason,
             )
             return None
+        achieved_price = stop_price
         if decision.check == StopPlacementCheck.ADOPT:
             sl_order_id = decision.existing_order_id
+            achieved_price = getattr(decision.existing_order, "stop_price", None) or stop_price
             logger.warning(
                 "Found an untracked resting stop-loss %s for %s @ %s — adopting "
                 "it instead of placing a duplicate (#1112). Intended was $%.2f.",
@@ -170,6 +179,9 @@ class LiveStopLossManager:
             )
             if position.order_id is not None:
                 state.live_position_tracker.set_stop_loss_order_id(position.order_id, sl_order_id)
+                state.live_position_tracker.set_last_placed_stop_price(
+                    position.order_id, float(achieved_price)
+                )
             if state.order_tracker:
                 state.order_tracker.track_order(sl_order_id, symbol)
         return sl_order_id
@@ -383,8 +395,10 @@ class LiveStopLossManager:
                 f"Reconciler backstop engaged. MANUAL REVIEW REQUIRED."
             )
             return
+        achieved_price = float(stop_price)
         if decision.check == StopPlacementCheck.ADOPT:
             sl_order_id = decision.existing_order_id
+            achieved_price = getattr(decision.existing_order, "stop_price", None) or achieved_price
             logger.warning(
                 "Found an untracked resting stop-loss %s for %s @ %s — adopting "
                 "it instead of placing a duplicate (#1112). Intended was $%.2f.",
@@ -421,6 +435,9 @@ class LiveStopLossManager:
         if sl_order_id:
             if position.order_id is not None:
                 state.live_position_tracker.set_stop_loss_order_id(position.order_id, sl_order_id)
+                state.live_position_tracker.set_last_placed_stop_price(
+                    position.order_id, float(achieved_price)
+                )
             if state.order_tracker:
                 state.order_tracker.track_order(sl_order_id, position.symbol)
             logger.warning(
@@ -482,27 +499,48 @@ class LiveStopLossManager:
             )
             return False
 
-        # Capture the id ONCE — see cancel()'s own comment: this field is shared
-        # with the OrderTracker callback thread and must not be re-read after
-        # the cancel round-trip.
-        old_order_id = position.stop_loss_order_id
-        if not old_order_id:
+        # Cheap unlocked pre-check to skip taking the lock for the common
+        # no-op case (no resting stop at all yet). This is only an
+        # optimization: it must NOT be reused as the id to cancel/exclude
+        # once inside the critical section below. The periodic reconciler's
+        # own re-placement serialises on this same lock and can cancel and
+        # replace this exact order while move() blocks here waiting for it —
+        # a snapshot taken before the lock can go stale by the time it is
+        # acquired (#1179). ``_move_locked`` re-reads the field fresh.
+        if not position.stop_loss_order_id:
             return False
 
         from src.engines.live.reconciliation import PositionReconciler
 
         base = PositionReconciler._extract_base_asset(position.symbol)
         with state._base_asset_locks.lock_for(base):
-            return self._move_locked(state, position, new_stop_price, old_order_id)
+            return self._move_locked(state, position, new_stop_price)
 
     def _move_locked(
         self,
         state: StopLossEngineState,
         position: LivePosition,
         new_stop_price: float,
-        old_order_id: str,
     ) -> bool:
         """The cancel-guard-place body of ``move()``, run under the base-asset lock."""
+        # Re-read INSIDE the lock — not move()'s pre-lock snapshot (#1179):
+        # the periodic reconciler's Step-2 re-placement serialises on this
+        # same lock and may have cancelled and replaced this exact order
+        # while move() was blocked waiting for it. Using a stale pre-lock id
+        # as `exclude_order_id` below would let a lagging Binance
+        # open-orders view make move() ADOPT an order it (or the reconciler)
+        # just cancelled, rather than genuinely re-placing at the new price.
+        old_order_id = position.stop_loss_order_id
+        if not old_order_id:
+            logger.info(
+                "%s trailing stop ratchet found no resting stop-loss to move "
+                "once the lock was acquired (cleared concurrently, e.g. by "
+                "the periodic reconciler) — skipping this ratchet; the next "
+                "one retries.",
+                position.symbol,
+            )
+            return False
+
         if not self.position_still_held(position):
             logger.warning(
                 "%s appears no longer held while trying to move its trailing "
@@ -563,6 +601,14 @@ class LiveStopLossManager:
                 f"🚨 {position.symbol} UNPROTECTED: trailing-stop move refused "
                 f"({decision.reason}). Reconciler backstop engaged. MANUAL REVIEW REQUIRED."
             )
+            from src.engines.live.reconciliation import write_unprotected_audit
+
+            write_unprotected_audit(
+                state.db_manager,
+                state.trading_session_id,
+                position,
+                f"trailing-stop move: refused after cancel — {decision.reason}",
+            )
             return False
         if decision.check == StopPlacementCheck.ADOPT:
             new_order_id = decision.existing_order_id
@@ -615,6 +661,14 @@ class LiveStopLossManager:
                     state.live_position_tracker.set_stop_loss_price(
                         position.order_id, float(achieved_price)
                     )
+                # Unconditional (unlike set_stop_loss_price above): this is the
+                # min-trailing-stop-move floor's baseline, and it must always
+                # reflect where the exchange order actually landed, even when
+                # that equals the ratchet's own intent (#1179).
+                state.live_position_tracker.set_last_placed_stop_price(
+                    position.order_id,
+                    float(achieved_price if achieved_price is not None else new_stop_price),
+                )
             if state.order_tracker:
                 state.order_tracker.track_order(new_order_id, position.symbol)
             logger.info(

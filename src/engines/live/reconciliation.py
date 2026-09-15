@@ -3484,6 +3484,11 @@ class PeriodicReconciler:
         )
         # Shared per-base-asset exchange-mutation lock (serialises sweep vs entry/exit).
         self._lock_registry = lock_registry
+        # One-shot guard for the unlocked-fallback warning in
+        # _stop_loss_placement_lock (#1179 P2) — the fallback is legitimate
+        # for standalone/test construction but must not go unnoticed if it
+        # ever happens with a real engine, without spamming every cycle.
+        self._warned_no_stop_loss_lock_registry = False
         # Reuses the startup reconciler's P&L realization (balance + audit) so a
         # stop-loss fill detected by the periodic cycle books money identically
         # to one detected at startup. Construction is side-effect-free.
@@ -4164,7 +4169,11 @@ class PeriodicReconciler:
                         position.symbol,
                         status_desc,
                     )
-                    position.stop_loss_order_id = None
+                    # Cleared inside the placement lock below (right before
+                    # the actual re-placement attempt), not here — this field
+                    # is the same one move()'s trailing-stop ratchet reads and
+                    # writes under that lock, and a write outside its scope is
+                    # an unsynchronised race with it (#1179).
 
                     # Account for partial SL fills before re-placement.
                     # If the SL partially executed, reduce current_size
@@ -4232,6 +4241,13 @@ class PeriodicReconciler:
                                 )
                                 continue
                             with self._stop_loss_placement_lock(position.symbol):
+                                # Null and (on success) re-set INSIDE the lock:
+                                # move()'s trailing-stop ratchet serialises on
+                                # this same lock and re-reads this field fresh
+                                # once it acquires it, so both ends must see a
+                                # consistent value rather than racing an
+                                # unsynchronised write from out here (#1179).
+                                position.stop_loss_order_id = None
                                 new_sl_id = place_or_adopt_stop_loss(
                                     self.exchange,
                                     symbol=position.symbol,
@@ -4240,8 +4256,9 @@ class PeriodicReconciler:
                                     stop_price=stop_price,
                                     side_effect_type=SideEffectType.AUTO_REPAY,
                                 )
+                                if new_sl_id:
+                                    position.stop_loss_order_id = new_sl_id
                             if new_sl_id:
-                                position.stop_loss_order_id = new_sl_id
                                 logger.info(
                                     "Re-placed stop-loss for %s: %s @ %.2f " "(periodic check)",
                                     position.symbol,
@@ -4480,10 +4497,25 @@ class PeriodicReconciler:
         (#1167) — so the two can never both observe the naked post-cancel window
         and both place a replacement, stacking two resting stops on one held
         quantity (#1104/#1108). Falls back to a no-op when no registry was wired
-        (e.g. standalone/test construction), matching the orphaned-borrow sweep's
-        own graceful-degradation pattern.
+        (e.g. standalone/test construction) rather than the orphaned-borrow
+        sweep's own hard refusal, because a missing stop-loss must still get
+        protected even in that degraded configuration — but unlike the sweep,
+        that fallback is silent by default, so it logs once per instance
+        naming the consequence (#1179 P2).
         """
         if self._lock_registry is None:
+            if not self._warned_no_stop_loss_lock_registry:
+                self._warned_no_stop_loss_lock_registry = True
+                logger.warning(
+                    "PeriodicReconciler has no lock_registry wired — stop-loss "
+                    "re-placement will run UNLOCKED and can race "
+                    "LiveStopLossManager.move()'s trailing-stop ratchet, "
+                    "risking a duplicate resting stop on the same held "
+                    "quantity (#1104/#1108/#1179). Expected only for "
+                    "standalone/test construction; a live engine must wire "
+                    "the same BaseAssetLockRegistry it gives the stop-loss "
+                    "manager."
+                )
             return contextlib.nullcontext()
         base_asset = PositionReconciler._extract_base_asset(symbol)
         return self._lock_registry.lock_for(base_asset)
@@ -4607,8 +4639,13 @@ class PeriodicReconciler:
                     stop_price=stop_price,
                     side_effect_type=SideEffectType.AUTO_REPAY,
                 )
+                # Set INSIDE the lock — see the Step-2 re-placement's own
+                # comment: move()'s trailing-stop ratchet serialises on this
+                # same lock and re-reads this field fresh once it acquires
+                # it (#1179).
+                if new_sl_id:
+                    position.stop_loss_order_id = new_sl_id
             if new_sl_id:
-                position.stop_loss_order_id = new_sl_id
                 logger.info(
                     "Placed missing stop-loss for %s: %s @ %.2f (periodic check)",
                     position.symbol,

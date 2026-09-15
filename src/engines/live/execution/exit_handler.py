@@ -72,21 +72,33 @@ ZERO_VALUE = 0.0
 
 
 def _exceeds_min_trailing_stop_move(
-    new_stop_price: float, previous_stop_price: float | None
+    new_stop_price: float, last_placed_stop_price: float | None
 ) -> bool:
     """Whether a ratchet is large enough to justify moving the exchange stop (#1167).
 
     Without a floor, ``update_trailing_stops`` would do a real cancel+place
     round-trip on every loop iteration once a position is past activation, even
     for sub-tick price noise — needlessly repeating the naked cancel-to-place
-    window every cycle. A missing/non-positive ``previous_stop_price`` (no
-    resting order placed yet) always passes; that case is a first placement,
-    not a move, and ``move()`` itself no-ops when there is nothing to cancel.
+    window every cycle.
+
+    The baseline MUST be the price the resting exchange order actually sits
+    at (``LivePosition.last_placed_stop_price``), not the tracked
+    ``position.stop_loss``: the ratchet advances ``stop_loss`` every cycle
+    regardless of whether this gate passes, so comparing against it would
+    reset each check against an already-advanced value — a monotonic run of
+    sub-threshold ratchets would then never accumulate past the floor, and
+    ``stop_loss`` would drift arbitrarily far from what the exchange will
+    actually trigger at, silently, forever (#1179).
+
+    A missing/non-positive baseline (no resting order placed yet, or an
+    in-memory reset after a restart) always passes — that case is a first
+    placement/resync, not a move, and ``move()`` itself no-ops when there is
+    nothing to cancel.
     """
-    if not previous_stop_price or previous_stop_price <= 0:
+    if not last_placed_stop_price or last_placed_stop_price <= 0:
         return True
-    min_delta = abs(previous_stop_price) * MIN_TRAILING_STOP_MOVE_FRACTION
-    return abs(new_stop_price - previous_stop_price) >= min_delta
+    min_delta = abs(last_placed_stop_price) * MIN_TRAILING_STOP_MOVE_FRACTION
+    return abs(new_stop_price - last_placed_stop_price) >= min_delta
 
 
 @dataclass
@@ -882,7 +894,9 @@ class LiveExitHandler:
                 and position.stop_loss is not None
                 and position.stop_loss != previous_stop_loss
                 and self._stop_loss_manager is not None
-                and _exceeds_min_trailing_stop_move(position.stop_loss, previous_stop_loss)
+                and _exceeds_min_trailing_stop_move(
+                    position.stop_loss, position.last_placed_stop_price
+                )
             ):
                 try:
                     self._stop_loss_manager.move(position, float(position.stop_loss))

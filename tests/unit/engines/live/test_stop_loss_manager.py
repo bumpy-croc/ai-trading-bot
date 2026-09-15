@@ -7,6 +7,7 @@ engine-state reads, placement retry/registration, and offline-fill detection.
 """
 
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -115,6 +116,11 @@ class TestPlaceProtection:
         state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
             "entry-1", "sl-99"
         )
+        # #1179: the trailing-stop min-move floor's baseline must be seeded
+        # at initial placement, not just on a later move().
+        state.live_position_tracker.set_last_placed_stop_price.assert_called_once_with(
+            "entry-1", 48000.0
+        )
         state.order_tracker.track_order.assert_called_once_with("sl-99", "BTCUSDT")
 
     def test_short_position_uses_buy_side(self):
@@ -202,6 +208,11 @@ class TestPlaceProtectionRestingStopGuard1112:
         state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
             "entry-1", "already_resting"
         )
+        # #1179: adopted price (the resting order's actual stop_price), not
+        # just the intended one, seeds the min-move floor's baseline.
+        state.live_position_tracker.set_last_placed_stop_price.assert_called_once_with(
+            "entry-1", 48000.0
+        )
         state.order_tracker.track_order.assert_called_once_with("already_resting", "BTCUSDT")
 
     def test_refuses_when_resting_order_is_wrong_side(self):
@@ -272,6 +283,12 @@ class TestMove:
         )
         state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
             "entry-1", "sl-new"
+        )
+        # #1179: a real move must always refresh the min-move floor's
+        # baseline to the achieved price, so the next ratchet's cumulative
+        # drift is measured from here, not from the pre-move tracked value.
+        state.live_position_tracker.set_last_placed_stop_price.assert_called_once_with(
+            "entry-1", 49000.0
         )
         state.order_tracker.track_order.assert_called_once_with("sl-new", "BTCUSDT")
 
@@ -344,6 +361,13 @@ class TestMove:
         assert moved is False
         exchange.place_stop_loss_order.assert_not_called()
         send_alert.assert_called_once()
+        # #1179 P2: refused-after-cancel must write the same persisted
+        # CRITICAL audit row as the sibling cancel-succeeded/re-place-failed
+        # path below -- both leave the position genuinely UNPROTECTED.
+        state.db_manager.log_audit_event.assert_called_once()
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert audit_call["severity"] == "CRITICAL"
+        assert audit_call["field"] == "stop_loss_order_id"
 
     @patch("src.engines.live.execution.stop_loss_manager.time.sleep")
     def test_escalates_when_replacement_fails_after_cancel(self, mock_sleep):
@@ -468,6 +492,12 @@ class TestMoveAdoptBranch:
         # the engine's own exit check trusts a price the exchange will never
         # trigger at, the exact #1167 divergence in a different guise.
         state.live_position_tracker.set_stop_loss_price.assert_called_once_with("entry-1", 48990.0)
+        # #1179: the min-move floor's baseline is the ACHIEVED price too,
+        # unconditionally (unlike set_stop_loss_price, which only fires when
+        # it differs from the intent).
+        state.live_position_tracker.set_last_placed_stop_price.assert_called_once_with(
+            "entry-1", 48990.0
+        )
 
     def test_adopting_at_exactly_the_intended_price_does_not_rewrite_it(self):
         exchange = TestMove._held_exchange()
@@ -481,6 +511,101 @@ class TestMoveAdoptBranch:
 
         assert moved is True
         state.live_position_tracker.set_stop_loss_price.assert_not_called()
+        # #1179: still set unconditionally, even though it equals the intent.
+        state.live_position_tracker.set_last_placed_stop_price.assert_called_once_with(
+            "entry-1", 49000.0
+        )
+
+
+class TestMoveExcludesTheOrderItActuallyCancelled:
+    """#1179 P1: ``move()`` must use the order id it actually cancels — read
+    freshly INSIDE the base-asset lock — as ``exclude_order_id``, never the
+    snapshot taken before the lock was acquired.
+
+    The periodic reconciler's own SL re-placement serialises on this same
+    lock (#1167 P0) and can swap the tracked order id between move()'s
+    pre-lock snapshot and its lock acquisition. If move() then excludes the
+    STALE id instead of the one it just cancelled, a lagging Binance
+    open-orders view showing that just-cancelled order as the ONLY resting
+    stop makes ``guard_stop_placement`` classify it as an untracked,
+    same-side, in-tolerance resting stop and ADOPT it — tracking the position
+    as protected by an order that is already dead — instead of correctly
+    recognising (via the exclusion) that the only resting order IS the one
+    just cancelled and REFUSING (fail-closed) pending the reconciler.
+    """
+
+    @staticmethod
+    def _start_reconciler_and_mover(position, registry, exchange, manager):
+        """Runs move() concurrently with a reconciler stand-in that swaps the
+        tracked order id ("sl-old" -> "sl-mid") while move() blocks waiting
+        for the SAME base-asset lock the reconciler holds -- mirroring the
+        fixed reconciliation.py Step 2 (its own null+replace now happens
+        inside this same lock, #1179). Returns move()'s result.
+        """
+        reconciler_holding = threading.Event()
+        release_reconciler = threading.Event()
+
+        def reconciler_replace():
+            with registry.lock_for("BTC"):
+                reconciler_holding.set()
+                release_reconciler.wait(timeout=2)
+                position.stop_loss_order_id = "sl-mid"
+
+        reconciler_thread = threading.Thread(target=reconciler_replace)
+        reconciler_thread.start()
+        assert reconciler_holding.wait(timeout=2), "reconciler stand-in never took the lock"
+
+        mover_result: dict[str, bool] = {}
+
+        def run_move():
+            # move()'s pre-lock snapshot of position.stop_loss_order_id reads
+            # "sl-old" here (the reconciler thread hasn't swapped it yet --
+            # it's still waiting on release_reconciler) and then blocks
+            # trying to acquire the lock the reconciler is holding.
+            mover_result["value"] = manager.move(position, 49000.0)
+
+        mover_thread = threading.Thread(target=run_move)
+        mover_thread.start()
+        # Give move() a moment to take its pre-lock snapshot and start
+        # blocking on the lock before the reconciler swaps the id and
+        # releases it. Best-effort ordering only -- the assertions below are
+        # what actually prove correctness, not this sleep.
+        time.sleep(0.05)
+        release_reconciler.set()
+        reconciler_thread.join(timeout=2)
+        mover_thread.join(timeout=2)
+        return mover_result.get("value")
+
+    def test_move_excludes_the_order_it_actually_cancelled(self):
+        registry = BaseAssetLockRegistry()
+        exchange = TestMove._held_exchange()
+        # Binance's open-orders view lags: it still lists the order move() is
+        # about to cancel (sl-mid) as resting, within ADOPT tolerance of the
+        # new ratchet price -- and it is the ONLY resting order once
+        # correctly excluded.
+        exchange.get_open_orders_checked.return_value = [
+            SimpleNamespace(order_id="sl-mid", side=OrderSide.SELL, stop_price=49000.0)
+        ]
+        send_alert = Mock()
+        position = make_position(stop_loss_order_id="sl-old")
+        state = make_state(exchange_interface=exchange, _base_asset_locks=registry)
+        manager = LiveStopLossManager(engine_state=state, send_alert=send_alert)
+
+        moved = self._start_reconciler_and_mover(position, registry, exchange, manager)
+
+        # move() must cancel the CURRENT order (sl-mid, set by the
+        # reconciler while move() waited), not the stale pre-lock snapshot.
+        exchange.cancel_order.assert_called_once_with("sl-mid", "BTCUSDT")
+        # With the correct fresh exclude_order_id ("sl-mid"), the guard sees
+        # the only resting order IS the one just cancelled and fails closed
+        # (REFUSE) rather than resurrecting it -- move() must NOT succeed...
+        assert moved is False
+        # ...and, above all, must NEVER track the position as protected by
+        # the order it (or the reconciler) just cancelled. This is the
+        # concrete failure mode: silently adopting a dead order.
+        state.live_position_tracker.set_stop_loss_order_id.assert_not_called()
+        exchange.place_stop_loss_order.assert_not_called()
+        send_alert.assert_called_once()
 
 
 class TestCheckFilled:

@@ -2498,6 +2498,156 @@ class TestPeriodicReconcilerStopLossPlacementLock:
         assert pos.stop_loss_order_id == "new_sl_unlocked"
 
 
+class TestPeriodicReconcilerStopLossIdMutationInsideLock:
+    """#1179 P1: the reconciler must mutate ``stop_loss_order_id`` (both the
+    None reset before placement and the new-id set after it) INSIDE the same
+    lock scope it acquires for placement — not before acquiring it or after
+    releasing it. ``LiveStopLossManager.move()``'s trailing-stop ratchet
+    serialises on this same lock and re-reads this field fresh the instant it
+    acquires the lock; a write outside the lock's scope races that re-read
+    regardless of how unlikely a given run is to land in the exact gap, so
+    this asserts the CODE SHAPE (state observed at the moment the lock
+    releases) rather than relying on thread-scheduling luck."""
+
+    def test_step2_replacement_id_mutation_happens_before_lock_release(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_scope_1",
+            exchange_order_id="entry_scope_1",
+            db_position_id=70,
+            quantity=0.5,
+        )
+        pos.stop_loss = 45000.0
+        mock_position_tracker.positions = {"entry_scope_1": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(
+            order_id="sl_scope_1", status=ExOS.CANCELLED, filled_quantity=0.0
+        )
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.get_open_orders.return_value = []
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_scope"
+
+        registry = BaseAssetLockRegistry()
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            lock_registry=registry,
+        )
+        real_lock = registry.lock_for("BTC")
+        observed_at_release: list[str | None] = []
+
+        class _ObservingLock:
+            def __enter__(self):
+                real_lock.acquire()
+                return self
+
+            def __exit__(self, *exc_info):
+                observed_at_release.append(pos.stop_loss_order_id)
+                real_lock.release()
+                return False
+
+        with patch.object(reconciler, "_stop_loss_placement_lock", return_value=_ObservingLock()):
+            reconciler._reconcile_cycle()
+
+        assert observed_at_release == ["new_sl_scope"], (
+            "stop_loss_order_id must already be the NEW id before the "
+            "placement lock releases -- a post-release assignment races "
+            "LiveStopLossManager.move()'s fresh re-read once it acquires "
+            "this same lock (#1179)"
+        )
+        assert pos.stop_loss_order_id == "new_sl_scope"
+
+    def test_missing_sl_placement_id_set_happens_before_lock_release(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id=None,
+            exchange_order_id="entry_scope_2",
+            db_position_id=71,
+            quantity=0.5,
+        )
+        pos.stop_loss = 45000.0
+        mock_position_tracker.positions = {"entry_scope_2": pos}
+        mock_exchange.get_order.return_value = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0
+        )
+        mock_exchange.get_open_orders.return_value = []
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_missing_scope"
+
+        registry = BaseAssetLockRegistry()
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            lock_registry=registry,
+        )
+        real_lock = registry.lock_for("BTC")
+        observed_at_release: list[str | None] = []
+
+        class _ObservingLock:
+            def __enter__(self):
+                real_lock.acquire()
+                return self
+
+            def __exit__(self, *exc_info):
+                observed_at_release.append(pos.stop_loss_order_id)
+                real_lock.release()
+                return False
+
+        with patch.object(reconciler, "_stop_loss_placement_lock", return_value=_ObservingLock()):
+            reconciler._reconcile_cycle()
+
+        assert observed_at_release == ["new_sl_missing_scope"]
+        assert pos.stop_loss_order_id == "new_sl_missing_scope"
+
+    def test_missing_lock_registry_logs_a_one_time_warning(
+        self, mock_exchange, mock_position_tracker, mock_db, caplog
+    ):
+        """#1179 P2: the unlocked fallback must not be silent — unlike the
+        orphaned-borrow sweep's hard refusal, stop-loss placement must still
+        proceed without a registry (a missing SL must still get protected),
+        but the degraded, race-prone configuration must be logged."""
+        import logging
+
+        pos = MockPosition(
+            stop_loss_order_id=None,
+            exchange_order_id="entry_scope_3",
+            db_position_id=72,
+            quantity=0.5,
+        )
+        pos.stop_loss = 45000.0
+        mock_position_tracker.positions = {"entry_scope_3": pos}
+        mock_exchange.get_order.return_value = MockExchangeOrder(status=None, average_price=50000.0)
+        mock_exchange.get_open_orders.return_value = []
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_unlocked_warn"
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            # lock_registry omitted entirely -- degraded, unlocked fallback.
+        )
+
+        with caplog.at_level(logging.WARNING, logger="src.engines.live.reconciliation"):
+            reconciler._reconcile_cycle()
+            reconciler._reconcile_cycle()
+
+        warnings = [r for r in caplog.records if "UNLOCKED" in r.message]
+        assert len(warnings) == 1, (
+            "the no-registry warning must fire once per instance, not once " "per cycle/placement"
+        )
+
+
 # ---------- Partial SL Fill Quantity Calculation Tests ----------
 
 
