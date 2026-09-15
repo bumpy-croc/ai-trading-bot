@@ -6,6 +6,7 @@ discrepancy handling, close-only mode, and audit events.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, call, create_autospec, patch
@@ -16,6 +17,7 @@ from src.data_providers.exchange_interface import OrderLookupError
 from src.database.models import EventType
 from src.engines.live.reconciliation import (
     AuditEvent,
+    BaseAssetLockRegistry,
     PeriodicReconciler,
     PositionReconciler,
     ReconciliationResult,
@@ -2386,6 +2388,114 @@ class TestPeriodicReconcilerSLVerification:
 
         # Only one get_order call (for entry), no SL check
         assert mock_exchange.get_order.call_count == 1
+
+
+class TestPeriodicReconcilerStopLossPlacementLock:
+    """#1167 P0: the periodic reconciler's own SL re-placement must serialise on
+    the same per-base-asset lock as LiveStopLossManager.move()'s trailing-stop
+    ratchet — otherwise a ratchet mid cancel-guard-place and a reconciliation
+    cycle can both observe the naked post-cancel window and both place a
+    replacement, stacking two resting stops on one held quantity
+    (#1104/#1108 class)."""
+
+    def test_step2_replacement_holds_the_base_asset_lock(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_locked_1",
+            exchange_order_id="entry_locked_1",
+            db_position_id=60,
+            quantity=0.5,
+        )
+        pos.stop_loss = 45000.0
+        mock_position_tracker.positions = {"entry_locked_1": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(
+            order_id="sl_locked_1", status=ExOS.CANCELLED, filled_quantity=0.0
+        )
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.get_open_orders.return_value = []
+
+        entered_place = threading.Event()
+        release_place = threading.Event()
+
+        def blocking_place(**kwargs):
+            entered_place.set()
+            release_place.wait(timeout=2)
+            return "new_sl_locked"
+
+        mock_exchange.place_stop_loss_order.side_effect = blocking_place
+
+        registry = BaseAssetLockRegistry()
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            lock_registry=registry,
+        )
+
+        cycle_thread = threading.Thread(target=reconciler._reconcile_cycle)
+        cycle_thread.start()
+        try:
+            assert entered_place.wait(timeout=2), "_reconcile_cycle never reached placement"
+
+            # While the cycle is inside its guarded placement call, a second
+            # thread (standing in for LiveStopLossManager.move()'s own
+            # cancel-guard-place) must NOT be able to acquire the same
+            # base-asset lock.
+            lock = registry.lock_for("BTC")
+            acquired_by_other_thread = lock.acquire(blocking=False)
+            try:
+                assert not acquired_by_other_thread, (
+                    "base-asset lock was not held during the periodic "
+                    "reconciler's SL re-placement — a concurrent trailing-stop "
+                    "move() could race it and stack a duplicate stop"
+                )
+            finally:
+                if acquired_by_other_thread:
+                    lock.release()
+        finally:
+            release_place.set()
+            cycle_thread.join(timeout=2)
+
+        # Released once the cycle completes.
+        lock = registry.lock_for("BTC")
+        assert lock.acquire(blocking=False)
+        lock.release()
+        assert pos.stop_loss_order_id == "new_sl_locked"
+
+    def test_missing_registry_falls_back_to_unlocked_placement(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Standalone/test construction without a lock_registry must still work
+        (graceful degradation), matching the orphaned-borrow sweep's own
+        pattern for the same parameter."""
+        pos = MockPosition(
+            stop_loss_order_id=None,
+            exchange_order_id="entry_locked_2",
+            db_position_id=61,
+            quantity=0.5,
+        )
+        pos.stop_loss = 45000.0
+        mock_position_tracker.positions = {"entry_locked_2": pos}
+        mock_exchange.get_order.return_value = MockExchangeOrder(status=None, average_price=50000.0)
+        mock_exchange.get_open_orders.return_value = []
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_unlocked"
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            # lock_registry omitted entirely
+        )
+        reconciler._reconcile_cycle()
+
+        assert pos.stop_loss_order_id == "new_sl_unlocked"
 
 
 # ---------- Partial SL Fill Quantity Calculation Tests ----------

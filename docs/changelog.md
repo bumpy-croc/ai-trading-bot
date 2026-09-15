@@ -69,10 +69,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   places a new one at the ratcheted price through the same guarded placement path as
   `reprotect()` (#1112's fail-closed resting-stop check, with `exclude_order_id` so the
   just-cancelled order is never re-adopted); `update_trailing_stops` calls it only when the
-  tracked stop price itself changed, not on activation/breakeven-flag-only updates. The
-  reconciler's stop-loss audit still checks order status/fill only, not price — tracked
-  separately in #1172 as defense-in-depth for `move()`'s own conservative failure path (a
-  failed cancel leaves the old order resting rather than risk stacking a duplicate).
+  tracked stop price itself changed AND the move clears a `MIN_TRAILING_STOP_MOVE_FRACTION`
+  (0.05%) floor, not on activation/breakeven-flag-only updates or sub-tick noise. `move()`'s
+  cancel-guard-place round-trip serialises on the same per-base-asset lock
+  (`state._base_asset_locks`) as `execute_entry`/`execute_exit` and the periodic reconciler's
+  own SL re-placement — without it, a ratchet mid cancel-guard-place could race a
+  reconciliation cycle and both observe the naked post-cancel window, stacking two resting
+  stops on one held quantity (the #1104/#1108 class); the reconciler's own re-placement paths
+  now take the same lock. Cancel-succeeded/re-place-failed also writes a persisted CRITICAL
+  audit row (`write_unprotected_audit`, shared with the reconciler's `_audit_unprotected`),
+  not just a log line + alert. The reconciler's stop-loss audit still checks order status/fill
+  only, not price — tracked separately in #1172 as defense-in-depth for `move()`'s own
+  conservative failure path (a failed cancel leaves the old order resting rather than risk
+  stacking a duplicate).
 - **`exit_reason` was free text with substring-matched control flow** (#1115). The backtest
   engine chose an exit's order type with `if "Stop loss" in exit_reason:`, so the `stop_loss`
   and `stop_loss_filled_offline` spellings silently skipped it and exited as market orders with

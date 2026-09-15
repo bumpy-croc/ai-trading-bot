@@ -7,19 +7,28 @@ startup reconciliation fallback — so ``LiveTradingEngine`` orchestrates these
 operations through one handler instead of talking to the exchange directly
 (#486).
 
-Thread-safety / lock ownership: this manager holds no locks and owns no
-mutable state of its own. It reads ``enable_live_trading``,
-``exchange_interface`` and ``order_tracker`` off the engine at call time
-(tests and the engine's own startup mutate these after construction), and all
-position mutations go through ``LivePositionTracker``'s internal lock.
+Thread-safety / lock ownership: this manager owns no mutable state of its
+own and reads ``enable_live_trading``, ``exchange_interface`` and
+``order_tracker`` off the engine at call time (tests and the engine's own
+startup mutate these after construction); all position mutations go through
+``LivePositionTracker``'s internal lock. The one exception is ``move()``:
+its cancel-then-place round-trip mutates exchange order state for a base
+asset, so — like ``execute_entry``/``execute_exit`` and the periodic
+reconciler's own re-placement — it serialises on
+``state._base_asset_locks.lock_for(base_asset)`` so it can never race a
+concurrent placement for the same base asset and stack a duplicate resting
+stop (#1104/#1108/#1167). ``place_protection()`` and ``reprotect()`` are
+always invoked by a caller that already holds that lock across the whole
+entry/exit sequence, so they do not acquire it themselves.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections.abc import Callable, Mapping
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from src.config.constants import BORROW_DUST_EPSILON
 from src.data_providers.exchange_interface import OrderSide, SideEffectType
@@ -33,6 +42,10 @@ from src.engines.live.execution.position_tracker import (
 from src.engines.live.order_tracker import OrderTracker
 from src.engines.shared.models import PositionSide
 from src.infrastructure.logging.events import log_order_event
+
+if TYPE_CHECKING:
+    from src.database.manager import DatabaseManager
+    from src.engines.live.reconciliation import BaseAssetLockRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +62,9 @@ class StopLossEngineState(Protocol):
     exchange_interface: Any
     order_tracker: OrderTracker | None
     live_position_tracker: LivePositionTracker
+    db_manager: DatabaseManager
+    trading_session_id: int | None
+    _base_asset_locks: BaseAssetLockRegistry
 
 
 class LiveStopLossManager:
@@ -438,18 +454,32 @@ class LiveStopLossManager:
         ``new_stop_price`` via the same guarded placement path as
         ``reprotect`` (#1112).
 
-        No-ops (returns False) when live trading is disabled, there is no
-        resting stop to move yet (protection not placed — the next placement
-        attempt already picks up the current ``position.stop_loss``), or the
-        position is no longer confirmed held. A failed cancel leaves the old
-        order in place rather than risk stacking a duplicate on one that may
-        still be resting (the next ratchet, or the periodic reconciler,
-        retries); a failed re-placement after a successful cancel escalates
-        to CRITICAL/alert exactly like ``reprotect`` — the periodic
-        reconciler is the backstop in both cases.
+        No-ops (returns False) when live trading is disabled, ``new_stop_price``
+        is not a valid price, there is no resting stop to move yet (protection
+        not placed — the next placement attempt already picks up the current
+        ``position.stop_loss``), or the position is no longer confirmed held.
+        A failed cancel leaves the old order in place rather than risk
+        stacking a duplicate on one that may still be resting (the next
+        ratchet, or the periodic reconciler, retries); a failed re-placement
+        after a successful cancel escalates to CRITICAL/alert/audit exactly
+        like ``reprotect`` — the periodic reconciler is the backstop in both
+        cases.
+
+        The whole cancel-guard-place sequence serialises on the position's
+        base-asset lock (see the class docstring) so it can never race the
+        periodic reconciler's own re-placement for the same base asset.
         """
         state = self._state
         if not (state.enable_live_trading and state.exchange_interface):
+            return False
+
+        if not math.isfinite(new_stop_price) or new_stop_price <= 0:
+            logger.warning(
+                "%s trailing stop ratchet produced an invalid price %s — not "
+                "touching the exchange.",
+                position.symbol,
+                new_stop_price,
+            )
             return False
 
         # Capture the id ONCE — see cancel()'s own comment: this field is shared
@@ -459,6 +489,20 @@ class LiveStopLossManager:
         if not old_order_id:
             return False
 
+        from src.engines.live.reconciliation import PositionReconciler
+
+        base = PositionReconciler._extract_base_asset(position.symbol)
+        with state._base_asset_locks.lock_for(base):
+            return self._move_locked(state, position, new_stop_price, old_order_id)
+
+    def _move_locked(
+        self,
+        state: StopLossEngineState,
+        position: LivePosition,
+        new_stop_price: float,
+        old_order_id: str,
+    ) -> bool:
+        """The cancel-guard-place body of ``move()``, run under the base-asset lock."""
         if not self.position_still_held(position):
             logger.warning(
                 "%s appears no longer held while trying to move its trailing "
@@ -482,10 +526,11 @@ class LiveStopLossManager:
         if not self.cancel(position):
             logger.warning(
                 "Could not confirm cancel of stop-loss %s for %s while moving "
-                "the trailing stop to $%.2f — the tracked stop_loss has "
-                "already advanced but the resting exchange order has not; "
-                "leaving it at its old price rather than risk a duplicate. "
-                "Will retry on the next ratchet.",
+                "the trailing stop to $%.2f — it may still be resting (leaving "
+                "it in place rather than risk a duplicate; will retry on the "
+                "next ratchet), or a prior pass may have already cancelled and "
+                "failed to re-place it, in which case the position is naked "
+                "pending the periodic reconciler.",
                 old_order_id,
                 position.symbol,
                 new_stop_price,
@@ -521,17 +566,25 @@ class LiveStopLossManager:
             return False
         if decision.check == StopPlacementCheck.ADOPT:
             new_order_id = decision.existing_order_id
+            # The adopted order is whatever price/qty is actually resting on the
+            # exchange, which guard_stop_placement only guarantees is within
+            # _ADOPT_PRICE_TOLERANCE_FRACTION of new_stop_price -- not equal to
+            # it. Track the ACHIEVED price below, not the ratchet's intent, so
+            # position.stop_loss (which the engine's own exit check trusts)
+            # never diverges from what the exchange will actually trigger at.
+            achieved_price = getattr(decision.existing_order, "stop_price", None)
             logger.warning(
                 "Found an untracked resting stop-loss %s for %s @ %s — "
                 "adopting it instead of placing a duplicate (#1112). "
                 "Intended was $%.2f.",
                 new_order_id,
                 position.symbol,
-                getattr(decision.existing_order, "stop_price", None),
+                achieved_price,
                 new_stop_price,
             )
         else:
             new_order_id = None
+            achieved_price = new_stop_price
             retry_delay = 1.0
             for attempt in range(3):
                 try:
@@ -558,6 +611,10 @@ class LiveStopLossManager:
         if new_order_id:
             if position.order_id is not None:
                 state.live_position_tracker.set_stop_loss_order_id(position.order_id, new_order_id)
+                if achieved_price is not None and achieved_price != new_stop_price:
+                    state.live_position_tracker.set_stop_loss_price(
+                        position.order_id, float(achieved_price)
+                    )
             if state.order_tracker:
                 state.order_tracker.track_order(new_order_id, position.symbol)
             logger.info(
@@ -565,7 +622,7 @@ class LiveStopLossManager:
                 position.symbol,
                 old_order_id,
                 new_order_id,
-                new_stop_price,
+                achieved_price if achieved_price is not None else new_stop_price,
             )
             return True
 
@@ -579,6 +636,14 @@ class LiveStopLossManager:
         self._send_alert(
             f"🚨 {position.symbol} UNPROTECTED: trailing-stop cancel succeeded "
             f"but re-placement at the new price failed. Reconciler backstop engaged."
+        )
+        from src.engines.live.reconciliation import write_unprotected_audit
+
+        write_unprotected_audit(
+            state.db_manager,
+            state.trading_session_id,
+            position,
+            "trailing-stop move: cancel succeeded but re-placement failed",
         )
         return False
 

@@ -13,19 +13,23 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, patch
 
 import pandas as pd
 import pytest
 
 from src.data_providers.exchange_interface import OrderSide
-from src.engines.live.execution.exit_handler import LiveExitHandler
+from src.engines.live.execution.exit_handler import (
+    LiveExitHandler,
+    _exceeds_min_trailing_stop_move,
+)
 from src.engines.live.execution.position_tracker import (
     LivePosition,
     LivePositionTracker,
     PositionSide,
 )
 from src.engines.live.execution.stop_loss_manager import LiveStopLossManager
+from src.engines.live.reconciliation import BaseAssetLockRegistry
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.fill_policy import default_fill_policy
 from src.position_management.trailing_stops import TrailingStopPolicy
@@ -90,6 +94,9 @@ def _build_exit_handler(
             exchange_interface=exchange,
             order_tracker=Mock(),
             live_position_tracker=position_tracker,
+            db_manager=Mock(),
+            trading_session_id=1,
+            _base_asset_locks=BaseAssetLockRegistry(),
         )
         stop_loss_manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
         exit_handler.bind_stop_loss_manager(stop_loss_manager)
@@ -134,3 +141,61 @@ class TestTrailingStopRatchetMovesExchangeOrder:
         exchange.cancel_order.assert_not_called()
         exchange.place_stop_loss_order.assert_not_called()
         assert position_tracker.get_position("entry-1").stop_loss == pytest.approx(108.9)
+
+
+class TestMinTrailingStopMoveThreshold:
+    """#1167 P1: a sub-threshold ratchet must not trigger a real cancel+place
+    round-trip against the exchange — without a floor, every loop iteration
+    past activation would touch the exchange for sub-tick price noise."""
+
+    def test_sub_threshold_ratchet_does_not_touch_the_exchange(self):
+        exchange = _spot_exchange()
+        exit_handler, position_tracker = _build_exit_handler(exchange)
+        position_tracker.open_position(_long_position())
+
+        with patch(
+            "src.engines.live.execution.exit_handler._exceeds_min_trailing_stop_move",
+            return_value=False,
+        ):
+            exit_handler.update_trailing_stops(_candles(), current_index=1, current_price=110.0)
+
+        # The in-memory/DB ratchet still applies (that part is free)...
+        assert position_tracker.get_position("entry-1").stop_loss == pytest.approx(108.9)
+        # ...but the exchange-mutating move() is gated out entirely.
+        exchange.cancel_order.assert_not_called()
+        exchange.place_stop_loss_order.assert_not_called()
+
+    def test_threshold_gate_is_consulted_with_old_and_new_prices(self):
+        exchange = _spot_exchange()
+        exit_handler, position_tracker = _build_exit_handler(exchange)
+        position_tracker.open_position(_long_position())
+
+        with patch(
+            "src.engines.live.execution.exit_handler._exceeds_min_trailing_stop_move",
+            return_value=True,
+        ) as gate:
+            exit_handler.update_trailing_stops(_candles(), current_index=1, current_price=110.0)
+
+        gate.assert_called_once_with(pytest.approx(108.9), pytest.approx(95.0))
+        exchange.cancel_order.assert_called_once()
+
+
+class TestExceedsMinTrailingStopMove:
+    """Direct unit coverage of the gate function itself."""
+
+    def test_sub_threshold_delta_is_rejected(self):
+        # threshold fraction is 0.0005 -> min_delta = 100.0 * 0.0005 = 0.05
+        assert _exceeds_min_trailing_stop_move(100.03, 100.0) is False
+
+    def test_at_or_above_threshold_delta_is_accepted(self):
+        # threshold fraction is 0.0005 -> min_delta = 100.0 * 0.0005 = 0.05;
+        # use a value safely clear of that boundary to avoid float rounding.
+        assert _exceeds_min_trailing_stop_move(100.06, 100.0) is True
+
+    def test_above_threshold_delta_is_accepted(self):
+        assert _exceeds_min_trailing_stop_move(101.0, 100.0) is True
+
+    def test_missing_or_non_positive_previous_price_always_qualifies(self):
+        assert _exceeds_min_trailing_stop_move(100.0, None) is True
+        assert _exceeds_min_trailing_stop_move(100.0, 0.0) is True
+        assert _exceeds_min_trailing_stop_move(100.0, -5.0) is True

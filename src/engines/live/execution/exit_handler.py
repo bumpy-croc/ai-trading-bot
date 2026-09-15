@@ -19,6 +19,7 @@ from src.config.constants import (
     DEFAULT_MAX_FILLED_PRICE_DEVIATION,
     DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE,
     DEFAULT_MAX_POSITION_SIZE,
+    MIN_TRAILING_STOP_MOVE_FRACTION,
 )
 from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.live.execution.entry_pause import EntryPauseGate
@@ -68,6 +69,24 @@ logger = logging.getLogger(__name__)
 # Use centralized constant for partial exits limit (defense-in-depth against malformed policies)
 MAX_PARTIAL_EXITS_PER_CYCLE = DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE
 ZERO_VALUE = 0.0
+
+
+def _exceeds_min_trailing_stop_move(
+    new_stop_price: float, previous_stop_price: float | None
+) -> bool:
+    """Whether a ratchet is large enough to justify moving the exchange stop (#1167).
+
+    Without a floor, ``update_trailing_stops`` would do a real cancel+place
+    round-trip on every loop iteration once a position is past activation, even
+    for sub-tick price noise — needlessly repeating the naked cancel-to-place
+    window every cycle. A missing/non-positive ``previous_stop_price`` (no
+    resting order placed yet) always passes; that case is a first placement,
+    not a move, and ``move()`` itself no-ops when there is nothing to cancel.
+    """
+    if not previous_stop_price or previous_stop_price <= 0:
+        return True
+    min_delta = abs(previous_stop_price) * MIN_TRAILING_STOP_MOVE_FRACTION
+    return abs(new_stop_price - previous_stop_price) >= min_delta
 
 
 @dataclass
@@ -863,6 +882,7 @@ class LiveExitHandler:
                 and position.stop_loss is not None
                 and position.stop_loss != previous_stop_loss
                 and self._stop_loss_manager is not None
+                and _exceeds_min_trailing_stop_move(position.stop_loss, previous_stop_loss)
             ):
                 try:
                     self._stop_loss_manager.move(position, float(position.stop_loss))
