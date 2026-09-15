@@ -420,6 +420,7 @@ class LiveExitHandler:
         candle_low: float | None = None,
         data_provider: Any = None,
         exit_category: ExitReason = ExitReason.UNKNOWN,
+        stop_just_cancelled: bool = False,
     ) -> LiveExitResult:
         """Execute an exit for a position.
 
@@ -433,6 +434,10 @@ class LiveExitHandler:
             candle_high: Candle high for realistic execution modeling.
             candle_low: Candle low for realistic execution modeling.
             data_provider: Data provider for price fallback.
+            stop_just_cancelled: True when the caller already cancelled the
+                position's resting stop-loss to free its inventory for this
+                close (#710). Forwarded to the execution engine so it retries a
+                stale post-cancel balance read instead of aborting on it (#1165).
 
         Returns:
             LiveExitResult with execution details.
@@ -512,6 +517,7 @@ class LiveExitHandler:
             liquidity=liquidity,
             apply_slippage=apply_slippage,
             position_db_id=position.db_position_id,
+            stop_just_cancelled=stop_just_cancelled,
         )
 
         if not execution_result.success:
