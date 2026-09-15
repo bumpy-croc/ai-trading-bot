@@ -4169,11 +4169,20 @@ class PeriodicReconciler:
                         position.symbol,
                         status_desc,
                     )
-                    # Cleared inside the placement lock below (right before
-                    # the actual re-placement attempt), not here — this field
-                    # is the same one move()'s trailing-stop ratchet reads and
-                    # writes under that lock, and a write outside its scope is
-                    # an unsynchronised race with it (#1179).
+                    # Cleared immediately, before any of the early-exit paths
+                    # below (position-gone, flat qty, no stop price, or an
+                    # exception during placement) — leaving a dead id in place
+                    # on those paths breaks the `not sl_order_id` check at the
+                    # top of this loop, so the position never routes into
+                    # _place_missing_stop_loss() on a later cycle and is stuck
+                    # unprotected forever (#1179 round 5). Wrapped in the
+                    # placement lock since it's the same field move()'s
+                    # trailing-stop ratchet reads and writes under that lock
+                    # (#1179 round 3); the placement block below re-nulls it
+                    # again once it reacquires the lock, which is a harmless,
+                    # idempotent no-op.
+                    with self._stop_loss_placement_lock(position.symbol):
+                        position.stop_loss_order_id = None
 
                     # Account for partial SL fills before re-placement.
                     # If the SL partially executed, reduce current_size
@@ -4258,6 +4267,7 @@ class PeriodicReconciler:
                                 )
                                 if new_sl_id:
                                     position.stop_loss_order_id = new_sl_id
+                                    position.last_placed_stop_price = stop_price
                             if new_sl_id:
                                 logger.info(
                                     "Re-placed stop-loss for %s: %s @ %.2f " "(periodic check)",
@@ -4645,6 +4655,7 @@ class PeriodicReconciler:
                 # it (#1179).
                 if new_sl_id:
                     position.stop_loss_order_id = new_sl_id
+                    position.last_placed_stop_price = stop_price
             if new_sl_id:
                 logger.info(
                     "Placed missing stop-loss for %s: %s @ %.2f (periodic check)",
