@@ -3478,6 +3478,9 @@ class TestGuardStopPlacementUnit:
         )
         assert decision.check == StopPlacementCheck.REFUSE
         assert "just_cancelled" in decision.reason
+        # Eventual-consistency lag, not a genuine conflict -- a retry loop may
+        # spend its budget waiting for the exchange's view to catch up (#1186).
+        assert decision.unconfirmed is True
 
     def test_excluded_order_does_not_block_a_genuinely_different_resting_stop(self):
         """Excluding the just-cancelled id must not make an UNRELATED resting
@@ -3518,6 +3521,527 @@ class TestGuardStopPlacementUnit:
         exchange.get_open_orders_checked.return_value = [ExplodesOnAttributeAccess()]
         decision = guard_stop_placement(exchange, "BTCUSDT", OrderSide.SELL)
         assert decision.check == StopPlacementCheck.REFUSE
+
+
+class TestPlaceOrAdoptStopLossRetry:
+    """#1185: place_or_adopt_stop_loss() grew opt-in retry/backoff so
+    LiveStopLossManager's three inline guard+ADOPT+REFUSE+retry copies could
+    delegate to it instead of duplicating the sequence. The default
+    (max_attempts=1) must stay byte-identical to the pre-#1185 behavior the
+    periodic reconciler's seven call sites already depend on."""
+
+    def test_default_single_attempt_propagates_exceptions(self):
+        """The periodic reconciler's call sites wrap this call in their own
+        try/except and rely on exceptions propagating -- the retry path must
+        not change that for callers that don't opt in."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.side_effect = ConnectionError("boom")
+
+        with pytest.raises(ConnectionError):
+            place_or_adopt_stop_loss(
+                exchange,
+                symbol="BTCUSDT",
+                side=OrderSide.SELL,
+                quantity=0.1,
+                stop_price=48000.0,
+            )
+        exchange.place_stop_loss_order.assert_called_once()
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_retries_on_exception_then_succeeds(self, mock_sleep):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.side_effect = [ConnectionError("boom"), "sl-new"]
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+        )
+
+        assert result == "sl-new"
+        assert exchange.place_stop_loss_order.call_count == 2
+        mock_sleep.assert_called_once_with(1.0)
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_exhausts_retries_and_returns_none(self, mock_sleep):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.return_value = None
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+        )
+
+        assert result is None
+        assert exchange.place_stop_loss_order.call_count == 3
+        # Exponential backoff: 1.0s then 2.0s between the 3 attempts.
+        assert mock_sleep.call_args_list == [call(1.0), call(2.0)]
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_retry_log_prefix_is_used_in_the_per_attempt_warning(self, mock_sleep, caplog):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.side_effect = ConnectionError("boom")
+
+        with caplog.at_level("WARNING"):
+            place_or_adopt_stop_loss(
+                exchange,
+                symbol="BTCUSDT",
+                side=OrderSide.SELL,
+                quantity=0.1,
+                stop_price=48000.0,
+                max_attempts=2,
+                retry_log_prefix="Trailing-stop move",
+            )
+
+        assert any(
+            "Trailing-stop move attempt 1/2 for BTCUSDT failed" in r.message for r in caplog.records
+        )
+
+    def test_on_adopt_is_invoked_with_the_decision_when_adopting(self):
+        from types import SimpleNamespace
+
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import (
+            StopPlacementDecision,
+            place_or_adopt_stop_loss,
+        )
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = [
+            SimpleNamespace(order_id="already_resting", side=OrderSide.SELL, stop_price=48990.0)
+        ]
+        seen: list[StopPlacementDecision] = []
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=49000.0,
+            on_adopt=seen.append,
+        )
+
+        assert result == "already_resting"
+        exchange.place_stop_loss_order.assert_not_called()
+        assert len(seen) == 1
+        assert seen[0].existing_order_id == "already_resting"
+        assert seen[0].existing_order.stop_price == 48990.0
+
+    def test_on_adopt_is_not_invoked_on_a_fresh_placement(self):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.return_value = "sl-new"
+        on_adopt = MagicMock()
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=49000.0,
+            on_adopt=on_adopt,
+        )
+
+        assert result == "sl-new"
+        on_adopt.assert_not_called()
+
+    def test_on_adopt_is_not_invoked_on_refuse(self):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = None  # unconfirmed -> REFUSE
+        on_adopt = MagicMock()
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=49000.0,
+            on_adopt=on_adopt,
+        )
+
+        assert result is None
+        on_adopt.assert_not_called()
+
+    def test_retry_reconsults_guard_and_adopts_after_ambiguous_submission(self):
+        """#1186 P1: a raise from ``place_stop_loss_order`` does not mean the
+        exchange rejected the order -- it can mean the exchange accepted and
+        rested it while the response (or our read of it) timed out, the same
+        ambiguous-submission case the entry path already handles explicitly.
+        Without re-consulting ``guard_stop_placement`` at the top of every
+        retry attempt, the next attempt would place a SECOND protective stop
+        on the same held quantity, orphaning the first as an untracked
+        resting stop -- exactly the #1104/#1108 duplicate-stop class the
+        guard exists to prevent."""
+        from types import SimpleNamespace
+
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        landed_order = SimpleNamespace(
+            order_id="landed-sl", side=OrderSide.SELL, stop_price=48000.0
+        )
+        state = {"landed": False}
+        placement_calls: list[dict] = []
+
+        def fake_get_open_orders_checked(symbol):
+            # Nothing resting until attempt 1's call below flips this --
+            # simulating the order actually landing on the exchange despite
+            # the caller seeing an exception.
+            return [landed_order] if state["landed"] else []
+
+        def fake_place_stop_loss_order(**kwargs):
+            placement_calls.append(kwargs)
+            if len(placement_calls) == 1:
+                state["landed"] = True
+                raise ConnectionError("timed out waiting for the exchange response")
+            # If the retry loop does NOT re-consult the guard, it lands here
+            # and stacks a second, genuinely distinct order on top of the one
+            # that is already resting -- the duplicate-stop bug.
+            return f"stacked-duplicate-{len(placement_calls)}"
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.side_effect = fake_get_open_orders_checked
+        exchange.place_stop_loss_order.side_effect = fake_place_stop_loss_order
+
+        with patch("src.engines.live.reconciliation.time.sleep"):
+            result = place_or_adopt_stop_loss(
+                exchange,
+                symbol="BTCUSDT",
+                side=OrderSide.SELL,
+                quantity=0.1,
+                stop_price=48000.0,
+                max_attempts=3,
+                retry_delay=1.0,
+            )
+
+        assert result == "landed-sl"
+        # Attempt 2 must adopt the order attempt 1 actually landed instead of
+        # placing a second one on top of it.
+        exchange.place_stop_loss_order.assert_called_once()
+
+    def test_retry_on_adopt_fires_on_a_retry_reconsult(self):
+        """The retry loop's guard re-consult must invoke the same on_adopt
+        callback the initial check does -- not just decide silently -- so
+        callers like ``move()`` still get the actual resting price on a
+        mid-retry adopt. (The on_refuse half of this contract is covered
+        separately by
+        ``test_retry_reconsult_genuine_conflict_refuse_invokes_on_refuse_and_stops_retrying``.)
+        """
+        from types import SimpleNamespace
+
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import (
+            StopPlacementDecision,
+            place_or_adopt_stop_loss,
+        )
+
+        landed_order = SimpleNamespace(
+            order_id="landed-sl", side=OrderSide.SELL, stop_price=48010.0
+        )
+        state = {"landed": False}
+
+        def fake_get_open_orders_checked(symbol):
+            return [landed_order] if state["landed"] else []
+
+        def fake_place_stop_loss_order(**kwargs):
+            state["landed"] = True
+            raise ConnectionError("timed out waiting for the exchange response")
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.side_effect = fake_get_open_orders_checked
+        exchange.place_stop_loss_order.side_effect = fake_place_stop_loss_order
+        adopted: list[StopPlacementDecision] = []
+
+        with patch("src.engines.live.reconciliation.time.sleep"):
+            result = place_or_adopt_stop_loss(
+                exchange,
+                symbol="BTCUSDT",
+                side=OrderSide.SELL,
+                quantity=0.1,
+                stop_price=48000.0,
+                max_attempts=3,
+                on_adopt=adopted.append,
+            )
+
+        assert result == "landed-sl"
+        assert len(adopted) == 1
+        assert adopted[0].existing_order_id == "landed-sl"
+
+    def test_retry_reconsult_genuine_conflict_refuse_invokes_on_refuse_and_stops_retrying(
+        self,
+    ):
+        """A REFUSE from the retry re-consult must remain terminal when it
+        reflects a genuine conflict (``StopPlacementDecision.unconfirmed`` is
+        False), as opposed to the guard's own lookup failing/being
+        unconfirmed -- retrying will never change what's actually resting on
+        the wrong side, so the retry budget must not be spent chasing it
+        (#1186). The unconfirmed-refuse case, where the budget IS preserved,
+        is covered by
+        ``test_retry_survives_unconfirmed_guard_reconsult_and_succeeds_on_next_attempt``."""
+        from types import SimpleNamespace
+
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import (
+            StopPlacementDecision,
+            place_or_adopt_stop_loss,
+        )
+
+        wrong_side_order = SimpleNamespace(
+            order_id="wrong-side-sl", side=OrderSide.BUY, stop_price=48000.0
+        )
+
+        exchange = MagicMock()
+        # First guard check (PROCEED) -> attempt 1 raises. Second guard check
+        # (the retry re-consult) finds a resting stop on the WRONG side -- a
+        # genuine conflict, not a lookup failure -- so it must REFUSE and stop.
+        exchange.get_open_orders_checked.side_effect = [[], [wrong_side_order]]
+        exchange.place_stop_loss_order.side_effect = ConnectionError("boom")
+        refused: list[StopPlacementDecision] = []
+
+        with patch("src.engines.live.reconciliation.time.sleep"):
+            result = place_or_adopt_stop_loss(
+                exchange,
+                symbol="BTCUSDT",
+                side=OrderSide.SELL,
+                quantity=0.1,
+                stop_price=48000.0,
+                max_attempts=3,
+                on_refuse=refused.append,
+            )
+
+        assert result is None
+        exchange.place_stop_loss_order.assert_called_once()
+        assert len(refused) == 1
+        assert refused[0].unconfirmed is False
+        assert "wrong side" in refused[0].reason
+
+    def test_retry_survives_unconfirmed_guard_reconsult_and_succeeds_on_next_attempt(self):
+        """#1186 regression: a REFUSE from the retry re-consult must NOT
+        collapse the retry budget when it's caused by the guard's own lookup
+        failing/being unconfirmed (``StopPlacementDecision.unconfirmed``),
+        rather than a genuine conflict. The retry loop only runs because
+        something already failed once -- often a transient exchange blip
+        (timeout, rate limit) -- and that SAME condition frequently also
+        breaks the re-consult's own lookup on the very next attempt. Treating
+        every re-consult REFUSE as terminal collapsed a 3-attempt budget to a
+        single attempt under exactly the conditions retry/backoff exists to
+        survive -- which, reached via ``place_protection()``, triggers an
+        unnecessary emergency-close of a position that was just opened.
+
+        Attempt 1's placement raises (transient). Attempt 2's guard
+        re-consult lookup is itself unconfirmed (same transient condition).
+        Attempt 3's guard confirms clear and placement succeeds -- proving
+        the loop preserved its third attempt instead of giving up after the
+        second."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        # Call 1: initial guard check -> PROCEED (empty).
+        # Call 2: attempt 2's re-consult -> lookup itself unconfirmed -> REFUSE.
+        # Call 3: attempt 3's re-consult -> PROCEED (the blip has cleared).
+        exchange.get_open_orders_checked.side_effect = [[], None, []]
+        exchange.place_stop_loss_order.side_effect = [
+            ConnectionError("timed out waiting for the exchange response"),
+            "sl-recovered",
+        ]
+
+        with patch("src.engines.live.reconciliation.time.sleep"):
+            result = place_or_adopt_stop_loss(
+                exchange,
+                symbol="BTCUSDT",
+                side=OrderSide.SELL,
+                quantity=0.1,
+                stop_price=48000.0,
+                max_attempts=3,
+                retry_delay=1.0,
+            )
+
+        assert result == "sl-recovered"
+        assert exchange.place_stop_loss_order.call_count == 2
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_first_attempt_unconfirmed_guard_is_not_terminal(self, mock_sleep):
+        """#1186 (round 2): an incomplete version of the fix above still ran
+        the very first ``guard_stop_placement`` check in a separate call
+        BEFORE entering the retry loop, and treated EVERY REFUSE from that
+        pre-loop check as terminal -- including an unconfirmed one. That made
+        ``max_attempts`` meaningless for the single most likely place to hit
+        an eventual-consistency lag: immediately after a confirmed cancel in
+        move()/reprotect(), milliseconds before the exchange's open-orders
+        view has caught up. A single transient lookup failure on what would
+        have been "attempt 0" must consume one attempt and retry via
+        backoff -- not return None with zero placement attempts ever made."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        # attempt 0's guard lookup is itself unconfirmed; attempt 1's clears.
+        exchange.get_open_orders_checked.side_effect = [None, []]
+        exchange.place_stop_loss_order.return_value = "sl-recovered"
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+        )
+
+        # The gap's symptom was: result is None and place_stop_loss_order was
+        # never called at all.
+        assert result == "sl-recovered"
+        exchange.place_stop_loss_order.assert_called_once()
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_exhausts_retries_when_guard_never_confirms(self, mock_sleep):
+        """The terminal 'exhausted while still unconfirmed' branch (the one
+        that decides whether a live position gets emergency-closed) had zero
+        test coverage. A lookup that stays unconfirmed/failing across every
+        attempt must spend the FULL retry budget -- not bail out early --
+        without ever guessing at a placement, then return None and fire
+        on_refuse exactly once."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import (
+            StopPlacementDecision,
+            place_or_adopt_stop_loss,
+        )
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = None  # unconfirmed, every attempt
+        refused: list[StopPlacementDecision] = []
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+            on_refuse=refused.append,
+        )
+
+        assert result is None
+        # Never guess: an unconfirmed guard must never let placement proceed,
+        # on any attempt.
+        exchange.place_stop_loss_order.assert_not_called()
+        # ...but the full budget must be spent first, not bypassed on attempt 0.
+        assert exchange.get_open_orders_checked.call_count == 3
+        assert mock_sleep.call_count == 2
+        assert len(refused) == 1
+        assert refused[0].unconfirmed is True
+
+    def test_on_adopt_exception_is_fault_isolated(self, caplog):
+        """A bug in the caller's on_adopt callback must not lose the adopted
+        order id -- the callback runs in a window where a preceding cancel
+        may already have succeeded and the position is naked but for the
+        just-adopted order (#1186)."""
+        from types import SimpleNamespace
+
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = [
+            SimpleNamespace(order_id="already_resting", side=OrderSide.SELL, stop_price=48990.0)
+        ]
+
+        def exploding_on_adopt(decision):
+            raise RuntimeError("callback bug")
+
+        with caplog.at_level("ERROR"):
+            result = place_or_adopt_stop_loss(
+                exchange,
+                symbol="BTCUSDT",
+                side=OrderSide.SELL,
+                quantity=0.1,
+                stop_price=49000.0,
+                on_adopt=exploding_on_adopt,
+            )
+
+        assert result == "already_resting"
+        assert any("on_adopt callback failed" in r.message for r in caplog.records)
+
+    def test_on_refuse_is_invoked_with_the_decision_on_refuse(self):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import (
+            StopPlacementDecision,
+            place_or_adopt_stop_loss,
+        )
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = None  # unconfirmed -> REFUSE
+        seen: list[StopPlacementDecision] = []
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=49000.0,
+            on_refuse=seen.append,
+        )
+
+        assert result is None
+        assert len(seen) == 1
+        assert seen[0].reason == "lookup unconfirmed"
+
+    def test_on_refuse_exception_is_fault_isolated(self, caplog):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = None  # unconfirmed -> REFUSE
+
+        def exploding_on_refuse(decision):
+            raise RuntimeError("callback bug")
+
+        with caplog.at_level("ERROR"):
+            result = place_or_adopt_stop_loss(
+                exchange,
+                symbol="BTCUSDT",
+                side=OrderSide.SELL,
+                quantity=0.1,
+                stop_price=49000.0,
+                on_refuse=exploding_on_refuse,
+            )
+
+        assert result is None
+        assert any("on_refuse callback failed" in r.message for r in caplog.records)
 
 
 # ---------- Emergency Sell Verification Tests ----------
