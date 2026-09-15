@@ -2846,6 +2846,82 @@ class TestPeriodicReconcilerSLPriceDrift:
             position_id=61, stop_loss_order_id="new_sl_corrected"
         )
 
+    def test_cycle_corrects_sl_price_drift_holds_the_base_asset_lock(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """#1177 review P0: this correction predates #1179's base-asset lock and
+        was the only remaining cancel+re-place path in PeriodicReconciler that
+        didn't serialise on it -- a ratchet mid cancel-guard-place (move()) and
+        this correction could both observe the naked post-cancel window and
+        both place a replacement, stacking two resting stops on one held
+        quantity (#1104/#1108 class). Also pins the #1179 P1 companion fix:
+        last_placed_stop_price must be set to the corrected (tracked) price on
+        success, matching every other successful-placement site."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_price_stale_locked",
+            exchange_order_id="entry_stale_locked",
+            db_position_id=63,
+            quantity=1.0,
+            current_size=1.0,
+            original_size=1.0,
+        )
+        pos.stop_loss = 47000.0
+        mock_position_tracker.positions = {"entry_stale_locked": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(order_id="sl_price_stale_locked", status=ExOS.PENDING)
+        sl_order.stop_price = 45000.0
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.get_open_orders.return_value = []
+        mock_exchange.cancel_order.return_value = True
+
+        entered_place = threading.Event()
+        release_place = threading.Event()
+
+        def blocking_place(**kwargs):
+            entered_place.set()
+            release_place.wait(timeout=2)
+            return "new_sl_drift_locked"
+
+        mock_exchange.place_stop_loss_order.side_effect = blocking_place
+
+        registry = BaseAssetLockRegistry()
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            lock_registry=registry,
+        )
+
+        cycle_thread = threading.Thread(target=reconciler._reconcile_cycle)
+        cycle_thread.start()
+        try:
+            assert entered_place.wait(timeout=2), "drift correction never reached placement"
+
+            lock = registry.lock_for("BTC")
+            acquired_by_other_thread = lock.acquire(blocking=False)
+            try:
+                assert not acquired_by_other_thread, (
+                    "base-asset lock was not held during the drift correction's "
+                    "SL re-placement — a concurrent trailing-stop move() could "
+                    "race it and stack a duplicate stop"
+                )
+            finally:
+                if acquired_by_other_thread:
+                    lock.release()
+        finally:
+            release_place.set()
+            cycle_thread.join(timeout=2)
+
+        lock = registry.lock_for("BTC")
+        assert lock.acquire(blocking=False)
+        lock.release()
+        assert pos.stop_loss_order_id == "new_sl_drift_locked"
+        assert pos.last_placed_stop_price == 47000.0
+
     def test_cycle_does_not_replace_when_cancel_unconfirmed(
         self, mock_exchange, mock_position_tracker, mock_db
     ):

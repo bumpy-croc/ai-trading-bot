@@ -5177,6 +5177,19 @@ class PeriodicReconciler:
             )
             return detail
 
+        # Null INSIDE the lock, immediately after the confirmed cancel and before
+        # any of the placement computation below (which can itself raise) —
+        # move()'s trailing-stop ratchet serialises the identical cancel-guard-
+        # place sequence on this same per-symbol lock and re-reads
+        # stop_loss_order_id fresh once it acquires it (#1179). Without this, a
+        # ratchet blocked on the lock while this correction runs could observe
+        # the same naked post-cancel window and both place a replacement,
+        # stacking two resting stops on one held quantity (#1104/#1108 class) —
+        # the exact race #1179's lock exists to close, reopened here because
+        # this cancel+re-place predates that lock.
+        with self._stop_loss_placement_lock(symbol):
+            position.stop_loss_order_id = None
+
         try:
             from src.data_providers.exchange_interface import OrderSide
 
@@ -5194,18 +5207,24 @@ class PeriodicReconciler:
                     "(periodic check)",
                     symbol,
                 )
-                position.stop_loss_order_id = None
                 return detail
 
-            new_sl_id = place_or_adopt_stop_loss(
-                self.exchange,
-                symbol=symbol,
-                side=sl_side,
-                quantity=qty,
-                stop_price=tracked_price,
-                side_effect_type=SideEffectType.AUTO_REPAY,
-                exclude_order_id=sl_order_id,
-            )
+            # Place and (on success) re-set INSIDE the lock too, so a concurrent
+            # move() re-reading stop_loss_order_id never observes a state this
+            # correction hasn't fully committed.
+            with self._stop_loss_placement_lock(symbol):
+                new_sl_id = place_or_adopt_stop_loss(
+                    self.exchange,
+                    symbol=symbol,
+                    side=sl_side,
+                    quantity=qty,
+                    stop_price=tracked_price,
+                    side_effect_type=SideEffectType.AUTO_REPAY,
+                    exclude_order_id=sl_order_id,
+                )
+                if new_sl_id:
+                    position.stop_loss_order_id = new_sl_id
+                    position.last_placed_stop_price = tracked_price
         except Exception as e:
             logger.critical(
                 "Exception re-placing diverged stop-loss for %s: %s — position may be "
@@ -5215,7 +5234,6 @@ class PeriodicReconciler:
             )
             new_sl_id = None
 
-        position.stop_loss_order_id = new_sl_id
         db_pos_id = getattr(position, "db_position_id", None)
         if db_pos_id is not None:
             try:
