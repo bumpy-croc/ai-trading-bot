@@ -139,7 +139,7 @@ class TestPlaceProtection:
         call = state.exchange_interface.place_stop_loss_order.call_args
         assert call.kwargs["side"] == OrderSide.BUY
 
-    @patch("src.engines.live.execution.stop_loss_manager.time.sleep")
+    @patch("src.engines.live.reconciliation.time.sleep")
     def test_retries_on_exception_then_succeeds(self, mock_sleep):
         state = make_state()
         state.exchange_interface.place_stop_loss_order.side_effect = [
@@ -159,7 +159,7 @@ class TestPlaceProtection:
         assert sl_order_id == "sl-after-retry"
         assert state.exchange_interface.place_stop_loss_order.call_count == 2
 
-    @patch("src.engines.live.execution.stop_loss_manager.time.sleep")
+    @patch("src.engines.live.reconciliation.time.sleep")
     def test_returns_none_after_exhausting_retries_without_registration(self, mock_sleep):
         state = make_state()
         state.exchange_interface.place_stop_loss_order.return_value = None
@@ -177,6 +177,27 @@ class TestPlaceProtection:
         assert state.exchange_interface.place_stop_loss_order.call_count == 3
         state.live_position_tracker.set_stop_loss_order_id.assert_not_called()
         state.order_tracker.track_order.assert_not_called()
+        # #1185: exhausting retries must persist an UNPROTECTED audit row, not
+        # just leave the caller's emergency-close as the only trail.
+        state.db_manager.log_audit_event.assert_called_once()
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert audit_call["severity"] == "CRITICAL"
+        assert audit_call["field"] == "stop_loss_order_id"
+
+    def test_success_does_not_write_an_unprotected_audit(self):
+        state = make_state()
+        state.exchange_interface.place_stop_loss_order.return_value = "sl-99"
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        manager.place_protection(
+            position=make_position(),
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            quantity=0.5,
+            stop_price=48000.0,
+        )
+
+        state.db_manager.log_audit_event.assert_not_called()
 
 
 class TestPlaceProtectionRestingStopGuard1112:
@@ -214,6 +235,7 @@ class TestPlaceProtectionRestingStopGuard1112:
             "entry-1", 48000.0
         )
         state.order_tracker.track_order.assert_called_once_with("already_resting", "BTCUSDT")
+        state.db_manager.log_audit_event.assert_not_called()
 
     def test_refuses_when_resting_order_is_wrong_side(self):
         state = make_state()
@@ -233,8 +255,22 @@ class TestPlaceProtectionRestingStopGuard1112:
         assert sl_order_id is None
         state.exchange_interface.place_stop_loss_order.assert_not_called()
         state.order_tracker.track_order.assert_not_called()
+        # #1185: a fail-closed refusal is an unprotected entry too.
+        state.db_manager.log_audit_event.assert_called_once()
+        # #1186: the guard's specific reason must reach the audit row, not a
+        # generic message.
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert "wrong side" in audit_call["reason"]
 
-    def test_refuses_when_open_orders_lookup_is_unconfirmed(self):
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_refuses_when_open_orders_lookup_is_unconfirmed(self, mock_sleep):
+        """#1186: an unconfirmed lookup (None every time) never clears across
+        the DEFAULT_STOP_LOSS_MAX_RETRIES attempts, so this still ends up
+        refusing -- but only after spending the full retry budget on it, not
+        by bypassing the budget on attempt 0 the way the incomplete first fix
+        did (time.sleep is mocked because this now genuinely exercises the
+        backoff between attempts, not because a fresh test premise requires
+        it)."""
         state = make_state()
         state.exchange_interface.get_open_orders_checked.return_value = None
         manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
@@ -249,6 +285,129 @@ class TestPlaceProtectionRestingStopGuard1112:
 
         assert sl_order_id is None
         state.exchange_interface.place_stop_loss_order.assert_not_called()
+        state.db_manager.log_audit_event.assert_called_once()
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert "lookup unconfirmed" in audit_call["reason"]
+
+
+class TestReprotect:
+    """#710/#1185: re-placing a stop-loss after a failed close must delegate
+    to the shared guard+ADOPT+REFUSE+retry helper (``place_or_adopt_stop_loss``)
+    instead of inlining its own copy, and every CRITICAL branch -- invalid
+    inputs, a fail-closed refusal, or exhausted retries -- must persist an
+    UNPROTECTED audit row alongside the existing log + alert escalation."""
+
+    @staticmethod
+    def _held_exchange(**overrides):
+        """Spot exchange stand-in confirmed as holding the position's base asset."""
+        exchange = make_exchange(**overrides)
+        exchange.is_margin_mode = False
+        exchange.get_balance.return_value = SimpleNamespace(free=0.5, locked=0.0)
+        return exchange
+
+    def test_success_registers_stop_and_writes_no_audit(self):
+        exchange = self._held_exchange()
+        exchange.place_stop_loss_order.return_value = "sl-new"
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        manager.reprotect(make_position())
+
+        exchange.place_stop_loss_order.assert_called_once_with(
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.5,
+            stop_price=48000.0,
+            side_effect_type=SideEffectType.AUTO_REPAY,
+        )
+        state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
+            "entry-1", "sl-new"
+        )
+        state.order_tracker.track_order.assert_called_once_with("sl-new", "BTCUSDT")
+        state.db_manager.log_audit_event.assert_not_called()
+
+    def test_skips_when_position_no_longer_held(self):
+        exchange = make_exchange()
+        exchange.is_margin_mode = False
+        exchange.get_balance.return_value = SimpleNamespace(free=0.0, locked=0.0)
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        manager.reprotect(make_position())
+
+        exchange.place_stop_loss_order.assert_not_called()
+        state.db_manager.log_audit_event.assert_not_called()
+
+    def test_writes_audit_when_stop_price_is_missing(self):
+        exchange = self._held_exchange()
+        send_alert = Mock()
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=send_alert)
+
+        manager.reprotect(make_position(stop_loss=None))
+
+        exchange.place_stop_loss_order.assert_not_called()
+        send_alert.assert_called_once()
+        state.db_manager.log_audit_event.assert_called_once()
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert audit_call["severity"] == "CRITICAL"
+        assert audit_call["field"] == "stop_loss_order_id"
+
+    def test_adopts_matching_untracked_resting_stop_without_placing(self):
+        exchange = self._held_exchange()
+        exchange.get_open_orders_checked.return_value = [
+            SimpleNamespace(order_id="already_resting", side=OrderSide.SELL, stop_price=48000.0)
+        ]
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        manager.reprotect(make_position())
+
+        exchange.place_stop_loss_order.assert_not_called()
+        state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
+            "entry-1", "already_resting"
+        )
+        state.db_manager.log_audit_event.assert_not_called()
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_writes_audit_when_refused(self, mock_sleep):
+        """#1186: the guard consults on every attempt now, so a lookup that
+        stays unconfirmed exhausts the full retry budget (time.sleep mocked
+        for that reason) before refusing, rather than bypassing the budget on
+        attempt 0 the way the incomplete first fix did."""
+        exchange = self._held_exchange()
+        exchange.get_open_orders_checked.return_value = None  # unconfirmed -> REFUSE
+        send_alert = Mock()
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=send_alert)
+
+        manager.reprotect(make_position())
+
+        exchange.place_stop_loss_order.assert_not_called()
+        send_alert.assert_called_once()
+        state.db_manager.log_audit_event.assert_called_once()
+        # #1186: the guard's specific reason must reach both the alert and
+        # the audit row, not a generic message.
+        assert "lookup unconfirmed" in send_alert.call_args.args[0]
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert "lookup unconfirmed" in audit_call["reason"]
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_writes_audit_when_replacement_fails_after_retries(self, mock_sleep):
+        exchange = self._held_exchange()
+        exchange.place_stop_loss_order.return_value = None
+        send_alert = Mock()
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=send_alert)
+
+        manager.reprotect(make_position())
+
+        assert exchange.place_stop_loss_order.call_count == 3
+        send_alert.assert_called_once()
+        state.db_manager.log_audit_event.assert_called_once()
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert audit_call["severity"] == "CRITICAL"
+        assert audit_call["field"] == "stop_loss_order_id"
 
 
 class TestMove:
@@ -361,15 +520,19 @@ class TestMove:
         assert moved is False
         exchange.place_stop_loss_order.assert_not_called()
         send_alert.assert_called_once()
-        # #1179 P2: refused-after-cancel must write the same persisted
-        # CRITICAL audit row as the sibling cancel-succeeded/re-place-failed
-        # path below -- both leave the position genuinely UNPROTECTED.
+        # #1185: the cancel above already succeeded, so a REFUSE here leaves
+        # the position exactly as naked as an exhausted-retries failure would
+        # -- it must get the same persisted audit row, not just the alert.
         state.db_manager.log_audit_event.assert_called_once()
         audit_call = state.db_manager.log_audit_event.call_args.kwargs
         assert audit_call["severity"] == "CRITICAL"
         assert audit_call["field"] == "stop_loss_order_id"
+        # #1186: the guard's specific reason (wrong price, not just "REFUSE")
+        # must reach both the alert and the audit row.
+        assert "outside" in send_alert.call_args.args[0]
+        assert "outside" in audit_call["reason"]
 
-    @patch("src.engines.live.execution.stop_loss_manager.time.sleep")
+    @patch("src.engines.live.reconciliation.time.sleep")
     def test_escalates_when_replacement_fails_after_cancel(self, mock_sleep):
         exchange = self._held_exchange()
         exchange.place_stop_loss_order.return_value = None
@@ -576,7 +739,8 @@ class TestMoveExcludesTheOrderItActuallyCancelled:
         mover_thread.join(timeout=2)
         return mover_result.get("value")
 
-    def test_move_excludes_the_order_it_actually_cancelled(self):
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_move_excludes_the_order_it_actually_cancelled(self, mock_sleep):
         registry = BaseAssetLockRegistry()
         exchange = TestMove._held_exchange()
         # Binance's open-orders view lags: it still lists the order move() is
