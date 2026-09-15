@@ -495,10 +495,12 @@ class _StopPlacementAttemptAction(Enum):
     """What ``_place_with_retry`` should do next for one attempt, decided by
     ``_resolve_stop_placement_attempt``.
 
-    Deliberately a plain ``Enum``, not ``(str, Enum)`` like ``StopPlacementCheck``
-    — ``_place_with_retry`` distinguishes these sentinels from an adopted order
-    id via ``isinstance(outcome, str)``, which a str-backed enum member would
-    also satisfy.
+    Deliberately a plain ``Enum``, not ``(str, Enum)`` like ``StopPlacementCheck``.
+    ``_place_with_retry`` dispatches on ``isinstance(outcome, _StopPlacementAttemptAction)``
+    rather than on ``isinstance(outcome, str)``, so the two sentinel types stay
+    distinguishable however either is defined — but keeping this one a plain
+    ``Enum`` avoids a str-backed member (or a stray ``None``) ever being
+    mistaken for one of these three sentinels in the first place.
     """
 
     PLACE = "place"  # guard confirmed PROCEED — attempt place_stop_loss_order
@@ -648,8 +650,8 @@ def _place_with_retry(
         )
         if outcome is _StopPlacementAttemptAction.STOP:
             return None
-        if isinstance(outcome, str):
-            return outcome
+        if not isinstance(outcome, _StopPlacementAttemptAction):
+            return outcome  # adopted order id
 
         if outcome is _StopPlacementAttemptAction.PLACE:
             try:

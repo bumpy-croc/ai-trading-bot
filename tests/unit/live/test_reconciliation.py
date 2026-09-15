@@ -3686,12 +3686,12 @@ class TestPlaceOrAdoptStopLossRetry:
 
     @patch("src.engines.live.reconciliation.time.sleep")
     def test_exhausts_retries_when_guard_never_confirms(self, mock_sleep):
-        """[P2] The terminal 'exhausted while still unconfirmed' branch (the
-        one that decides whether a live position gets emergency-closed) had
-        zero test coverage. A lookup that stays unconfirmed/failing across
-        every attempt must exhaust the full retry budget without ever
-        guessing at a placement, return None, and fire on_refuse exactly
-        once."""
+        """The terminal 'exhausted while still unconfirmed' branch (the one
+        that decides whether a live position gets emergency-closed) had zero
+        test coverage. A lookup that stays unconfirmed/failing across every
+        attempt must spend the FULL retry budget -- not bail out early --
+        without ever guessing at a placement, then return None and fire
+        on_refuse exactly once."""
         from src.data_providers.exchange_interface import OrderSide
         from src.engines.live.reconciliation import (
             StopPlacementDecision,
@@ -3717,6 +3717,9 @@ class TestPlaceOrAdoptStopLossRetry:
         # Never guess: an unconfirmed guard must never let placement proceed,
         # on any attempt.
         exchange.place_stop_loss_order.assert_not_called()
+        # ...but the full budget must be spent first, not bypassed on attempt 0.
+        assert exchange.get_open_orders_checked.call_count == 3
+        assert mock_sleep.call_count == 2
         assert len(refused) == 1
         assert refused[0].unconfirmed is True
 
