@@ -341,6 +341,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   since plain `-c` puts the cwd on `sys.path` and prints a false all-clear.
 
 ### Changed
+- **Deduped `LiveStopLossManager`'s guard+ADOPT+REFUSE+retry logic and closed an
+  audit gap** (#1185). `place_protection()`, `reprotect()`, and `move()` each
+  inlined their own copy of the sequence: consult `guard_stop_placement()`,
+  branch on REFUSE/ADOPT/PROCEED, and on PROCEED run a 3-attempt
+  exponential-backoff retry against `exchange.place_stop_loss_order`. The
+  canonical `place_or_adopt_stop_loss()` (`src/engines/live/reconciliation.py`,
+  used by the periodic reconciler) grew opt-in `max_attempts`/`retry_delay`
+  parameters (default: a single attempt, matching every existing call site
+  exactly) plus an `on_adopt` hook so `move()` can still capture the actual
+  adopted stop price without re-running the guard itself; all three
+  `LiveStopLossManager` methods now delegate to it instead of duplicating the
+  sequence. `reprotect()` and `place_protection()` now also call
+  `write_unprotected_audit()` on total placement failure, matching `move()`'s
+  existing cancel-succeeded/re-place-failed escalation — closing the same
+  observability gap for the entry and post-close-failure paths. Since a
+  fail-closed REFUSE and an exhausted-retries failure leave an identical real
+  state once delegated (the cancel, where one happened, already succeeded),
+  both now escalate identically, so a REFUSE that previously only alerted
+  gets a persisted audit row too.
 - **`src/config/risk-limits.json` now governs the running system** (#986, design
   §3.5 "Hydration"). The Board-ratified limits file was previously **inert**: its
   loader (`src/config/risk_limits.py`, shipped in #1034) had zero consumers in
