@@ -2741,6 +2741,230 @@ class TestPeriodicReconcilerCase3DeadStopNoPriceRegression:
         assert pos.last_placed_stop_price == pos.stop_loss
 
 
+class TestPeriodicReconcilerSLPriceDrift:
+    """#1172: the periodic SL audit must compare the resting order's actual price
+    against the tracked stop, not just its status."""
+
+    def test_cycle_ignores_sl_within_tolerance(self, mock_exchange, mock_position_tracker, mock_db):
+        """A resting SL within the adopt tolerance of the tracked stop is left alone:
+        no cancel, no re-place, no CRITICAL escalation."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_price_ok",
+            exchange_order_id="entry_ok",
+            db_position_id=60,
+            quantity=1.0,
+            current_size=1.0,
+            original_size=1.0,
+        )
+        pos.stop_loss = 45000.0
+        mock_position_tracker.positions = {"entry_ok": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        # Still resting (not filled/cancelled/expired/rejected) and within 2% of
+        # the tracked stop (45000 * 0.02 = 900 tolerance; here off by 50).
+        sl_order = MockExchangeOrder(order_id="sl_price_ok", status=ExOS.PENDING)
+        sl_order.stop_price = 45050.0
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.get_open_orders.return_value = []
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._reconcile_cycle()
+
+        mock_exchange.cancel_order.assert_not_called()
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        assert pos.stop_loss_order_id == "sl_price_ok"
+        price_drift_audits = [
+            c
+            for c in mock_db.log_audit_event.call_args_list
+            if c.kwargs.get("field") == "stop_loss_price"
+        ]
+        assert price_drift_audits == []
+
+    def test_cycle_corrects_sl_price_drift(self, mock_exchange, mock_position_tracker, mock_db):
+        """A resting SL whose actual price has diverged beyond tolerance from the
+        tracked stop (e.g. a trailing-stop ratchet whose exchange-side move failed)
+        is cancelled and re-placed at the tracked price, with a CRITICAL escalation."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_price_stale",
+            exchange_order_id="entry_stale",
+            db_position_id=61,
+            quantity=1.0,
+            current_size=1.0,
+            original_size=1.0,
+        )
+        # Tracked stop already ratcheted to 47000, but the resting order below is
+        # still at the old, pre-ratchet price (45000) — a 4.4% divergence, well
+        # beyond the 2% tolerance.
+        pos.stop_loss = 47000.0
+        mock_position_tracker.positions = {"entry_stale": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(order_id="sl_price_stale", status=ExOS.PENDING)
+        sl_order.stop_price = 45000.0
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.get_open_orders.return_value = []
+        mock_exchange.cancel_order.return_value = True
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_corrected"
+
+        critical_callback = MagicMock()
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            on_critical=critical_callback,
+        )
+        reconciler._reconcile_cycle()
+
+        mock_exchange.cancel_order.assert_called_once_with("sl_price_stale", "BTCUSDT")
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        place_kwargs = mock_exchange.place_stop_loss_order.call_args.kwargs
+        assert place_kwargs["stop_price"] == 47000.0
+        assert pos.stop_loss_order_id == "new_sl_corrected"
+
+        # CRITICAL escalation: audit row, cycle severity -> on_critical callback.
+        critical_callback.assert_called_once()
+        price_drift_audits = [
+            c
+            for c in mock_db.log_audit_event.call_args_list
+            if c.kwargs.get("field") == "stop_loss_price"
+        ]
+        assert len(price_drift_audits) == 1
+        assert price_drift_audits[0].kwargs["severity"] == "CRITICAL"
+        assert price_drift_audits[0].kwargs["old_value"] == "45000.0"
+        assert price_drift_audits[0].kwargs["new_value"] == "47000.0"
+
+        mock_db.update_position.assert_any_call(
+            position_id=61, stop_loss_order_id="new_sl_corrected"
+        )
+
+    def test_cycle_corrects_sl_price_drift_holds_the_base_asset_lock(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """#1177 review P0: this correction predates #1179's base-asset lock and
+        was the only remaining cancel+re-place path in PeriodicReconciler that
+        didn't serialise on it -- a ratchet mid cancel-guard-place (move()) and
+        this correction could both observe the naked post-cancel window and
+        both place a replacement, stacking two resting stops on one held
+        quantity (#1104/#1108 class). Also pins the #1179 P1 companion fix:
+        last_placed_stop_price must be set to the corrected (tracked) price on
+        success, matching every other successful-placement site."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_price_stale_locked",
+            exchange_order_id="entry_stale_locked",
+            db_position_id=63,
+            quantity=1.0,
+            current_size=1.0,
+            original_size=1.0,
+        )
+        pos.stop_loss = 47000.0
+        mock_position_tracker.positions = {"entry_stale_locked": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(order_id="sl_price_stale_locked", status=ExOS.PENDING)
+        sl_order.stop_price = 45000.0
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.get_open_orders.return_value = []
+        mock_exchange.cancel_order.return_value = True
+
+        entered_place = threading.Event()
+        release_place = threading.Event()
+
+        def blocking_place(**kwargs):
+            entered_place.set()
+            release_place.wait(timeout=2)
+            return "new_sl_drift_locked"
+
+        mock_exchange.place_stop_loss_order.side_effect = blocking_place
+
+        registry = BaseAssetLockRegistry()
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            lock_registry=registry,
+        )
+
+        cycle_thread = threading.Thread(target=reconciler._reconcile_cycle)
+        cycle_thread.start()
+        try:
+            assert entered_place.wait(timeout=2), "drift correction never reached placement"
+
+            lock = registry.lock_for("BTC")
+            acquired_by_other_thread = lock.acquire(blocking=False)
+            try:
+                assert not acquired_by_other_thread, (
+                    "base-asset lock was not held during the drift correction's "
+                    "SL re-placement — a concurrent trailing-stop move() could "
+                    "race it and stack a duplicate stop"
+                )
+            finally:
+                if acquired_by_other_thread:
+                    lock.release()
+        finally:
+            release_place.set()
+            cycle_thread.join(timeout=2)
+
+        lock = registry.lock_for("BTC")
+        assert lock.acquire(blocking=False)
+        lock.release()
+        assert pos.stop_loss_order_id == "new_sl_drift_locked"
+        assert pos.last_placed_stop_price == 47000.0
+
+    def test_cycle_does_not_replace_when_cancel_unconfirmed(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """If the stale order's cancel cannot be confirmed, do NOT re-place — the
+        original may still be resting, and a second order risks stacking (#713)."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_price_stale2",
+            exchange_order_id="entry_stale2",
+            db_position_id=62,
+            quantity=1.0,
+            current_size=1.0,
+            original_size=1.0,
+        )
+        pos.stop_loss = 47000.0
+        mock_position_tracker.positions = {"entry_stale2": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(order_id="sl_price_stale2", status=ExOS.PENDING)
+        sl_order.stop_price = 45000.0
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.get_open_orders.return_value = []
+        mock_exchange.cancel_order.return_value = False  # unconfirmed
+
+        critical_callback = MagicMock()
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            on_critical=critical_callback,
+        )
+        reconciler._reconcile_cycle()
+
+        mock_exchange.cancel_order.assert_called_once_with("sl_price_stale2", "BTCUSDT")
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        # Tracked id left untouched — the old order may still be resting.
+        assert pos.stop_loss_order_id == "sl_price_stale2"
+        critical_callback.assert_called_once()
+
+
 # ---------- Partial SL Fill Quantity Calculation Tests ----------
 
 
@@ -5854,6 +6078,50 @@ class TestStopLossReplacementHoldingGuard:
 
         mock_exchange.place_stop_loss_order.assert_called_once()
         assert pos.stop_loss_order_id == "new_sl_real"
+
+    # --- startup: PositionReconciler._verify_stop_loss_price (#1172) ---
+
+    def test_startup_verify_stop_loss_price_within_tolerance_no_op(self, reconciler, mock_exchange):
+        """A resting SL within tolerance of the tracked stop is left alone at startup too."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(stop_loss_order_id="sl_price_ok", db_position_id=70, quantity=0.1)
+        pos.stop_loss = 45000.0
+        sl_order = MockExchangeOrder(order_id="sl_price_ok", status=ExOS.PENDING)
+        sl_order.stop_price = 45050.0  # within 2% tolerance (900) of 45000
+        mock_exchange.get_order.return_value = sl_order
+
+        result = ReconciliationResult(entity_type="position", entity_id=70, status="verified")
+        reconciler._verify_stop_loss(pos, "sl_price_ok", result)
+
+        mock_exchange.cancel_order.assert_not_called()
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        assert pos.stop_loss_order_id == "sl_price_ok"
+        assert result.severity == Severity.LOW
+
+    def test_startup_verify_stop_loss_price_diverged_corrects(self, reconciler, mock_exchange):
+        """A resting SL whose price diverged beyond tolerance is cancelled and
+        re-placed at the tracked price at startup too, escalated to CRITICAL."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(stop_loss_order_id="sl_price_stale", db_position_id=71, quantity=0.1)
+        pos.stop_loss = 47000.0
+        sl_order = MockExchangeOrder(order_id="sl_price_stale", status=ExOS.PENDING)
+        sl_order.stop_price = 45000.0  # stale — beyond 2% tolerance of 47000
+        mock_exchange.get_order.return_value = sl_order
+        mock_exchange.cancel_order.return_value = True
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_startup"
+
+        result = ReconciliationResult(entity_type="position", entity_id=71, status="verified")
+        reconciler._verify_stop_loss(pos, "sl_price_stale", result)
+
+        mock_exchange.cancel_order.assert_called_once_with("sl_price_stale", "BTCUSDT")
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        call_kwargs = mock_exchange.place_stop_loss_order.call_args.kwargs
+        assert call_kwargs["stop_price"] == 47000.0
+        assert pos.stop_loss_order_id == "new_sl_startup"
+        assert result.severity == Severity.CRITICAL
+        assert any(c.field == "stop_loss_price" for c in result.corrections)
 
     # --- startup: reconcile_position Step 3 (has stop price, no live SL order) ---
 

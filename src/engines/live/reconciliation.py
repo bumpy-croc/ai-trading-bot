@@ -725,6 +725,24 @@ def write_unprotected_audit(
     return detail
 
 
+def _stop_loss_price_diverged(resting_price: float | None, tracked_price: float | None) -> bool:
+    """True when a CONFIRMED-resting stop-loss order's actual price has drifted beyond
+    tolerance from the tracked ``position.stop_loss`` (#1172).
+
+    The status-only checks around this (missing / cancelled / filled) catch a stop that
+    is gone; they say nothing about one that is still resting but at the wrong price —
+    e.g. a trailing-stop ratchet advances the tracked stop, and if the exchange-side
+    cancel-then-replace that should follow it fails or is skipped, the tracked price
+    moves while the resting order does not. Reuses ``_ADOPT_PRICE_TOLERANCE_FRACTION``
+    (the same tolerance ``guard_stop_placement`` uses to adopt an untracked resting
+    stop) for the identical reason: absorb tick-quantization drift without letting a
+    real divergence pass as "close enough".
+    """
+    if resting_price is None or tracked_price is None or tracked_price <= 0:
+        return False
+    return abs(resting_price - tracked_price) > tracked_price * _ADOPT_PRICE_TOLERANCE_FRACTION
+
+
 @runtime_checkable
 class _HasDbPositionId(Protocol):
     """Structural type for position objects that carry a DB position ID."""
@@ -2692,9 +2710,163 @@ class PositionReconciler:
                     sl_order.average_price,
                 )
                 self._close_position_from_filled_sl(position, sl_order)
+            else:
+                # Order confirmed present and still resting (NEW/PARTIALLY_FILLED) — the
+                # branches above only ever checked its STATUS. Verify its actual price
+                # matches the tracked stop too (#1172).
+                self._verify_stop_loss_price(position, sl_order, result)
 
         except Exception as e:
             logger.warning("Failed to verify stop-loss order %s: %s", sl_order_id, e)
+
+    def _verify_stop_loss_price(
+        self, position: Any, sl_order: Any, result: ReconciliationResult
+    ) -> None:
+        """Verify a confirmed-resting stop-loss order's actual price against the tracked
+        ``position.stop_loss`` and correct a divergence beyond tolerance (#1172).
+
+        Reached only when the order exists and is not missing/cancelled/expired/
+        rejected/filled — i.e. it looks completely healthy by status alone. A trailing-
+        stop ratchet advances the tracked stop before cancelling and re-placing the
+        exchange order; if that cancel fails or is unconfirmed, the tracked price moves
+        while the resting order is deliberately left in place (to avoid stacking a
+        duplicate), and nothing else catches the resulting drift.
+
+        Mirrors the cancelled/expired re-placement branch above: cancel the stale order,
+        then re-place via ``place_or_adopt_stop_loss`` (the same guarded machinery every
+        other placement call site uses), excluding the id just cancelled so it cannot be
+        re-adopted. If the cancel itself cannot be confirmed, do NOT re-place — the
+        original may still be live, and a second order risks stacking or flipping the
+        position (#713) — leave it resting for the next pass to retry.
+        """
+        resting_price = getattr(sl_order, "stop_price", None)
+        tracked_price = getattr(position, "stop_loss", None)
+        if not _stop_loss_price_diverged(resting_price, tracked_price):
+            return
+        # _stop_loss_price_diverged only returns True when both are non-None floats.
+        assert tracked_price is not None
+
+        symbol = position.symbol
+        sl_order_id = getattr(sl_order, "order_id", None)
+        if sl_order_id is None:
+            logger.error(
+                "Diverged stop-loss for %s has no order_id — cannot cancel/correct; will "
+                "re-check next pass.",
+                symbol,
+            )
+            return
+        logger.critical(
+            "Stop-loss %s for %s is resting at $%s but the tracked stop is $%.2f — "
+            "diverged beyond %.0f%% tolerance. Attempting cancel+re-place.",
+            sl_order_id,
+            symbol,
+            resting_price,
+            tracked_price,
+            _ADOPT_PRICE_TOLERANCE_FRACTION * 100,
+        )
+        audit = AuditEvent(
+            entity_type="position",
+            entity_id=getattr(position, "db_position_id", None),
+            field="stop_loss_price",
+            old_value=str(resting_price),
+            new_value=str(tracked_price),
+            reason=(
+                f"Resting stop-loss price ${resting_price} diverged from tracked "
+                f"${tracked_price:.2f} beyond {_ADOPT_PRICE_TOLERANCE_FRACTION:.0%} tolerance"
+            ),
+            severity=Severity.CRITICAL,
+        )
+        self._persist_audit(audit)
+        result.corrections.append(audit)
+        result.severity = Severity.CRITICAL
+
+        if _position_holding_is_gone(self.exchange, self._use_margin, position):
+            logger.warning(
+                "Stop-loss price diverged for %s but the position no longer backs an "
+                "exchange holding — skipping correction (asset-holdings check will "
+                "remove the phantom).",
+                symbol,
+            )
+            return
+
+        cancelled = False
+        try:
+            cancelled = bool(self.exchange.cancel_order(sl_order_id, symbol))
+        except Exception as e:
+            logger.warning(
+                "Failed to cancel diverged stop-loss %s for %s: %s", sl_order_id, symbol, e
+            )
+        if not cancelled:
+            logger.critical(
+                "Could not confirm cancel of diverged stop-loss %s for %s — leaving it "
+                "resting (fail-closed, will not risk stacking a duplicate); the next "
+                "reconciliation pass retries.",
+                sl_order_id,
+                symbol,
+            )
+            return
+
+        try:
+            from src.data_providers.exchange_interface import OrderSide
+
+            side = getattr(position, "side", "long")
+            side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
+            sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
+            qty = getattr(position, "quantity", 0) or 0.0
+            current = getattr(position, "current_size", None)
+            original = getattr(position, "original_size", None)
+            if current is not None and original is not None and original > 0:
+                qty = qty * (current / original)
+            if qty <= 0:
+                logger.info(
+                    "Position %s is flat — skipping stop-loss re-placement after cancel",
+                    symbol,
+                )
+                position.stop_loss_order_id = None
+                return
+
+            new_sl_id = place_or_adopt_stop_loss(
+                self.exchange,
+                symbol=symbol,
+                side=sl_side,
+                quantity=qty,
+                stop_price=tracked_price,
+                side_effect_type=SideEffectType.AUTO_REPAY,
+                exclude_order_id=sl_order_id,
+            )
+        except Exception as e:
+            logger.critical(
+                "Exception re-placing diverged stop-loss for %s: %s — position may be "
+                "unprotected",
+                symbol,
+                e,
+            )
+            new_sl_id = None
+
+        position.stop_loss_order_id = new_sl_id
+        db_pos_id = getattr(position, "db_position_id", None)
+        if db_pos_id is not None:
+            try:
+                self.db_manager.update_position(position_id=db_pos_id, stop_loss_order_id=new_sl_id)
+            except Exception as e:
+                logger.warning(
+                    "Failed to persist corrected stop-loss order ID for %s: %s", symbol, e
+                )
+
+        if new_sl_id:
+            logger.warning(
+                "Corrected diverged stop-loss for %s: new order %s @ %.2f",
+                symbol,
+                new_sl_id,
+                tracked_price,
+            )
+        else:
+            logger.critical(
+                "Cancelled diverged stop-loss for %s but re-placement failed — position "
+                "is unprotected, entering close-only mode",
+                symbol,
+            )
+            result.severity = Severity.CRITICAL
 
     def _close_position_from_filled_sl(self, position: Any, sl_order: Any) -> None:
         """Close a position whose stop-loss filled offline: close the DB row, then (only on
@@ -4646,6 +4818,17 @@ class PeriodicReconciler:
                             self._audit_unprotected(position, "no stop price or SL unsupported")
                         )
 
+                else:
+                    # sl_order is confirmed present and is none of FILLED/CANCELLED/
+                    # EXPIRED/REJECTED — i.e. it looks completely healthy by status
+                    # alone (NEW or PARTIALLY_FILLED). The branches above only ever
+                    # checked STATUS; verify its actual PRICE against the tracked
+                    # stop too (#1172).
+                    drift_finding = self._verify_stop_loss_price_drift(position, sl_order)
+                    if drift_finding:
+                        max_severity = Severity.CRITICAL
+                        findings.append(drift_finding)
+
             except Exception as e:
                 logger.warning(
                     "Failed to verify stop-loss %s for %s: %s",
@@ -4898,6 +5081,182 @@ class PeriodicReconciler:
             cause,
             exchange_reason=exchange_reason,
         )
+
+    def _verify_stop_loss_price_drift(self, position: Any, sl_order: Any) -> str | None:
+        """Verify a confirmed-resting stop-loss order's actual price against the tracked
+        ``position.stop_loss`` and correct a divergence beyond tolerance (#1172).
+
+        Reached only when ``sl_order`` exists and is not FILLED/CANCELLED/EXPIRED/
+        REJECTED — i.e. the status checks above already consider it perfectly healthy.
+        A trailing-stop ratchet advances the tracked stop before cancelling and
+        re-placing the exchange order; if that cancel fails or is unconfirmed, the
+        tracked price moves while the resting order is deliberately left in place (to
+        avoid stacking a duplicate), and nothing else catches the resulting drift.
+
+        Mirrors the cancelled/expired re-placement branch above: cancel the stale
+        order, then re-place via ``place_or_adopt_stop_loss`` (the same guarded
+        machinery every other placement call site in this module uses), excluding the
+        id just cancelled so it cannot be re-adopted. If the cancel itself cannot be
+        confirmed, do NOT re-place — the original may still be live, and a second order
+        risks stacking or flipping the position (#713) — leave it resting for the next
+        cycle to retry.
+
+        Returns a short operator-facing finding string (for the cycle-severity page)
+        when a divergence was found, whether or not the correction itself succeeded, or
+        ``None`` when the price is within tolerance.
+        """
+        resting_price = getattr(sl_order, "stop_price", None)
+        tracked_price = getattr(position, "stop_loss", None)
+        if not _stop_loss_price_diverged(resting_price, tracked_price):
+            return None
+        # _stop_loss_price_diverged only returns True when both are non-None floats.
+        assert tracked_price is not None
+
+        symbol = position.symbol
+        sl_order_id = getattr(sl_order, "order_id", None)
+        if sl_order_id is None:
+            logger.error(
+                "Diverged stop-loss for %s has no order_id — cannot cancel/correct; will "
+                "re-check next cycle.",
+                symbol,
+            )
+            return (
+                f"{symbol} stop-loss price diverged: resting ${resting_price} vs "
+                f"tracked ${tracked_price:.2f}"
+            )
+        logger.critical(
+            "Stop-loss %s for %s is resting at $%s but the tracked stop is $%.2f — "
+            "diverged beyond %.0f%% tolerance (periodic check). Attempting cancel+re-place.",
+            sl_order_id,
+            symbol,
+            resting_price,
+            tracked_price,
+            _ADOPT_PRICE_TOLERANCE_FRACTION * 100,
+        )
+        detail = (
+            f"{symbol} stop-loss price diverged: resting ${resting_price} vs "
+            f"tracked ${tracked_price:.2f}"
+        )
+        try:
+            self.db_manager.log_audit_event(
+                session_id=self.session_id,
+                entity_type="position",
+                entity_id=getattr(position, "db_position_id", None),
+                field="stop_loss_price",
+                old_value=str(resting_price),
+                new_value=str(tracked_price),
+                reason=detail,
+                severity=Severity.CRITICAL.value,
+            )
+        except Exception as e:
+            logger.error("Failed to persist stop-loss price-drift audit for %s: %s", symbol, e)
+
+        if _position_holding_is_gone(self.exchange, self._use_margin, position):
+            logger.warning(
+                "Stop-loss price diverged for %s but the position no longer backs an "
+                "exchange holding — skipping correction (asset-holdings check will "
+                "remove the phantom).",
+                symbol,
+            )
+            return detail
+
+        cancelled = False
+        try:
+            cancelled = bool(self.exchange.cancel_order(sl_order_id, symbol))
+        except Exception as e:
+            logger.warning(
+                "Failed to cancel diverged stop-loss %s for %s: %s", sl_order_id, symbol, e
+            )
+        if not cancelled:
+            logger.critical(
+                "Could not confirm cancel of diverged stop-loss %s for %s — leaving it "
+                "resting (fail-closed, will not risk stacking a duplicate); the next "
+                "reconciliation cycle retries.",
+                sl_order_id,
+                symbol,
+            )
+            return detail
+
+        # Null INSIDE the lock, immediately after the confirmed cancel and before
+        # any of the placement computation below (which can itself raise) —
+        # move()'s trailing-stop ratchet serialises the identical cancel-guard-
+        # place sequence on this same per-symbol lock and re-reads
+        # stop_loss_order_id fresh once it acquires it (#1179). Without this, a
+        # ratchet blocked on the lock while this correction runs could observe
+        # the same naked post-cancel window and both place a replacement,
+        # stacking two resting stops on one held quantity (#1104/#1108 class) —
+        # the exact race #1179's lock exists to close, reopened here because
+        # this cancel+re-place predates that lock.
+        with self._stop_loss_placement_lock(symbol):
+            position.stop_loss_order_id = None
+
+        try:
+            from src.data_providers.exchange_interface import OrderSide
+
+            side = getattr(position, "side", "long")
+            side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
+            sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
+            qty = getattr(position, "quantity", 0) or 0.0
+            current = getattr(position, "current_size", None)
+            original = getattr(position, "original_size", None)
+            if current is not None and original is not None and original > 0:
+                qty = qty * (current / original)
+            if qty <= 0:
+                logger.info(
+                    "Position %s is flat — skipping stop-loss re-placement after cancel "
+                    "(periodic check)",
+                    symbol,
+                )
+                return detail
+
+            # Place and (on success) re-set INSIDE the lock too, so a concurrent
+            # move() re-reading stop_loss_order_id never observes a state this
+            # correction hasn't fully committed.
+            with self._stop_loss_placement_lock(symbol):
+                new_sl_id = place_or_adopt_stop_loss(
+                    self.exchange,
+                    symbol=symbol,
+                    side=sl_side,
+                    quantity=qty,
+                    stop_price=tracked_price,
+                    side_effect_type=SideEffectType.AUTO_REPAY,
+                    exclude_order_id=sl_order_id,
+                )
+                if new_sl_id:
+                    position.stop_loss_order_id = new_sl_id
+                    position.last_placed_stop_price = tracked_price
+        except Exception as e:
+            logger.critical(
+                "Exception re-placing diverged stop-loss for %s: %s — position may be "
+                "unprotected (periodic check)",
+                symbol,
+                e,
+            )
+            new_sl_id = None
+
+        db_pos_id = getattr(position, "db_position_id", None)
+        if db_pos_id is not None:
+            try:
+                self.db_manager.update_position(position_id=db_pos_id, stop_loss_order_id=new_sl_id)
+            except Exception as e:
+                logger.warning(
+                    "Failed to persist corrected stop-loss order ID for %s: %s", symbol, e
+                )
+
+        if new_sl_id:
+            logger.warning(
+                "Corrected diverged stop-loss for %s: new order %s @ %.2f (periodic check)",
+                symbol,
+                new_sl_id,
+                tracked_price,
+            )
+        else:
+            logger.critical(
+                "Cancelled diverged stop-loss for %s but re-placement failed — position "
+                "is unprotected (periodic check)",
+                symbol,
+            )
+        return detail
 
     def _place_missing_stop_loss(self, position: Any, order_key: str) -> None:
         """Place a stop-loss for a position that has none (e.g. phantom from timeout).
