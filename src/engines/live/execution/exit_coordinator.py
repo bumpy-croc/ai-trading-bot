@@ -318,11 +318,15 @@ class LiveExitCoordinator:
         candle: Any,
         skip_live_close: bool = False,
         exit_category: ExitReason = ExitReason.UNKNOWN,
+        close_notional_override: float | None = None,
     ) -> None:
         """Serialise the close on the position's base-asset lock, then execute it (#703).
 
         Re-entrant: an entry that already holds the lock (its SL-failed emergency
         close routes here) re-acquires it on the same thread without deadlock.
+
+        close_notional_override: see ``LiveExitHandler.execute_exit`` — passed
+        through unchanged for the partial-exit-complete route (#1183).
         """
         state = self._state
         from src.engines.live.reconciliation import PositionReconciler
@@ -339,6 +343,7 @@ class LiveExitCoordinator:
                 candle,
                 skip_live_close=skip_live_close,
                 exit_category=exit_category,
+                close_notional_override=close_notional_override,
             )
 
     def execute_exit_locked(
@@ -352,6 +357,7 @@ class LiveExitCoordinator:
         candle: Any,
         skip_live_close: bool = False,
         exit_category: ExitReason = ExitReason.UNKNOWN,
+        close_notional_override: float | None = None,
     ) -> None:
         """Close a position using shared execution modules."""
         state = self._state
@@ -403,6 +409,7 @@ class LiveExitCoordinator:
                     filled_price=base_price,
                     current_balance=state.current_balance,
                     exit_category=exit_category,
+                    close_notional_override=close_notional_override,
                 )
             else:
                 # #710: On margin a resting stop-loss order reserves the position's
@@ -464,6 +471,7 @@ class LiveExitCoordinator:
                     candle_low=candle_low,
                     data_provider=state.data_provider,
                     exit_category=exit_category,
+                    close_notional_override=close_notional_override,
                 )
                 if not exit_result.success and protective_order_cancelled:
                     # The close failed after we cancelled a clean (zero-fill) stop, so

@@ -11,7 +11,7 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import pandas as pd
 
@@ -85,6 +85,25 @@ class LiveExitCheck:
     early_cut_window_mfe_pct: float | None = None
 
 
+class ExecuteFullExitCallback(Protocol):
+    """Shape of ``LiveExitCoordinator.execute_exit`` (see ``execute_full_exit``)."""
+
+    def __call__(
+        self,
+        position: LivePosition,
+        reason: str,
+        limit_price: float | None,
+        current_price: float,
+        candle_high: float | None,
+        candle_low: float | None,
+        candle: Any,
+        *,
+        skip_live_close: bool = False,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
+        close_notional_override: float | None = None,
+    ) -> None: ...
+
+
 @dataclass
 class LiveExitResult:
     """Result of executing an exit."""
@@ -127,6 +146,7 @@ class LiveExitHandler:
         max_filled_price_deviation: float = DEFAULT_MAX_FILLED_PRICE_DEVIATION,
         close_only_provider: Callable[[], bool] | None = None,
         system_halt: SystemHaltState | None = None,
+        execute_full_exit: ExecuteFullExitCallback | None = None,
     ) -> None:
         """Initialize exit handler.
 
@@ -148,6 +168,15 @@ class LiveExitHandler:
             system_halt: The engine's shared manual kill-switch state (#922);
                 scale-ins are suppressed while it is active. None (tests,
                 standalone use) leaves only the feature-flag pause active.
+            execute_full_exit: The engine's ``LiveExitCoordinator.execute_exit``
+                (#486/#1166) — serialises on the base-asset lock (#703) and
+                runs the cancel-then-close sequence (#710) before submitting a
+                market close. Used when a partial exit fully closes a
+                position; calling the handler's own raw ``execute_exit``
+                instead would submit that close with the stop-loss still
+                resting. None (tests, standalone use without an engine) fails
+                safe: the close is skipped and left for the periodic
+                reconciler rather than risking an unprotected market close.
         """
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker
@@ -161,6 +190,7 @@ class LiveExitHandler:
         self.max_position_size = max_position_size
         self.max_filled_price_deviation = max_filled_price_deviation
         self._close_only_provider = close_only_provider
+        self._execute_full_exit = execute_full_exit
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
         self._strategy_exit_checker = StrategyExitChecker()
@@ -185,6 +215,17 @@ class LiveExitHandler:
         only — no behavioral state is lost.
         """
         self._entry_pause = EntryPauseGate(halt_state=system_halt)
+
+    def bind_full_exit(self, execute_full_exit: ExecuteFullExitCallback | None) -> None:
+        """Rebind the full-close route to the engine's exit coordinator (#1166).
+
+        A DI-injected handler is constructed before the engine's exit
+        coordinator exists, so the engine rebinds it here once both are built
+        — a partial exit that fully closes a position must never bypass the
+        coordinator's cancel-then-close sequence (#710) and base-asset lock
+        (#703).
+        """
+        self._execute_full_exit = execute_full_exit
 
     def _build_snapshot(
         self,
@@ -420,6 +461,7 @@ class LiveExitHandler:
         candle_low: float | None = None,
         data_provider: Any = None,
         exit_category: ExitReason = ExitReason.UNKNOWN,
+        close_notional_override: float | None = None,
     ) -> LiveExitResult:
         """Execute an exit for a position.
 
@@ -433,6 +475,13 @@ class LiveExitHandler:
             candle_high: Candle high for realistic execution modeling.
             candle_low: Candle low for realistic execution modeling.
             data_provider: Data provider for price fallback.
+            close_notional_override: Bypasses the ``current_size``-derived
+                notional (see ``_calculate_position_notional``). Used when a
+                partial exit fully closed the position: ``current_size`` is
+                already zeroed by then, but the exchange still holds the full
+                original quantity (#734: live partial exits don't place real
+                orders), so the one real close order this sequence submits
+                must be sized off that, not off the zeroed tracker state.
 
         Returns:
             LiveExitResult with execution details.
@@ -499,6 +548,7 @@ class LiveExitHandler:
             position=position,
             current_balance=current_balance,
             exit_price=base_exit_price,
+            close_notional_override=close_notional_override,
         )
 
         # Execute via execution engine
@@ -563,6 +613,7 @@ class LiveExitHandler:
         filled_price: float,
         current_balance: float,
         exit_category: ExitReason = ExitReason.UNKNOWN,
+        close_notional_override: float | None = None,
     ) -> LiveExitResult:
         """Finalize an exit where the exchange already filled the order.
 
@@ -572,6 +623,10 @@ class LiveExitHandler:
             exit_category: Typed exit category persisted alongside the detail.
             filled_price: Exchange-reported fill price.
             current_balance: Current account balance.
+            close_notional_override: See ``execute_exit`` — same fallback for
+                the partial-exit-complete case, used here for the exit-fee
+                calculation (no order is submitted in this path; the exchange
+                already filled it).
 
         Returns:
             LiveExitResult with execution details.
@@ -613,6 +668,7 @@ class LiveExitHandler:
             position=position,
             current_balance=current_balance,
             exit_price=executed_price,
+            close_notional_override=close_notional_override,
         )
 
         exit_fee = self.execution_engine.calculate_exit_fee(position_notional)
@@ -764,8 +820,21 @@ class LiveExitHandler:
         position: LivePosition,
         current_balance: float,
         exit_price: float,
+        close_notional_override: float | None = None,
     ) -> float:
-        """Calculate exit notional accounting for price movement."""
+        """Calculate exit notional accounting for price movement.
+
+        ``close_notional_override`` bypasses the ``current_size``-fraction
+        formula entirely. Needed for the final leg of a partial-exit
+        sequence (#1183): by the time the position is fully exited via
+        partials, the tracker's ``current_size`` is already zero, but live
+        partial exits are bookkeeping-only (#734 — no exchange order is
+        placed per partial), so the exchange still holds the full original
+        quantity. Deriving notional from the zeroed ``current_size`` there
+        would compute 0.0 and the real close order would be rejected.
+        """
+        if close_notional_override is not None:
+            return close_notional_override
         fraction = float(
             position.current_size if position.current_size is not None else position.size
         )
@@ -1109,14 +1178,67 @@ class LiveExitHandler:
                         "Position %s already closed after partial exits complete", order_id
                     )
                     return
-                self.execute_exit(
-                    position=position,
-                    exit_reason=f"Partial exits complete @ level {target_level}",
-                    exit_category=ExitReason.PARTIAL_EXIT_COMPLETE,
-                    current_price=price,
-                    limit_price=None,
-                    current_balance=current_balance,
-                )
+                # Route through the exit coordinator (not self.execute_exit)
+                # so a partial exit that fully closes the position gets the
+                # same #710 cancel-then-close sequence and #703 base-asset
+                # lock as every other close — calling execute_exit directly
+                # here would submit a market close with the stop-loss still
+                # resting (#1166).
+                if self._execute_full_exit is not None:
+                    self._execute_full_exit(
+                        position,
+                        f"Partial exits complete @ level {target_level}",
+                        None,  # limit_price
+                        price,  # current_price
+                        None,  # candle_high
+                        None,  # candle_low
+                        None,  # candle
+                        exit_category=ExitReason.PARTIAL_EXIT_COMPLETE,
+                        close_notional_override=self._full_close_notional_after_partials(
+                            position, price, current_balance
+                        ),
+                    )
+                else:
+                    logger.critical(
+                        "No exit-coordinator route wired for %s — cannot safely "
+                        "close the position fully exited via partials (would "
+                        "bypass the #710 cancel-then-close sequence and #703 "
+                        "base-asset lock). Leaving it for the periodic "
+                        "reconciler.",
+                        position.symbol,
+                    )
+
+    def _full_close_notional_after_partials(
+        self,
+        position: LivePosition,
+        price: float,
+        current_balance: float,
+    ) -> float:
+        """Notional for the one real order a fully-partialled-out position closes with.
+
+        Live partial exits are bookkeeping-only today (#734 — no exchange
+        order is placed for a PARTIAL_EXIT), so regardless of how many
+        partial "exits" the tracker recorded, the exchange still holds the
+        full original quantity right up until this final close. Size it off
+        ``position.quantity`` (the immutable entry-time asset amount,
+        untouched by ``apply_partial_exit``) rather than the now-zeroed
+        ``current_size`` fraction.
+        """
+        quantity = position.quantity
+        if quantity is None or quantity <= 0:
+            # position.quantity isn't always persisted (e.g. older DB rows) —
+            # fall back to the same balance-fraction derivation used when
+            # recording a position without one (see LivePositionTracker).
+            basis = (
+                float(position.entry_balance)
+                if position.entry_balance is not None and position.entry_balance > 0
+                else current_balance
+            )
+            fraction = float(position.original_size or position.size)
+            quantity = (
+                (fraction * basis) / position.entry_price if position.entry_price > 0 else 0.0
+            )
+        return quantity * price
 
     def _execute_scale_in(
         self,
