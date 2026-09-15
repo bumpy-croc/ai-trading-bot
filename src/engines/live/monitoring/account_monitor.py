@@ -86,31 +86,43 @@ class LiveAccountMonitor:
             logger.error("Failed to log account snapshot: %s", e, exc_info=True)
 
     def log_status(self, symbol: str, current_price: float) -> None:
-        """Log current trading status"""
-        state = self._state
-        total_unrealized = sum(
-            float(pos.unrealized_pnl) for pos in state.live_position_tracker.positions.values()
-        )
-        perf_metrics = state.performance_tracker.get_metrics()
-        win_rate = perf_metrics.win_rate * 100
+        """Log current trading status.
 
-        # Surface live inference timeouts (#927) so a degrading model is
-        # visible in routine ops logs, not only in per-bar WARNINGs.
-        # getattr keeps bare/legacy engine states working.
-        totals_fn = getattr(state, "inference_timeout_totals", None)
-        total_timeouts, consecutive_timeouts = totals_fn() if callable(totals_fn) else (0, 0)
-        timeout_note = f" | Inference timeouts: {total_timeouts}"
-        if consecutive_timeouts:
-            timeout_note += f" ({consecutive_timeouts} consecutive)"
+        Now fired on a bare wall-clock cadence (#1170) rather than gated
+        behind trade-count/position checks, so it runs far more often than
+        before. Wrapped like ``log_account_snapshot`` above: a malformed
+        position (or any other transient read failure) must never crash the
+        trading loop over a status line, and must never permanently silence
+        this heartbeat by raising before the caller records the attempt.
+        """
+        try:
+            state = self._state
+            total_unrealized = sum(
+                float(pos.unrealized_pnl) for pos in state.live_position_tracker.positions.values()
+            )
+            perf_metrics = state.performance_tracker.get_metrics()
+            win_rate = perf_metrics.win_rate * 100
 
-        logger.info(
-            f"📊 Status: {symbol} @ ${current_price:.2f} | "
-            f"Balance: ${state.current_balance:.2f} | "
-            f"Positions: {state.live_position_tracker.position_count} | "
-            f"Unrealized: ${total_unrealized:.2f} | "
-            f"Trades: {perf_metrics.total_trades} ({win_rate:.1f}% win)"
-            f"{timeout_note}"
-        )
+            # Surface live inference timeouts (#927) so a degrading model is
+            # visible in routine ops logs, not only in per-bar WARNINGs.
+            # getattr keeps bare/legacy engine states working.
+            totals_fn = getattr(state, "inference_timeout_totals", None)
+            total_timeouts, consecutive_timeouts = totals_fn() if callable(totals_fn) else (0, 0)
+            timeout_note = f" | Inference timeouts: {total_timeouts}"
+            if consecutive_timeouts:
+                timeout_note += f" ({consecutive_timeouts} consecutive)"
+
+            logger.info(
+                f"📊 Status: {symbol} @ ${current_price:.2f} | "
+                f"Balance: ${state.current_balance:.2f} | "
+                f"Positions: {state.live_position_tracker.position_count} | "
+                f"Unrealized: ${total_unrealized:.2f} | "
+                f"Trades: {perf_metrics.total_trades} ({win_rate:.1f}% win)"
+                f"{timeout_note}"
+            )
+        except Exception as e:
+            # Status logging must never crash the trading loop.
+            logger.error("Failed to log status: %s", e, exc_info=True)
 
     def print_final_stats(self) -> None:
         """Print final trading statistics"""

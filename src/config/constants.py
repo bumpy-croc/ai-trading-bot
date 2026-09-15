@@ -261,6 +261,7 @@ DEFAULT_CHECK_INTERVAL = 60  # Base check interval in seconds
 DEFAULT_MIN_CHECK_INTERVAL = 30  # Minimum check interval (high activity)
 DEFAULT_MAX_CHECK_INTERVAL = 300  # Maximum check interval (low activity)
 DEFAULT_PERFORMANCE_MONITOR_INTERVAL = 30  # Performance monitoring interval
+DEFAULT_STATUS_LOG_INTERVAL = 60  # Status heartbeat log interval in seconds
 DEFAULT_SLEEP_POLL_INTERVAL = 0.5  # Sleep polling interval (reduced from 0.1s)
 DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL = 1800  # Account snapshot interval (30 minutes)
 DEFAULT_DATA_FRESHNESS_THRESHOLD = 120  # Skip processing if data is older than 2 minutes
