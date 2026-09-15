@@ -251,7 +251,15 @@ class TestPlaceProtectionRestingStopGuard1112:
         audit_call = state.db_manager.log_audit_event.call_args.kwargs
         assert "wrong side" in audit_call["reason"]
 
-    def test_refuses_when_open_orders_lookup_is_unconfirmed(self):
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_refuses_when_open_orders_lookup_is_unconfirmed(self, mock_sleep):
+        """#1186: an unconfirmed lookup (None every time) never clears across
+        the DEFAULT_STOP_LOSS_MAX_RETRIES attempts, so this still ends up
+        refusing -- but only after spending the full retry budget on it, not
+        by bypassing the budget on attempt 0 the way the incomplete first fix
+        did (time.sleep is mocked because this now genuinely exercises the
+        backoff between attempts, not because a fresh test premise requires
+        it)."""
         state = make_state()
         state.exchange_interface.get_open_orders_checked.return_value = None
         manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
@@ -350,7 +358,12 @@ class TestReprotect:
         )
         state.db_manager.log_audit_event.assert_not_called()
 
-    def test_writes_audit_when_refused(self):
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_writes_audit_when_refused(self, mock_sleep):
+        """#1186: the guard consults on every attempt now, so a lookup that
+        stays unconfirmed exhausts the full retry budget (time.sleep mocked
+        for that reason) before refusing, rather than bypassing the budget on
+        attempt 0 the way the incomplete first fix did."""
         exchange = self._held_exchange()
         exchange.get_open_orders_checked.return_value = None  # unconfirmed -> REFUSE
         send_alert = Mock()

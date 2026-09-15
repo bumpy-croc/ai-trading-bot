@@ -3649,6 +3649,77 @@ class TestPlaceOrAdoptStopLossRetry:
         assert result == "sl-recovered"
         assert exchange.place_stop_loss_order.call_count == 2
 
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_first_attempt_unconfirmed_guard_is_not_terminal(self, mock_sleep):
+        """#1186 (round 2): an incomplete version of the fix above still ran
+        the very first ``guard_stop_placement`` check in a separate call
+        BEFORE entering the retry loop, and treated EVERY REFUSE from that
+        pre-loop check as terminal -- including an unconfirmed one. That made
+        ``max_attempts`` meaningless for the single most likely place to hit
+        an eventual-consistency lag: immediately after a confirmed cancel in
+        move()/reprotect(), milliseconds before the exchange's open-orders
+        view has caught up. A single transient lookup failure on what would
+        have been "attempt 0" must consume one attempt and retry via
+        backoff -- not return None with zero placement attempts ever made."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        # attempt 0's guard lookup is itself unconfirmed; attempt 1's clears.
+        exchange.get_open_orders_checked.side_effect = [None, []]
+        exchange.place_stop_loss_order.return_value = "sl-recovered"
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+        )
+
+        # The gap's symptom was: result is None and place_stop_loss_order was
+        # never called at all.
+        assert result == "sl-recovered"
+        exchange.place_stop_loss_order.assert_called_once()
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_exhausts_retries_when_guard_never_confirms(self, mock_sleep):
+        """[P2] The terminal 'exhausted while still unconfirmed' branch (the
+        one that decides whether a live position gets emergency-closed) had
+        zero test coverage. A lookup that stays unconfirmed/failing across
+        every attempt must exhaust the full retry budget without ever
+        guessing at a placement, return None, and fire on_refuse exactly
+        once."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import (
+            StopPlacementDecision,
+            place_or_adopt_stop_loss,
+        )
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = None  # unconfirmed, every attempt
+        refused: list[StopPlacementDecision] = []
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+            on_refuse=refused.append,
+        )
+
+        assert result is None
+        # Never guess: an unconfirmed guard must never let placement proceed,
+        # on any attempt.
+        exchange.place_stop_loss_order.assert_not_called()
+        assert len(refused) == 1
+        assert refused[0].unconfirmed is True
+
     def test_on_adopt_exception_is_fault_isolated(self, caplog):
         """A bug in the caller's on_adopt callback must not lose the adopted
         order id -- the callback runs in a window where a preceding cancel

@@ -380,6 +380,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (previously-unused constants in `src/config/constants.py`) now back the
   three `LiveStopLossManager` call sites and `entry_coordinator.py`'s
   retry-exhaustion log message instead of duplicated literals.
+- **Closed a second `place_or_adopt_stop_loss()` gap: the pre-loop guard check
+  itself bypassed the whole retry budget** (#1186, review follow-up to the
+  fix above). That fix re-consulted the guard on every retry attempt *after*
+  the first, but `place_or_adopt_stop_loss()` still ran one guard check
+  itself, before ever entering the retry loop, and treated every REFUSE from
+  that check as terminal — including an unconfirmed one (the guard's own
+  lookup failing, or the just-cancelled-order eventual-consistency lag).
+  A single transient lookup failure on that first check returned `None` with
+  **zero** placement attempts ever made, regardless of `max_attempts` — worse
+  than the bug the prior fix closed, and more likely to fire, since that
+  check runs immediately after a confirmed cancel in `move()`/`reprotect()`,
+  exactly when the exchange's view is most likely still lagging. The pre-loop
+  check is gone: `place_or_adopt_stop_loss()`'s `max_attempts > 1` path now
+  delegates to `_place_with_retry()` unconditionally, which consults the
+  guard on attempt 0 exactly like every later attempt via a new
+  `_resolve_stop_placement_attempt()` helper (also flattening the loop back
+  down from 5 nesting levels). The `max_attempts <= 1` path used by the
+  periodic reconciler's seven call sites is untouched — still a single guard
+  check, single placement attempt, exceptions still propagate. Also fixed:
+  the "retry budget preserved" warning could log immediately before a
+  contradictory "exhausted retry attempts" critical for the same attempt
+  (now the exhaustion check runs first); the exhaustion message's "without
+  ever confirming the guard check" was misleading when an earlier attempt HAD
+  confirmed PROCEED and only a later one went unconfirmed (reworded to name
+  the final attempt specifically); and a stale comment referencing a literal
+  "3-attempt budget" now names `DEFAULT_STOP_LOSS_MAX_RETRIES` like its
+  neighbors.
 - **`src/config/risk-limits.json` now governs the running system** (#986, design
   §3.5 "Hydration"). The Board-ratified limits file was previously **inert**: its
   loader (`src/config/risk_limits.py`, shipped in #1034) had zero consumers in

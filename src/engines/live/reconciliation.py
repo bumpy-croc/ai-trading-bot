@@ -428,42 +428,45 @@ def place_or_adopt_stop_loss(
     Only the retry path catches exceptions from ``place_stop_loss_order`` —
     the single-attempt default still propagates them, matching every existing
     caller's current behavior exactly. The retry loop re-consults
-    ``guard_stop_placement`` at the top of every attempt after the first: a
-    prior attempt can raise on something like a network timeout that the
-    exchange nonetheless accepted (the same ambiguous-submission case the
-    entry path already handles explicitly), so the next attempt must adopt
-    that just-landed order instead of stacking a second one on the same held
-    quantity — exactly the #1104/#1108 duplicate-stop class this guard exists
-    to prevent.
+    ``guard_stop_placement`` at the top of EVERY attempt, including the first
+    (#1186): a prior attempt can raise on something like a network timeout
+    that the exchange nonetheless accepted (the same ambiguous-submission
+    case the entry path already handles explicitly), so the next attempt must
+    adopt that just-landed order instead of stacking a second one on the same
+    held quantity — exactly the #1104/#1108 duplicate-stop class this guard
+    exists to prevent. Consulting the guard on the first attempt too matters
+    just as much: an early version of this fix only re-consulted after the
+    first attempt, so a single transient lookup failure on attempt 0 returned
+    ``None`` with zero placement attempts ever made, bypassing the whole
+    retry budget on the exact condition retry/backoff exists to survive.
 
     ``on_adopt``, if given, is invoked with the full ``StopPlacementDecision``
     when an untracked resting stop is adopted — for a caller (``move()``) that
     needs the ACTUAL resting price/quantity, not just the order id, without
     re-running the guard check itself. ``on_refuse`` is the REFUSE-side
     equivalent, invoked with the decision (and its specific ``reason``) when
-    the guard refuses — the initial check or a retry re-consult — so a caller
-    can surface that reason in its own alert/audit instead of a generic
-    message. Both callbacks are fault-isolated: an exception from either is
-    logged and swallowed rather than propagated.
+    the guard refuses — on any attempt — so a caller can surface that reason
+    in its own alert/audit instead of a generic message. Both callbacks are
+    fault-isolated: an exception from either is logged and swallowed rather
+    than propagated.
     """
-    decision = guard_stop_placement(
-        exchange, symbol, side, stop_price=stop_price, exclude_order_id=exclude_order_id
-    )
-    if decision.check == StopPlacementCheck.REFUSE:
-        logger.critical(
-            "Refusing to place a stop-loss for %s: %s — skipping this "
-            "placement (fail-closed, #1112).",
-            symbol,
-            decision.reason,
-        )
-        _invoke_on_refuse(on_refuse, decision, symbol)
-        return None
-    if decision.check == StopPlacementCheck.ADOPT:
-        _log_adoption(decision, symbol, stop_price, quantity)
-        _invoke_on_adopt(on_adopt, decision, symbol)
-        return decision.existing_order_id
-
     if max_attempts <= 1:
+        decision = guard_stop_placement(
+            exchange, symbol, side, stop_price=stop_price, exclude_order_id=exclude_order_id
+        )
+        if decision.check == StopPlacementCheck.REFUSE:
+            logger.critical(
+                "Refusing to place a stop-loss for %s: %s — skipping this "
+                "placement (fail-closed, #1112).",
+                symbol,
+                decision.reason,
+            )
+            _invoke_on_refuse(on_refuse, decision, symbol)
+            return None
+        if decision.check == StopPlacementCheck.ADOPT:
+            _log_adoption(decision, symbol, stop_price, quantity)
+            _invoke_on_adopt(on_adopt, decision, symbol)
+            return decision.existing_order_id
         return exchange.place_stop_loss_order(
             symbol=symbol,
             side=side,
@@ -488,6 +491,119 @@ def place_or_adopt_stop_loss(
     )
 
 
+class _StopPlacementAttemptAction(Enum):
+    """What ``_place_with_retry`` should do next for one attempt, decided by
+    ``_resolve_stop_placement_attempt``.
+
+    Deliberately a plain ``Enum``, not ``(str, Enum)`` like ``StopPlacementCheck``
+    — ``_place_with_retry`` distinguishes these sentinels from an adopted order
+    id via ``isinstance(outcome, str)``, which a str-backed enum member would
+    also satisfy.
+    """
+
+    PLACE = "place"  # guard confirmed PROCEED — attempt place_stop_loss_order
+    SKIP = "skip"  # unconfirmed REFUSE, budget remains — skip placing, keep looping
+    STOP = "stop"  # terminal — return None immediately
+
+
+def _resolve_stop_placement_attempt(
+    exchange: Any,
+    *,
+    symbol: str,
+    side: Any,
+    quantity: float,
+    stop_price: float,
+    exclude_order_id: str | None,
+    attempt: int,
+    max_attempts: int,
+    retry_log_prefix: str,
+    on_adopt: Callable[[StopPlacementDecision], None] | None,
+    on_refuse: Callable[[StopPlacementDecision], None] | None,
+) -> _StopPlacementAttemptAction | str:
+    """Consult ``guard_stop_placement`` for one attempt of the retry loop and
+    decide what ``_place_with_retry`` should do next.
+
+    Called for EVERY attempt, including the first (#1186): a REFUSE the guard
+    itself could not confirm (its own lookup failing, or the just-cancelled-
+    order eventual-consistency lag) must not be treated as terminal on
+    attempt 0 any more than on a later attempt — the gap in an earlier
+    version of this fix, which only re-consulted the guard after the first
+    attempt and so let a single transient lookup failure return ``None``
+    with zero placements ever attempted.
+
+    Returns ``_StopPlacementAttemptAction.PLACE`` when the caller should
+    attempt ``place_stop_loss_order`` this round; ``...SKIP`` when an
+    unconfirmed REFUSE means this round places nothing but the retry budget
+    is preserved; ``...STOP`` when the caller should return ``None``
+    immediately — a genuine conflict (wrong side, wrong price, multiple
+    resting orders, or a just-cancelled order the exchange hasn't caught up
+    on yet), or an unconfirmed REFUSE on the final attempt; or a ``str`` — the
+    adopted order id — when the caller should return that immediately.
+    """
+    decision = guard_stop_placement(
+        exchange, symbol, side, stop_price=stop_price, exclude_order_id=exclude_order_id
+    )
+    if decision.check == StopPlacementCheck.ADOPT:
+        _log_adoption(decision, symbol, stop_price, quantity)
+        _invoke_on_adopt(on_adopt, decision, symbol)
+        # ADOPT always carries a non-None existing_order_id (set alongside the
+        # check in _classify_stop_placement) -- cast rather than widen this
+        # function's return type with a None the caller would then have to
+        # needlessly distinguish from _StopPlacementAttemptAction.STOP.
+        return cast(str, decision.existing_order_id)
+    if decision.check == StopPlacementCheck.PROCEED:
+        return _StopPlacementAttemptAction.PLACE
+
+    # REFUSE. A genuine conflict never clears just by retrying, so it is
+    # terminal regardless of which attempt hit it.
+    if not decision.unconfirmed:
+        logger.critical(
+            "Refusing to place a stop-loss for %s (attempt %s/%s): %s — "
+            "skipping further attempts (fail-closed, #1112).",
+            symbol,
+            attempt + 1,
+            max_attempts,
+            decision.reason,
+        )
+        _invoke_on_refuse(on_refuse, decision, symbol)
+        return _StopPlacementAttemptAction.STOP
+
+    # Unconfirmed: the guard's own lookup failed, or hasn't caught up with a
+    # cancel we already confirmed. Check whether the budget is exhausted
+    # BEFORE logging anything, so an operator never sees "retry budget
+    # preserved" immediately followed by "exhausted retry attempts" for the
+    # same attempt.
+    if attempt == max_attempts - 1:
+        logger.critical(
+            "Exhausted retry attempts for %s stop-loss placement: the guard "
+            "check could not be confirmed on the final attempt (%s) — "
+            "skipping further attempts (fail-closed, #1112).",
+            symbol,
+            decision.reason,
+        )
+        _invoke_on_refuse(on_refuse, decision, symbol)
+        return _StopPlacementAttemptAction.STOP
+
+    # The retry loop only exists because something already failed once --
+    # often the same transient condition (a timeout, a rate limit) that just
+    # broke this attempt's own guard lookup. Treating that as a terminal
+    # conflict would collapse a DEFAULT_STOP_LOSS_MAX_RETRIES-attempt budget
+    # to a single attempt under exactly the conditions retry/backoff was
+    # built to survive (#1186). Don't place blind, but don't give up either --
+    # skip this attempt's placement and let the loop's usual backoff sleep
+    # carry it into the next one.
+    logger.warning(
+        "%s attempt %s/%s for %s: guard check could not be confirmed (%s) — "
+        "not placing this attempt, retry budget preserved.",
+        retry_log_prefix,
+        attempt + 1,
+        max_attempts,
+        symbol,
+        decision.reason,
+    )
+    return _StopPlacementAttemptAction.SKIP
+
+
 def _place_with_retry(
     exchange: Any,
     *,
@@ -506,80 +622,36 @@ def _place_with_retry(
     """The exponential-backoff retry loop behind ``place_or_adopt_stop_loss``'s
     ``max_attempts > 1`` path.
 
-    Re-consults ``guard_stop_placement`` at the top of every attempt AFTER
-    the first (the first attempt's decision was already made by the caller
-    before entering this loop). This is the fix for the gap the three inline
-    copies this helper replaced all shared: ``place_stop_loss_order`` can
-    raise after the exchange has already accepted and rested the order (a
-    timeout on the response, not on the submission) — without re-checking,
-    the next attempt would place a SECOND protective stop on the same held
-    quantity, orphaning the first as an untracked resting stop.
-
-    A REFUSE from that re-consult is only treated as terminal when it reflects
-    a genuine conflict (wrong side, wrong price, multiple resting orders, or a
-    just-cancelled order the exchange hasn't caught up on yet). When it
-    instead means the guard's own lookup failed or couldn't be confirmed
-    (``StopPlacementDecision.unconfirmed``), this does not place on that
-    attempt but preserves the remaining retry budget — the retry loop only
-    runs because something already failed once, so the same transient
-    condition frequently breaks the re-consult's lookup too, and treating that
-    as terminal would collapse a multi-attempt budget to a single attempt
-    under exactly the conditions retry/backoff exists to survive (#1186).
+    Consults ``guard_stop_placement`` (via ``_resolve_stop_placement_attempt``)
+    at the top of EVERY attempt, including the first (#1186). This is the fix
+    for the gap the three inline copies this helper replaced all shared:
+    ``place_stop_loss_order`` can raise after the exchange has already
+    accepted and rested the order (a timeout on the response, not on the
+    submission) — without re-checking, the next attempt would place a SECOND
+    protective stop on the same held quantity, orphaning the first as an
+    untracked resting stop.
     """
     delay = retry_delay
     for attempt in range(max_attempts):
-        skip_placement = False
-        if attempt > 0:
-            decision = guard_stop_placement(
-                exchange, symbol, side, stop_price=stop_price, exclude_order_id=exclude_order_id
-            )
-            if decision.check == StopPlacementCheck.REFUSE:
-                if decision.unconfirmed:
-                    # The retry loop only exists because something already
-                    # failed once -- often the same transient condition (a
-                    # timeout, a rate limit) that just broke this re-consult's
-                    # own lookup. Treating that as a terminal conflict would
-                    # collapse a 3-attempt budget to 1 attempt under exactly
-                    # the conditions the retry/backoff was built to survive
-                    # (#1186). Don't place blind, but don't give up either --
-                    # fall through to the same sleep/continue an exception
-                    # from place_stop_loss_order already gets below.
-                    logger.warning(
-                        "%s attempt %s/%s for %s: guard re-consult could not be "
-                        "confirmed (%s) — not placing this attempt, retry budget "
-                        "preserved.",
-                        retry_log_prefix,
-                        attempt + 1,
-                        max_attempts,
-                        symbol,
-                        decision.reason,
-                    )
-                    if attempt == max_attempts - 1:
-                        logger.critical(
-                            "Exhausted retry attempts for %s stop-loss placement "
-                            "without ever confirming the guard check: %s — "
-                            "skipping further attempts (fail-closed, #1112).",
-                            symbol,
-                            decision.reason,
-                        )
-                        _invoke_on_refuse(on_refuse, decision, symbol)
-                        return None
-                    skip_placement = True
-                else:
-                    logger.critical(
-                        "Refusing to retry a stop-loss placement for %s: %s — "
-                        "skipping further attempts (fail-closed, #1112).",
-                        symbol,
-                        decision.reason,
-                    )
-                    _invoke_on_refuse(on_refuse, decision, symbol)
-                    return None
-            elif decision.check == StopPlacementCheck.ADOPT:
-                _log_adoption(decision, symbol, stop_price, quantity)
-                _invoke_on_adopt(on_adopt, decision, symbol)
-                return decision.existing_order_id
+        outcome = _resolve_stop_placement_attempt(
+            exchange,
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            stop_price=stop_price,
+            exclude_order_id=exclude_order_id,
+            attempt=attempt,
+            max_attempts=max_attempts,
+            retry_log_prefix=retry_log_prefix,
+            on_adopt=on_adopt,
+            on_refuse=on_refuse,
+        )
+        if outcome is _StopPlacementAttemptAction.STOP:
+            return None
+        if isinstance(outcome, str):
+            return outcome
 
-        if not skip_placement:
+        if outcome is _StopPlacementAttemptAction.PLACE:
             try:
                 order_id = exchange.place_stop_loss_order(
                     symbol=symbol,
@@ -599,6 +671,9 @@ def _place_with_retry(
                     symbol,
                     e,
                 )
+        # outcome is SKIP: place nothing this round, fall through to the same
+        # backoff sleep an exception from place_stop_loss_order gets above.
+
         if attempt < max_attempts - 1:
             time.sleep(delay)
             delay *= 2
