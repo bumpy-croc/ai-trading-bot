@@ -486,6 +486,7 @@ def test_close_only_mode_blocks_entry_evaluation():
 
     state = create_autospec(LiveEntryEngineState, instance=True)
     state._close_only_mode = True  # what the drawdown trip sets
+    state.db_manager = None  # skip strategy-execution DB logging (#1169)
     strategy = MagicMock()
     state.strategy = strategy
 
