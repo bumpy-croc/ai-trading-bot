@@ -9,6 +9,7 @@ All corrections are recorded as immutable audit events with before/after values.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 import threading
@@ -366,6 +367,44 @@ def place_or_adopt_stop_loss(
         stop_price=stop_price,
         side_effect_type=side_effect_type,
     )
+
+
+def write_unprotected_audit(
+    db_manager: Any,
+    session_id: int | None,
+    position: Any,
+    cause: str,
+    *,
+    exchange_reason: str | None = None,
+) -> str:
+    """Persist a CRITICAL audit row for a position left without a stop-loss and
+    return a short operator-facing detail string.
+
+    Shared by ``PeriodicReconciler._audit_unprotected`` and
+    ``LiveStopLossManager`` (#1167's trailing-stop move) so every caller that
+    discovers an unprotected position leaves the same DB trail instead of just
+    a log line — a log-only escalation is exactly the gap #853 closed for the
+    reconciler. Fault-isolated: an audit-write failure must never break the
+    caller's own escalation path.
+    """
+    symbol = getattr(position, "symbol", "unknown")
+    detail = f"{symbol} unprotected — SL re-placement failed ({cause})"
+    if exchange_reason:
+        detail = f"{detail}; {exchange_reason}"
+    try:
+        db_manager.log_audit_event(
+            session_id=session_id,
+            entity_type="position",
+            entity_id=getattr(position, "db_position_id", None),
+            field="stop_loss_order_id",
+            old_value=str(getattr(position, "stop_loss_order_id", None)),
+            new_value=None,
+            reason=detail,
+            severity=Severity.CRITICAL.value,
+        )
+    except Exception as e:
+        logger.error("Failed to persist unprotected-position audit: %s", e)
+    return detail
 
 
 @runtime_checkable
@@ -3445,6 +3484,11 @@ class PeriodicReconciler:
         )
         # Shared per-base-asset exchange-mutation lock (serialises sweep vs entry/exit).
         self._lock_registry = lock_registry
+        # One-shot guard for the unlocked-fallback warning in
+        # _stop_loss_placement_lock (#1179 P2) — the fallback is legitimate
+        # for standalone/test construction but must not go unnoticed if it
+        # ever happens with a real engine, without spamming every cycle.
+        self._warned_no_stop_loss_lock_registry = False
         # Reuses the startup reconciler's P&L realization (balance + audit) so a
         # stop-loss fill detected by the periodic cycle books money identically
         # to one detected at startup. Construction is side-effect-free.
@@ -4125,7 +4169,20 @@ class PeriodicReconciler:
                         position.symbol,
                         status_desc,
                     )
-                    position.stop_loss_order_id = None
+                    # Cleared immediately, before any of the early-exit paths
+                    # below (position-gone, flat qty, no stop price, or an
+                    # exception during placement) — leaving a dead id in place
+                    # on those paths breaks the `not sl_order_id` check at the
+                    # top of this loop, so the position never routes into
+                    # _place_missing_stop_loss() on a later cycle and is stuck
+                    # unprotected forever (#1179 round 5). Wrapped in the
+                    # placement lock since it's the same field move()'s
+                    # trailing-stop ratchet reads and writes under that lock
+                    # (#1179 round 3); the placement block below re-nulls it
+                    # again once it reacquires the lock, which is a harmless,
+                    # idempotent no-op.
+                    with self._stop_loss_placement_lock(position.symbol):
+                        position.stop_loss_order_id = None
 
                     # Account for partial SL fills before re-placement.
                     # If the SL partially executed, reduce current_size
@@ -4192,16 +4249,26 @@ class PeriodicReconciler:
                                     position.symbol,
                                 )
                                 continue
-                            new_sl_id = place_or_adopt_stop_loss(
-                                self.exchange,
-                                symbol=position.symbol,
-                                side=sl_side,
-                                quantity=qty,
-                                stop_price=stop_price,
-                                side_effect_type=SideEffectType.AUTO_REPAY,
-                            )
+                            with self._stop_loss_placement_lock(position.symbol):
+                                # Null and (on success) re-set INSIDE the lock:
+                                # move()'s trailing-stop ratchet serialises on
+                                # this same lock and re-reads this field fresh
+                                # once it acquires it, so both ends must see a
+                                # consistent value rather than racing an
+                                # unsynchronised write from out here (#1179).
+                                position.stop_loss_order_id = None
+                                new_sl_id = place_or_adopt_stop_loss(
+                                    self.exchange,
+                                    symbol=position.symbol,
+                                    side=sl_side,
+                                    quantity=qty,
+                                    stop_price=stop_price,
+                                    side_effect_type=SideEffectType.AUTO_REPAY,
+                                )
+                                if new_sl_id:
+                                    position.stop_loss_order_id = new_sl_id
+                                    position.last_placed_stop_price = stop_price
                             if new_sl_id:
-                                position.stop_loss_order_id = new_sl_id
                                 logger.info(
                                     "Re-placed stop-loss for %s: %s @ %.2f " "(periodic check)",
                                     position.symbol,
@@ -4431,6 +4498,38 @@ class PeriodicReconciler:
             alert=True,
         )
 
+    def _stop_loss_placement_lock(self, symbol: str) -> contextlib.AbstractContextManager[Any]:
+        """Per-base-asset lock guarding a stop-loss re-placement, or a no-op.
+
+        Re-placing a stop must serialise with everything else that mutates the
+        same base asset's resting stop order — most importantly
+        ``LiveStopLossManager.move()``'s cancel+place for a trailing-stop ratchet
+        (#1167) — so the two can never both observe the naked post-cancel window
+        and both place a replacement, stacking two resting stops on one held
+        quantity (#1104/#1108). Falls back to a no-op when no registry was wired
+        (e.g. standalone/test construction) rather than the orphaned-borrow
+        sweep's own hard refusal, because a missing stop-loss must still get
+        protected even in that degraded configuration — but unlike the sweep,
+        that fallback is silent by default, so it logs once per instance
+        naming the consequence (#1179 P2).
+        """
+        if self._lock_registry is None:
+            if not self._warned_no_stop_loss_lock_registry:
+                self._warned_no_stop_loss_lock_registry = True
+                logger.warning(
+                    "PeriodicReconciler has no lock_registry wired — stop-loss "
+                    "re-placement will run UNLOCKED and can race "
+                    "LiveStopLossManager.move()'s trailing-stop ratchet, "
+                    "risking a duplicate resting stop on the same held "
+                    "quantity (#1104/#1108/#1179). Expected only for "
+                    "standalone/test construction; a live engine must wire "
+                    "the same BaseAssetLockRegistry it gives the stop-loss "
+                    "manager."
+                )
+            return contextlib.nullcontext()
+        base_asset = PositionReconciler._extract_base_asset(symbol)
+        return self._lock_registry.lock_for(base_asset)
+
     def _last_exchange_order_error(self, symbol: str) -> str | None:
         """The exchange's own reason for its most recent order failure on ``symbol``.
 
@@ -4470,28 +4569,17 @@ class PeriodicReconciler:
         The periodic SL re-placement failure paths previously only logged +
         bumped the cycle severity, so the paged cycle-severity event pointed
         operators at a ``reconciliation_audit_events`` table that held no row for
-        the cause. Writing the row here makes that pointer honest. Fault-isolated:
-        an audit-write failure must never break the reconcile cycle.
+        the cause. Writing the row here makes that pointer honest.
         """
         symbol = getattr(position, "symbol", "unknown")
-        detail = f"{symbol} unprotected — SL re-placement failed ({cause})"
         exchange_reason = self._last_exchange_order_error(symbol)
-        if exchange_reason:
-            detail = f"{detail}; {exchange_reason}"
-        try:
-            self.db_manager.log_audit_event(
-                session_id=self.session_id,
-                entity_type="position",
-                entity_id=getattr(position, "db_position_id", None),
-                field="stop_loss_order_id",
-                old_value=str(getattr(position, "stop_loss_order_id", None)),
-                new_value=None,
-                reason=detail,
-                severity=Severity.CRITICAL.value,
-            )
-        except Exception as e:
-            logger.error("Failed to persist unprotected-position audit: %s", e)
-        return detail
+        return write_unprotected_audit(
+            self.db_manager,
+            self.session_id,
+            position,
+            cause,
+            exchange_reason=exchange_reason,
+        )
 
     def _place_missing_stop_loss(self, position: Any, order_key: str) -> None:
         """Place a stop-loss for a position that has none (e.g. phantom from timeout).
@@ -4552,16 +4640,23 @@ class PeriodicReconciler:
             if current is not None and original is not None and original > 0:
                 qty = qty * (current / original)
 
-            new_sl_id = place_or_adopt_stop_loss(
-                self.exchange,
-                symbol=position.symbol,
-                side=sl_side,
-                quantity=qty,
-                stop_price=stop_price,
-                side_effect_type=SideEffectType.AUTO_REPAY,
-            )
+            with self._stop_loss_placement_lock(position.symbol):
+                new_sl_id = place_or_adopt_stop_loss(
+                    self.exchange,
+                    symbol=position.symbol,
+                    side=sl_side,
+                    quantity=qty,
+                    stop_price=stop_price,
+                    side_effect_type=SideEffectType.AUTO_REPAY,
+                )
+                # Set INSIDE the lock — see the Step-2 re-placement's own
+                # comment: move()'s trailing-stop ratchet serialises on this
+                # same lock and re-reads this field fresh once it acquires
+                # it (#1179).
+                if new_sl_id:
+                    position.stop_loss_order_id = new_sl_id
+                    position.last_placed_stop_price = stop_price
             if new_sl_id:
-                position.stop_loss_order_id = new_sl_id
                 logger.info(
                     "Placed missing stop-loss for %s: %s @ %.2f (periodic check)",
                     position.symbol,

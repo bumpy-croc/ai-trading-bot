@@ -57,6 +57,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the ungated path still diverges.
 
 ### Fixed
+- **Trailing-stop ratchets never moved the exchange-side stop-loss order** (#1167; found
+  root-causing #1165's abort storm). `LiveExitHandler.update_trailing_stops` updated
+  `position.stop_loss` in memory and the DB as the trail ratcheted, but the resting exchange
+  order stayed at its original (lower) price forever — a real protection gap, since the
+  position was never actually protected at the price the engine (and the DB) believed. It was
+  also the direct trigger of #1165: `_check_stop_loss` evaluates the *engine-side*
+  `position.stop_loss` against the candle low every loop iteration, so the engine's own exit
+  condition kept re-firing every ~66s against a stop the exchange would never hit at that
+  price. `LiveStopLossManager` gains a `move()` method that cancels the resting order and
+  places a new one at the ratcheted price through the same guarded placement path as
+  `reprotect()` (#1112's fail-closed resting-stop check, with `exclude_order_id` so the
+  just-cancelled order is never re-adopted); `update_trailing_stops` calls it only when the
+  tracked stop price itself changed AND the move clears a `MIN_TRAILING_STOP_MOVE_FRACTION`
+  (0.05%) floor, not on activation/breakeven-flag-only updates or sub-tick noise. `move()`'s
+  cancel-guard-place round-trip serialises on the same per-base-asset lock
+  (`state._base_asset_locks`) as `execute_entry`/`execute_exit` and the periodic reconciler's
+  own SL re-placement — without it, a ratchet mid cancel-guard-place could race a
+  reconciliation cycle and both observe the naked post-cancel window, stacking two resting
+  stops on one held quantity (the #1104/#1108 class); the reconciler's own re-placement paths
+  now take the same lock. Cancel-succeeded/re-place-failed also writes a persisted CRITICAL
+  audit row (`write_unprotected_audit`, shared with the reconciler's `_audit_unprotected`),
+  not just a log line + alert. The reconciler's stop-loss audit still checks order status/fill
+  only, not price — tracked separately in #1172 as defense-in-depth for `move()`'s own
+  conservative failure path (a failed cancel leaves the old order resting rather than risk
+  stacking a duplicate).
+- **Two integrity gaps in #1167's own base-asset-lock fix** (#1179, round 4 of the same PR).
+  (1) `move()` captured `stop_loss_order_id` *before* acquiring the base-asset lock and reused
+  that stale snapshot as `exclude_order_id` deep inside the locked cancel-guard-place sequence;
+  since the periodic reconciler's Step-2 re-placement now serialises on the same lock, a
+  reconciler cycle could swap the tracked order id while `move()` waited for the lock, and
+  `move()` would then exclude the wrong (already-dead) id — letting a lagging exchange
+  open-orders view make it ADOPT an order it (or the reconciler) had just cancelled. Fixed by
+  re-reading `stop_loss_order_id` fresh *inside* the lock for both the cancel and the exclusion
+  filter; the reconciler's own null/set of that field is now inside its matching lock scope too
+  (it previously nulled before acquiring the lock and set the new id after releasing it — an
+  unsynchronised write racing `move()`'s in-lock read). (2) The trailing-stop min-move floor
+  compared each ratchet against the *tracked* `position.stop_loss`, which advances every cycle
+  regardless of whether the floor passes — so a monotonic run of sub-threshold ratchets never
+  accumulated past the floor, letting `stop_loss` drift arbitrarily far from the exchange's real
+  resting price with no real `move()` ever firing. A new `LivePosition.last_placed_stop_price`
+  (updated on every successful placement/reprotect/move, including the achieved price on an
+  ADOPT) is now the floor's baseline instead, so sub-threshold increments correctly accumulate
+  and eventually cross it. Both fixes are covered by real-thread concurrency tests (a reconciler
+  stand-in swapping the order id while `move()` waits on the lock) and a monotonic sub-threshold
+  drift simulation, each with a discrimination check confirming the specific failure mode
+  reproduces when the fix is reverted. Also: `move()`'s guard-REFUSE-after-cancel path now
+  writes the same persisted CRITICAL audit row as its cancel-succeeded/re-place-failed sibling;
+  the reconciler's unlocked-fallback path (no `lock_registry` wired) now logs a one-time WARNING
+  instead of degrading silently.
 - **`exit_reason` was free text with substring-matched control flow** (#1115). The backtest
   engine chose an exit's order type with `if "Stop loss" in exit_reason:`, so the `stop_loss`
   and `stop_loss_filled_offline` spellings silently skipped it and exited as market orders with

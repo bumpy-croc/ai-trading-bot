@@ -269,6 +269,10 @@ def test_failed_close_reprotects_when_still_held():
     assert kw["stop_price"] == 95.0
     assert kw["side"] == OrderSide.SELL
     assert kw["quantity"] == pytest.approx(0.5)
+    # #1179: reprotect() seeds the trailing-stop min-move floor's baseline
+    # too, not just move() -- otherwise the first ratchet after a reprotect
+    # would compare against a stale (or missing) baseline.
+    assert position.last_placed_stop_price == pytest.approx(95.0)
 
 
 def test_failed_close_skips_reprotect_when_not_held():
@@ -330,6 +334,9 @@ def test_reprotect_adopts_untracked_resting_stop_instead_of_duplicating():
 
     engine.exchange_interface.place_stop_loss_order.assert_not_called()
     assert position.stop_loss_order_id == "already_resting"
+    # #1179: the ADOPT branch seeds the floor's baseline from the achieved
+    # (actually-resting) price too, matching move()'s own ADOPT handling.
+    assert position.last_placed_stop_price == pytest.approx(95.0)
 
 
 def test_reprotect_refuses_when_resting_stop_lookup_unconfirmed():

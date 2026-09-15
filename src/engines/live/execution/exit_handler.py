@@ -19,6 +19,7 @@ from src.config.constants import (
     DEFAULT_MAX_FILLED_PRICE_DEVIATION,
     DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE,
     DEFAULT_MAX_POSITION_SIZE,
+    MIN_TRAILING_STOP_MOVE_FRACTION,
 )
 from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.live.execution.entry_pause import EntryPauseGate
@@ -55,6 +56,7 @@ from src.trading.exit_reason import (
 )
 
 if TYPE_CHECKING:
+    from src.engines.live.execution.stop_loss_manager import LiveStopLossManager
     from src.position_management.early_cut import EarlyCutPolicy
     from src.position_management.time_exits import TimeExitPolicy
     from src.position_management.trailing_stops import TrailingStopPolicy
@@ -67,6 +69,36 @@ logger = logging.getLogger(__name__)
 # Use centralized constant for partial exits limit (defense-in-depth against malformed policies)
 MAX_PARTIAL_EXITS_PER_CYCLE = DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE
 ZERO_VALUE = 0.0
+
+
+def _exceeds_min_trailing_stop_move(
+    new_stop_price: float, last_placed_stop_price: float | None
+) -> bool:
+    """Whether a ratchet is large enough to justify moving the exchange stop (#1167).
+
+    Without a floor, ``update_trailing_stops`` would do a real cancel+place
+    round-trip on every loop iteration once a position is past activation, even
+    for sub-tick price noise — needlessly repeating the naked cancel-to-place
+    window every cycle.
+
+    The baseline MUST be the price the resting exchange order actually sits
+    at (``LivePosition.last_placed_stop_price``), not the tracked
+    ``position.stop_loss``: the ratchet advances ``stop_loss`` every cycle
+    regardless of whether this gate passes, so comparing against it would
+    reset each check against an already-advanced value — a monotonic run of
+    sub-threshold ratchets would then never accumulate past the floor, and
+    ``stop_loss`` would drift arbitrarily far from what the exchange will
+    actually trigger at, silently, forever (#1179).
+
+    A missing/non-positive baseline (no resting order placed yet, or an
+    in-memory reset after a restart) always passes — that case is a first
+    placement/resync, not a move, and ``move()`` itself no-ops when there is
+    nothing to cancel.
+    """
+    if not last_placed_stop_price or last_placed_stop_price <= 0:
+        return True
+    min_delta = abs(last_placed_stop_price) * MIN_TRAILING_STOP_MOVE_FRACTION
+    return abs(new_stop_price - last_placed_stop_price) >= min_delta
 
 
 @dataclass
@@ -171,10 +203,24 @@ class LiveExitHandler:
         # #802 follow-up P3: optional exposure governor to cap scale-in exposure
         # (set by the engine; None => inert). Mirrors the entry handler's gate.
         self._exposure_governor: ExposureGovernor | None = None
+        # Bound after construction (#1167): the engine builds its stop-loss
+        # manager after the exit handler. None => a ratcheted trailing stop
+        # only updates position.stop_loss in memory/DB, matching pre-#1167
+        # behavior (e.g. paper trading, or a handler built without one).
+        self._stop_loss_manager: LiveStopLossManager | None = None
 
     def configure_exposure_gate(self, exposure_governor: ExposureGovernor | None) -> None:
         """Wire the #802 exposure governor so scale-ins respect the gross cap."""
         self._exposure_governor = exposure_governor
+
+    def bind_stop_loss_manager(self, stop_loss_manager: LiveStopLossManager | None) -> None:
+        """Wire the engine's stop-loss manager so a trailing-stop ratchet can
+        move the resting exchange order, not just the in-memory/DB value (#1167).
+
+        Built and bound after construction because the engine assembles its
+        stop-loss manager after the exit handler (mirrors ``bind_system_halt``).
+        """
+        self._stop_loss_manager = stop_loss_manager
 
     def bind_system_halt(self, system_halt: SystemHaltState | None) -> None:
         """Rebind the scale-in gate to the engine's shared manual-halt state (#922).
@@ -817,6 +863,13 @@ class LiveExitHandler:
             new_activated = result.trailing_activated or position.trailing_stop_activated
             new_breakeven = result.breakeven_triggered or position.breakeven_triggered
 
+            # Snapshot BEFORE the tracker mutates the position: `position` is the
+            # same object the tracker holds internally (positions.items() is a
+            # shallow dict copy, not a deep one), so reading it after the call
+            # below would already reflect the new value (CODE.md: "the 'before'
+            # reference may alias the mutated object").
+            previous_stop_loss = position.stop_loss
+
             # Update position via tracker
             changed = self.position_tracker.update_trailing_stop(
                 order_id=order_id,
@@ -835,6 +888,31 @@ class LiveExitHandler:
                     position.trailing_stop_activated,
                     position.breakeven_triggered,
                 )
+
+            # Move the resting exchange stop when the protected PRICE actually
+            # ratcheted (not just an activation/breakeven flag) (#1167): a DB/
+            # memory-only update leaves the exchange order resting at its
+            # original price forever, which is both a real protection gap and
+            # the trigger for the engine's own exit check re-firing every loop
+            # iteration against a stop the exchange will never hit (#1165).
+            if (
+                changed
+                and position.stop_loss is not None
+                and position.stop_loss != previous_stop_loss
+                and self._stop_loss_manager is not None
+                and _exceeds_min_trailing_stop_move(
+                    position.stop_loss, position.last_placed_stop_price
+                )
+            ):
+                try:
+                    self._stop_loss_manager.move(position, float(position.stop_loss))
+                except Exception as e:
+                    logger.warning(
+                        "Failed to move exchange stop-loss for %s to $%.4f: %s",
+                        position.symbol,
+                        position.stop_loss,
+                        e,
+                    )
 
     def check_partial_operations(
         self,

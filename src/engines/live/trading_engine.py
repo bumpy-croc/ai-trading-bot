@@ -1155,6 +1155,10 @@ class LiveTradingEngine:
         exposure_governor = self._init_entry_handler(entry_handler)
         self._init_exit_handler(exit_handler, exposure_governor)
         self._init_risk_guards()
+        # The stop-loss manager is built by _init_risk_guards, after the exit
+        # handler -- bind it now so a trailing-stop ratchet can move the
+        # resting exchange order (#1167), not just the in-memory/DB value.
+        self.live_exit_handler.bind_stop_loss_manager(self.stop_loss_manager)
 
     def _apply_dynamic_risk_adjustment(
         self,
