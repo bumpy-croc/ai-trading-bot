@@ -1322,8 +1322,11 @@ keep the skill generic and let the specifics live here.
   (~2 min `Decision:` cadence).
 - **Don't trust the deploy API for liveness.** Railway can show SUCCESS while the loop is dead (a
   DB/DNS outage killed it — see `MEMORY` bots-down-railway-dns). Ground truth = a recent
-  `Decision:`/`Status:` log line **and** the 30-minute `account_history` heartbeat row in the DB
-  (`DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL` = 1800s in `src/config/constants.py` — not hourly).
+  `Decision:`/`Status:` log line **and** the hourly `account_history` heartbeat row in the DB.
+  (`DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL` = 1800s in `src/config/constants.py`, but every CLI entry
+  point — `atb live`, `atb live-health`, i.e. every prod/staging launch — overrides it via
+  `runner.py`'s `--snapshot-interval default=3600`, so the constant is dead and 3600s/hourly is
+  what actually runs. #1180.)
 
 ### 5.2 Escalate immediately (critical markers)
 - `emergency.close` / "Stop-loss placement failed" — opened a position it couldn't protect; repeated

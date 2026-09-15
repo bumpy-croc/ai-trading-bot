@@ -16,6 +16,14 @@ Two independent defects, both in `LiveTradingEngine`:
    component, not total elapsed seconds. A gap spanning more than 24h (e.g. a
    quiet weekend) silently reports a much smaller elapsed time than actually
    passed. Fixed by using `timedelta.total_seconds()`.
+
+A third, review-caught defect: firing far more often (every wall-clock
+interval, not just on trade-count multiples) raised the odds of ``log_status``
+hitting a transient bad read. Unlike its sibling ``log_account_snapshot``,
+``AccountMonitor.log_status`` had no fault isolation, so a single malformed
+position could propagate an exception into the trading loop's generic error
+handler -- silencing the heartbeat exactly when something is already wrong.
+Fixed by wrapping it the same way.
 """
 
 from __future__ import annotations
@@ -94,6 +102,36 @@ class TestStatusHeartbeatCadence:
 
         engine._log_status.assert_called_once_with("BTCUSDT", 100.0)
         assert engine.last_status_log is not None
+
+
+# --------------------------------------------------------------------------- #
+# Item 3: log_status must not crash the trading loop on a bad read
+# --------------------------------------------------------------------------- #
+
+
+class TestLogStatusIsFaultIsolated:
+    def test_a_malformed_position_does_not_propagate(self):
+        """The real symptom: a position whose unrealized_pnl cannot be
+        floated must not raise out of log_status and into the trading loop's
+        generic error handler."""
+        engine = _make_engine()
+        bad_position = Mock()
+        bad_position.unrealized_pnl = object()  # float() raises TypeError
+        engine.live_position_tracker._positions = {"order-1": bad_position}
+
+        # Must not raise.
+        engine.account_monitor.log_status("BTCUSDT", 100.0)
+
+    def test_a_healthy_call_still_logs_normally(self):
+        """Sanity check the wrap doesn't swallow the happy path."""
+        engine = _make_engine()
+        engine.live_position_tracker._positions = {}
+
+        with patch("src.engines.live.monitoring.account_monitor.logger") as mock_logger:
+            engine.account_monitor.log_status("BTCUSDT", 100.0)
+
+        mock_logger.info.assert_called_once()
+        mock_logger.error.assert_not_called()
 
 
 # --------------------------------------------------------------------------- #
