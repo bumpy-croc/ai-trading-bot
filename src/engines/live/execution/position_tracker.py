@@ -300,6 +300,32 @@ class LivePositionTracker:
             except Exception as e:
                 logger.warning("Failed to persist stop-loss order ID: %s", e)
 
+    def set_stop_loss_price(self, order_id: str, stop_loss: float) -> None:
+        """Update the tracked stop-loss price for a position.
+
+        Used when a guarded placement adopts an already-resting order (#1112)
+        whose price differs from what was intended (``guard_stop_placement``
+        only guarantees it is within tolerance, not equal) -- without this the
+        engine's own exit check keeps trusting the intended price instead of
+        the one the exchange will actually trigger at, the exact divergence
+        class #1167 exists to close.
+        """
+        with self._positions_lock:
+            position = self._positions.get(order_id)
+            if position is None:
+                return
+            position.stop_loss = stop_loss
+            db_id = self._position_db_ids.get(order_id)
+
+        if self.db_manager is not None and db_id is not None:
+            try:
+                self.db_manager.update_position(
+                    position_id=db_id,
+                    stop_loss=stop_loss,
+                )
+            except Exception as e:
+                logger.warning("Failed to persist adopted stop-loss price: %s", e)
+
     def remove_position(self, order_id: str) -> None:
         """Remove a position without closing it (e.g., canceled entry)."""
         with self._positions_lock:

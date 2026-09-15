@@ -28,7 +28,11 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import pandas as pd
 
-from src.config.constants import DEFAULT_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT
+from src.config.constants import (
+    DEFAULT_STOP_LOSS_MAX_RETRIES,
+    DEFAULT_STOP_LOSS_PCT,
+    DEFAULT_TAKE_PROFIT_PCT,
+)
 from src.data_providers.exchange_interface import OrderSide, OrderType, SideEffectType
 from src.database.models import EventType
 from src.engines.live.execution.entry_handler import LiveEntrySignal
@@ -973,7 +977,7 @@ class LiveEntryCoordinator:
                     logger.critical(
                         "CRITICAL: Failed to place stop-loss after %s attempts for %s - "
                         "closing position on exchange to prevent unprotected exposure",
-                        3,  # placement retry budget lives in LiveStopLossManager
+                        DEFAULT_STOP_LOSS_MAX_RETRIES,
                         symbol,
                     )
                     # Record the structured event and fire the alert in one call

@@ -9,10 +9,12 @@ All corrections are recorded as immutable audit events with before/after values.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -165,6 +167,13 @@ class StopPlacementDecision:
     existing_order_id: str | None = None
     existing_order: Any | None = None
     reason: str = ""
+    # True only for a REFUSE caused by the guard's own lookup failing or being
+    # unconfirmed (including the exclude_order_id eventual-consistency lag) --
+    # i.e. "we couldn't tell", not "we found a genuine conflict". A retry loop
+    # may treat this as transient and keep its remaining attempts; a genuine
+    # conflict (wrong side, wrong price, multiple resting orders) never will,
+    # since retrying won't change what's actually resting (#1186).
+    unconfirmed: bool = False
 
 
 def guard_stop_placement(
@@ -230,7 +239,9 @@ def guard_stop_placement(
     try:
         orders = checked(symbol)
         if orders is None:
-            return StopPlacementDecision(StopPlacementCheck.REFUSE, reason="lookup unconfirmed")
+            return StopPlacementDecision(
+                StopPlacementCheck.REFUSE, reason="lookup unconfirmed", unconfirmed=True
+            )
         return _classify_stop_placement(
             orders,
             symbol=symbol,
@@ -239,7 +250,9 @@ def guard_stop_placement(
             exclude_order_id=exclude_order_id,
         )
     except Exception as e:
-        return StopPlacementDecision(StopPlacementCheck.REFUSE, reason=f"lookup raised: {e}")
+        return StopPlacementDecision(
+            StopPlacementCheck.REFUSE, reason=f"lookup raised: {e}", unconfirmed=True
+        )
 
 
 def _classify_stop_placement(
@@ -265,6 +278,10 @@ def _classify_stop_placement(
                     "was just cancelled — exchange view has not caught up with the "
                     "cancel (or the cancel did not take); will not resurrect it"
                 ),
+                # Eventual-consistency lag, not a genuine conflict: the exchange's
+                # view of a cancel we already confirmed simply hasn't caught up
+                # yet, and may well clear on the very next lookup.
+                unconfirmed=True,
             )
         resting = remaining
 
@@ -307,6 +324,68 @@ def _classify_stop_placement(
     )
 
 
+def _invoke_on_adopt(
+    on_adopt: Callable[[StopPlacementDecision], None] | None,
+    decision: StopPlacementDecision,
+    symbol: str,
+) -> None:
+    """Fault-isolated: ``on_adopt`` can run in a window where a preceding
+    cancel already succeeded and the position is naked but for the just-
+    adopted order (``move()``'s cancel-then-place). A bug in the callback
+    must not propagate out and lose the adopted order id (#1186)."""
+    if on_adopt is None:
+        return
+    try:
+        on_adopt(decision)
+    except Exception as e:
+        logger.error(
+            "on_adopt callback failed for %s (adopted order %s is still valid "
+            "and was returned to the caller): %s",
+            symbol,
+            decision.existing_order_id,
+            e,
+            exc_info=True,
+        )
+
+
+def _invoke_on_refuse(
+    on_refuse: Callable[[StopPlacementDecision], None] | None,
+    decision: StopPlacementDecision,
+    symbol: str,
+) -> None:
+    """Fault-isolated like ``_invoke_on_adopt``: a callback bug must not mask
+    the REFUSE decision itself, which the caller still needs to return."""
+    if on_refuse is None:
+        return
+    try:
+        on_refuse(decision)
+    except Exception as e:
+        logger.error(
+            "on_refuse callback failed for %s (%s): %s",
+            symbol,
+            decision.reason,
+            e,
+            exc_info=True,
+        )
+
+
+def _log_adoption(
+    decision: StopPlacementDecision, symbol: str, stop_price: float, quantity: float
+) -> None:
+    actual_price = getattr(decision.existing_order, "stop_price", None)
+    actual_qty = getattr(decision.existing_order, "quantity", None)
+    logger.warning(
+        "Found an untracked resting stop-loss %s for %s @ %s (qty=%s) — adopting "
+        "it instead of placing a duplicate (#1112). Intended was $%.2f qty=%.8f.",
+        decision.existing_order_id,
+        symbol,
+        actual_price,
+        actual_qty,
+        stop_price,
+        quantity,
+    )
+
+
 def place_or_adopt_stop_loss(
     exchange: Any,
     *,
@@ -316,6 +395,11 @@ def place_or_adopt_stop_loss(
     stop_price: float,
     side_effect_type: str | None = None,
     exclude_order_id: str | None = None,
+    max_attempts: int = 1,
+    retry_delay: float = 1.0,
+    retry_log_prefix: str = "Stop-loss placement",
+    on_adopt: Callable[[StopPlacementDecision], None] | None = None,
+    on_refuse: Callable[[StopPlacementDecision], None] | None = None,
 ) -> str | None:
     """Place a protective stop, first checking for one already resting (#1112).
 
@@ -333,39 +417,310 @@ def place_or_adopt_stop_loss(
     Pass ``exclude_order_id`` when this call immediately follows cancelling a
     specific tracked stop, so the just-cancelled order (which may still
     briefly appear on the exchange's open-orders view) is never re-adopted.
+
+    By default this makes a single placement attempt with no retry — the
+    periodic reconciler's own call sites rely on that (they already wrap this
+    call in their own try/except and re-place on the next cycle). Pass
+    ``max_attempts`` > 1 to opt into the exponential-backoff retry loop the
+    inline entry/re-protect/trailing-stop-move paths need instead
+    (``retry_delay`` doubles after each failed attempt); ``retry_log_prefix``
+    lets each of those callers keep its own distinct per-attempt warning text.
+    Only the retry path catches exceptions from ``place_stop_loss_order`` —
+    the single-attempt default still propagates them, matching every existing
+    caller's current behavior exactly. The retry loop re-consults
+    ``guard_stop_placement`` at the top of EVERY attempt, including the first
+    (#1186): a prior attempt can raise on something like a network timeout
+    that the exchange nonetheless accepted (the same ambiguous-submission
+    case the entry path already handles explicitly), so the next attempt must
+    adopt that just-landed order instead of stacking a second one on the same
+    held quantity — exactly the #1104/#1108 duplicate-stop class this guard
+    exists to prevent. Consulting the guard on the first attempt too matters
+    just as much: an early version of this fix only re-consulted after the
+    first attempt, so a single transient lookup failure on attempt 0 returned
+    ``None`` with zero placement attempts ever made, bypassing the whole
+    retry budget on the exact condition retry/backoff exists to survive.
+
+    ``on_adopt``, if given, is invoked with the full ``StopPlacementDecision``
+    when an untracked resting stop is adopted — for a caller (``move()``) that
+    needs the ACTUAL resting price/quantity, not just the order id, without
+    re-running the guard check itself. ``on_refuse`` is the REFUSE-side
+    equivalent, invoked with the decision (and its specific ``reason``) when
+    the guard refuses — on any attempt — so a caller can surface that reason
+    in its own alert/audit instead of a generic message. Both callbacks are
+    fault-isolated: an exception from either is logged and swallowed rather
+    than propagated.
     """
-    decision = guard_stop_placement(
-        exchange, symbol, side, stop_price=stop_price, exclude_order_id=exclude_order_id
-    )
-    if decision.check == StopPlacementCheck.REFUSE:
-        logger.critical(
-            "Refusing to place a stop-loss for %s: %s — skipping this "
-            "placement (fail-closed, #1112).",
-            symbol,
-            decision.reason,
+    if max_attempts <= 1:
+        decision = guard_stop_placement(
+            exchange, symbol, side, stop_price=stop_price, exclude_order_id=exclude_order_id
         )
-        return None
-    if decision.check == StopPlacementCheck.ADOPT:
-        actual_price = getattr(decision.existing_order, "stop_price", None)
-        actual_qty = getattr(decision.existing_order, "quantity", None)
-        logger.warning(
-            "Found an untracked resting stop-loss %s for %s @ %s (qty=%s) — adopting "
-            "it instead of placing a duplicate (#1112). Intended was $%.2f qty=%.8f.",
-            decision.existing_order_id,
-            symbol,
-            actual_price,
-            actual_qty,
-            stop_price,
-            quantity,
+        if decision.check == StopPlacementCheck.REFUSE:
+            logger.critical(
+                "Refusing to place a stop-loss for %s: %s — skipping this "
+                "placement (fail-closed, #1112).",
+                symbol,
+                decision.reason,
+            )
+            _invoke_on_refuse(on_refuse, decision, symbol)
+            return None
+        if decision.check == StopPlacementCheck.ADOPT:
+            _log_adoption(decision, symbol, stop_price, quantity)
+            _invoke_on_adopt(on_adopt, decision, symbol)
+            return decision.existing_order_id
+        return exchange.place_stop_loss_order(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            stop_price=stop_price,
+            side_effect_type=side_effect_type,
         )
-        return decision.existing_order_id
-    return exchange.place_stop_loss_order(
+
+    return _place_with_retry(
+        exchange,
         symbol=symbol,
         side=side,
         quantity=quantity,
         stop_price=stop_price,
         side_effect_type=side_effect_type,
+        exclude_order_id=exclude_order_id,
+        max_attempts=max_attempts,
+        retry_delay=retry_delay,
+        retry_log_prefix=retry_log_prefix,
+        on_adopt=on_adopt,
+        on_refuse=on_refuse,
     )
+
+
+class _StopPlacementAttemptAction(Enum):
+    """What ``_place_with_retry`` should do next for one attempt, decided by
+    ``_resolve_stop_placement_attempt``.
+
+    Deliberately a plain ``Enum``, not ``(str, Enum)`` like ``StopPlacementCheck``
+    — ``_place_with_retry`` distinguishes these sentinels from an adopted order
+    id via ``isinstance(outcome, str)``, which a str-backed enum member would
+    also satisfy.
+    """
+
+    PLACE = "place"  # guard confirmed PROCEED — attempt place_stop_loss_order
+    SKIP = "skip"  # unconfirmed REFUSE, budget remains — skip placing, keep looping
+    STOP = "stop"  # terminal — return None immediately
+
+
+def _resolve_stop_placement_attempt(
+    exchange: Any,
+    *,
+    symbol: str,
+    side: Any,
+    quantity: float,
+    stop_price: float,
+    exclude_order_id: str | None,
+    attempt: int,
+    max_attempts: int,
+    retry_log_prefix: str,
+    on_adopt: Callable[[StopPlacementDecision], None] | None,
+    on_refuse: Callable[[StopPlacementDecision], None] | None,
+) -> _StopPlacementAttemptAction | str:
+    """Consult ``guard_stop_placement`` for one attempt of the retry loop and
+    decide what ``_place_with_retry`` should do next.
+
+    Called for EVERY attempt, including the first (#1186): a REFUSE the guard
+    itself could not confirm (its own lookup failing, or the just-cancelled-
+    order eventual-consistency lag) must not be treated as terminal on
+    attempt 0 any more than on a later attempt — the gap in an earlier
+    version of this fix, which only re-consulted the guard after the first
+    attempt and so let a single transient lookup failure return ``None``
+    with zero placements ever attempted.
+
+    Returns ``_StopPlacementAttemptAction.PLACE`` when the caller should
+    attempt ``place_stop_loss_order`` this round; ``...SKIP`` when an
+    unconfirmed REFUSE means this round places nothing but the retry budget
+    is preserved; ``...STOP`` when the caller should return ``None``
+    immediately — a genuine conflict (wrong side, wrong price, multiple
+    resting orders, or a just-cancelled order the exchange hasn't caught up
+    on yet), or an unconfirmed REFUSE on the final attempt; or a ``str`` — the
+    adopted order id — when the caller should return that immediately.
+    """
+    decision = guard_stop_placement(
+        exchange, symbol, side, stop_price=stop_price, exclude_order_id=exclude_order_id
+    )
+    if decision.check == StopPlacementCheck.ADOPT:
+        _log_adoption(decision, symbol, stop_price, quantity)
+        _invoke_on_adopt(on_adopt, decision, symbol)
+        # ADOPT always carries a non-None existing_order_id (set alongside the
+        # check in _classify_stop_placement) -- cast rather than widen this
+        # function's return type with a None the caller would then have to
+        # needlessly distinguish from _StopPlacementAttemptAction.STOP.
+        return cast(str, decision.existing_order_id)
+    if decision.check == StopPlacementCheck.PROCEED:
+        return _StopPlacementAttemptAction.PLACE
+
+    # REFUSE. A genuine conflict never clears just by retrying, so it is
+    # terminal regardless of which attempt hit it.
+    if not decision.unconfirmed:
+        logger.critical(
+            "Refusing to place a stop-loss for %s (attempt %s/%s): %s — "
+            "skipping further attempts (fail-closed, #1112).",
+            symbol,
+            attempt + 1,
+            max_attempts,
+            decision.reason,
+        )
+        _invoke_on_refuse(on_refuse, decision, symbol)
+        return _StopPlacementAttemptAction.STOP
+
+    # Unconfirmed: the guard's own lookup failed, or hasn't caught up with a
+    # cancel we already confirmed. Check whether the budget is exhausted
+    # BEFORE logging anything, so an operator never sees "retry budget
+    # preserved" immediately followed by "exhausted retry attempts" for the
+    # same attempt.
+    if attempt == max_attempts - 1:
+        logger.critical(
+            "Exhausted retry attempts for %s stop-loss placement: the guard "
+            "check could not be confirmed on the final attempt (%s) — "
+            "skipping further attempts (fail-closed, #1112).",
+            symbol,
+            decision.reason,
+        )
+        _invoke_on_refuse(on_refuse, decision, symbol)
+        return _StopPlacementAttemptAction.STOP
+
+    # The retry loop only exists because something already failed once --
+    # often the same transient condition (a timeout, a rate limit) that just
+    # broke this attempt's own guard lookup. Treating that as a terminal
+    # conflict would collapse a DEFAULT_STOP_LOSS_MAX_RETRIES-attempt budget
+    # to a single attempt under exactly the conditions retry/backoff was
+    # built to survive (#1186). Don't place blind, but don't give up either --
+    # skip this attempt's placement and let the loop's usual backoff sleep
+    # carry it into the next one.
+    logger.warning(
+        "%s attempt %s/%s for %s: guard check could not be confirmed (%s) — "
+        "not placing this attempt, retry budget preserved.",
+        retry_log_prefix,
+        attempt + 1,
+        max_attempts,
+        symbol,
+        decision.reason,
+    )
+    return _StopPlacementAttemptAction.SKIP
+
+
+def _place_with_retry(
+    exchange: Any,
+    *,
+    symbol: str,
+    side: Any,
+    quantity: float,
+    stop_price: float,
+    side_effect_type: str | None,
+    exclude_order_id: str | None,
+    max_attempts: int,
+    retry_delay: float,
+    retry_log_prefix: str,
+    on_adopt: Callable[[StopPlacementDecision], None] | None,
+    on_refuse: Callable[[StopPlacementDecision], None] | None,
+) -> str | None:
+    """The exponential-backoff retry loop behind ``place_or_adopt_stop_loss``'s
+    ``max_attempts > 1`` path.
+
+    Consults ``guard_stop_placement`` (via ``_resolve_stop_placement_attempt``)
+    at the top of EVERY attempt, including the first (#1186). This is the fix
+    for the gap the three inline copies this helper replaced all shared:
+    ``place_stop_loss_order`` can raise after the exchange has already
+    accepted and rested the order (a timeout on the response, not on the
+    submission) — without re-checking, the next attempt would place a SECOND
+    protective stop on the same held quantity, orphaning the first as an
+    untracked resting stop.
+    """
+    delay = retry_delay
+    for attempt in range(max_attempts):
+        outcome = _resolve_stop_placement_attempt(
+            exchange,
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            stop_price=stop_price,
+            exclude_order_id=exclude_order_id,
+            attempt=attempt,
+            max_attempts=max_attempts,
+            retry_log_prefix=retry_log_prefix,
+            on_adopt=on_adopt,
+            on_refuse=on_refuse,
+        )
+        if outcome is _StopPlacementAttemptAction.STOP:
+            return None
+        if isinstance(outcome, str):
+            return outcome
+
+        if outcome is _StopPlacementAttemptAction.PLACE:
+            try:
+                order_id = exchange.place_stop_loss_order(
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    stop_price=stop_price,
+                    side_effect_type=side_effect_type,
+                )
+                if order_id:
+                    return order_id
+            except Exception as e:
+                logger.warning(
+                    "%s attempt %s/%s for %s failed: %s",
+                    retry_log_prefix,
+                    attempt + 1,
+                    max_attempts,
+                    symbol,
+                    e,
+                )
+        # outcome is SKIP: place nothing this round, fall through to the same
+        # backoff sleep an exception from place_stop_loss_order gets above.
+
+        if attempt < max_attempts - 1:
+            time.sleep(delay)
+            delay *= 2
+    return None
+
+
+def write_unprotected_audit(
+    db_manager: Any,
+    session_id: int | None,
+    position: Any,
+    cause: str,
+    *,
+    exchange_reason: str | None = None,
+) -> str:
+    """Persist a CRITICAL audit row for a position left without a stop-loss and
+    return a short operator-facing detail string.
+
+    Shared by ``PeriodicReconciler._audit_unprotected`` and
+    ``LiveStopLossManager`` (#1167's trailing-stop move) so every caller that
+    discovers an unprotected position leaves the same DB trail instead of just
+    a log line — a log-only escalation is exactly the gap #853 closed for the
+    reconciler. Fault-isolated: an audit-write failure must never break the
+    caller's own escalation path.
+    """
+    symbol = getattr(position, "symbol", "unknown")
+    detail = f"{symbol} unprotected — SL re-placement failed ({cause})"
+    if exchange_reason:
+        detail = f"{detail}; {exchange_reason}"
+    try:
+        db_manager.log_audit_event(
+            session_id=session_id,
+            entity_type="position",
+            entity_id=getattr(position, "db_position_id", None),
+            field="stop_loss_order_id",
+            old_value=str(getattr(position, "stop_loss_order_id", None)),
+            new_value=None,
+            reason=detail,
+            severity=Severity.CRITICAL.value,
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to persist unprotected-position audit for %s: %s",
+            symbol,
+            e,
+            exc_info=True,
+        )
+    return detail
 
 
 @runtime_checkable
@@ -4192,14 +4547,15 @@ class PeriodicReconciler:
                                     position.symbol,
                                 )
                                 continue
-                            new_sl_id = place_or_adopt_stop_loss(
-                                self.exchange,
-                                symbol=position.symbol,
-                                side=sl_side,
-                                quantity=qty,
-                                stop_price=stop_price,
-                                side_effect_type=SideEffectType.AUTO_REPAY,
-                            )
+                            with self._stop_loss_placement_lock(position.symbol):
+                                new_sl_id = place_or_adopt_stop_loss(
+                                    self.exchange,
+                                    symbol=position.symbol,
+                                    side=sl_side,
+                                    quantity=qty,
+                                    stop_price=stop_price,
+                                    side_effect_type=SideEffectType.AUTO_REPAY,
+                                )
                             if new_sl_id:
                                 position.stop_loss_order_id = new_sl_id
                                 logger.info(
@@ -4431,6 +4787,23 @@ class PeriodicReconciler:
             alert=True,
         )
 
+    def _stop_loss_placement_lock(self, symbol: str) -> contextlib.AbstractContextManager[Any]:
+        """Per-base-asset lock guarding a stop-loss re-placement, or a no-op.
+
+        Re-placing a stop must serialise with everything else that mutates the
+        same base asset's resting stop order — most importantly
+        ``LiveStopLossManager.move()``'s cancel+place for a trailing-stop ratchet
+        (#1167) — so the two can never both observe the naked post-cancel window
+        and both place a replacement, stacking two resting stops on one held
+        quantity (#1104/#1108). Falls back to a no-op when no registry was wired
+        (e.g. standalone/test construction), matching the orphaned-borrow sweep's
+        own graceful-degradation pattern.
+        """
+        if self._lock_registry is None:
+            return contextlib.nullcontext()
+        base_asset = PositionReconciler._extract_base_asset(symbol)
+        return self._lock_registry.lock_for(base_asset)
+
     def _last_exchange_order_error(self, symbol: str) -> str | None:
         """The exchange's own reason for its most recent order failure on ``symbol``.
 
@@ -4470,28 +4843,17 @@ class PeriodicReconciler:
         The periodic SL re-placement failure paths previously only logged +
         bumped the cycle severity, so the paged cycle-severity event pointed
         operators at a ``reconciliation_audit_events`` table that held no row for
-        the cause. Writing the row here makes that pointer honest. Fault-isolated:
-        an audit-write failure must never break the reconcile cycle.
+        the cause. Writing the row here makes that pointer honest.
         """
         symbol = getattr(position, "symbol", "unknown")
-        detail = f"{symbol} unprotected — SL re-placement failed ({cause})"
         exchange_reason = self._last_exchange_order_error(symbol)
-        if exchange_reason:
-            detail = f"{detail}; {exchange_reason}"
-        try:
-            self.db_manager.log_audit_event(
-                session_id=self.session_id,
-                entity_type="position",
-                entity_id=getattr(position, "db_position_id", None),
-                field="stop_loss_order_id",
-                old_value=str(getattr(position, "stop_loss_order_id", None)),
-                new_value=None,
-                reason=detail,
-                severity=Severity.CRITICAL.value,
-            )
-        except Exception as e:
-            logger.error("Failed to persist unprotected-position audit: %s", e)
-        return detail
+        return write_unprotected_audit(
+            self.db_manager,
+            self.session_id,
+            position,
+            cause,
+            exchange_reason=exchange_reason,
+        )
 
     def _place_missing_stop_loss(self, position: Any, order_key: str) -> None:
         """Place a stop-loss for a position that has none (e.g. phantom from timeout).
@@ -4552,14 +4914,15 @@ class PeriodicReconciler:
             if current is not None and original is not None and original > 0:
                 qty = qty * (current / original)
 
-            new_sl_id = place_or_adopt_stop_loss(
-                self.exchange,
-                symbol=position.symbol,
-                side=sl_side,
-                quantity=qty,
-                stop_price=stop_price,
-                side_effect_type=SideEffectType.AUTO_REPAY,
-            )
+            with self._stop_loss_placement_lock(position.symbol):
+                new_sl_id = place_or_adopt_stop_loss(
+                    self.exchange,
+                    symbol=position.symbol,
+                    side=sl_side,
+                    quantity=qty,
+                    stop_price=stop_price,
+                    side_effect_type=SideEffectType.AUTO_REPAY,
+                )
             if new_sl_id:
                 position.stop_loss_order_id = new_sl_id
                 logger.info(

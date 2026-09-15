@@ -359,6 +359,13 @@ DEFAULT_TRAILING_DISTANCE_ATR_MULT = 1.5
 DEFAULT_BREAKEVEN_THRESHOLD = 0.02  # 2.0%
 DEFAULT_BREAKEVEN_BUFFER = 0.001  # 0.1%
 
+# Minimum ratchet move (as a fraction of price) before a trailing stop's resting
+# exchange order is actually cancelled and re-placed (#1167). Without this floor,
+# every loop iteration past activation does a real cancel+place round-trip even
+# for sub-tick price noise, needlessly multiplying exposure to the naked window
+# between cancel and re-placement.
+MIN_TRAILING_STOP_MOVE_FRACTION = 0.0005  # 0.05%
+
 # Correlation Control Defaults
 DEFAULT_CORRELATION_WINDOW_DAYS = 30
 DEFAULT_CORRELATION_THRESHOLD = 0.7

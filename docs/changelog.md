@@ -57,6 +57,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the ungated path still diverges.
 
 ### Fixed
+- **Trailing-stop ratchets never moved the exchange-side stop-loss order** (#1167; found
+  root-causing #1165's abort storm). `LiveExitHandler.update_trailing_stops` updated
+  `position.stop_loss` in memory and the DB as the trail ratcheted, but the resting exchange
+  order stayed at its original (lower) price forever — a real protection gap, since the
+  position was never actually protected at the price the engine (and the DB) believed. It was
+  also the direct trigger of #1165: `_check_stop_loss` evaluates the *engine-side*
+  `position.stop_loss` against the candle low every loop iteration, so the engine's own exit
+  condition kept re-firing every ~66s against a stop the exchange would never hit at that
+  price. `LiveStopLossManager` gains a `move()` method that cancels the resting order and
+  places a new one at the ratcheted price through the same guarded placement path as
+  `reprotect()` (#1112's fail-closed resting-stop check, with `exclude_order_id` so the
+  just-cancelled order is never re-adopted); `update_trailing_stops` calls it only when the
+  tracked stop price itself changed AND the move clears a `MIN_TRAILING_STOP_MOVE_FRACTION`
+  (0.05%) floor, not on activation/breakeven-flag-only updates or sub-tick noise. `move()`'s
+  cancel-guard-place round-trip serialises on the same per-base-asset lock
+  (`state._base_asset_locks`) as `execute_entry`/`execute_exit` and the periodic reconciler's
+  own SL re-placement — without it, a ratchet mid cancel-guard-place could race a
+  reconciliation cycle and both observe the naked post-cancel window, stacking two resting
+  stops on one held quantity (the #1104/#1108 class); the reconciler's own re-placement paths
+  now take the same lock. Cancel-succeeded/re-place-failed also writes a persisted CRITICAL
+  audit row (`write_unprotected_audit`, shared with the reconciler's `_audit_unprotected`),
+  not just a log line + alert. The reconciler's stop-loss audit still checks order status/fill
+  only, not price — tracked separately in #1172 as defense-in-depth for `move()`'s own
+  conservative failure path (a failed cancel leaves the old order resting rather than risk
+  stacking a duplicate).
 - **`exit_reason` was free text with substring-matched control flow** (#1115). The backtest
   engine chose an exit's order type with `if "Stop loss" in exit_reason:`, so the `stop_loss`
   and `stop_loss_filled_offline` spellings silently skipped it and exited as market orders with
@@ -316,6 +341,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   since plain `-c` puts the cwd on `sys.path` and prints a false all-clear.
 
 ### Changed
+- **Deduped `LiveStopLossManager`'s guard+ADOPT+REFUSE+retry logic and closed an
+  audit gap** (#1185). `place_protection()`, `reprotect()`, and `move()` each
+  inlined their own copy of the sequence: consult `guard_stop_placement()`,
+  branch on REFUSE/ADOPT/PROCEED, and on PROCEED run a 3-attempt
+  exponential-backoff retry against `exchange.place_stop_loss_order`. The
+  canonical `place_or_adopt_stop_loss()` (`src/engines/live/reconciliation.py`,
+  used by the periodic reconciler) grew opt-in `max_attempts`/`retry_delay`
+  parameters (default: a single attempt, matching every existing call site
+  exactly) plus an `on_adopt` hook so `move()` can still capture the actual
+  adopted stop price without re-running the guard itself; all three
+  `LiveStopLossManager` methods now delegate to it instead of duplicating the
+  sequence. `reprotect()` and `place_protection()` now also call
+  `write_unprotected_audit()` on total placement failure, matching `move()`'s
+  existing cancel-succeeded/re-place-failed escalation — closing the same
+  observability gap for the entry and post-close-failure paths. Since a
+  fail-closed REFUSE and an exhausted-retries failure leave an identical real
+  state once delegated (the cancel, where one happened, already succeeded),
+  both now escalate identically, so a REFUSE that previously only alerted
+  gets a persisted audit row too.
+- **Closed a duplicate-stop gap in `place_or_adopt_stop_loss()`'s retry loop**
+  (#1186, review follow-up to #1185). `guard_stop_placement()` was only
+  consulted once, before the retry loop started: if an attempt raised on
+  something like a network timeout the exchange nonetheless accepted (the
+  same ambiguous-submission case the entry path already handles explicitly),
+  the next attempt placed a SECOND protective stop on the same held
+  quantity, orphaning the first as an untracked resting stop — the exact
+  #1104/#1108 duplicate-stop class the guard exists to prevent. The retry
+  loop (extracted into `_place_with_retry()`) now re-consults the guard at
+  the top of every attempt after the first, adopting a just-landed order
+  instead of stacking a duplicate. `on_adopt` is now fault-isolated
+  (`try/except` + `logger.error`, matching `write_unprotected_audit()`), and
+  a new `on_refuse` callback threads the guard's specific refuse reason back
+  to `LiveStopLossManager`'s callers so `reprotect()`/`move()`/
+  `place_protection()` alerts and `write_unprotected_audit()`'s
+  `exchange_reason` carry the real cause instead of a generic message.
+  `DEFAULT_STOP_LOSS_MAX_RETRIES`/`DEFAULT_STOP_LOSS_RETRY_DELAY`
+  (previously-unused constants in `src/config/constants.py`) now back the
+  three `LiveStopLossManager` call sites and `entry_coordinator.py`'s
+  retry-exhaustion log message instead of duplicated literals.
+- **Closed a second `place_or_adopt_stop_loss()` gap: the pre-loop guard check
+  itself bypassed the whole retry budget** (#1186, review follow-up to the
+  fix above). That fix re-consulted the guard on every retry attempt *after*
+  the first, but `place_or_adopt_stop_loss()` still ran one guard check
+  itself, before ever entering the retry loop, and treated every REFUSE from
+  that check as terminal — including an unconfirmed one (the guard's own
+  lookup failing, or the just-cancelled-order eventual-consistency lag).
+  A single transient lookup failure on that first check returned `None` with
+  **zero** placement attempts ever made, regardless of `max_attempts` — worse
+  than the bug the prior fix closed, and more likely to fire, since that
+  check runs immediately after a confirmed cancel in `move()`/`reprotect()`,
+  exactly when the exchange's view is most likely still lagging. The pre-loop
+  check is gone: `place_or_adopt_stop_loss()`'s `max_attempts > 1` path now
+  delegates to `_place_with_retry()` unconditionally, which consults the
+  guard on attempt 0 exactly like every later attempt via a new
+  `_resolve_stop_placement_attempt()` helper (also flattening the loop back
+  down from 5 nesting levels). The `max_attempts <= 1` path used by the
+  periodic reconciler's seven call sites is untouched — still a single guard
+  check, single placement attempt, exceptions still propagate. Also fixed:
+  the "retry budget preserved" warning could log immediately before a
+  contradictory "exhausted retry attempts" critical for the same attempt
+  (now the exhaustion check runs first); the exhaustion message's "without
+  ever confirming the guard check" was misleading when an earlier attempt HAD
+  confirmed PROCEED and only a later one went unconfirmed (reworded to name
+  the final attempt specifically); and a stale comment referencing a literal
+  "3-attempt budget" now names `DEFAULT_STOP_LOSS_MAX_RETRIES` like its
+  neighbors.
 - **`src/config/risk-limits.json` now governs the running system** (#986, design
   §3.5 "Hydration"). The Board-ratified limits file was previously **inert**: its
   loader (`src/config/risk_limits.py`, shipped in #1034) had zero consumers in
