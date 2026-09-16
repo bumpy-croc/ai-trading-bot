@@ -345,6 +345,42 @@ class TestPlaceProtectionRestingStopGuard1112:
         audit_call = state.db_manager.log_audit_event.call_args.kwargs
         assert "lookup unconfirmed" in audit_call["reason"]
 
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_non_terminal_unconfirmed_then_genuine_failure_is_not_deferrable(self, mock_sleep):
+        """#1218 review follow-up (P2): a NON-terminal UNCONFIRMED refusal on
+        attempt 0 (the guard's lookup fails once) followed by the guard
+        clearing and ``place_stop_loss_order`` itself genuinely failing on
+        attempts 1-2 must NOT be classified as the deferrable UNCONFIRMED
+        case. ``on_refuse`` only fires on a TERMINAL refusal (#1186) --
+        attempts 1-2 never refuse at all, they PROCEED and then the exchange
+        call fails -- so ``refuse_reason_code`` stays ``None`` and the caller
+        (entry_coordinator.py) emergency-closes instead of deferring. Pins
+        the invariant a future refactor (e.g. firing ``_invoke_on_refuse`` on
+        a SKIP outcome too) could silently break without any test failing."""
+        state = make_state()
+        state.exchange_interface.get_open_orders_checked.side_effect = [None, [], []]
+        state.exchange_interface.place_stop_loss_order.return_value = None
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        result = manager.place_protection(
+            position=make_position(stop_loss_order_id=None),
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            quantity=0.5,
+            stop_price=48000.0,
+        )
+
+        assert result.order_id is None
+        assert result.refuse_reason_code is None
+        assert result.is_unconfirmed_refusal is False
+        # Attempt 0: SKIP (unconfirmed, budget preserved) -- no placement
+        # attempted. Attempts 1-2: guard PROCEEDs, place_stop_loss_order is
+        # actually called and genuinely fails both times.
+        assert state.exchange_interface.place_stop_loss_order.call_count == 2
+        state.db_manager.log_audit_event.assert_called_once()
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert audit_call["field"] == "stop_loss_order_id"
+
 
 class TestReprotect:
     """#710/#1185: re-placing a stop-loss after a failed close must delegate

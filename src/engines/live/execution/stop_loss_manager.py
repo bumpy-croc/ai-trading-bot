@@ -89,6 +89,19 @@ class StopLossPlacementResult:
     order_id: str | None
     refuse_reason_code: StopPlacementRefuseReason | None = None
 
+    @property
+    def is_unconfirmed_refusal(self) -> bool:
+        """Whether placement failed specifically on an UNCONFIRMED guard lookup.
+
+        The one failure class safe to defer rather than emergency-close
+        (#1218) -- a transient, retryable exchange-side lookup, not a
+        confirmed conflict and not a placement failure with the guard
+        itself saying PROCEED.
+        """
+        from src.engines.live.reconciliation import StopPlacementRefuseReason
+
+        return self.refuse_reason_code == StopPlacementRefuseReason.UNCONFIRMED
+
 
 class StopLossEngineState(Protocol):
     """Live engine state the manager reads at call time.

@@ -77,6 +77,12 @@ def _make_state(position: MagicMock, result: MagicMock, **overrides) -> MagicMoc
     state.live_entry_handler = MagicMock()
     state.stop_loss_manager = MagicMock()
     state.db_manager = MagicMock()
+    # Alive by default so the UNCONFIRMED-defer tests exercise the deferral
+    # itself; test_stop_loss_placement_unconfirmed_refusal_*_no_reconciler
+    # below overrides this to pin the P2 gate (#1218 review follow-up).
+    state._periodic_reconciler = MagicMock()
+    state._periodic_reconciler.is_running = True
+    state._periodic_reconciler.interval = 120
 
     state.live_position_tracker.has_position_for_symbol.return_value = False
     state.live_position_tracker.position_count = 0
@@ -277,7 +283,10 @@ def test_stop_loss_placement_unconfirmed_refusal_defers_instead_of_closing():
     lookup couldn't be confirmed after all retries) defers to the next
     reconciler pass instead of emergency-closing the freshly-opened position --
     mirroring #1160's startup-recovery site. The position stays tracked and
-    the in-memory stop_loss it was created with is left untouched."""
+    the in-memory stop_loss it was created with is left untouched. Deferral
+    is only safe (and only taken) while the periodic reconciler is actually
+    running (_make_state's default) -- see the *_no_reconciler tests below
+    for the fallback when it is not."""
     position = _make_position()
     state = _make_state(position, _make_result(position))
     state.enable_live_trading = True
@@ -293,6 +302,39 @@ def test_stop_loss_placement_unconfirmed_refusal_defers_instead_of_closing():
     # The position was already tracked via open_position() earlier in the
     # flow and must NOT be closed/removed on defer.
     state.live_position_tracker.open_position.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "reconciler",
+    [
+        None,
+        MagicMock(is_running=False),
+    ],
+    ids=["reconciler_never_started", "reconciler_started_but_dead"],
+)
+def test_stop_loss_placement_unconfirmed_refusal_emergency_closes_without_live_reconciler(
+    reconciler,
+):
+    """#1218 review follow-up (P2): the UNCONFIRMED-defer safety argument
+    depends entirely on the periodic reconciler being alive to re-place the
+    stop. If it was never started (start_runtime_services swallowed an
+    exception, #startup.py) or its thread has died, deferring would leave the
+    position naked indefinitely rather than for one bounded reconciler pass --
+    so this must fall through to the same emergency-close path a confirmed
+    conflict takes, not defer."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state._periodic_reconciler = reconciler
+    state.stop_loss_manager.place_protection.return_value = StopLossPlacementResult(
+        order_id=None, refuse_reason_code=StopPlacementRefuseReason.UNCONFIRMED
+    )
+
+    _call(state)
+
+    state._record_event.assert_called_once()
+    assert state._record_event.call_args.kwargs["error_code"] == "EMERGENCY_CLOSE"
+    state._execute_exit.assert_called_once()
 
 
 def test_balance_update_failure_unconfirmed_emergency_close_enters_close_only():
