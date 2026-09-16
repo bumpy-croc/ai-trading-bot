@@ -3268,6 +3268,90 @@ class TestPeriodicMissingStopLoss:
         # Position should now have the SL order ID
         assert pos.stop_loss_order_id == "new_sl_123"
 
+    def test_periodic_missing_sl_placement_tracks_new_order(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """A stop placed via _place_missing_stop_loss must be handed to the OrderTracker.
+
+        Otherwise it has no real-time WS fill/cancel routing (#1104's self-cancel
+        suppression included) until the next reconcile pass discovers it independently.
+        """
+        pos = MockPosition(
+            entry_price=50000.0,
+            current_size=0.1,
+            exchange_order_id="ex_205",
+            stop_loss=48000.0,
+            stop_loss_order_id=None,
+            quantity=0.1,
+            original_size=0.1,
+            db_position_id=45,
+        )
+        mock_position_tracker.positions = {"pos_5": pos}
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_exchange.get_order.return_value = MockExchangeOrder(status=ExOS.FILLED)
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=5000.0)
+            if asset == "USDT"
+            else MockBalance(asset=asset, total=0.1, free=0.1, locked=0.0)
+        )
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_tracked"
+        mock_db.get_current_balance.return_value = 10000.0
+        mock_order_tracker = MagicMock()
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+            on_critical=MagicMock(),
+            order_tracker=mock_order_tracker,
+        )
+        reconciler._reconcile_cycle()
+
+        mock_order_tracker.track_order.assert_called_once_with("new_sl_tracked", pos.symbol)
+
+    def test_periodic_missing_sl_placement_tolerates_no_order_tracker(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """order_tracker is optional (paper mode / standalone construction) — must not crash."""
+        pos = MockPosition(
+            entry_price=50000.0,
+            current_size=0.1,
+            exchange_order_id="ex_206",
+            stop_loss=48000.0,
+            stop_loss_order_id=None,
+            quantity=0.1,
+            original_size=0.1,
+            db_position_id=46,
+        )
+        mock_position_tracker.positions = {"pos_6": pos}
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_exchange.get_order.return_value = MockExchangeOrder(status=ExOS.FILLED)
+        mock_exchange.get_balance.side_effect = lambda asset: (
+            MockBalance(asset="USDT", total=5000.0)
+            if asset == "USDT"
+            else MockBalance(asset=asset, total=0.1, free=0.1, locked=0.0)
+        )
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_untracked"
+        mock_db.get_current_balance.return_value = 10000.0
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            interval=60,
+            on_critical=MagicMock(),
+        )
+        reconciler._reconcile_cycle()
+
+        assert pos.stop_loss_order_id == "new_sl_untracked"
+
     def test_periodic_computes_default_sl_when_stop_loss_is_none(
         self, mock_exchange, mock_position_tracker, mock_db
     ):
