@@ -3921,6 +3921,7 @@ class PeriodicReconciler:
         sweep_cooldown: dict[str, float] | None = None,
         lock_registry: Any = None,
         data_provider: Any | None = None,
+        order_tracker: Any = None,
     ) -> None:
         """Initialize periodic reconciler.
 
@@ -3940,9 +3941,14 @@ class PeriodicReconciler:
                 to cross-margin accounts.
             symbols: Configured trading symbols, used by the orphaned-borrow sweep
                 to know which base assets it may repay.
+            order_tracker: The engine's OrderTracker, so stop-losses placed by this
+                reconciler (e.g. ``_place_missing_stop_loss``) get real-time WS
+                fill/cancel routing instead of waiting for the next reconcile pass
+                to discover them independently. None in paper mode / standalone use.
         """
         self.exchange = exchange_interface
         self.position_tracker = position_tracker
+        self.order_tracker = order_tracker
         self.db_manager = db_manager
         self.session_id = session_id
         self._use_margin = use_margin
@@ -4759,6 +4765,8 @@ class PeriodicReconciler:
                                     position.stop_loss_order_id = new_sl_id
                                     position.last_placed_stop_price = stop_price
                             if new_sl_id:
+                                if self.order_tracker:
+                                    self.order_tracker.track_order(new_sl_id, position.symbol)
                                 logger.info(
                                     "Re-placed stop-loss for %s: %s @ %.2f " "(periodic check)",
                                     position.symbol,
@@ -5244,6 +5252,8 @@ class PeriodicReconciler:
                 )
 
         if new_sl_id:
+            if self.order_tracker:
+                self.order_tracker.track_order(new_sl_id, symbol)
             logger.warning(
                 "Corrected diverged stop-loss for %s: new order %s @ %.2f (periodic check)",
                 symbol,
@@ -5334,6 +5344,8 @@ class PeriodicReconciler:
                     position.stop_loss_order_id = new_sl_id
                     position.last_placed_stop_price = stop_price
             if new_sl_id:
+                if self.order_tracker:
+                    self.order_tracker.track_order(new_sl_id, position.symbol)
                 logger.info(
                     "Placed missing stop-loss for %s: %s @ %.2f (periodic check)",
                     position.symbol,

@@ -444,6 +444,7 @@ class LiveStartupSequencer:
                     sweep_cooldown=state._orphan_sweep_cooldown,
                     lock_registry=state._base_asset_locks,
                     data_provider=state.data_provider,
+                    order_tracker=state.order_tracker,
                 )
                 state._periodic_reconciler.start()
                 logger.info("🔄 Periodic reconciler started")
