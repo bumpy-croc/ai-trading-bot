@@ -410,6 +410,11 @@ DEFAULT_STOP_LOSS_MAX_RETRIES = 3  # Maximum retry attempts for stop-loss placem
 DEFAULT_STOP_LOSS_RETRY_DELAY = 1.0  # Initial delay between retries (seconds)
 DEFAULT_RETRY_BACKOFF_MULTIPLIER = 2  # Exponential backoff multiplier
 
+# Max attempts to read account equity during the cold-boot startup account sync
+# (a transient None here can mean the exchange client isn't fully ready yet).
+DEFAULT_STARTUP_EQUITY_MAX_RETRIES = 3
+DEFAULT_STARTUP_EQUITY_RETRY_DELAY = 1.0  # Delay between startup equity-read retries (seconds)
+
 # Regime Multiplier Fallback
 DEFAULT_REGIME_UNKNOWN_MULTIPLIER = 0.5  # Conservative multiplier for unknown regimes
 

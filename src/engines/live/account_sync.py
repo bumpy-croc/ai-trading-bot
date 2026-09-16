@@ -7,6 +7,7 @@ or trades due to shutdowns or errors.
 """
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -16,6 +17,8 @@ from src.config.constants import (
     DEFAULT_BALANCE_DISCREPANCY_THRESHOLD_PCT,
     DEFAULT_POSITION_SIZE_COMPARISON_TOLERANCE,
     DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT,
+    DEFAULT_STARTUP_EQUITY_MAX_RETRIES,
+    DEFAULT_STARTUP_EQUITY_RETRY_DELAY,
 )
 from src.data_providers.exchange_interface import (
     AccountBalance,
@@ -71,6 +74,12 @@ class AccountSynchronizer:
         self.session_id = session_id
         self._use_margin = use_margin
         self.last_sync_time: datetime | None = None
+        # Set when the cold-boot startup sync could not read equity (even after
+        # retrying) so the very next sync isn't throttled by
+        # DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES — a startup-skip self-heals on
+        # the next warm attempt instead of running on a stale balance until the
+        # normal periodic cadence comes around.
+        self._pending_startup_equity_retry = False
 
     def sync_account_data(self, force: bool = False, symbol: str | None = None) -> SyncResult:
         """
@@ -86,6 +95,15 @@ class AccountSynchronizer:
         """
         try:
             logger.info("Starting account data synchronization...")
+
+            # A startup equity-read skip forces the very next sync through
+            # regardless of the min-interval throttle below, so the correction
+            # self-heals on the first warm attempt instead of waiting out the
+            # full periodic cadence. One-shot: consumed here whether or not this
+            # attempt itself succeeds.
+            if self._pending_startup_equity_retry:
+                self._pending_startup_equity_retry = False
+                force = True
 
             # Check if we should sync (avoid too frequent syncs)
             if not force and self.last_sync_time:
@@ -167,6 +185,71 @@ class AccountSynchronizer:
                 timestamp=datetime.now(UTC),
             )
 
+    def _read_account_equity(self, is_startup: bool) -> float | None:
+        """Read ``get_account_equity()``, retrying briefly at cold-boot startup.
+
+        Mirrors the bounded startup-retry shape used for the ban-aware client
+        init in ``BinanceProvider._initialize_client`` (a few short-backoff
+        attempts, each logged): the first sync after construction can race the
+        exchange client's own readiness, and a transient ``None`` there must
+        not be treated the same as a settled "equity unavailable" (#659).
+        """
+        equity = self.exchange.get_account_equity()
+        if equity is not None or not is_startup:
+            return equity
+
+        for attempt in range(1, DEFAULT_STARTUP_EQUITY_MAX_RETRIES):
+            logger.warning(
+                "Startup margin-equity read returned None (attempt %d/%d) — " "retrying in %.1fs",
+                attempt,
+                DEFAULT_STARTUP_EQUITY_MAX_RETRIES,
+                DEFAULT_STARTUP_EQUITY_RETRY_DELAY,
+            )
+            time.sleep(DEFAULT_STARTUP_EQUITY_RETRY_DELAY)
+            equity = self.exchange.get_account_equity()
+            if equity is not None:
+                return equity
+
+        return None
+
+    def _log_skipped_correction_event(
+        self,
+        session_id: int | None,
+        is_startup: bool,
+        equity: float | None,
+    ) -> None:
+        """Record a ``system_events`` row for a skipped margin-equity correction.
+
+        Matches the alerting convention ``_record_equity_correction_audit`` uses
+        for an applied correction: a skip is exactly as invisible to operators as
+        a wrong correction would be, and a cold-boot skip is the most dangerous
+        case (the bot then trades a whole session on stale balance) so it is
+        escalated to "warning" here rather than left to logs alone. Best-effort
+        and independently guarded per CODE.md — observability must never break
+        the sync loop.
+        """
+        if session_id is None:
+            return
+        try:
+            self.db_manager.log_event(
+                event_type=EventType.WARNING,
+                message=(
+                    f"Margin equity correction skipped at {'startup' if is_startup else 'periodic'} "
+                    f"sync: get_account_equity() returned {equity!r} — tracked balance was "
+                    "left uncorrected"
+                ),
+                severity="warning",
+                component="account_sync.margin_equity",
+                details={"is_startup": is_startup, "equity": equity},
+                session_id=session_id,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to record margin-equity skipped-correction system event: %s",
+                e,
+                exc_info=True,
+            )
+
     def _sync_margin_equity(self) -> dict[str, Any]:
         """Reconcile the tracked balance against true cross-margin equity.
 
@@ -185,13 +268,19 @@ class AccountSynchronizer:
         position's market value from leaking into cash (which would over-size).
         A material divergence is always logged.
         """
+        # The very first sync since this synchronizer was constructed is the
+        # cold-boot startup sync, where the exchange client may not be fully
+        # ready yet (#659: get_account_equity() returned None only at cold
+        # boot — a warm call moments later returned the correct value). Only
+        # retry there; a warm periodic None is a real API failure, not a
+        # readiness race, so it's left to the next cycle rather than slowing
+        # the trading loop.
+        is_startup = self.last_sync_time is None
         try:
-            equity = self.exchange.get_account_equity()
+            equity = self._read_account_equity(is_startup=is_startup)
         except Exception as e:
             logger.warning("Margin equity read failed: %s", e)
             return {"synced": False, "reason": f"equity unavailable: {e}"}
-        if equity is None or equity <= 0:
-            return {"synced": False, "reason": "equity unavailable"}
 
         # Resolve the session id exactly as update_balance does (it falls back to the
         # DB manager's _current_session_id). During the INITIAL startup sync this
@@ -205,6 +294,24 @@ class AccountSynchronizer:
             if self.session_id is not None
             else getattr(self.db_manager, "_current_session_id", None)
         )
+
+        if equity is None or equity <= 0:
+            # A skipped correction must never be invisible in the logs (#659: this
+            # branch used to return silently — no log, no metric — while the
+            # tracked balance stayed stale). If this was the startup attempt,
+            # arm the one-shot early retry so the next sync isn't stuck behind
+            # DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES.
+            logger.warning(
+                "Margin equity correction skipped (%s sync): get_account_equity() "
+                "returned %s — tracked balance left uncorrected%s",
+                "startup" if is_startup else "periodic",
+                equity,
+                " (will retry on the next sync attempt)" if is_startup else " until the next sync",
+            )
+            if is_startup:
+                self._pending_startup_equity_retry = True
+            self._log_skipped_correction_event(effective_session_id, is_startup, equity)
+            return {"synced": False, "reason": "equity unavailable"}
 
         current_db_balance = self.db_manager.get_current_balance(effective_session_id)
         diff_pct = (

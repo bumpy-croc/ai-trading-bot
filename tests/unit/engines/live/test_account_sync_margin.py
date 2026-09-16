@@ -7,6 +7,8 @@ exchange's account-level net equity (`get_account_equity`) and only corrects
 while flat.
 """
 
+import logging
+from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 import pytest
@@ -96,7 +98,8 @@ def test_margin_equity_no_correct_when_position_held():
     db.update_balance.assert_not_called()
 
 
-def test_margin_equity_no_sync_when_equity_unavailable():
+@patch("src.engines.live.account_sync.time.sleep")
+def test_margin_equity_no_sync_when_equity_unavailable(mock_sleep):
     """Equity unreadable -> no sync, no correction (fail safe)."""
     sync, db = _make_sync(equity=None, db_balance=99.89, usdt_total=99.89)
 
@@ -256,3 +259,159 @@ def test_margin_equity_exactly_five_percent_divergence_is_critical():
     assert res["corrected"] is True
     assert db.log_audit_event.call_args.kwargs["severity"] == "CRITICAL"
     assert db.log_event.call_args.kwargs["severity"] == "critical"
+
+
+# ---------------------------------------------------------------------------
+# GH #659: cold-boot startup silent-skip regression tests
+#
+# Prod diagnosis: after a deploy, the startup account-sync's margin-equity
+# correction silently no-op'd — tracked balance stayed at ~$99.89 while true
+# equity was ~$84.18 (15% divergence) — with NO log line at all, because
+# get_account_equity() returned None only at cold boot (a warm call moments
+# later returned the correct value) and `_sync_margin_equity`'s
+# `if equity is None or equity <= 0: return` was completely silent.
+# ---------------------------------------------------------------------------
+
+
+@patch("src.data_providers.binance_provider.Client")
+@patch("src.data_providers.binance_provider.get_config")
+def test_get_account_equity_logs_when_client_not_initialized(
+    mock_config, mock_client_class, caplog
+):
+    """get_account_equity() must log WHY it's returning None, not return silently."""
+    from src.data_providers.binance_provider import BinanceProvider
+
+    mock_config.return_value = Mock(get_required=Mock(return_value="fake_key"))
+    mock_client_class.return_value = Mock()
+
+    provider = BinanceProvider()
+    provider._client = None  # simulate the client not being ready yet
+
+    with caplog.at_level(logging.WARNING):
+        result = provider.get_account_equity()
+
+    assert result is None
+    assert any(
+        "cannot read equity" in record.message and "client not initialized" in record.message
+        for record in caplog.records
+    )
+
+
+@patch("src.data_providers.binance_provider.Client")
+@patch("src.data_providers.binance_provider.get_config")
+def test_get_account_equity_logs_when_binance_unavailable(mock_config, mock_client_class, caplog):
+    """The other silent branch (python-binance not installed) must also log."""
+    from src.data_providers.binance_provider import BinanceProvider
+
+    mock_config.return_value = Mock(get_required=Mock(return_value="fake_key"))
+    mock_client_class.return_value = Mock()
+
+    provider = BinanceProvider()
+
+    with (
+        patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", False),
+        caplog.at_level(logging.WARNING),
+    ):
+        result = provider.get_account_equity()
+
+    assert result is None
+    assert any(
+        "cannot read equity" in record.message and "not installed" in record.message
+        for record in caplog.records
+    )
+
+
+@patch("src.engines.live.account_sync.time.sleep")
+def test_margin_equity_startup_skip_logs_and_arms_pending_retry(mock_sleep, caplog):
+    """A cold-boot skip must log a warning, emit a system event, and arm the
+    one-shot early retry so the next sync isn't throttled for
+    DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES."""
+    sync, db = _make_sync(equity=None, db_balance=99.89, usdt_total=99.89)
+    assert sync.last_sync_time is None  # fresh synchronizer == cold boot
+
+    with caplog.at_level(logging.WARNING):
+        res = sync._sync_margin_equity()
+
+    assert res["synced"] is False
+    assert any("Margin equity correction skipped" in r.message for r in caplog.records)
+    assert any("startup" in r.message for r in caplog.records)
+
+    db.log_event.assert_called_once()
+    event = db.log_event.call_args.kwargs
+    assert event["event_type"] == EventType.WARNING
+    assert event["severity"] == "warning"
+    assert event["session_id"] == 1
+
+    assert sync._pending_startup_equity_retry is True
+    # Retried DEFAULT_STARTUP_EQUITY_MAX_RETRIES times total before giving up.
+    assert mock_sleep.call_count == 2
+
+
+def test_margin_equity_periodic_skip_does_not_arm_pending_retry():
+    """A WARM (periodic) skip is a real API failure, not a readiness race — it
+    must still log/alert but must NOT force an early bypass of the sync
+    throttle (that would spin on an unavailable endpoint)."""
+    sync, db = _make_sync(equity=None, db_balance=99.89, usdt_total=99.89)
+    sync.last_sync_time = datetime.now(UTC)
+
+    res = sync._sync_margin_equity()
+
+    assert res["synced"] is False
+    db.log_event.assert_called_once()
+    assert sync._pending_startup_equity_retry is False
+
+
+@patch("src.engines.live.account_sync.time.sleep")
+def test_margin_equity_startup_retry_recovers_from_transient_none(mock_sleep):
+    """Discriminates the retry fix: a transient None on the first read, then a
+    real value on a later attempt, must still apply the correction — this is
+    exactly the cold-boot race the bug report describes (mechanism verified
+    correct when called warm)."""
+    exchange = Mock()
+    exchange.get_account_equity.side_effect = [None, None, 84.14]
+    exchange.get_balance.return_value = Mock(total=84.14)
+    db = Mock()
+    db.get_current_balance.return_value = 99.89
+    db.update_balance.return_value = True
+    sync = AccountSynchronizer(exchange=exchange, db_manager=db, session_id=1, use_margin=True)
+
+    res = sync._sync_margin_equity()
+
+    assert res["corrected"] is True
+    assert res["new_balance"] == pytest.approx(84.14)
+    db.update_balance.assert_called_once()
+    assert exchange.get_account_equity.call_count == 3
+    assert mock_sleep.call_count == 2
+    # The correction succeeded, so no early-retry needed on the next sync.
+    assert sync._pending_startup_equity_retry is False
+
+
+def test_sync_account_data_bypasses_throttle_after_startup_equity_skip():
+    """Part 3: a startup skip must self-heal on the very next sync attempt
+    rather than waiting out DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES."""
+    exchange = Mock()
+    exchange.sync_account_data.return_value = {
+        "sync_successful": True,
+        "balances": [],
+        "positions": [],
+        "open_orders": [],
+    }
+    exchange.get_account_equity.return_value = 84.14
+    exchange.get_balance.return_value = Mock(total=84.14)
+    db = Mock()
+    db.get_current_balance.return_value = 99.89
+    db.update_balance.return_value = True
+    sync = AccountSynchronizer(exchange=exchange, db_manager=db, session_id=1, use_margin=True)
+
+    # Simulate a prior sync that just happened (so the throttle would normally
+    # block an immediate re-sync) and arm the pending flag as the startup skip
+    # would have.
+    sync.last_sync_time = datetime.now(UTC)
+    sync._pending_startup_equity_retry = True
+
+    result = sync.sync_account_data(force=False)
+
+    assert result.success is True
+    assert result.data["balance_sync"]["corrected"] is True
+    # One-shot: consumed after use.
+    assert sync._pending_startup_equity_retry is False
