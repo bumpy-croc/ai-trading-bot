@@ -425,15 +425,25 @@ class AccountSynchronizer:
             equity,
             diff_pct,
         )
-        balance_updated = self.db_manager.update_balance(
-            equity, "margin_equity_sync_correction", "system", effective_session_id
-        )
-        if not balance_updated:
-            # update_balance swallows its own errors and returns False; don't emit
-            # an audit trail or alert claiming a correction that never persisted.
+        try:
+            # atomic_balance_correction applies the correction as a delta from
+            # this function's pre-lock current_db_balance snapshot, so a delta
+            # writer (e.g. a trade closing) that commits between this read and
+            # lock acquisition is preserved instead of being clobbered by this
+            # absolute correction (#735b).
+            with self.db_manager.atomic_balance_correction(
+                equity,
+                "margin_equity_sync_correction",
+                "system",
+                effective_session_id,
+                caller_snapshot=current_db_balance,
+            ):
+                pass
+        except Exception as e:
             logger.error(
-                "Margin equity correction did NOT persist (update_balance returned "
-                "False): tracked $%.2f vs true equity $%.2f — skipping audit/event",
+                "Margin equity correction did NOT persist: %s — tracked $%.2f vs true "
+                "equity $%.2f — skipping audit/event",
+                e,
                 current_db_balance,
                 equity,
             )
@@ -605,10 +615,19 @@ class AccountSynchronizer:
                         f"Balance discrepancy detected: DB=${current_db_balance:.2f} vs Exchange=${exchange_balance:.2f} (diff: {balance_diff_pct:.2f}%)"
                     )
 
-                    # Update database with exchange balance
-                    self.db_manager.update_balance(
-                        exchange_balance, "exchange_sync_correction", "system", self.session_id
-                    )
+                    # Update database with exchange balance. atomic_balance_correction
+                    # applies the correction as a delta from this function's pre-lock
+                    # current_db_balance snapshot, so a concurrent delta writer (e.g. a
+                    # trade closing) is preserved instead of being clobbered by this
+                    # absolute correction (#735b).
+                    with self.db_manager.atomic_balance_correction(
+                        exchange_balance,
+                        "exchange_sync_correction",
+                        "system",
+                        self.session_id,
+                        caller_snapshot=current_db_balance,
+                    ):
+                        pass
 
                     return {
                         "synced": True,

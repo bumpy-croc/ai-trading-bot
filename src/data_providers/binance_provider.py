@@ -348,6 +348,19 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         # downstream on_user_event forwarding or the socket start/stop loop calls.
         self._user_stream_lock = threading.Lock()
 
+        # Last-known-good get_symbol_info() result per symbol (#1155). Filters
+        # (tick/step size, precision, min notional) change only on rare
+        # exchange-side listing updates, so a transient exchangeInfo failure
+        # (rate-limit window, brief 5xx) shouldn't make an already-known symbol
+        # look unknown to callers that fail closed on a falsy result (#1126's
+        # place_stop_loss_order guard) -- that previously turned a 3-second
+        # blip into three failed retries and an emergency-close. Guarded by a
+        # plain lock like the other small in-memory caches on this class
+        # (_twm_lock, _user_stream_lock) since get_symbol_info is called
+        # concurrently from entry, stop-loss, and reconciliation paths.
+        self._symbol_info_cache: dict[str, dict[str, Any]] = {}
+        self._symbol_info_cache_lock = threading.Lock()
+
     @staticmethod
     def _validate_credentials(
         api_key: str | None,
@@ -2379,20 +2392,33 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return []
 
     def get_symbol_info(self, symbol: str) -> dict[str, Any] | None:
-        """Get trading symbol information"""
+        """Get trading symbol information (LOT_SIZE/PRICE_FILTER/MIN_NOTIONAL filters).
+
+        Always attempts a live ``get_exchange_info()`` fetch first -- filters can
+        change on exchange-side listing updates, so this is not a TTL cache that
+        skips the network call. On failure it falls back to the last
+        successfully-fetched result for ``symbol``, if this process has ever seen
+        one, since filters are otherwise static and a transient blip (rate limit,
+        brief 5xx) shouldn't make an already-known symbol look unknown. Only a
+        symbol that has NEVER been fetched successfully returns falsy on failure
+        (#1155) -- callers such as ``place_stop_loss_order``'s #1126 fail-closed
+        guard rely on that distinction to avoid treating every transient
+        exchangeInfo error as "unknown precision, refuse to place."
+        """
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - returning None for symbol info")
             return None
 
+        cache_key = SymbolFactory.to_exchange_symbol(symbol, "binance")
         try:
             exchange_info = self._client.get_exchange_info()
 
             for symbol_info in exchange_info["symbols"]:
-                if symbol_info["symbol"] == SymbolFactory.to_exchange_symbol(symbol, "binance"):
+                if symbol_info["symbol"] == cache_key:
                     # Extract relevant information
                     filters = {f["filterType"]: f for f in symbol_info["filters"]}
 
-                    return {
+                    info = {
                         "symbol": symbol,
                         "base_asset": symbol_info["baseAsset"],
                         "quote_asset": symbol_info["quoteAsset"],
@@ -2409,10 +2435,31 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                             filters.get("MIN_NOTIONAL", {}).get("minNotional", 0)
                         ),
                     }
+                    with self._symbol_info_cache_lock:
+                        self._symbol_info_cache[cache_key] = info
+                    logger.debug("Refreshed symbol info cache for %s", symbol)
+                    return info
 
+            # A successful lookup that confirms the symbol is genuinely absent
+            # (e.g. delisted) must drop any stale cache entry -- otherwise a
+            # later transient failure would resurrect it via the except branch
+            # below, serving filters for a symbol Binance just told us doesn't
+            # exist.
+            with self._symbol_info_cache_lock:
+                self._symbol_info_cache.pop(cache_key, None)
             return None
 
         except Exception as e:
+            with self._symbol_info_cache_lock:
+                cached = self._symbol_info_cache.get(cache_key)
+            if cached is not None:
+                logger.warning(
+                    "get_exchange_info failed for %s (%s) - serving last known-good "
+                    "symbol info from cache instead of failing closed",
+                    symbol,
+                    e,
+                )
+                return cached
             logger.error(f"Failed to get symbol info for {symbol}: {e}")
             return None
 

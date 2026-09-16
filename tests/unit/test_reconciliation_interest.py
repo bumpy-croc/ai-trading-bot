@@ -67,11 +67,29 @@ def mock_exchange():
 
 @pytest.fixture
 def mock_db():
+    from contextlib import contextmanager
+
     db = MagicMock()
     db.get_unresolved_orders.return_value = []
     db.get_current_balance.return_value = 1000.0
     db.log_audit_event.return_value = 1
     db.update_order_journal.return_value = True
+    db.has_terminal_trade_for_position.return_value = False
+
+    # Default atomic_balance_update: a real working context manager (mirrors
+    # DatabaseManager's) so _realize_pnl_on_close's log_trade=False fallback
+    # path gets a real {"old_balance", "new_balance", "change"} dict instead
+    # of an unconfigured MagicMock (which crashes formatting with ":.2f").
+    @contextmanager
+    def _default_atomic_balance_update(
+        balance_change, reason, updated_by="system", session_id=None, correlation_id=None
+    ):
+        old_balance = db.get_current_balance(session_id)
+        new_balance = old_balance + balance_change
+        yield {"old_balance": old_balance, "new_balance": new_balance, "change": balance_change}
+        db.update_balance(new_balance, reason, updated_by, session_id)
+
+    db.atomic_balance_update.side_effect = _default_atomic_balance_update
     return db
 
 
