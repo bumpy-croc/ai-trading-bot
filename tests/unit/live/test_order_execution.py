@@ -549,6 +549,34 @@ class TestExecuteExit:
         assert result.success is False
         assert result.filled_quantity == pytest.approx(0.004)
 
+    def test_execute_exit_pending_status_is_not_treated_as_confirmed_failure(
+        self, execution_engine_with_exchange, mock_exchange
+    ):
+        """PENDING is not terminal -- must NOT take the #744 confirmed-failure path.
+
+        Every provider maps NEW (and any unrecognized status) to PENDING, so
+        treating it as a confirmed non-fill would turn an ordinary in-flight
+        close into a false failure, cascading into CLOSE_INVENTORY_LOCKED
+        pages for a position that is (or will shortly be) actually closed.
+        PENDING must keep falling through to the simulated-price path exactly
+        as it did before #744's fix.
+        """
+        order_details = Mock()
+        order_details.status = ExchangeOrderStatus.PENDING
+        order_details.filled_quantity = 0.0
+        order_details.average_price = None
+        mock_exchange.get_order.return_value = order_details
+
+        result = execution_engine_with_exchange.execute_exit(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            order_id="order123",
+            base_price=50000.0,
+            position_notional=1000.0,
+        )
+
+        assert result.success is True
+
 
 # ============================================================================
 # Tests for the close-quantity holdings guard (-2010 class)
