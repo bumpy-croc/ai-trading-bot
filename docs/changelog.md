@@ -57,6 +57,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the ungated path still diverges.
 
 ### Fixed
+- **`DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL` was dead code, shadowed by `runner.py`'s hardcoded
+  `--snapshot-interval` default** (#1184). The constant claimed 1800s (30 min), but every real
+  entry point (`atb live`, `atb live-health`, prod's Railway `startCommand`) goes through
+  `runner.py`, which hardcodes `default=3600` and never imports the constant — so every actual
+  deployment snapshots hourly, not every 30 minutes. This previously caused a real docs
+  regression (PR #1180, closed unmerged) that "corrected" ops docs from the true "hourly" to
+  the false "30-minute" value, trusting the unreachable constant over the deployed behavior.
+  No behavior change: the constant now reads 3600, matching what has always actually run.
 - **Trailing-stop ratchets never moved the exchange-side stop-loss order** (#1167; found
   root-causing #1165's abort storm). `LiveExitHandler.update_trailing_stops` updated
   `position.stop_loss` in memory and the DB as the trail ratcheted, but the resting exchange

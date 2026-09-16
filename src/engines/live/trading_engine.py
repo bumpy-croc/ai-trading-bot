@@ -228,7 +228,7 @@ class LiveTradingEngine:
         resume_from_last_balance: bool = True,  # Resume balance from last account snapshot
         database_url: str | None = None,  # Database connection URL
         max_consecutive_errors: int = 10,  # Maximum consecutive errors before shutdown
-        account_snapshot_interval: int = DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,  # Account snapshot interval in seconds (30 minutes)
+        account_snapshot_interval: int = DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,  # Account snapshot interval in seconds (1 hour)
         provider: str = "binance",  # 'binance' (default) or 'coinbase'
         testnet: bool = False,  # Use exchange testnet (separate credentials)
         # Dynamic risk management
@@ -267,7 +267,7 @@ class LiveTradingEngine:
             Defaults to True.
         account_snapshot_interval : int, optional
             How often to log account snapshots to database in seconds.
-            Defaults to 1800 (30 minutes). Set to 0 to disable snapshots.
+            Defaults to 3600 (1 hour). Set to 0 to disable snapshots.
         settings : LiveEngineSettings, optional
             Pre-resolved construction-time settings (feature flags / env /
             app config). The runner builds these explicitly; when omitted the
