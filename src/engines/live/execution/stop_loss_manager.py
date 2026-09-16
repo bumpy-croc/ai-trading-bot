@@ -35,6 +35,7 @@ import logging
 import math
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from src.config.constants import (
@@ -57,9 +58,49 @@ from src.infrastructure.logging.events import log_order_event
 
 if TYPE_CHECKING:
     from src.database.manager import DatabaseManager
-    from src.engines.live.reconciliation import BaseAssetLockRegistry
+    from src.engines.live.reconciliation import (
+        BaseAssetLockRegistry,
+        StopPlacementRefuseReason,
+    )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class StopLossPlacementResult:
+    """Outcome of :meth:`LiveStopLossManager.place_protection` (#1218).
+
+    ``order_id`` is the placed/adopted stop order id, or ``None`` on total
+    failure (a fail-closed guard refusal, or all retries exhausted).
+    ``refuse_reason_code`` is populated only on that failure path, and only
+    when the guard's own REFUSE decision was the terminal cause -- it is
+    ``None`` when every attempt instead failed via ``place_stop_loss_order``
+    itself raising/returning falsy with the guard saying PROCEED (a different
+    failure class: the exchange rejected placement, not "we couldn't confirm
+    it's safe to place").
+
+    This lets the caller distinguish an ``UNCONFIRMED`` guard lookup
+    (transient -- the exchange's open-orders view couldn't be read this
+    cycle, may clear on the very next attempt) from a genuine confirmed
+    conflict (``AMBIGUOUS``/``WRONG_SIDE``/``PRICE_MISMATCH``/``NO_ACCESSOR``),
+    the same distinction #1160 drew for the startup-recovery placement site.
+    """
+
+    order_id: str | None
+    refuse_reason_code: StopPlacementRefuseReason | None = None
+
+    @property
+    def is_unconfirmed_refusal(self) -> bool:
+        """Whether placement failed specifically on an UNCONFIRMED guard lookup.
+
+        The one failure class safe to defer rather than emergency-close
+        (#1218) -- a transient, retryable exchange-side lookup, not a
+        confirmed conflict and not a placement failure with the guard
+        itself saying PROCEED.
+        """
+        from src.engines.live.reconciliation import StopPlacementRefuseReason
+
+        return self.refuse_reason_code == StopPlacementRefuseReason.UNCONFIRMED
 
 
 class StopLossEngineState(Protocol):
@@ -104,13 +145,16 @@ class LiveStopLossManager:
         side: PositionSide,
         quantity: float,
         stop_price: float,
-    ) -> str | None:
+    ) -> StopLossPlacementResult:
         """Place a server-side stop-loss after entry, with retry/backoff.
 
         On success the stop order id is recorded on the tracked position and
         registered with the order tracker. On total failure (a fail-closed
         refusal, or all retries exhausted) persists an UNPROTECTED audit row
-        and returns ``None`` — the caller owns the emergency-close escalation.
+        and returns a result with ``order_id=None`` — the caller owns the
+        emergency-close-or-defer escalation, keyed off ``refuse_reason_code``
+        (#1218; mirrors the ``reason_code`` #1160 introduced for the
+        startup-recovery placement site).
         """
         from src.engines.live.reconciliation import (
             StopPlacementDecision,
@@ -122,7 +166,7 @@ class LiveStopLossManager:
         sl_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
 
         achieved_price: float = stop_price
-        refuse_reason: str | None = None
+        refuse_decision: StopPlacementDecision | None = None
 
         def _capture_achieved_price(decision: StopPlacementDecision) -> None:
             nonlocal achieved_price
@@ -130,9 +174,9 @@ class LiveStopLossManager:
             if price is not None:
                 achieved_price = price
 
-        def _capture_refuse_reason(decision: StopPlacementDecision) -> None:
-            nonlocal refuse_reason
-            refuse_reason = decision.reason
+        def _capture_refuse_decision(decision: StopPlacementDecision) -> None:
+            nonlocal refuse_decision
+            refuse_decision = decision
 
         # Consult the fail-closed resting-stop check BEFORE placing (#1112), with
         # a DEFAULT_STOP_LOSS_MAX_RETRIES-attempt exponential-backoff retry on
@@ -155,7 +199,7 @@ class LiveStopLossManager:
             retry_delay=DEFAULT_STOP_LOSS_RETRY_DELAY,
             retry_log_prefix="Stop-loss placement",
             on_adopt=_capture_achieved_price,
-            on_refuse=_capture_refuse_reason,
+            on_refuse=_capture_refuse_decision,
         )
 
         if sl_order_id:
@@ -174,18 +218,22 @@ class LiveStopLossManager:
                 state.order_tracker.track_order(sl_order_id, symbol)
         else:
             # Refusal and retry-exhaustion both leave the new entry with no
-            # protective stop; either way the caller's emergency-close is the
-            # escalation, but the position was UNPROTECTED for at least one
-            # cycle and that deserves the same persisted trail as the
-            # cancel-then-re-place failures below (#1185).
+            # protective stop; either way the caller owns the escalation
+            # (emergency-close or defer, see StopLossPlacementResult), but the
+            # position was UNPROTECTED for at least one cycle and that
+            # deserves the same persisted trail as the cancel-then-re-place
+            # failures below (#1185).
             write_unprotected_audit(
                 state.db_manager,
                 state.trading_session_id,
                 position,
                 "post-entry stop-loss placement failed",
-                exchange_reason=refuse_reason,
+                exchange_reason=refuse_decision.reason if refuse_decision else None,
             )
-        return sl_order_id
+        return StopLossPlacementResult(
+            order_id=sl_order_id,
+            refuse_reason_code=refuse_decision.reason_code if refuse_decision else None,
+        )
 
     def cancel(self, position: LivePosition) -> bool:
         """Cancel a position's resting stop-loss order and stop tracking it.

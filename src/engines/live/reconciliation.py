@@ -581,11 +581,13 @@ def place_or_adopt_stop_loss(
     when an untracked resting stop is adopted — for a caller (``move()``) that
     needs the ACTUAL resting price/quantity, not just the order id, without
     re-running the guard check itself. ``on_refuse`` is the REFUSE-side
-    equivalent, invoked with the decision (and its specific ``reason``) when
-    the guard refuses — on any attempt — so a caller can surface that reason
-    in its own alert/audit instead of a generic message. Both callbacks are
-    fault-isolated: an exception from either is logged and swallowed rather
-    than propagated.
+    equivalent, invoked with the decision (and its specific ``reason``) only
+    on a TERMINAL refusal — a confirmed conflict (any attempt), or an
+    unconfirmed lookup on the final attempt — never on an unconfirmed
+    ``SKIP`` that still has retry budget left; callers (e.g. #1218's entry-path
+    defer) rely on this to distinguish "genuinely refused" from "still
+    retrying" via ``refuse_reason_code``. Both callbacks are fault-isolated:
+    an exception from either is logged and swallowed rather than propagated.
     """
     if max_attempts <= 1:
         decision = guard_stop_placement(
@@ -4633,6 +4635,17 @@ class PeriodicReconciler:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=10)
         logger.info("Periodic reconciler stopped")
+
+    @property
+    def is_running(self) -> bool:
+        """Whether the reconciliation daemon thread is actually alive.
+
+        Distinct from ``self._running`` (set eagerly in ``start()``): a caller
+        deciding whether to rely on this reconciler as a safety backstop
+        (#1218's entry-path UNCONFIRMED defer) needs to know the thread is
+        genuinely running, not just that ``start()`` was called.
+        """
+        return self._running and self._thread is not None and self._thread.is_alive()
 
     def get_position_lock(self, position_key: str) -> threading.Lock:
         """Get or create a per-position mutation lock.

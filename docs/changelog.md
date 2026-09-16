@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Entry-path stop-loss placement now threads `reason_code` through and defers on a
+  terminal UNCONFIRMED refusal instead of always emergency-closing, but only when the
+  periodic reconciler is confirmed alive** (#1218, follow-up to #1160).
+  `LiveStopLossManager.place_protection()` now returns a `StopLossPlacementResult`
+  (`order_id` + `refuse_reason_code`) instead of a bare `str | None`, capturing the full
+  `StopPlacementDecision` from the guard instead of just its free-text `reason`. When all
+  `DEFAULT_STOP_LOSS_MAX_RETRIES` placement attempts terminate in an `UNCONFIRMED` guard
+  refusal (the exchange open-orders lookup itself couldn't be confirmed — a transient
+  blip, not a genuine conflict) AND `PeriodicReconciler.is_running` is true,
+  `entry_coordinator.py`'s post-entry flow now leaves the freshly-opened position tracked
+  for the next periodic-reconciler pass instead of emergency-market-selling it, mirroring
+  #1160's startup-recovery fix. Unlike #1160's recovered-position case, a fresh position
+  is skipped by `exit_coordinator.py`'s same-bar-entry guard for the rest of the bar it
+  was entered on, so the live loop's in-memory `_check_exit_conditions` is *not* active
+  during the defer window either — the actual backstop is the periodic reconciler
+  re-placing the exchange-side stop on its next pass (~`interval` seconds), which is why
+  deferring is gated on that reconciler actually being alive; when it is not, this falls
+  through to the same emergency-close path a confirmed conflict
+  (`AMBIGUOUS`/`WRONG_SIDE`/`PRICE_MISMATCH`/`NO_ACCESSOR`) always takes.
 - **Consolidated the duplicated "held quantity" scaling in `reconciliation.py`** (#1208).
   ~17 independent inline reimplementations of `qty * (current_size / original_size)` —
   used for stop-loss re-placement sizing, external-close/margin-position threshold checks,
