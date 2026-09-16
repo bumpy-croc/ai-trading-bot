@@ -3718,10 +3718,12 @@ class PositionReconciler:
             side_str = getattr(side, "value", None) or str(side or "long")
             qty_abs = abs(float(qty))
             # Match the engine close path on scale-ins (current_size > original_size):
-            # position.quantity is the ORIGINAL fill and is not updated on scale-in, so the
-            # held quantity is not reliably derivable. The engine stores NULL quantity and
-            # does not inflate the entry fee (_closed_base_quantity -> None,
-            # _close_position_portion -> 1.0); mirror that here rather than over-reporting.
+            # ``apply_scale_in`` keeps original_size in lockstep with current_size (#1206),
+            # so this should only trip for state recovered from before that fix, or other
+            # corrupted sizing — in which case the held quantity is not reliably derivable.
+            # The engine stores NULL quantity and does not inflate the entry fee
+            # (_closed_base_quantity -> None, _close_position_portion -> 1.0); mirror that
+            # here rather than over-reporting.
             original = getattr(position, "original_size", None)
             current = getattr(position, "current_size", None)
             try:

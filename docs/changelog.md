@@ -57,6 +57,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the ungated path still diverges.
 
 ### Fixed
+- **`position.quantity` never grew on a scale-in, degrading close/SL-reprotect sizing
+  accuracy for any position that scaled in** (#1206; found while tracing #737's
+  quantity-sizing fix). `LivePositionTracker.apply_scale_in` grew `current_size`/`size`
+  but left `quantity` (the base-asset amount) and `original_size` untouched, so
+  `current_size` could exceed `original_size` and every consumer scaling
+  `quantity * (current_size / original_size)` to recover the true held amount either fell
+  back to a less-accurate path (`_closed_base_quantity` -> `None`) or silently
+  under-reported it (`held_protection_quantity`, used to re-place a stop-loss after a
+  failed close). `apply_scale_in` now grows `quantity` by the base units the scale-in
+  represents (derived from the same fraction/entry_balance/price basis used to seed
+  `quantity` at entry, since live scale-ins place no real exchange order today —
+  bookkeeping-only, like partial exits, #734) and grows `original_size` by the same
+  amount as `current_size`, so the ratio stays meaningful. Both are now persisted to the
+  DB in the same transaction as `current_size` so a session restart recovers the grown
+  values, not the stale pre-scale-in ones. Positions already scaled in before this fix
+  keep their existing (stale) DB values — the guards in `_closed_base_quantity` and the
+  reconciler stay in place as defense-in-depth for that legacy state.
 - **`DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL` was dead code, shadowed by `runner.py`'s hardcoded
   `--snapshot-interval` default** (#1184). The constant claimed 1800s (30 min), but every real
   entry point (`atb live`, `atb live-health`, prod's Railway `startCommand`) goes through

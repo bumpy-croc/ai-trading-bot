@@ -829,6 +829,40 @@ class LivePositionTracker:
             # exactly this so DB state matches runtime state.
             applied_delta = new_current_size - current_size
 
+            # Grow `original_size` by the same applied delta so
+            # `current_size / original_size` stays a meaningful ratio (1.0 for
+            # "fully held since the scale-in") instead of exceeding 1.0 (#1206).
+            # Grow `quantity` — the running total of base-asset units actually
+            # held — by the units the scale-in added. Live scale-ins place no
+            # real exchange order today (bookkeeping-only, like partial exits —
+            # #734), so those units are derived from the same
+            # fraction * entry_balance / price basis `open_position` uses to
+            # seed `quantity` at entry, rather than read off a fill.
+            quantity_delta: float | None = None
+            if applied_delta > EPSILON:
+                position.original_size = float(position.original_size) + applied_delta
+                entry_balance = position.entry_balance
+                if (
+                    position.quantity is not None
+                    and entry_balance is not None
+                    and math.isfinite(entry_balance)
+                    and entry_balance > 0
+                    and math.isfinite(price)
+                    and price > 0
+                ):
+                    quantity_delta = applied_delta * entry_balance / price
+                    position.quantity = float(position.quantity) + quantity_delta
+                else:
+                    logger.warning(
+                        "Cannot grow tracked quantity for %s scale-in (quantity=%s, "
+                        "entry_balance=%s, price=%.8f) — quantity-derived sizing will "
+                        "undercount this position until it fully closes",
+                        order_id,
+                        position.quantity,
+                        entry_balance,
+                        price,
+                    )
+
         logger.debug(
             "Scale-in: +%.4f to position %s, new size=%.4f",
             delta_fraction,
@@ -844,6 +878,7 @@ class LivePositionTracker:
                     added_size_delta=float(applied_delta),
                     price=float(price),
                     threshold_level=int(threshold_level),
+                    quantity_delta=quantity_delta,
                 )
             except Exception as e:
                 logger.warning("DB scale-in update failed: %s", e)

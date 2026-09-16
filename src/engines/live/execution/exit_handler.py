@@ -1303,10 +1303,11 @@ class LiveExitHandler:
         Live partial exits are bookkeeping-only today (#734 — no exchange
         order is placed for a PARTIAL_EXIT), so regardless of how many
         partial "exits" the tracker recorded, the exchange still holds the
-        full original quantity right up until this final close. Size it off
-        ``position.quantity`` (the immutable entry-time asset amount,
-        untouched by ``apply_partial_exit``) rather than the now-zeroed
-        ``current_size`` fraction.
+        full quantity right up until this final close. Size it off
+        ``position.quantity`` (the running total of base-asset units ever
+        bought — entry fill plus any scale-ins, #1206 — left untouched by
+        ``apply_partial_exit``) rather than the now-zeroed ``current_size``
+        fraction.
         """
         quantity = position.quantity
         if quantity is None or quantity <= 0:

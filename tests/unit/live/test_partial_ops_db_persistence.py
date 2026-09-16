@@ -73,11 +73,58 @@ def _track_position(
     return position
 
 
+def _track_position_with_quantity(
+    db: DatabaseManager, tracker: LivePositionTracker, side: PositionSide
+) -> LivePosition:
+    """Like ``_track_position``, but the in-memory position also carries the entry-fill
+    ``quantity`` (as a real recovered/entry-handler position would) so scale-in growth of
+    ``quantity``/``original_size`` (#1206) has a baseline to grow from."""
+    session_id = db.create_trading_session(
+        strategy_name="TestStrategy",
+        symbol="ETHUSDT",
+        timeframe="1h",
+        mode=TradeSource.PAPER,
+        initial_balance=1000.0,
+    )
+    db_id = db.log_position(
+        symbol="ETHUSDT",
+        side="long" if side == PositionSide.LONG else "short",
+        entry_price=100.0,
+        size=0.10,
+        strategy_name="TestStrategy",
+        entry_order_id="order-1",
+        quantity=1.0,
+        entry_balance=1000.0,
+        session_id=session_id,
+    )
+    position = LivePosition(
+        symbol="ETHUSDT",
+        side=side,
+        entry_price=100.0,
+        entry_time=ENTRY_TIME,
+        size=0.10,
+        entry_balance=1000.0,
+        quantity=1.0,
+        order_id="order-1",
+        db_position_id=db_id,
+    )
+    tracker.track_recovered_position(position, db_id=db_id)
+    return position
+
+
 def _db_current_size(db: DatabaseManager, db_id: int) -> float:
     with db.get_session() as session:
         row = session.query(Position).filter(Position.id == db_id).first()
         assert row is not None
         return float(row.current_size)
+
+
+def _db_row(db: DatabaseManager, db_id: int) -> Position:
+    with db.get_session() as session:
+        row = session.query(Position).filter(Position.id == db_id).first()
+        assert row is not None
+        session.expunge(row)
+        return row
 
 
 @pytest.mark.parametrize("side", [PositionSide.LONG, PositionSide.SHORT])
@@ -159,3 +206,65 @@ class TestPartialOpsDbPersistenceMirrorsRuntime:
         db_id = tracker._position_db_ids["order-1"]
         assert db_id is not None
         assert _db_current_size(db, db_id) == pytest.approx(position.current_size)
+
+
+@pytest.mark.parametrize("side", [PositionSide.LONG, PositionSide.SHORT])
+class TestScaleInPersistsQuantityAndOriginalSize:
+    """Regression for #1206: a scale-in must persist the grown ``quantity`` and
+    ``original_size`` to the DB, not just ``current_size`` — otherwise a session
+    restart recovers the pre-fix (stale) values and the fix silently reverts."""
+
+    def test_scale_in_persists_quantity_and_original_size(self, side) -> None:
+        db = _make_db()
+        tracker = LivePositionTracker(db_manager=db)
+        position = _track_position_with_quantity(db, tracker, side)
+
+        # 20%-of-original on a 0.10 position = 0.02 balance-fraction add, at a price
+        # (50) below the entry_price (100): 0.02 * 1000 / 50 = 0.4 additional units.
+        result = tracker.apply_scale_in(
+            order_id="order-1",
+            delta_fraction=0.02,
+            price=50.0,
+            threshold_level=0,
+            max_position_size=1.0,
+        )
+
+        assert result is not None
+        assert position.quantity == pytest.approx(1.4)
+        assert position.original_size == pytest.approx(0.12)
+        assert position.current_size == pytest.approx(0.12)
+
+        db_id = tracker._position_db_ids["order-1"]
+        assert db_id is not None
+        row = _db_row(db, db_id)
+        assert float(row.quantity) == pytest.approx(1.4)
+        assert float(row.original_size) == pytest.approx(0.12)
+        assert float(row.current_size) == pytest.approx(0.12)
+
+    def test_recovered_position_reflects_persisted_growth(self, side) -> None:
+        """A fresh tracker recovering the position from the DB after the scale-in
+        sees the grown quantity/original_size, not the stale entry-time values."""
+        db = _make_db()
+        tracker = LivePositionTracker(db_manager=db)
+        _track_position_with_quantity(db, tracker, side)
+
+        tracker.apply_scale_in(
+            order_id="order-1",
+            delta_fraction=0.02,
+            price=50.0,
+            threshold_level=0,
+            max_position_size=1.0,
+        )
+
+        db_id = tracker._position_db_ids["order-1"]
+        assert db_id is not None
+        row = _db_row(db, db_id)
+
+        recovering_tracker = LivePositionTracker(db_manager=db)
+        recovered = recovering_tracker.recover_positions(session_id=row.session_id)
+
+        assert len(recovered) == 1
+        recovered_position = recovered[0]
+        assert recovered_position.quantity == pytest.approx(1.4)
+        assert recovered_position.original_size == pytest.approx(0.12)
+        assert recovered_position.current_size == pytest.approx(0.12)

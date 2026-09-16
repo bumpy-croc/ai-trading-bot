@@ -102,13 +102,16 @@ Follow standard SOLID, KISS, YAGNI, and composition-over-inheritance principles.
 
 | Field | Meaning | Example | Use for |
 |-------|---------|---------|---------|
-| `quantity` | Asset amount | 0.5 BTC | Exchange orders, emergency close qty |
-| `size` | Balance fraction at entry | 0.02 (2%) | Entry sizing decisions |
-| `current_size` | Remaining after partial exits | 0.01 | SL re-placement, holdings checks |
-| `original_size` | Size at entry (immutable) | 0.02 | Scaling ratios |
+| `quantity` | Asset amount ever bought: entry fill + any scale-ins | 0.5 BTC | Exchange orders, emergency close qty |
+| `size` | Balance fraction at entry, grown by scale-ins | 0.02 (2%) | Entry sizing decisions |
+| `current_size` | Remaining after partial exits, grown by scale-ins | 0.01 | SL re-placement, holdings checks |
+| `original_size` | Size at entry, grown by scale-ins in lockstep with `current_size` | 0.02 | Scaling ratios |
 
 - These fields are **never interchangeable**.
-- Scale expected holdings by `current_size / original_size` after partial exits.
+- Scale expected holdings by `current_size / original_size` after partial exits. A
+  scale-in grows `quantity` and `original_size` by the same amount it grows
+  `current_size`, so the ratio stays meaningful (1.0 right after a scale-in with no
+  partial exits pending) instead of exceeding 1.0.
 - Never use `if value:` on these fields — `0.0` is valid state (flat position), not falsy. Use `if value is not None:`.
 - Preserve `0.0` when deserializing from DB — don't convert to `None`.
 

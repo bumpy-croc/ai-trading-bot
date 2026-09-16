@@ -3678,14 +3678,25 @@ class DatabaseManager:
         added_size_delta: float,
         price: float,
         threshold_level: int,
+        quantity_delta: float | None = None,
     ) -> None:
-        """Append scale-in trade, increment current size and counters.
+        """Append scale-in trade, increment current size, original size, and counters.
 
         ``added_size_delta`` is the added slice in balance-fraction units —
         the SAME units as ``Position.current_size`` — so the persisted size
         mirrors the runtime tracker exactly (callers convert policy sizes
         with ``fraction_of_original * original_size`` and apply any
-        daily-risk / max-position clamps before persisting).
+        daily-risk / max-position clamps before persisting). ``original_size``
+        grows by the same (post-cap) amount as ``current_size`` so
+        ``current_size / original_size`` stays a meaningful ratio instead of
+        exceeding 1.0 (#1206).
+
+        ``quantity_delta`` is the additional base-asset units the scale-in
+        represents (derived by the caller from ``added_size_delta``), added to
+        ``Position.quantity`` so it keeps tracking the total base quantity
+        actually held. ``None`` (missing entry_balance/price at the caller) or
+        a pre-existing ``NULL`` quantity leaves ``quantity`` untouched rather
+        than fabricate a baseline.
         """
         # Validate financial inputs
         if not math.isfinite(added_size_delta) or added_size_delta <= 0:
@@ -3713,7 +3724,25 @@ class DatabaseManager:
             # Update position current size and counters
             cur = float(position.current_size or position.size or 0.0)
             new_cur = min(1.0, cur + float(added_size_delta))
+            actual_current_delta = new_cur - cur
             position.current_size = Decimal(str(new_cur))
+            if actual_current_delta > 0:
+                prev_original = float(position.original_size or position.size or 0.0)
+                position.original_size = Decimal(str(prev_original + actual_current_delta))
+                if quantity_delta is not None and position.quantity is not None:
+                    # Scale down proportionally on the rare case the 1.0
+                    # backstop above clips growth further than the caller's
+                    # own (already max-position-capped) delta anticipated, so
+                    # the added quantity stays consistent with the size
+                    # actually applied here.
+                    applied_quantity_delta = quantity_delta
+                    if actual_current_delta < added_size_delta:
+                        applied_quantity_delta = quantity_delta * (
+                            actual_current_delta / added_size_delta
+                        )
+                    position.quantity = Decimal(
+                        str(float(position.quantity) + applied_quantity_delta)
+                    )
             position.scale_ins_taken = int((position.scale_ins_taken or 0) + 1)
             position.last_scale_in_price = Decimal(str(price))
             position.last_update = datetime.now(UTC)

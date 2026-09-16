@@ -260,7 +260,7 @@ class Position(Base):
     # Position details
     entry_price = Column(Numeric(18, 8), nullable=False)
     size: Mapped[Decimal] = cast(Mapped[Decimal], Column(Numeric(18, 8), nullable=False))
-    quantity = Column(Numeric(18, 8))
+    quantity: Mapped[Decimal | None] = cast(Mapped[Decimal | None], Column(Numeric(18, 8)))
     entry_balance = Column(Numeric(18, 8))
     # Partial operations tracking
     original_size: Mapped[Decimal | None] = cast(

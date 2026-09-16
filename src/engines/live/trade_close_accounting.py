@@ -20,11 +20,12 @@ logger = logging.getLogger(__name__)
 def _closed_base_quantity(position: Position) -> float | None:
     """Actual filled base-asset quantity represented by a closing ``Trade`` row.
 
-    ``position.quantity`` is the authoritative filled base quantity of the *original*
-    position (set from the entry fill, see LiveExecutionEngine.execute_entry). Partial
-    exits reduce ``current_size`` (a fraction of balance) but never mutate ``quantity``,
-    so the quantity actually being closed is ``position.quantity`` scaled by the fraction
-    of the original position remaining.
+    ``position.quantity`` is the running total of base-asset units actually held:
+    seeded from the entry fill (see ``LiveExecutionEngine.execute_entry``) and grown by
+    each scale-in's derived unit count (``LivePositionTracker.apply_scale_in``, #1206).
+    Partial exits reduce ``current_size`` (a fraction of balance) but never mutate
+    ``quantity``, so the quantity actually being closed is ``position.quantity`` scaled
+    by the fraction of the (scale-in-inclusive) position remaining.
 
     Returns ``None`` (so the Trade row stores NULL rather than a fabricated or negative
     value) when the filled quantity is unknown or the sizing inputs are corrupt:
@@ -57,9 +58,10 @@ def _closed_base_quantity(position: Position) -> float | None:
         # 0.0 quantity (which _close_position_portion would still pair with the full fee).
         return None
     if current_f > original_f:
-        # Scale-ins grow current_size beyond original_size but do NOT update
-        # ``quantity`` (the original entry fill), so the held base quantity cannot
-        # be derived by scaling. Store NULL rather than over-report the fill.
+        # ``apply_scale_in`` grows original_size in lockstep with current_size (#1206),
+        # so this should only fire for state recovered from before that fix, or other
+        # corrupted sizing. Kept as defense-in-depth: store NULL rather than over-report
+        # the fill from an unreliable ratio.
         return None
     return qty * (current_f / original_f)
 

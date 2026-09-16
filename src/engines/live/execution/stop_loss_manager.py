@@ -309,10 +309,14 @@ class LiveStopLossManager:
 
     @staticmethod
     def held_protection_quantity(position: LivePosition) -> float:
-        """Base quantity to protect, scaled for any prior partial exits.
+        """Base quantity to protect, scaled for any prior partial exits or scale-ins.
 
         Mirrors the reconciler's re-placement sizing ``quantity * current/original`` so
-        a re-protected stop covers the *remaining* held size, not the full entry size.
+        a re-protected stop covers the size actually held: less than the entry fill after
+        a partial exit, more after a scale-in (``apply_scale_in`` grows ``quantity`` and
+        ``original_size`` together, #1206). For state recovered from before that fix
+        (``current > original``), the ratio still applies and quantity understates the
+        true held amount by the scale-in's un-tracked units.
         """
         quantity = getattr(position, "quantity", None)
         if not quantity or quantity <= 0:
