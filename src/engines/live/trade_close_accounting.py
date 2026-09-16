@@ -17,6 +17,60 @@ from src.engines.live.execution.position_tracker import LivePosition as Position
 logger = logging.getLogger(__name__)
 
 
+def held_base_quantity(
+    qty: float | None,
+    current_size: float | None,
+    original_size: float | None,
+    *,
+    allow_scale_in: bool = False,
+) -> float | None:
+    """Base quantity represented by ``qty`` scaled by ``current_size / original_size``.
+
+    The single implementation of the "held quantity" ratio duplicated (with divergent,
+    inconsistent guards) across ``reconciliation.py`` and ``stop_loss_manager.py`` before
+    #1208 consolidated it. Guards mirror ``_closed_base_quantity``: returns ``None`` when
+    ``qty`` is missing/non-finite/non-positive, ``original_size`` is not finite-positive,
+    or ``current_size`` is not finite-non-negative (``0.0`` is a valid, fully-exited
+    holding, not corrupt state — CODE.md Position Fields).
+
+    ``current_size > original_size`` (a scale-in) is guarded by default (``None``): before
+    #1206 this was the NORMAL shape of a scaled-in position (``apply_scale_in`` grew
+    ``current_size`` without growing ``original_size``/``quantity`` in lockstep), so it is
+    only a corrupted/legacy-state signal now that #1206 keeps them in lockstep going
+    forward. ``allow_scale_in=True`` (the default at every consolidated call site except
+    ``_log_reconciliation_trade``) computes the scaled value anyway rather than returning
+    ``None`` for it: these are operational quantities (stop-loss sizing, notional
+    estimates, P&L on close) where under-sizing a real held amount to 0 risks leaving live
+    inventory unprotected, which is worse than a ratio past 1.0 for the rare legacy/
+    corrupted case. ``_log_reconciliation_trade`` keeps the strict default because its
+    consumer is a persisted ``trades.quantity`` audit column, matching
+    ``_closed_base_quantity``'s own no-fabrication policy exactly (same purpose, same
+    guard).
+    """
+    if qty is None:
+        return None
+    try:
+        qty_f = float(qty)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(qty_f) or qty_f <= 0:
+        return None
+    if current_size is None or original_size is None:
+        return None
+    try:
+        original_f = float(original_size)
+        current_f = float(current_size)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(original_f) and original_f > 0):
+        return None
+    if not (math.isfinite(current_f) and current_f >= 0):
+        return None
+    if current_f > original_f and not allow_scale_in:
+        return None
+    return qty_f * (current_f / original_f)
+
+
 def _closed_base_quantity(position: Position) -> float | None:
     """Actual filled base-asset quantity represented by a closing ``Trade`` row.
 

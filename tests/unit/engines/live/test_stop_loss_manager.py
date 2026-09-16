@@ -73,6 +73,47 @@ def make_position(**overrides):
     return position
 
 
+class TestHeldProtectionQuantity:
+    """held_protection_quantity delegates to the shared held_base_quantity (#1208)."""
+
+    def test_scales_by_partial_exit(self):
+        position = make_position(quantity=1.0, current_size=0.5, original_size=1.0)
+        assert LiveStopLossManager.held_protection_quantity(position) == pytest.approx(0.5)
+
+    def test_scales_past_one_for_scale_in(self):
+        """allow_scale_in=True (#1208): unchanged from the pre-#1208 unguarded scaling — a
+        real scale-in's held amount must still be protectable, not zeroed out."""
+        position = make_position(quantity=1.0, current_size=1.5, original_size=1.0)
+        assert LiveStopLossManager.held_protection_quantity(position) == pytest.approx(1.5)
+
+    def test_falls_back_to_raw_quantity_when_sizing_missing(self):
+        position = make_position(quantity=0.5, current_size=None, original_size=None)
+        assert LiveStopLossManager.held_protection_quantity(position) == pytest.approx(0.5)
+
+    def test_zero_quantity_returns_zero(self):
+        position = make_position(quantity=0.0, current_size=0.0, original_size=0.02)
+        assert LiveStopLossManager.held_protection_quantity(position) == 0.0
+
+    def test_corrupt_current_size_falls_back_to_raw_quantity(self):
+        """Regression (#1208): a non-finite/negative current_size is a NEW guard the shared
+        helper adds — the previous inline check (`current is not None and original is not
+        None and original > 0`) did not validate current_size's sign/finiteness at all, so a
+        corrupted current_size would have silently scaled by a garbage ratio."""
+        position = make_position(quantity=0.5, current_size=float("nan"), original_size=0.02)
+        assert LiveStopLossManager.held_protection_quantity(position) == pytest.approx(0.5)
+
+    def test_non_finite_quantity_returns_zero(self):
+        """Regression (#1208): NaN quantity previously slipped past `not quantity or quantity
+        <= 0` (both comparisons against NaN are False), and could have handed the exchange a
+        NaN stop-loss order quantity. It is now rejected and returns 0.0."""
+        position = make_position(quantity=float("nan"), current_size=None, original_size=None)
+        assert LiveStopLossManager.held_protection_quantity(position) == 0.0
+
+    def test_negative_quantity_returns_zero(self):
+        position = make_position(quantity=-0.5, current_size=None, original_size=None)
+        assert LiveStopLossManager.held_protection_quantity(position) == 0.0
+
+
 class TestDynamicStateReads:
     def test_reads_exchange_interface_assigned_after_construction(self):
         # Arrange: manager built before the exchange exists (engine startup order)

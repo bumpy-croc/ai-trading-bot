@@ -51,6 +51,7 @@ from src.engines.live.execution.position_tracker import (
     LivePositionTracker,
 )
 from src.engines.live.order_tracker import OrderTracker
+from src.engines.live.trade_close_accounting import held_base_quantity
 from src.engines.shared.models import PositionSide
 from src.infrastructure.logging.events import log_order_event
 
@@ -311,17 +312,29 @@ class LiveStopLossManager:
     def held_protection_quantity(position: LivePosition) -> float:
         """Base quantity to protect, scaled for any prior partial exits.
 
-        Mirrors the reconciler's re-placement sizing ``quantity * current/original`` so
-        a re-protected stop covers the *remaining* held size, not the full entry size.
+        Delegates to the shared ``held_base_quantity`` (#1208) so this mirrors the
+        reconciler's re-placement sizing off ONE implementation. ``allow_scale_in=True``
+        preserves this method's pre-#1208 behavior of scaling past 1.0 for a scale-in
+        rather than refusing to size the stop — a real held amount must still be
+        protected even for legacy/corrupted state (see the helper's docstring). Falls
+        back to the raw (unscaled) quantity when the helper cannot scale (missing/
+        invalid current_size or original_size), matching the previous inline guard;
+        that fallback path now also rejects a non-finite/negative quantity (e.g. NaN),
+        which the previous ``not quantity or quantity <= 0`` check silently let through
+        (comparisons against NaN are always False) and could have handed the exchange a
+        NaN order quantity.
         """
         quantity = getattr(position, "quantity", None)
-        if not quantity or quantity <= 0:
-            return 0.0
         current = getattr(position, "current_size", None)
         original = getattr(position, "original_size", None)
-        if current is not None and original is not None and original > 0:
-            return float(quantity) * (float(current) / float(original))
-        return float(quantity)
+        scaled = held_base_quantity(quantity, current, original, allow_scale_in=True)
+        if scaled is not None:
+            return scaled
+        try:
+            qty_f = float(quantity) if quantity is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+        return qty_f if math.isfinite(qty_f) and qty_f > 0 else 0.0
 
     def reprotect(self, position: LivePosition) -> None:
         """Re-place a stop-loss after a failed close left a position momentarily naked.

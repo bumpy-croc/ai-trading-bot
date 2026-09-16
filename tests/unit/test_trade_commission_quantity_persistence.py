@@ -20,6 +20,7 @@ import pytest
 
 pytestmark = pytest.mark.fast
 
+from src.engines.live.trade_close_accounting import held_base_quantity
 from src.engines.live.trading_engine import (
     LiveTradingEngine,
     Position,
@@ -218,6 +219,54 @@ def test_closed_base_quantity_none_for_scaled_in_position():
     position = _make_position(quantity=2.5, entry_fee=0.25, size=0.40, current_size=0.40)
     position.original_size = 0.25  # scaled in beyond the original fraction
     assert _closed_base_quantity(position) is None
+
+
+@pytest.mark.parametrize(
+    "qty, current_size, original_size",
+    [
+        (None, 0.25, 0.25),  # unknown quantity
+        (0.0, 0.25, 0.25),  # non-positive quantity
+        (-2.5, 0.25, 0.25),  # negative quantity
+        (float("inf"), 0.25, 0.25),  # non-finite quantity
+        (2.5, 0.25, 0.0),  # non-positive original_size
+        (2.5, 0.25, -0.1),  # negative original_size
+        (2.5, 0.25, float("nan")),  # non-finite original_size
+        (2.5, -0.1, 0.25),  # negative current_size
+        (2.5, float("nan"), 0.25),  # non-finite current_size
+        (2.5, None, 0.25),  # missing current_size
+        (2.5, 0.25, None),  # missing original_size
+    ],
+)
+def test_held_base_quantity_returns_none_for_corrupt_sizing(qty, current_size, original_size):
+    """held_base_quantity (#1208) mirrors _closed_base_quantity's guard for corrupt inputs,
+    regardless of allow_scale_in."""
+    assert held_base_quantity(qty, current_size, original_size) is None
+    assert held_base_quantity(qty, current_size, original_size, allow_scale_in=True) is None
+
+
+def test_held_base_quantity_allows_zero_current_size():
+    """current_size == 0.0 (a fully-exited, flat slice) is a VALID holding, not corrupt state —
+    unlike _closed_base_quantity's stricter current_f > 0 (that function's own DB-column policy),
+    the general helper returns 0.0 (CODE.md Position Fields: 0.0 is valid, not falsy)."""
+    assert held_base_quantity(2.5, 0.0, 0.25) == pytest.approx(0.0)
+
+
+def test_held_base_quantity_scales_valid_inputs():
+    assert held_base_quantity(2.5, 0.10, 0.25) == pytest.approx(1.0)
+
+
+def test_held_base_quantity_overflow_default_returns_none():
+    """current_size > original_size (scale-in) -> None by default, matching
+    _closed_base_quantity (#1208's suggested default)."""
+    assert held_base_quantity(2.5, 0.40, 0.25) is None
+
+
+def test_held_base_quantity_overflow_allow_scale_in_scales_past_one():
+    """allow_scale_in=True computes the scaled (>1.0) value instead of refusing it — the
+    operational-sizing variant used by every reconciliation.py call site except
+    _log_reconciliation_trade (#1208): a real scale-in's held amount must still be usable
+    for stop-loss sizing / notional / P&L, not zeroed out."""
+    assert held_base_quantity(2.5, 0.40, 0.25, allow_scale_in=True) == pytest.approx(4.0)
 
 
 def test_recover_active_positions_hydrates_partial_state(monkeypatch):
@@ -872,6 +921,37 @@ def test_reconciler_scale_in_close_nulls_quantity_and_does_not_inflate_commissio
     trade = list(db._trades.values())[0]
     assert trade["quantity"] is None  # not the over-reported 4.0
     # entry fee is on the ORIGINAL fill (2.5 * 100 * 0.001 = 0.25), not the inflated 4.0.
+    assert trade["commission"] == pytest.approx(0.25 + 0.11, abs=0.001)
+
+
+def test_reconciler_logs_null_quantity_for_corrupt_original_size(monkeypatch):
+    """Regression (#1208): _log_reconciliation_trade's guard now delegates to
+    held_base_quantity's DEFAULT (no allow_scale_in) semantics, which also nulls a corrupt
+    original_size — not only the narrower current_size > original_size check the manual
+    reimplementation had before. A non-positive original_size means the sizing basis for
+    position.quantity cannot be trusted, so the logged quantity is NULL rather than the
+    caller's (still-valid-looking) qty."""
+    db = MockDatabaseManager()
+    reconciler = _make_reconciler(db, fee_rate=0.001)
+    position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0, current_size=0.10)
+    position.original_size = 0.0  # corrupt: no valid sizing basis
+
+    reconciler._log_reconciliation_trade(
+        position=position,
+        entry_price=100.0,
+        exit_price=110.0,
+        qty=2.5,  # what the caller would have passed pre-guard
+        gross_pnl=25.0,
+        exit_fee=0.11,
+        interest_cost=0.0,
+        reason="stop_loss_filled_offline",
+        exit_order_id="sl-corrupt-original",
+    )
+
+    trade = list(db._trades.values())[0]
+    assert trade["quantity"] is None
+    # Entry fee reconstructed from the raw (unscaled) quantity, matching a scale-in's
+    # fee_base_qty fallback — never fabricated from the untrustworthy scaled qty.
     assert trade["commission"] == pytest.approx(0.25 + 0.11, abs=0.001)
 
 
