@@ -113,6 +113,7 @@ class TestPlaceProtection:
             stop_price=48000.0,
             client_order_id=ANY,  # #740: atbsl_-prefixed, generated fresh per placement
             side_effect_type=SideEffectType.AUTO_REPAY,
+            just_cancelled=False,
         )
         state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
             "entry-1", "sl-99"
@@ -321,6 +322,7 @@ class TestReprotect:
             stop_price=48000.0,
             client_order_id=ANY,  # #740: atbsl_-prefixed, generated fresh per placement
             side_effect_type=SideEffectType.AUTO_REPAY,
+            just_cancelled=True,
         )
         state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
             "entry-1", "sl-new"
@@ -442,6 +444,7 @@ class TestMove:
             stop_price=49000.0,
             client_order_id=ANY,  # #740: atbsl_-prefixed, generated fresh per placement
             side_effect_type=SideEffectType.AUTO_REPAY,
+            just_cancelled=True,
         )
         state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
             "entry-1", "sl-new"

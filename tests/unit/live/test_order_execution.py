@@ -493,6 +493,62 @@ class TestExecuteExit:
         expected_fee = 1000.0 * engine._cost_calculator.maker_fee_rate
         assert result.exit_fee == pytest.approx(expected_fee)
 
+    def test_execute_exit_expired_zero_fill_reports_failure(
+        self, execution_engine_with_exchange, mock_exchange
+    ):
+        """#744: a close order confirmed EXPIRED with zero fill must NOT report success.
+
+        The resting stop-loss is already cancelled by the time a real close is
+        submitted (#710), so silently reporting success=True here (as the code
+        used to, falling through to the pre-computed simulated price) leaves
+        the position naked and untracked while the exchange still holds the
+        full inventory. This must surface as a failure so the caller keeps the
+        position tracked and re-protects it.
+        """
+        order_details = Mock()
+        order_details.status = ExchangeOrderStatus.EXPIRED
+        order_details.filled_quantity = 0.0
+        order_details.average_price = None
+        mock_exchange.get_order.return_value = order_details
+
+        result = execution_engine_with_exchange.execute_exit(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            order_id="order123",
+            base_price=50000.0,
+            position_notional=1000.0,
+        )
+
+        assert result.success is False
+        assert result.filled_quantity == 0.0
+        assert result.error is not None
+
+    def test_execute_exit_partial_fill_then_expired_surfaces_filled_quantity(
+        self, execution_engine_with_exchange, mock_exchange
+    ):
+        """A partial-fill-then-expire must be distinguishable from a zero-fill expiry.
+
+        The order never reached a FILLED/PARTIALLY_FILLED terminal state (it
+        expired), so it is still a close failure -- but the caller needs the
+        actually-filled quantity to tell it apart from a clean zero-fill expiry.
+        """
+        order_details = Mock()
+        order_details.status = ExchangeOrderStatus.EXPIRED
+        order_details.filled_quantity = 0.004
+        order_details.average_price = 50000.0
+        mock_exchange.get_order.return_value = order_details
+
+        result = execution_engine_with_exchange.execute_exit(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            order_id="order123",
+            base_price=50000.0,
+            position_notional=1000.0,
+        )
+
+        assert result.success is False
+        assert result.filled_quantity == pytest.approx(0.004)
+
 
 # ============================================================================
 # Tests for the close-quantity holdings guard (-2010 class)
@@ -715,6 +771,46 @@ class TestExecuteFilledExit:
         assert result.success is True
         assert result.exit_price == pytest.approx(220.0)
         assert not live_position_tracker.has_position("entry_order_456")
+
+    def test_execute_exit_keeps_position_tracked_when_close_order_expires_unfilled(
+        self, live_exit_handler, live_position_tracker, mock_exchange
+    ):
+        """#744: an EXPIRED zero-fill close must not pop the position or book PnL.
+
+        Regression for the reported symptom: execute_exit returning
+        success=True with a simulated price for a close order that never
+        actually filled, which popped the position from tracking (with the
+        stop-loss already cancelled) even though the exchange still held the
+        real inventory.
+        """
+        position = LivePosition(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.1,
+            entry_price=50000.0,
+            entry_time=datetime.now(UTC),
+            order_id="entry_order_789",
+            entry_balance=10000.0,
+        )
+        live_position_tracker.track_recovered_position(position, db_id=None)
+
+        order_details = Mock()
+        order_details.status = ExchangeOrderStatus.EXPIRED
+        order_details.filled_quantity = 0.0
+        order_details.average_price = None
+        mock_exchange.get_order.return_value = order_details
+
+        result = live_exit_handler.execute_exit(
+            position=position,
+            exit_reason="stop_loss",
+            current_price=48000.0,
+            limit_price=48000.0,
+            current_balance=10000.0,
+        )
+
+        assert result.success is False
+        assert result.realized_pnl == 0.0
+        assert live_position_tracker.has_position("entry_order_789")
 
 
 # ============================================================================

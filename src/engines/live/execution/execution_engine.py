@@ -36,6 +36,7 @@ from src.database.models import EventType
 from src.engines.shared.commission import order_commission_usd
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
+from src.trading.balance_retry import read_free_balance_with_retry
 from src.trading.precision import quantize_to_step
 from src.trading.symbols.factory import base_asset_from_symbol
 
@@ -52,9 +53,9 @@ logger = logging.getLogger(__name__)
 # wallet still settling ~3s after cancel at reprotect time (an upper bound, not
 # a measurement of the earliest settle point); this budget is deliberately
 # generous relative to that, since the base-asset lock it runs under already
-# tolerates multi-second waits elsewhere in this same close path.
-_POST_CANCEL_BALANCE_RETRY_ATTEMPTS = 5
-_POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS = 0.3
+# tolerates multi-second waits elsewhere in this same close path. The retry
+# loop itself lives in ``src.trading.balance_retry`` (#1173) so the re-protect
+# path can share it instead of a third copy.
 
 # Free base-asset value at or below this is ignorable dust for the SHORT
 # inventory guard; above it, MARGIN_BUY would sell held inventory instead of
@@ -120,6 +121,11 @@ class ExitExecutionResult:
     exit_fee: float = 0.0
     slippage_cost: float = 0.0
     error: str | None = None
+    # Exchange-confirmed filled quantity, when a live close order's status was
+    # fetched. 0.0 for paper trades and for a fetch that never ran/returned a
+    # fill (ambiguous, not "confirmed zero fill"). Lets a caller distinguish a
+    # zero-fill terminal status from a partial-fill-then-terminal one (#744).
+    filled_quantity: float = 0.0
 
 
 class LiveExecutionEngine:
@@ -895,6 +901,7 @@ class LiveExecutionEngine:
             slippage_cost = cost_result.slippage_cost
 
             # Execute real order if enabled
+            filled_quantity = 0.0
             if self.enable_live_trading:
                 # Already validated base_price > 0 above
                 quantity = position_notional / base_price
@@ -916,16 +923,40 @@ class LiveExecutionEngine:
                 if order_details:
                     status = getattr(order_details, "status", None)
                     if status is not None and not self._is_filled_status(status):
-                        logger.debug(
-                            "Exit order %s not filled yet (status=%s); using simulated execution",
+                        # The exchange CONFIRMED a terminal status that never
+                        # filled (e.g. EXPIRED from book exhaustion). This is a
+                        # genuine close failure, not a pending state to paper
+                        # over with the simulated price -- the resting stop-loss
+                        # was already cancelled ahead of this close (#710), so
+                        # returning success=True here would book PnL at a
+                        # fictional price while the exchange still holds the
+                        # real inventory, untracked and unprotected (#744).
+                        # Surface the confirmed filled quantity (0.0 for a clean
+                        # expiry) so the caller can tell a zero-fill expiry apart
+                        # from a partial-fill-then-expire.
+                        filled_quantity = float(order_details.filled_quantity or 0.0)
+                        logger.error(
+                            "Exit order %s for %s did not fill (status=%s, filled=%.8f) "
+                            "-- treating close as failed so the position stays tracked "
+                            "and protected.",
                             close_order_id,
+                            symbol,
                             status,
+                            filled_quantity,
+                        )
+                        return ExitExecutionResult(
+                            success=False,
+                            filled_quantity=filled_quantity,
+                            error=(
+                                f"Exit order {close_order_id} for {symbol} did not fill "
+                                f"(status={status})"
+                            ),
                         )
                     elif order_details.average_price:
                         executed_price = float(order_details.average_price)
-                        filled_qty = float(order_details.filled_quantity or 0.0)
-                        if filled_qty > 0:
-                            position_notional = filled_qty * executed_price
+                        filled_quantity = float(order_details.filled_quantity or 0.0)
+                        if filled_quantity > 0:
+                            position_notional = filled_quantity * executed_price
                         # Convert the exchange commission to USD via its commission_asset
                         # (a SELL is normally quote/USDT already; a base-asset commission
                         # is priced into USD). None -> not reliably convertible (e.g. BNB),
@@ -958,6 +989,19 @@ class LiveExecutionEngine:
                             "Exit order %s fill missing average price; using simulated execution",
                             close_order_id,
                         )
+                else:
+                    # Fetch itself failed/unavailable -- ambiguous, not a confirmed
+                    # non-fill (see CODE.md "Exchange None Returns"). The place_order
+                    # call that produced close_order_id already succeeded, and a
+                    # MARKET order that was accepted fills essentially immediately,
+                    # so this is treated the same as before: fall through to the
+                    # simulated price rather than fail a likely-successful close.
+                    logger.warning(
+                        "Could not confirm fill for exit order %s on %s (order-detail "
+                        "fetch failed) -- using simulated execution price.",
+                        close_order_id,
+                        symbol,
+                    )
             else:
                 logger.info("PAPER TRADE - Would close %s position on %s", side.value, symbol)
 
@@ -966,6 +1010,7 @@ class LiveExecutionEngine:
                 executed_price=executed_price,
                 exit_fee=exit_fee,
                 slippage_cost=slippage_cost,
+                filled_quantity=filled_quantity,
             )
 
         except (ValueError, ArithmeticError, TypeError) as e:
@@ -1480,8 +1525,9 @@ class LiveExecutionEngine:
         caller passes ``min_required`` (the quantity it actually needs freed,
         already padded by one lot step so a "settled" verdict here survives the
         caller's later floor-to-step normalization — see ``_close_live_order``),
-        poll the read up to ``_POST_CANCEL_BALANCE_RETRY_ATTEMPTS`` times,
-        ``_POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS`` apart, and return as soon
+        the shared ``read_free_balance_with_retry`` (``src.trading.balance_retry``)
+        polls the read up to ``POST_CANCEL_BALANCE_RETRY_ATTEMPTS`` times,
+        ``POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS`` apart, and returns as soon
         as a read clears it. If the budget expires the last (still-stale) read
         is returned unchanged, so the caller's existing gate still aborts a
         genuinely locked inventory — this only removes the false-positive delay.
@@ -1490,9 +1536,8 @@ class LiveExecutionEngine:
             return None
 
         base_asset = base_asset_from_symbol(symbol)
-        attempts = _POST_CANCEL_BALANCE_RETRY_ATTEMPTS if min_required is not None else 1
-        free: float | None = None
-        for attempt in range(attempts):
+
+        def _read_free_base() -> float | None:
             try:
                 balance = self.exchange_interface.get_balance(base_asset)
                 # Convert INSIDE the try: a malformed balance (e.g. a non-numeric
@@ -1501,25 +1546,14 @@ class LiveExecutionEngine:
                 # propagates to a failed close with the stop already cancelled —
                 # the exact storm this retry exists to stop, from a new trigger
                 # (#1165 review).
-                free = float(balance.free) if balance is not None else None
+                return float(balance.free) if balance is not None else None
             except Exception as e:
                 logger.warning("Could not read free %s balance for close sizing: %s", base_asset, e)
                 return None
-            is_stale = free is not None and min_required is not None and free < min_required
-            if not is_stale or attempt == attempts - 1:
-                return free
-            logger.info(
-                "Free %s balance %.8f for %s is still below the %.8f just freed by a "
-                "stop-loss cancel (attempt %d/%d) — retrying after a short settlement wait.",
-                base_asset,
-                free,
-                symbol,
-                min_required,
-                attempt + 1,
-                attempts,
-            )
-            time.sleep(_POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS)
-        return free
+
+        return read_free_balance_with_retry(
+            _read_free_base, min_required=min_required, context=symbol
+        )
 
     def _lot_step_size(self, symbol: str) -> float | None:
         """Best-effort LOT_SIZE step for ``symbol``, or None if unavailable.
