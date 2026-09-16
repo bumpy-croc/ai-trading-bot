@@ -95,6 +95,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the ungated path still diverges.
 
 ### Fixed
+- **A -1003 exchange-wide rate-limit ban hitting the stop-placement guard's own
+  open-orders lookup — rather than the placement call itself — never reached the
+  `on_rate_limit_ban` close-only escalation** (#738 review follow-up). The prior fix
+  only detected the ban when `place_stop_loss_order` itself raised -1003, but a real
+  IP-wide ban fails EVERY REST call identically, so `guard_stop_placement`'s
+  `get_open_orders_checked` lookup usually hits it first — REFUSE(unconfirmed=True)
+  with no placement attempt ever made, and the callback never fired.
+  `BinanceProvider.get_open_orders_checked` now re-raises (instead of swallowing to
+  `None`) when the lookup itself fails with a rate-limit ban code; a new
+  `StopPlacementRefuseReason.RATE_LIMIT_BAN` classifies that REFUSE, and
+  `_resolve_stop_placement_attempt` invokes `on_rate_limit_ban` and aborts the retry
+  budget from that path too, not just the placement-exception path. Also: adding
+  -1003/-1015 to `DEFINITIVE_REJECT_CODES` made a rate-limited emergency close raise
+  `ValueError` instead of returning `None`, which fell through the two
+  `entry_coordinator.py` emergency-close call sites' weaker generic `except Exception`
+  handler (log-only) instead of the `None`-return branch's `_enter_close_only_mode`
+  escalation — both sites now catch `ValueError` explicitly and escalate the same way.
 - **Startup-recovery stop-loss placement emergency-closed a recovered position on a
   transient, unconfirmed exchange lookup, not just a genuine conflict** (#1160).
   `StopPlacementDecision.reason` was free text only, so `_reconcile_filled_entry`'s

@@ -36,6 +36,7 @@ from src.config.constants import (
     DEFAULT_RECONCILIATION_ORDER_MATCH_TIME_WINDOW_MIN,
     DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT,
     DEFAULT_STOP_LOSS_PCT,
+    EXCHANGE_IP_RATE_LIMIT_BAN_CODE,
     NET_FLAT_DUST_USD,
     ORPHANED_BORROW_SWEEP_COOLDOWN_SECONDS,
     RECONCILE_CYCLE_ESCALATION_SECONDS,
@@ -180,6 +181,15 @@ class StopPlacementRefuseReason(str, Enum):
       (the ``exclude_order_id`` eventual-consistency lag). All three are "we
       couldn't tell", not "we found a conflict" -- equivalent to
       ``unconfirmed=True``, retryable, and safe to treat as transient.
+    - ``RATE_LIMIT_BAN``: the open-orders lookup raised with an exchange-wide
+      rate-limit ban code (``EXCHANGE_IP_RATE_LIMIT_BAN_CODE``). Every REST
+      call fails identically for the ban's duration, so this lookup is often
+      the FIRST thing to hit it -- before ``place_stop_loss_order`` is ever
+      called -- which would otherwise make the ban invisible to a caller only
+      watching for it on the placement-exception path (#738). Also
+      ``unconfirmed=True`` (retrying is still safe/expected once the ban
+      lifts), but distinct from plain ``UNCONFIRMED`` so a retry loop can
+      escalate (e.g. close-only mode) instead of silently burning its budget.
     - ``NO_ACCESSOR``: the exchange object has no fail-closed open-orders
       accessor at all. Structural, not transient -- retrying won't help.
     - ``AMBIGUOUS``: more than one resting stop-type order already exists.
@@ -193,6 +203,7 @@ class StopPlacementRefuseReason(str, Enum):
     """
 
     UNCONFIRMED = "unconfirmed"
+    RATE_LIMIT_BAN = "rate_limit_ban"
     NO_ACCESSOR = "no_accessor"
     AMBIGUOUS = "ambiguous"
     WRONG_SIDE = "wrong_side"
@@ -218,6 +229,11 @@ class StopPlacementDecision:
     # for any caller/log already depending on them -- this is a new field
     # callers may optionally branch on instead of parsing `reason`.
     reason_code: StopPlacementRefuseReason | None = None
+    # The original exception the open-orders lookup raised, when reason_code
+    # is RATE_LIMIT_BAN -- lets a caller's on_rate_limit_ban callback (which
+    # takes a BaseException) fire from this REFUSE path too, not just from
+    # place_stop_loss_order's own -1003 (#738). None for every other decision.
+    error: BaseException | None = None
 
 
 def guard_stop_placement(
@@ -298,6 +314,14 @@ def guard_stop_placement(
             exclude_order_id=exclude_order_id,
         )
     except Exception as e:
+        if getattr(e, "code", None) == EXCHANGE_IP_RATE_LIMIT_BAN_CODE:
+            return StopPlacementDecision(
+                StopPlacementCheck.REFUSE,
+                reason=f"open-orders lookup hit an exchange-wide rate-limit ban: {e}",
+                unconfirmed=True,
+                reason_code=StopPlacementRefuseReason.RATE_LIMIT_BAN,
+                error=e,
+            )
         return StopPlacementDecision(
             StopPlacementCheck.REFUSE,
             reason=f"lookup raised: {e}",
@@ -529,6 +553,7 @@ def place_or_adopt_stop_loss(
     retry_log_prefix: str = "Stop-loss placement",
     on_adopt: Callable[[StopPlacementDecision], None] | None = None,
     on_refuse: Callable[[StopPlacementDecision], None] | None = None,
+    on_rate_limit_ban: Callable[[BaseException], None] | None = None,
 ) -> str | None:
     """Place a protective stop, first checking for one already resting (#1112).
 
@@ -588,6 +613,20 @@ def place_or_adopt_stop_loss(
     defer) rely on this to distinguish "genuinely refused" from "still
     retrying" via ``refuse_reason_code``. Both callbacks are fault-isolated:
     an exception from either is logged and swallowed rather than propagated.
+
+    ``on_rate_limit_ban``, if given (retry path only, ``max_attempts`` > 1), is
+    invoked once with the exception when either ``place_stop_loss_order``
+    raises, or the guard's own open-orders lookup (via
+    ``get_open_orders_checked``) hits, Binance's -1003 (IP-wide rate-limit
+    ban, #738): every exchange call fails identically for the ban's duration,
+    so the retry loop aborts immediately instead of burning the rest of its
+    budget, and this callback is the caller's hook to escalate beyond the
+    usual UNPROTECTED-audit-and-alert (e.g. entering close-only mode). The
+    guard-lookup path matters because it usually fails FIRST during a real
+    ban — before ``place_stop_loss_order`` is ever reached — so relying on
+    only the placement-exception path would make the ban invisible here.
+    Not invoked on the single-attempt path, which already propagates the
+    exception directly to the caller.
     """
     if max_attempts <= 1:
         decision = guard_stop_placement(
@@ -630,6 +669,7 @@ def place_or_adopt_stop_loss(
         retry_log_prefix=retry_log_prefix,
         on_adopt=on_adopt,
         on_refuse=on_refuse,
+        on_rate_limit_ban=on_rate_limit_ban,
     )
 
 
@@ -663,6 +703,7 @@ def _resolve_stop_placement_attempt(
     retry_log_prefix: str,
     on_adopt: Callable[[StopPlacementDecision], None] | None,
     on_refuse: Callable[[StopPlacementDecision], None] | None,
+    on_rate_limit_ban: Callable[[BaseException], None] | None = None,
 ) -> _StopPlacementAttemptAction | str:
     """Consult ``guard_stop_placement`` for one attempt of the retry loop and
     decide what ``_place_with_retry`` should do next.
@@ -681,8 +722,9 @@ def _resolve_stop_placement_attempt(
     is preserved; ``...STOP`` when the caller should return ``None``
     immediately — a genuine conflict (wrong side, wrong price, multiple
     resting orders, or a just-cancelled order the exchange hasn't caught up
-    on yet), or an unconfirmed REFUSE on the final attempt; or a ``str`` — the
-    adopted order id — when the caller should return that immediately.
+    on yet), a rate-limit ban hit by the guard's OWN lookup, or an unconfirmed
+    REFUSE on the final attempt; or a ``str`` — the adopted order id — when
+    the caller should return that immediately.
     """
     decision = guard_stop_placement(
         exchange, symbol, side, stop_price=stop_price, exclude_order_id=exclude_order_id
@@ -697,6 +739,30 @@ def _resolve_stop_placement_attempt(
         return cast(str, decision.existing_order_id)
     if decision.check == StopPlacementCheck.PROCEED:
         return _StopPlacementAttemptAction.PLACE
+
+    # REFUSE, and the guard's OWN open-orders lookup is the thing that hit the
+    # ban -- place_stop_loss_order is never even attempted this round, so the
+    # placement-exception -1003 handling in _place_with_retry would never see
+    # it (#738). Escalate from here instead: terminal regardless of attempt
+    # budget, since every REST call fails identically for the ban's duration.
+    if decision.reason_code == StopPlacementRefuseReason.RATE_LIMIT_BAN:
+        logger.critical(
+            "%s attempt %s/%s for %s: the stop-placement guard's own "
+            "open-orders lookup hit an exchange-wide rate-limit ban — "
+            "aborting remaining attempts: %s",
+            retry_log_prefix,
+            attempt + 1,
+            max_attempts,
+            symbol,
+            decision.reason,
+        )
+        _invoke_on_refuse(on_refuse, decision, symbol)
+        if on_rate_limit_ban:
+            try:
+                on_rate_limit_ban(decision.error or RuntimeError(decision.reason))
+            except Exception:
+                logger.exception("on_rate_limit_ban callback failed for %s", symbol)
+        return _StopPlacementAttemptAction.STOP
 
     # REFUSE. A genuine conflict never clears just by retrying, so it is
     # terminal regardless of which attempt hit it.
@@ -763,6 +829,7 @@ def _place_with_retry(
     retry_log_prefix: str,
     on_adopt: Callable[[StopPlacementDecision], None] | None,
     on_refuse: Callable[[StopPlacementDecision], None] | None,
+    on_rate_limit_ban: Callable[[BaseException], None] | None = None,
 ) -> str | None:
     """The exponential-backoff retry loop behind ``place_or_adopt_stop_loss``'s
     ``max_attempts > 1`` path.
@@ -790,6 +857,7 @@ def _place_with_retry(
             retry_log_prefix=retry_log_prefix,
             on_adopt=on_adopt,
             on_refuse=on_refuse,
+            on_rate_limit_ban=on_rate_limit_ban,
         )
         if outcome is _StopPlacementAttemptAction.STOP:
             return None
@@ -810,6 +878,28 @@ def _place_with_retry(
                 if order_id:
                     return order_id
             except Exception as e:
+                # EXCHANGE_IP_RATE_LIMIT_BAN_CODE (-1003) is Binance's IP-wide
+                # rate-limit ban: every exchange call fails identically for
+                # its duration, so spending the rest of this budget retrying
+                # is pointless and only delays the caller noticing (#738). Abort
+                # immediately and let on_rate_limit_ban escalate; any other
+                # exception keeps the existing warn-and-retry behavior.
+                if getattr(e, "code", None) == EXCHANGE_IP_RATE_LIMIT_BAN_CODE:
+                    logger.critical(
+                        "%s attempt %s/%s for %s hit an exchange-wide rate-limit "
+                        "ban (-1003) — aborting remaining attempts: %s",
+                        retry_log_prefix,
+                        attempt + 1,
+                        max_attempts,
+                        symbol,
+                        e,
+                    )
+                    if on_rate_limit_ban:
+                        try:
+                            on_rate_limit_ban(e)
+                        except Exception:
+                            logger.exception("on_rate_limit_ban callback failed for %s", symbol)
+                    return None
                 logger.warning(
                     "%s attempt %s/%s for %s failed: %s",
                     retry_log_prefix,
@@ -1704,10 +1794,7 @@ class PositionReconciler:
                     )
 
                 if not sl_placed:
-                    if (
-                        refusal_decision is not None
-                        and refusal_decision.reason_code == StopPlacementRefuseReason.UNCONFIRMED
-                    ):
+                    if refusal_decision is not None and refusal_decision.unconfirmed:
                         # The guard couldn't confirm the exchange's open-orders
                         # state this cycle (network blip, transient API error, or
                         # an eventual-consistency lag) -- not a genuine conflict.

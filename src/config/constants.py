@@ -556,6 +556,15 @@ DEFAULT_WS_KLINE_DEGRADED_PROBE_EVERY = 10
 DEFAULT_STARTUP_BAN_MAX_WAIT = 600  # Max seconds to wait for an IP ban to lift during startup
 DEFAULT_STARTUP_BAN_MAX_RETRIES = 3  # Max retry attempts for ban-related startup failures
 
+# Binance error code for an exchange-wide (IP) rate-limit ban: every REST call
+# fails identically for its duration, including an open-orders lookup used by
+# a safety guard that has nothing else to do with Binance specifically (#738).
+# Named here rather than inlined so reconciliation.py's stop-placement guard
+# (deliberately exchange-agnostic, `exchange: Any`) doesn't couple to a bare
+# magic number; binance_provider.py's own RATE_LIMIT_ERROR_CODES set is the
+# source of truth for retry/reject classification and includes this code.
+EXCHANGE_IP_RATE_LIMIT_BAN_CODE = -1003
+
 # TFT (Temporal Fusion Transformer) Model Defaults
 DEFAULT_TFT_N_HEADS = 4  # Number of attention heads in the temporal decoder
 DEFAULT_TFT_HIDDEN_SIZE = 64  # Hidden dimension for GRN and attention layers

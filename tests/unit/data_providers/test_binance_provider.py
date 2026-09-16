@@ -996,6 +996,159 @@ class TestPlaceStopLossOrder:
         # Assert
         assert result is None
 
+    @patch("src.data_providers.binance_provider.time.sleep")
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_rate_limit_1015_is_retried_by_decorator_and_succeeds(
+        self, mock_config, mock_client_class, mock_sleep
+    ):
+        """#738: -1015 must reach with_rate_limit_retry and actually be retried.
+
+        Before the fix, place_stop_loss_order caught BinanceAPIException
+        generically and returned None on the first attempt, so the
+        @with_rate_limit_retry(ban_safe=True) decorator wrapping this method
+        never saw the exception and never retried — create_order was called
+        exactly once and the method returned None instead of the order id.
+        """
+        from binance.exceptions import BinanceAPIException
+
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        rate_limit_error = BinanceAPIException(Mock(status_code=418, headers={}), 418, "")
+        rate_limit_error.code = -1015
+        mock_client.create_order.side_effect = [
+            rate_limit_error,
+            {"orderId": "12345"},
+        ]
+        mock_client.get_exchange_info.return_value = {"symbols": []}
+
+        provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={"step_size": 0.0001, "tick_size": 0.01, "base_asset": "BTC"}
+        )
+        provider.get_balance = Mock(return_value=Mock(free=1.0))
+
+        result = provider.place_stop_loss_order(
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=50000.0,
+        )
+
+        assert result == "12345"
+        assert mock_client.create_order.call_count == 2
+        mock_sleep.assert_called_once()
+
+    @patch("src.data_providers.binance_provider.time.sleep")
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_rate_limit_1003_raises_immediately_without_retry(
+        self, mock_config, mock_client_class, mock_sleep
+    ):
+        """#738: -1003 (IP ban) must propagate distinctly, not return None.
+
+        ban_safe=True on this method's decorator means -1003 is raised
+        immediately rather than retried (sleeping through an IP ban would
+        leave a position's stop-loss placement blocked for minutes). Before
+        the fix, place_stop_loss_order swallowed this into a plain None
+        return, indistinguishable from any other failure and never reaching
+        the decorator at all.
+        """
+        from binance.exceptions import BinanceAPIException
+
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        ban_error = BinanceAPIException(Mock(status_code=418, headers={}), 418, "")
+        ban_error.code = -1003
+        mock_client.create_order.side_effect = ban_error
+        mock_client.get_exchange_info.return_value = {"symbols": []}
+
+        provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={"step_size": 0.0001, "tick_size": 0.01, "base_asset": "BTC"}
+        )
+        provider.get_balance = Mock(return_value=Mock(free=1.0))
+
+        with pytest.raises(BinanceAPIException):
+            provider.place_stop_loss_order(
+                symbol="BTCUSDT",
+                side=OrderSide.SELL,
+                quantity=0.1,
+                stop_price=50000.0,
+            )
+
+        assert mock_client.create_order.call_count == 1
+        mock_sleep.assert_not_called()
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True)
+class TestPlaceOrderRateLimitDefinitiveReject:
+    """#738: a rate-limit rejection on entry placement must be definitive.
+
+    Before the fix, -1003/-1015 fell into place_order's generic "ambiguous"
+    BinanceAPIException branch and returned None — the same signal used for
+    a genuinely ambiguous network/timeout error. Callers (execution_engine.py)
+    treat a None return as "order may have been placed", tracking a phantom
+    position and entering close-only mode until a manual restart. Since the
+    exchange definitively rejected the order (it was never placed), this
+    must instead raise ValueError like every other definitive reject.
+    """
+
+    @pytest.mark.parametrize("error_code", [-1003, -1015])
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_rate_limit_code_raises_value_error_not_none(
+        self, mock_config, mock_client_class, error_code
+    ):
+        from binance.exceptions import BinanceAPIException
+
+        from src.data_providers.exchange_interface import OrderType
+
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        error = BinanceAPIException(Mock(status_code=418, headers={}), 418, "")
+        error.code = error_code
+        error.message = "Too many requests"
+        mock_client.create_order.side_effect = error
+        mock_client.get_exchange_info.return_value = {
+            "symbols": [
+                {
+                    "symbol": "BTCUSDT",
+                    "baseAsset": "BTC",
+                    "quoteAsset": "USDT",
+                    "status": "TRADING",
+                    "filters": [
+                        {"filterType": "LOT_SIZE", "minQty": "0.00001", "stepSize": "0.00001"},
+                        {"filterType": "PRICE_FILTER", "minPrice": "0.01", "tickSize": "0.01"},
+                        {"filterType": "MIN_NOTIONAL", "minNotional": "5"},
+                    ],
+                }
+            ]
+        }
+
+        provider = BinanceProvider()
+
+        with pytest.raises(ValueError, match=f"Order rejected by exchange.*{error_code}"):
+            provider.place_order(
+                symbol="BTCUSDT",
+                side=OrderSide.BUY,
+                order_type=OrderType.MARKET,
+                quantity=0.001,
+            )
+
 
 def _exchange_info_for(symbol: str) -> dict:
     return {
@@ -2800,3 +2953,52 @@ class TestGetOpenOrdersCheckedFailClosed:
         result = provider.get_open_orders_checked("BTCUSDT")
         assert result is not None
         assert len(result) == 1
+
+    @pytest.mark.parametrize("error_code", [-1003, -1015])
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_reraises_on_rate_limit_ban_instead_of_swallowing_to_none(
+        self, mock_config, mock_client_class, error_code
+    ):
+        """#738 review follow-up: a -1003/-1015 exchange-wide rate-limit ban
+        hitting THIS lookup must re-raise (not swallow to a bare None) so
+        guard_stop_placement's caller can tell "we're banned" from a generic
+        transient lookup failure. Before this fix every exception here --
+        ban included -- was swallowed into the same None, which made the
+        stop-placement guard's REFUSE indistinguishable from an ordinary
+        unconfirmed lookup and left on_rate_limit_ban unreachable from this
+        path.
+        """
+        from binance.exceptions import BinanceAPIException
+
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        provider = BinanceProvider()
+
+        ban_error = BinanceAPIException(Mock(status_code=418, headers={}), 418, "")
+        ban_error.code = error_code
+        provider._call_get_open_orders = Mock(side_effect=ban_error)
+
+        with pytest.raises(BinanceAPIException) as exc_info:
+            provider.get_open_orders_checked("BTCUSDT")
+        assert exc_info.value.code == error_code
+
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_non_ban_exception_still_returns_none(self, mock_config, mock_client_class):
+        """Every non-ban exception keeps the existing fail-closed None return --
+        only the specific rate-limit ban codes change behavior."""
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        provider = BinanceProvider()
+
+        provider._call_get_open_orders = Mock(side_effect=RuntimeError("network blip"))
+
+        result = provider.get_open_orders_checked("BTCUSDT")
+        assert result is None

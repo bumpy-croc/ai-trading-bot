@@ -2287,6 +2287,58 @@ class TestFilledOrderPositionReconciliation:
         assert event_kwargs["error_code"] == "RECOVERY_SL_UNCONFIRMED"
         assert event_kwargs["alert"] is True
 
+    def test_filled_entry_sl_rate_limit_ban_refusal_defers_not_emergency_closes(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """#1228 review regression guard: a RATE_LIMIT_BAN refusal (the
+        open-orders lookup hit an exchange-wide -1003 ban) is a sub-case of
+        "couldn't confirm", not a genuine conflict -- it must defer exactly
+        like a plain UNCONFIRMED refusal, not fall through to emergency-close.
+        #738 introduced this reason_code as a new REFUSE sub-case; the #1160
+        gate at this site originally matched on the exact UNCONFIRMED enum
+        value, so a new sub-case silently fell outside it and re-armed an
+        emergency market-sell during the exact ban scenario #738 exists to
+        handle. The gate must key on `.unconfirmed` (the semantic flag every
+        REFUSE sub-case shares) rather than one specific enum identity."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 202
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 22,
+                "client_order_id": "atb_BTCUSDT_long_3333_eeee",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        # The guard's own lookup hit an IP-wide rate-limit ban -- a REFUSE
+        # sub-case distinct from plain UNCONFIRMED, but still "couldn't
+        # confirm", not a genuine conflict.
+        ban_error = Exception("banned")
+        ban_error.code = -1003
+        mock_exchange.get_open_orders_checked.side_effect = ban_error
+        on_event = MagicMock()
+        reconciler.on_event = on_event
+
+        reconciler.resolve_pending_orders()
+
+        mock_position_tracker.track_recovered_position.assert_called_once()
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
+        mock_exchange.place_order.assert_not_called()
+        mock_exchange.place_stop_loss_order.assert_not_called()
+
     def test_filled_entry_sl_ambiguous_refusal_still_emergency_closes(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
     ):
@@ -4556,6 +4608,115 @@ class TestPlaceOrAdoptStopLossRetry:
         assert exchange.place_stop_loss_order.call_count == 3
         # Exponential backoff: 1.0s then 2.0s between the 3 attempts.
         assert mock_sleep.call_args_list == [call(1.0), call(2.0)]
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_rate_limit_ban_aborts_retry_budget_and_invokes_callback(self, mock_sleep):
+        """#738: a -1003 exchange-wide rate-limit ban must abort the retry loop
+        immediately (every exchange call fails identically for the ban's
+        duration, so spending the rest of the budget retrying is pointless)
+        and hand the exception to on_rate_limit_ban so the caller can escalate
+        (e.g. close-only mode) instead of the ordinary warn-and-retry path."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        ban_error = Exception("Too many requests")
+        ban_error.code = -1003  # type: ignore[attr-defined]
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.side_effect = ban_error
+
+        callback_calls = []
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+            on_rate_limit_ban=callback_calls.append,
+        )
+
+        assert result is None
+        # No retry: one placement attempt, no backoff sleep, one callback call.
+        assert exchange.place_stop_loss_order.call_count == 1
+        mock_sleep.assert_not_called()
+        assert callback_calls == [ban_error]
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_non_ban_exception_still_uses_normal_retry_budget(self, mock_sleep):
+        """A -1003 ban aborts early, but every other exception (including other
+        rate-limit codes) must keep the existing warn-and-retry behavior --
+        on_rate_limit_ban is never invoked for them."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        other_error = Exception("Too many new orders")
+        other_error.code = -1015  # type: ignore[attr-defined]
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.side_effect = [other_error, "sl-new"]
+
+        callback_calls = []
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+            on_rate_limit_ban=callback_calls.append,
+        )
+
+        assert result == "sl-new"
+        assert exchange.place_stop_loss_order.call_count == 2
+        mock_sleep.assert_called_once_with(1.0)
+        assert callback_calls == []
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_rate_limit_ban_on_guard_lookup_aborts_and_invokes_callback(self, mock_sleep):
+        """#738 review follow-up: during a REAL -1003 ban, the exchange-wide
+        ban usually hits the GUARD's own open-orders lookup FIRST (every REST
+        endpoint fails identically) -- so place_stop_loss_order is never even
+        called. The existing ban-detection at the placement-exception site
+        (test_rate_limit_ban_aborts_retry_budget_and_invokes_callback above)
+        only fires when place_stop_loss_order itself raises -1003 after an
+        empty ([]) open-orders lookup, which is precisely the ONE lookup
+        outcome that cannot happen while a real ban is active. This is the
+        realistic shape: get_open_orders_checked raises with the ban code, so
+        guard_stop_placement REFUSEs unconfirmed and place_stop_loss_order is
+        never reached at all -- on_rate_limit_ban must still fire from here.
+        """
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        ban_error = Exception("Too many requests")
+        ban_error.code = -1003  # type: ignore[attr-defined]
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.side_effect = ban_error
+
+        callback_calls = []
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+            on_rate_limit_ban=callback_calls.append,
+        )
+
+        assert result is None
+        # The guard's own lookup was banned -- place_stop_loss_order must
+        # never have been called, and the retry budget must not be spent.
+        exchange.place_stop_loss_order.assert_not_called()
+        mock_sleep.assert_not_called()
+        assert callback_calls == [ban_error]
 
     @patch("src.engines.live.reconciliation.time.sleep")
     def test_retry_log_prefix_is_used_in_the_per_attempt_warning(self, mock_sleep, caplog):
