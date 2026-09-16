@@ -23,6 +23,7 @@ from src.engines.live.execution.exit_coordinator import (
     LiveExitCoordinator,
     LiveExitEngineState,
 )
+from src.engines.live.execution.exit_handler import LiveExitResult
 from src.engines.shared.models import PositionSide
 
 pytestmark = pytest.mark.fast
@@ -399,3 +400,97 @@ def test_check_exit_conditions_logs_prediction_error_details_end_to_end():
     assert kwargs["ml_predictions"]["prediction_failed"] is True
     assert kwargs["ml_predictions"]["error"] == "ONNX session timed out"
     assert kwargs["ml_predictions"]["error_type"] == "TimeoutError"
+
+
+# ---------------------------------------------------------------------------
+# atomic_close_with_balance / balance_delta (#736, #1224 review findings F/G):
+# a normal exit with a persisted position closes balance+trade+position in
+# ONE log_trade(balance_delta=...) call, then re-reads the balance from the
+# DB. The re-read must not be able to turn a successful close into a logged
+# failure if it raises.
+# ---------------------------------------------------------------------------
+
+
+def _make_closable_position() -> MagicMock:
+    """A position with concrete numeric sizing/fee fields (not auto-Mock
+    attributes) so the close-accounting helpers (_closed_base_quantity,
+    _close_entry_fee_usd, _close_position_portion) take their normal numeric
+    paths instead of falling back on a TypeError from a MagicMock."""
+    position = _make_position()
+    position.db_position_id = 55
+    position.quantity = 0.1
+    position.original_size = 0.1
+    position.current_size = 0.1
+    position.entry_balance = 1000.0
+    position.metadata = {"entry_fee": 0.5, "entry_slippage_cost": 0.0}
+    return position
+
+
+def _make_closing_state(position: MagicMock, **overrides) -> MagicMock:
+    state = _make_state(position, _make_exit_check(should_exit=False), **overrides)
+    state.trading_session_id = 7
+    state.live_position_tracker.has_position.return_value = True
+    state.live_execution_engine = MagicMock()
+    state.live_execution_engine.calculate_entry_fee.return_value = 0.5
+    state.performance_tracker = MagicMock()
+    return state
+
+
+def test_execute_exit_locked_logs_trade_with_balance_delta_on_atomic_close():
+    """A normal exit with a db_position_id and a trading session folds the
+    balance change into log_trade's balance_delta, then re-reads the ledger."""
+    position = _make_closable_position()
+    state = _make_closing_state(position)
+    exit_result = LiveExitResult(
+        success=True,
+        realized_pnl=10.0,
+        realized_pnl_percent=1.0,
+        exit_price=50100.0,
+        exit_fee=0.05,
+        slippage_cost=0.0,
+    )
+    state.live_exit_handler.execute_filled_exit.return_value = exit_result
+    state.db_manager.get_current_balance.return_value = 1010.0
+
+    LiveExitCoordinator(engine_state=state).execute_exit_locked(
+        position, "take_profit", None, 50100.0, None, None, None, skip_live_close=True
+    )
+
+    state.db_manager.log_trade.assert_called_once()
+    kwargs = state.db_manager.log_trade.call_args.kwargs
+    assert kwargs["balance_delta"] == pytest.approx(9.95)  # realized_pnl - exit_fee
+    assert kwargs["position_id"] == 55
+    # Authoritative post-commit re-read (the happy path of Finding F).
+    state.db_manager.get_current_balance.assert_called_once_with(7)
+    assert state.current_balance == 1010.0
+
+
+def test_execute_exit_locked_falls_back_to_delta_when_balance_reread_fails():
+    """#1224 review finding F: the close already committed by the time the
+    post-close balance re-read runs. If that re-read raises, it must not
+    propagate into the generic except handler (which would log a false
+    "failed to close" for an exit that actually succeeded) — current_balance
+    must fall back to applying the known realized-PnL delta in-memory."""
+    position = _make_closable_position()
+    state = _make_closing_state(position)
+    exit_result = LiveExitResult(
+        success=True,
+        realized_pnl=10.0,
+        realized_pnl_percent=1.0,
+        exit_price=50100.0,
+        exit_fee=0.05,
+        slippage_cost=0.0,
+    )
+    state.live_exit_handler.execute_filled_exit.return_value = exit_result
+    state.db_manager.get_current_balance.side_effect = RuntimeError("pool exhausted")
+    balance_before_close = state.current_balance  # 1000.0, per _make_state default
+
+    LiveExitCoordinator(engine_state=state).execute_exit_locked(
+        position, "take_profit", None, 50100.0, None, None, None, skip_live_close=True
+    )
+
+    # The close itself must still be recorded — no crash, no swallowed trade log.
+    state.db_manager.log_trade.assert_called_once()
+    # Balance falls back to pre-close balance + the same delta the atomic commit
+    # already applied (realized_pnl - exit_fee = 9.95), not left stale.
+    assert state.current_balance == pytest.approx(balance_before_close + 9.95)

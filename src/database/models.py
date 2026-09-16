@@ -776,7 +776,14 @@ class AccountBalance(Base):
     session_id = Column(Integer, ForeignKey("trading_sessions.id"))
 
     # Ensure we have one current balance per session
-    __table_args__ = (Index("idx_balance_session_updated", "session_id", "last_updated"),)
+    __table_args__ = (
+        Index("idx_balance_session_updated", "session_id", "last_updated"),
+        # get_current_balance orders by id (not last_updated) to break same-microsecond
+        # ties unambiguously (#735); this index keeps that query an index scan instead
+        # of a full sort of every row for the session, now that it runs inside
+        # DatabaseManager._lock_balance_ledger on every balance write.
+        Index("idx_balance_session_id", "session_id", "id"),
+    )
 
     created_at = Column(DateTime, default=utc_now)
 
@@ -784,21 +791,29 @@ class AccountBalance(Base):
     def get_current_balance(cls, session_id: int, db_session, for_update: bool = False) -> float:
         """Get the current balance for a session.
 
+        ``account_balances`` is append-only (every update INSERTs a new row), so
+        "current" means the most recently INSERTED row. Order by ``id`` (the
+        auto-incrementing PK), not ``last_updated`` (a wall-clock timestamp):
+        two writers can commit within the same microsecond, making
+        ``last_updated`` ties ambiguous about true insertion order, while ``id``
+        assignment order is always unambiguous (#735).
+
         Args:
             session_id: Trading session ID
             db_session: SQLAlchemy database session
-            for_update: If True, acquires row-level lock to prevent concurrent updates
+            for_update: If True, acquires a row-level lock on the returned row.
+                Note this does NOT serialize concurrent writers on its own for
+                an append-only table — see ``DatabaseManager._lock_balance_ledger``
+                for the actual serialization mechanism callers must use.
 
         Returns:
             Current balance as float (0.0 if no balance record exists)
         """
-        query = (
-            db_session.query(cls)
-            .filter(cls.session_id == session_id)
-            .order_by(cls.last_updated.desc())
-        )
+        query = db_session.query(cls).filter(cls.session_id == session_id).order_by(cls.id.desc())
 
-        # Acquire row-level lock for concurrent update safety
+        # Row-level lock: does not by itself serialize concurrent append-only
+        # writers (see the docstring/caller note above), but is harmless to
+        # apply for callers that still request it.
         if for_update:
             query = query.with_for_update()
 

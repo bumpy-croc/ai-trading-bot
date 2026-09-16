@@ -529,8 +529,29 @@ class LiveExitCoordinator:
                         e,
                     )
 
-            # Atomic balance update with full audit trail for realized P&L
-            if state.trading_session_id is not None:
+            # Resolve the position's DB row id up front: when both it and a trading
+            # session exist, the balance write is deferred and folded into the
+            # single atomic log_trade(balance_delta=...) call below instead of
+            # being committed here as its own transaction (#736) — a separate
+            # balance commit followed by a separate trade/position-close commit
+            # is exactly the split that let a crash between them double-apply or
+            # drop this PnL on recovery. That atomic write is also correctly
+            # serialized against every other balance writer (#735).
+            close_position_id = getattr(position, "db_position_id", None)
+            atomic_close_with_balance = (
+                state.trading_session_id is not None and close_position_id is not None
+            )
+
+            if state.trading_session_id is not None and not atomic_close_with_balance:
+                # No db_position_id (position was never persisted, e.g. DB logging
+                # failed at entry, or a test double) — an atomic close+balance isn't
+                # possible, fall back to a standalone atomic balance update.
+                logger.warning(
+                    "Closing %s (%s) without db_position_id — balance will be updated "
+                    "standalone, not atomically with the trade/position-close.",
+                    position.symbol,
+                    position.order_id,
+                )
                 try:
                     with state.db_manager.atomic_balance_update(
                         balance_change=realized_pnl,
@@ -548,7 +569,7 @@ class LiveExitCoordinator:
                     )
                     # Continue processing to log the trade even if balance update fails
                     # This allows for manual reconciliation
-            else:
+            elif state.trading_session_id is None:
                 # No trading session - update balance directly (testing/paper trading mode)
                 state.current_balance += realized_pnl
                 if state.current_balance < 0:
@@ -630,8 +651,8 @@ class LiveExitCoordinator:
                 # (_recover_active_positions). It may legitimately be None for a
                 # position that was never persisted (e.g. db logging failed, or
                 # tests without a DB); in that case log_trade falls back to its
-                # original behaviour (insert trade only, no status flip).
-                close_position_id = getattr(position, "db_position_id", None)
+                # original behaviour (insert trade only, no status flip), and the
+                # balance was already updated standalone above.
                 if close_position_id is None:
                     logger.warning(
                         "Closing %s (%s) without db_position_id — position row "
@@ -679,7 +700,33 @@ class LiveExitCoordinator:
                     commission=total_fee,
                     quantity=_closed_base_quantity(position),
                     margin_interest_cost=interest_cost,
+                    # Deferred from the block above (#736): balance, trade insert, and
+                    # position-close all commit in this ONE transaction when a
+                    # db_position_id is available. When it isn't, the balance was
+                    # already applied standalone above and balance_delta stays None.
+                    balance_delta=(realized_pnl if atomic_close_with_balance else None),
                 )
+                if atomic_close_with_balance:
+                    # Authoritative post-commit read: the atomic write above is
+                    # what actually moved the ledger, so re-read rather than
+                    # approximate in memory. The close itself already committed
+                    # successfully by this point, so a failure here (pool
+                    # pressure, a CRITICAL_READ timeout) must not unwind into
+                    # the generic except below and log a false "failed to close"
+                    # — fall back to applying the same delta the atomic commit
+                    # already applied in-memory instead.
+                    try:
+                        state.current_balance = state.db_manager.get_current_balance(
+                            state.trading_session_id
+                        )
+                    except Exception as read_err:
+                        state.current_balance += realized_pnl
+                        logger.warning(
+                            "Post-close balance re-read failed for %s: %s — applied the "
+                            "known realized PnL delta in-memory instead of re-reading.",
+                            position.symbol,
+                            read_err,
+                        )
 
             # NOTE(#710): the resting stop-loss is now cancelled BEFORE the market
             # close (see the close path above) so it cannot reserve the base asset
