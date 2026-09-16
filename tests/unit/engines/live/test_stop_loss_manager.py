@@ -260,7 +260,7 @@ class TestPlaceProtection:
         state.exchange_interface.place_stop_loss_order.side_effect = ban_error
         manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
 
-        sl_order_id = manager.place_protection(
+        result = manager.place_protection(
             position=make_position(),
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -268,7 +268,7 @@ class TestPlaceProtection:
             stop_price=48000.0,
         )
 
-        assert sl_order_id is None
+        assert result.order_id is None
         # No retry against a live IP-wide ban: one placement attempt only.
         assert state.exchange_interface.place_stop_loss_order.call_count == 1
         state._enter_close_only_mode.assert_called_once()
