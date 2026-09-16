@@ -612,8 +612,8 @@ class LiveStopLossManager:
         # _ADOPT_PRICE_TOLERANCE_FRACTION of new_stop_price -- not equal to
         # it. Capture the ACHIEVED price via on_adopt, not the ratchet's
         # intent, so position.stop_loss (which the engine's own exit check
-        # trusts) never diverges from what the exchange will actually trigger
-        # at.
+        # trusts) can be corrected to what the exchange will actually trigger
+        # at -- but only when that is the tighter of the two (#1213).
         achieved_price: float = new_stop_price
         refuse_reason: str | None = None
 
@@ -664,7 +664,9 @@ class LiveStopLossManager:
                             "than the ratcheted $%.2f -- NOT ratifying into "
                             "position.stop_loss (would weaken the engine's own exit "
                             "trigger below where the ratchet had already advanced it); "
-                            "leaving the divergence for the next reconciliation pass.",
+                            "the tracked stop stays tighter than the resting order, a "
+                            "divergence inside the periodic drift tolerance and so not "
+                            "self-correcting (#1214).",
                             position.symbol,
                             achieved_price,
                             new_stop_price,
