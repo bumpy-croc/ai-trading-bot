@@ -2964,6 +2964,69 @@ class TestPeriodicReconcilerSLPriceDrift:
         assert pos.stop_loss_order_id == "sl_price_stale2"
         critical_callback.assert_called_once()
 
+    def test_cycle_corrects_sl_price_drift_adopts_achieved_not_intended_price(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """#1187: the cancel+re-place can itself ADOPT an already-resting order
+        within the 2% adopt tolerance of the intended (tracked) price rather
+        than placing fresh at that exact price. ``last_placed_stop_price`` (the
+        min-trailing-stop-move floor's baseline, #1179) and ``position.stop_loss``
+        must both end up as the ACHIEVED/adopted price -- using the intended
+        price instead would give the floor a wrong baseline that this
+        reconciler's own drift check (the same 2% tolerance) then never flags,
+        silently ratifying the error instead of catching it."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_price_stale_adopt",
+            exchange_order_id="entry_stale_adopt",
+            db_position_id=64,
+            quantity=1.0,
+            current_size=1.0,
+            original_size=1.0,
+        )
+        # Tracked (intended) stop is 47_000; the stale resting order (45_000)
+        # diverged beyond the 2% tolerance and triggers the correction.
+        pos.stop_loss = 47000.0
+        mock_position_tracker.positions = {"entry_stale_adopt": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(order_id="sl_price_stale_adopt", status=ExOS.PENDING)
+        sl_order.stop_price = 45000.0
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.cancel_order.return_value = True
+
+        # After the cancel, an untracked resting stop is already at 47_500 --
+        # within the 2% adopt tolerance of the intended 47_000, but not equal
+        # to it. place_or_adopt_stop_loss ADOPTs it instead of placing fresh.
+        adopted_order = MockExchangeOrder(order_id="untracked_adopted_sl", status=ExOS.PENDING)
+        adopted_order.side = OrderSide.SELL
+        adopted_order.stop_price = 47500.0
+        mock_exchange.get_open_orders_checked.return_value = [adopted_order]
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._reconcile_cycle()
+
+        mock_exchange.cancel_order.assert_called_once_with("sl_price_stale_adopt", "BTCUSDT")
+        # No duplicate placement — the untracked resting order was adopted.
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        assert pos.stop_loss_order_id == "untracked_adopted_sl"
+
+        # The core assertion: both fields reflect the ACHIEVED price (47_500),
+        # not the intended tracked price (47_000) that was passed in.
+        assert pos.last_placed_stop_price == 47500.0
+        assert pos.stop_loss == 47500.0
+
+        mock_db.update_position.assert_any_call(
+            position_id=64, stop_loss_order_id="untracked_adopted_sl", stop_loss=47500.0
+        )
+
 
 # ---------- Partial SL Fill Quantity Calculation Tests ----------
 
