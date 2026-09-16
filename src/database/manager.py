@@ -3209,10 +3209,16 @@ class DatabaseManager:
         against ``caller_snapshot`` — the balance the caller read BEFORE
         acquiring the ledger lock, i.e. the value it used to decide a correction
         was warranted — not the fresh value read after the lock. That means a
-        concurrent delta writer that commits between the caller's read and lock
-        acquisition (e.g. a trade closing mid-sync) is preserved instead of
-        being silently clobbered: with ``locked_current = caller_snapshot +
-        concurrent_delta``, the result is
+        concurrent delta writer that commits between the caller's DB read and
+        lock acquisition (e.g. a trade closing mid-sync) is preserved instead
+        of being silently clobbered, PROVIDED the concurrent write's underlying
+        event (e.g. the fill it books) is not already reflected in whatever
+        external reading (exchange balance/equity) the caller used to derive
+        ``new_absolute_balance`` -- the two sub-millisecond windows where that
+        isn't true (the external reading already includes the concurrent
+        event, or the concurrent commit races the external reading itself)
+        both self-heal on the next correction pass. With
+        ``locked_current = caller_snapshot + concurrent_delta``, the result is
         ``locked_current + (new_absolute_balance - caller_snapshot)
         == new_absolute_balance + concurrent_delta`` (#735b). When no concurrent
         write occurred, ``locked_current == caller_snapshot`` and this reduces
@@ -3253,15 +3259,15 @@ class DatabaseManager:
 
                 with session.begin_nested():
                     self._lock_balance_ledger(session, session_id)
-                    # Fresh read under the lock — this is what the delta is
-                    # actually applied against (via _apply_balance_delta), so a
-                    # concurrent writer's commit is never lost even though the
-                    # delta magnitude below is computed against the caller's
-                    # pre-lock snapshot.
-                    locked_current = AccountBalance.get_current_balance(
-                        session_id, session, for_update=False
-                    )
-                    baseline = locked_current if caller_snapshot is None else caller_snapshot
+                    if caller_snapshot is None:
+                        # No pre-lock reading was offered -- fall back to a
+                        # fresh read under the lock, which makes this a plain
+                        # absolute overwrite (no concurrent-delta protection).
+                        baseline = AccountBalance.get_current_balance(
+                            session_id, session, for_update=False
+                        )
+                    else:
+                        baseline = caller_snapshot
                     delta = new_absolute_balance - baseline
                     result = self._apply_balance_delta(
                         session, session_id, delta, reason, updated_by

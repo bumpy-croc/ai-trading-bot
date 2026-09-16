@@ -7618,6 +7618,11 @@ class TestCrashRecoveryIdempotencyGuard:
         mock_db.close_position.assert_called_once_with(86, exit_price=51000.0)
         mock_db.log_trade.assert_not_called()
         mock_position_tracker.remove_position.assert_not_called()
+        # Mirrors the sibling site: the asset is confirmed gone (terminal trade
+        # exists) but the DB close didn't persist, so this retained position
+        # must not be counted as capital or have a stop re-armed against a
+        # holding that's already gone (re-review finding on #1224).
+        assert position.exchange_close_pending is True
 
     def test_reconcile_filled_exit_realizes_normally_without_prior_trade(
         self, reconciler, mock_db, mock_position_tracker

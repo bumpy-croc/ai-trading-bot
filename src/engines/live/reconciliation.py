@@ -1818,6 +1818,13 @@ class PositionReconciler:
                             position_id,
                         )
                     else:
+                        if matched_position is not None:
+                            # Mirrors the sibling guard in _close_position_from_filled_sl:
+                            # the asset is already gone (a terminal trade exists), so this
+                            # retained-but-unclosed position must not be counted as capital
+                            # (notional estimation) or have a stop re-armed against a
+                            # holding that no longer exists (#852's naked-stop guard).
+                            cast(Any, matched_position).exchange_close_pending = True
                         logger.warning(
                             "Position %s already has a terminal trade but close_position "
                             "did not persist — leaving tracked for re-reconciliation on a "
