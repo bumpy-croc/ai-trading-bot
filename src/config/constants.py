@@ -410,6 +410,24 @@ DEFAULT_STOP_LOSS_MAX_RETRIES = 3  # Maximum retry attempts for stop-loss placem
 DEFAULT_STOP_LOSS_RETRY_DELAY = 1.0  # Initial delay between retries (seconds)
 DEFAULT_RETRY_BACKOFF_MULTIPLIER = 2  # Exponential backoff multiplier
 
+# Max TOTAL attempts (not additional retries) to read account equity during the
+# cold-boot startup account sync (a transient None/exception/non-positive read
+# here can mean the exchange client isn't fully ready yet). Unlike the
+# neighbouring DEFAULT_STARTUP_BAN_MAX_RETRIES (retries AFTER the first
+# attempt, N+1 reads total), this constant IS the full read count: N=3 means
+# 3 reads total, not 3 retries plus an initial read.
+DEFAULT_STARTUP_EQUITY_MAX_RETRIES = 3
+# Base delay between startup equity-read retries (seconds); backs off by
+# DEFAULT_RETRY_BACKOFF_MULTIPLIER between attempts (1s, 2s, ...).
+DEFAULT_STARTUP_EQUITY_RETRY_DELAY = 1.0
+
+# Bounds how many additional loop-driven attempts the live trading loop itself
+# will make (via LiveTradingEngine._check_pending_startup_equity_retry) to
+# resolve a cold-boot margin-equity skip before giving up until the next
+# scheduled periodic sync. Keeps a permanently-broken equity endpoint from
+# retrying forever.
+DEFAULT_STARTUP_EQUITY_LOOP_MAX_ATTEMPTS = 5
+
 # Regime Multiplier Fallback
 DEFAULT_REGIME_UNKNOWN_MULTIPLIER = 0.5  # Conservative multiplier for unknown regimes
 

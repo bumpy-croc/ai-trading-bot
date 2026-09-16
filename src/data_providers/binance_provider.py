@@ -1067,6 +1067,14 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         USDT balance. Returns None if unavailable.
         """
         if not BINANCE_AVAILABLE or not self._client:
+            logger.warning(
+                "get_account_equity: cannot read equity - %s",
+                (
+                    "python-binance not installed"
+                    if not BINANCE_AVAILABLE
+                    else "client not initialized"
+                ),
+            )
             return None
         try:
             if self._use_margin:
