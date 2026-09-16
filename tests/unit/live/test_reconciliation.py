@@ -3271,7 +3271,8 @@ class TestPeriodicReconcilerSLPriceDrift:
         assert pos.stop_loss == 47000.0
 
         for db_call in mock_db.update_position.call_args_list:
-            assert db_call.kwargs.get("stop_loss") != 46200.0
+
+            assert "stop_loss" not in db_call.kwargs
 
     def test_cycle_corrects_sl_price_drift_skips_persist_after_concurrent_move(
         self, mock_exchange, mock_position_tracker, mock_db
@@ -5473,7 +5474,8 @@ class TestFailClosedSLLookup:
         assert position.last_placed_stop_price == 48100.0
         assert position.stop_loss == 49000.0
         for db_call in mock_db.update_position.call_args_list:
-            assert db_call.kwargs.get("stop_loss") != 48100.0
+
+            assert "stop_loss" not in db_call.kwargs
 
     def test_startup_verify_stop_loss_cancelled_does_not_ratify_a_looser_adopted_price(
         self, reconciler, mock_exchange, mock_db
@@ -5517,7 +5519,8 @@ class TestFailClosedSLLookup:
         assert position.last_placed_stop_price == 48100.0
         assert position.stop_loss == 49000.0
         for db_call in mock_db.update_position.call_args_list:
-            assert db_call.kwargs.get("stop_loss") != 48100.0
+
+            assert "stop_loss" not in db_call.kwargs
 
 
 class TestPeriodicSLFillBooksPnl:
@@ -7026,8 +7029,12 @@ class TestStopLossReplacementHoldingGuard:
         assert pos.stop_loss_order_id == "untracked_step3_sl_loose"
         assert pos.last_placed_stop_price == 44700.0
         assert pos.stop_loss == 45000.0
-        for db_call in mock_db.update_position.call_args_list:
-            assert db_call.kwargs.get("stop_loss") != 44700.0
+        # This site always persists stop_loss=position.stop_loss unconditionally
+        # (not gated by update_kwargs), so the DB must carry the safe 45000.0,
+        # never the looser 44700.0.
+        mock_db.update_position.assert_any_call(
+            position_id=66, stop_loss_order_id="untracked_step3_sl_loose", stop_loss=45000.0
+        )
 
     # --- periodic: PeriodicReconciler._reconcile_cycle ---
 
@@ -7292,7 +7299,8 @@ class TestStopLossReplacementHoldingGuard:
         assert pos.last_placed_stop_price == 2220.0
         assert pos.stop_loss == 2200.0
         for db_call in mock_db.update_position.call_args_list:
-            assert db_call.kwargs.get("stop_loss") != 2220.0
+
+            assert "stop_loss" not in db_call.kwargs
 
     # --- startup pending-entry recovery: _reconcile_filled_entry ---
 
@@ -7432,8 +7440,16 @@ class TestStopLossReplacementHoldingGuard:
         assert position.stop_loss_order_id == "untracked_recovery_sl_loose"
         assert position.last_placed_stop_price == 47200.0
         assert position.stop_loss == 47500.0
-        for db_call in mock_db.update_position.call_args_list:
-            assert db_call.kwargs.get("stop_loss") != 47200.0
+        # The SL-placement persist call (distinct from the earlier default-stop
+        # persist at position creation, which legitimately writes 47500.0) must
+        # carry only stop_loss_order_id here -- never the looser 47200.0.
+        sl_placement_calls = [
+            c
+            for c in mock_db.update_position.call_args_list
+            if c.kwargs.get("stop_loss_order_id") == "untracked_recovery_sl_loose"
+        ]
+        assert len(sl_placement_calls) == 1
+        assert "stop_loss" not in sl_placement_calls[0].kwargs
 
     def test_recovered_entry_gone_but_db_close_fails_retains_position(
         self, reconciler, mock_exchange, mock_position_tracker, mock_db
