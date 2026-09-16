@@ -2104,6 +2104,17 @@ class PositionReconciler:
             if not client_id or not client_id.startswith(client_prefix):
                 continue
 
+            # A protective stop-loss shares the same symbol/side/quantity as
+            # the entry/exit it protects (and a trailing-stop move() often
+            # re-creates one minutes before an exit), so an "atbsl_"-prefixed
+            # order can otherwise satisfy every remaining filter below and get
+            # incorrectly correlated to an unresolved journal row -- a FILLED
+            # stop-loss would then fabricate/repair a position from the wrong
+            # order's price, and a CANCELLED one would resolve the row as
+            # "never happened" (#740 follow-up).
+            if client_id.startswith("atbsl_"):
+                continue
+
             # Filter: matching side
             order_side = order.side.value if hasattr(order.side, "value") else str(order.side)
             if order_side != expected_exchange_side:
@@ -5056,57 +5067,69 @@ class PeriodicReconciler:
         ``None`` (nothing found, or the sweep itself failed -- fail-open by
         design, matching ``get_open_orders``'s own fail-open contract, since a
         lookup failure here must not block the rest of the reconciliation cycle).
+
+        Runs each symbol's query+cancel under ``_stop_loss_placement_lock``
+        (#740 follow-up): before this order class carried the ``atb`` prefix a
+        stop-loss could never match here, so this sweep never needed to
+        serialise against placement. Now that it does, an unlocked sweep could
+        observe the window between a stop actually landing on the exchange and
+        ``stop_loss_order_id`` being recorded -- every placement path
+        (``place_protection``/``reprotect``/``move``) already serialises that
+        exact window on this same lock -- and cancel a live protective stop.
+        The per-symbol snapshot is re-read fresh inside the lock so an id
+        recorded while this sweep was waiting on it is honoured.
         """
+        found_orphan = False
         try:
             fresh_snapshot = self.position_tracker.positions
-            tracked_exchange_ids = set()
-            for pos in fresh_snapshot.values():
-                eid = getattr(pos, "exchange_order_id", None)
-                if eid:
-                    tracked_exchange_ids.add(eid)
-                sl_id = getattr(pos, "stop_loss_order_id", None)
-                if sl_id:
-                    tracked_exchange_ids.add(sl_id)
-
             # Every configured symbol, plus (defensively) any symbol with a
             # tracked position that isn't in that configured list.
             symbols = set(self._symbols) | {pos.symbol for pos in fresh_snapshot.values()}
             if not symbols:
                 return None
 
-            found_orphan = False
             for symbol in symbols:
-                open_orders = self.exchange.get_open_orders(symbol)
-                for order in open_orders:
-                    if order.order_id in tracked_exchange_ids:
-                        continue
-                    client_id = getattr(order, "client_order_id", "") or ""
-                    if not client_id.startswith("atb"):  # atb_/atbx_/atbsl_
-                        continue
-                    logger.warning(
-                        "Orphaned order found: %s (%s) on %s — cancelling",
-                        order.order_id,
-                        client_id,
-                        symbol,
-                    )
-                    try:
-                        self.exchange.cancel_order(order.order_id, symbol)
-                        logger.info(
-                            "Cancelled orphaned order %s on %s",
+                with self._stop_loss_placement_lock(symbol):
+                    tracked_exchange_ids = set()
+                    for pos in self.position_tracker.positions.values():
+                        eid = getattr(pos, "exchange_order_id", None)
+                        if eid:
+                            tracked_exchange_ids.add(eid)
+                        sl_id = getattr(pos, "stop_loss_order_id", None)
+                        if sl_id:
+                            tracked_exchange_ids.add(sl_id)
+
+                    open_orders = self.exchange.get_open_orders(symbol)
+                    for order in open_orders:
+                        if order.order_id in tracked_exchange_ids:
+                            continue
+                        client_id = getattr(order, "client_order_id", "") or ""
+                        if not client_id.startswith("atb"):  # atb_/atbx_/atbsl_
+                            continue
+                        logger.warning(
+                            "Orphaned order found: %s (%s) on %s — cancelling",
                             order.order_id,
+                            client_id,
                             symbol,
                         )
-                    except Exception as cancel_err:
-                        logger.warning(
-                            "Failed to cancel orphaned order %s: %s",
-                            order.order_id,
-                            cancel_err,
-                        )
-                    found_orphan = True
+                        try:
+                            self.exchange.cancel_order(order.order_id, symbol)
+                            logger.info(
+                                "Cancelled orphaned order %s on %s",
+                                order.order_id,
+                                symbol,
+                            )
+                            found_orphan = True
+                        except Exception as cancel_err:
+                            logger.warning(
+                                "Failed to cancel orphaned order %s: %s",
+                                order.order_id,
+                                cancel_err,
+                            )
             return Severity.HIGH if found_orphan else None
         except Exception as e:
             logger.warning("Orphaned order check failed: %s", e)
-            return None
+            return Severity.HIGH if found_orphan else None
 
     def _emit_cycle_severity(
         self, max_severity: Severity, findings: list[str] | None = None
