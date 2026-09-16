@@ -1612,7 +1612,7 @@ class PositionReconciler:
                             "Placed recovery stop-loss for %s: %s @ %.2f",
                             symbol,
                             sl_order_id,
-                            position.stop_loss,
+                            achieved.price,
                         )
                         # Persist the SL order ID to DB so it survives restarts
                         if db_id is not None:
