@@ -35,6 +35,7 @@ from src.config.constants import (
     DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MIN_CHECK_INTERVAL,
     DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_STARTUP_EQUITY_LOOP_MAX_ATTEMPTS,
     DEFAULT_STATUS_LOG_INTERVAL,
     DEFAULT_TAKE_PROFIT_PCT,
     DEFAULT_TIME_RESTRICTIONS,
@@ -137,7 +138,7 @@ from src.strategies.components import Strategy as ComponentStrategy
 from src.strategies.components.exposure_governor import ExposureGovernor
 from src.trading.exit_reason import ExitReason
 
-from .account_sync import AccountSynchronizer
+from .account_sync import AccountSynchronizer, SyncResult
 from .order_tracker import OrderTracker
 
 if TYPE_CHECKING:
@@ -368,6 +369,14 @@ class LiveTradingEngine:
         # Episode latch for the consecutive-inference-timeout escalation
         # (#927): page once when the threshold is crossed, re-arm on recovery.
         self._inference_escalation_active = False
+        # Drives AccountSynchronizer.pending_startup_equity_retry from the
+        # loop's own cadence instead of only the hourly account-snapshot tick
+        # (#1226 review of #659): _startup_equity_retry_in_progress tracks
+        # whether a retry campaign is active across iterations, and
+        # _startup_equity_retry_attempts bounds it so a permanently-broken
+        # equity endpoint can't spin forever.
+        self._startup_equity_retry_in_progress = False
+        self._startup_equity_retry_attempts = 0
 
         self._init_time_exit_policy(time_exit_policy)
 
@@ -1915,6 +1924,10 @@ class LiveTradingEngine:
                 self._check_max_drawdown()
                 # Escalate persistent inference timeouts (#927, observability only)
                 self._check_inference_health()
+                # Drive a cold-boot margin-equity retry on the loop's own
+                # cadence (#1226 review of #659) before the periodic snapshot
+                # path below, which only calls sync_account_data() hourly.
+                self._check_pending_startup_equity_retry()
                 self._log_periodic_account_state()
                 self._log_status_heartbeat(symbol, current_price)
                 # Reset error counter on successful iteration
@@ -2036,20 +2049,7 @@ class LiveTradingEngine:
                     )
                     if sync_result.success:
                         logger.debug("Periodic account sync completed")
-                        # Apply any balance correction to the in-memory balance
-                        # that drives sizing (the DB is already updated inside the
-                        # sync). Without this a mid-session margin-equity
-                        # correction would not reach live sizing until restart.
-                        balance_sync = sync_result.data.get("balance_sync", {})
-                        if balance_sync.get("corrected", False):
-                            corrected = balance_sync.get("new_balance")
-                            if corrected is not None:
-                                with self._balance_lock:
-                                    self.current_balance = corrected
-                                logger.info(
-                                    "💰 Balance corrected mid-session from " "exchange: $%.2f",
-                                    corrected,
-                                )
+                        self._apply_corrected_balance(sync_result, "mid-session from exchange")
                     else:
                         logger.warning(
                             "Periodic account sync failed: %s",
@@ -2057,6 +2057,89 @@ class LiveTradingEngine:
                         )
                 except Exception as e:
                     logger.error("Periodic account sync error: %s", e)
+
+    def _apply_corrected_balance(self, sync_result: SyncResult, source: str) -> None:
+        """Apply a sync's balance correction to the in-memory balance that
+        drives sizing (the DB is already updated inside the sync). Without
+        this, a mid-session margin-equity correction would not reach live
+        sizing until restart."""
+        balance_sync = sync_result.data.get("balance_sync", {})
+        if balance_sync.get("corrected", False):
+            corrected = balance_sync.get("new_balance")
+            if corrected is not None:
+                with self._balance_lock:
+                    self.current_balance = corrected
+                logger.info("💰 Balance corrected %s: $%.2f", source, corrected)
+
+    def _check_pending_startup_equity_retry(self) -> None:
+        """Drive #659's cold-boot margin-equity self-heal from the trading
+        loop's own cadence instead of only the hourly account-snapshot tick.
+
+        ``AccountSynchronizer.pending_startup_equity_retry`` bypasses the
+        internal sync throttle for the next ``sync_account_data()`` call, but
+        in production the only scheduled caller of that method besides
+        startup is ``_log_periodic_account_state``, gated behind
+        ``DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL`` (one hour). Without this check,
+        a cold-boot skip that survives its own inline retry would sit armed
+        but unused until that hourly tick — up to an hour of trading on a
+        stale balance, which is exactly the oversized-sizing window #659
+        describes. Checking every loop iteration instead closes that down to
+        one ``check_interval`` (seconds), and keeps retrying on subsequent
+        iterations — bounded by ``DEFAULT_STARTUP_EQUITY_LOOP_MAX_ATTEMPTS``
+        so a permanently-broken equity endpoint can't spin forever — for as
+        long as the synchronizer keeps reporting the read as unavailable,
+        not just the single bypassed call the flag itself buys.
+        """
+        if not (self.account_synchronizer and self.enable_live_trading):
+            return
+
+        flag_armed = self.account_synchronizer.pending_startup_equity_retry
+        if not flag_armed and not self._startup_equity_retry_in_progress:
+            return
+
+        if self._startup_equity_retry_attempts >= DEFAULT_STARTUP_EQUITY_LOOP_MAX_ATTEMPTS:
+            if self._startup_equity_retry_in_progress:
+                logger.error(
+                    "Cold-boot margin-equity retry exhausted %d loop attempts — "
+                    "tracked balance may stay stale until the next periodic sync",
+                    DEFAULT_STARTUP_EQUITY_LOOP_MAX_ATTEMPTS,
+                )
+                self._startup_equity_retry_in_progress = False
+            return
+
+        self._startup_equity_retry_in_progress = True
+        self._startup_equity_retry_attempts += 1
+        logger.info(
+            "Retrying cold-boot margin-equity sync from the trading loop (attempt %d/%d)",
+            self._startup_equity_retry_attempts,
+            DEFAULT_STARTUP_EQUITY_LOOP_MAX_ATTEMPTS,
+        )
+        try:
+            sync_result = self.account_synchronizer.sync_account_data(
+                force=True, symbol=self._active_symbol
+            )
+        except Exception as e:
+            logger.error("Cold-boot margin-equity retry error: %s", e)
+            return
+
+        if not sync_result.success:
+            # The exchange-level sync itself failed before an equity read was
+            # even attempted (the #1226 P2 scenario) — still unresolved, keep
+            # retrying on the next iteration, bounded by the attempt counter.
+            logger.warning("Cold-boot margin-equity retry sync failed: %s", sync_result.message)
+            return
+
+        balance_sync = sync_result.data.get("balance_sync", {})
+        if balance_sync.get("reason") == "equity unavailable":
+            # Still unresolved — keep retrying on the next iteration, bounded
+            # by the attempt counter above.
+            return
+
+        # Resolved (corrected, already in sync, or a different non-retryable
+        # outcome such as an open position) — stop the campaign.
+        self._startup_equity_retry_in_progress = False
+        self._startup_equity_retry_attempts = 0
+        self._apply_corrected_balance(sync_result, "from cold-boot equity retry")
 
     @staticmethod
     def _is_transient_db_error(exc: BaseException) -> bool:

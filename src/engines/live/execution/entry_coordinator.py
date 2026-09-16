@@ -57,7 +57,7 @@ if TYPE_CHECKING:
     from src.engines.live.execution.position_tracker import LivePosition, LivePositionTracker
     from src.engines.live.execution.stop_loss_manager import LiveStopLossManager
     from src.engines.live.order_tracker import OrderTracker
-    from src.engines.live.reconciliation import BaseAssetLockRegistry
+    from src.engines.live.reconciliation import BaseAssetLockRegistry, PeriodicReconciler
     from src.risk.risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,9 @@ class LiveEntryEngineState(Protocol):
     _component_strategy: ComponentStrategy | None
     _close_only_mode: bool
     _base_asset_locks: BaseAssetLockRegistry
+    # Read (never started) here to gate the UNCONFIRMED-defer decision (#1218)
+    # on the reconciler actually being alive to backstop it.
+    _periodic_reconciler: PeriodicReconciler | None
 
     # Engine helpers that stay on the engine; the coordinator calls them via
     # this backref (so subclass/test overrides on the engine still apply).
@@ -1126,15 +1129,79 @@ class LiveEntryCoordinator:
                         else 0.0
                     )
 
-                sl_order_id = state.stop_loss_manager.place_protection(
+                placement = state.stop_loss_manager.place_protection(
                     position=position,
                     symbol=symbol,
                     side=side,
                     quantity=quantity,
                     stop_price=stop_loss,
                 )
+                sl_order_id = placement.order_id
 
                 if not sl_order_id:
+                    reconciler = state._periodic_reconciler
+                    reconciler_alive = reconciler is not None and reconciler.is_running
+
+                    if (
+                        reconciler is not None
+                        and reconciler_alive
+                        and placement.is_unconfirmed_refusal
+                    ):
+                        # #1218: mirrors #1160's startup-recovery defer, but the
+                        # safety argument is weaker here. A recovered position's
+                        # entry_time predates the crash, so #1160's in-memory
+                        # stop check is live immediately; a FRESH position is
+                        # skipped by exit_coordinator's same-bar-entry guard for
+                        # the rest of this bar, so until the next bar there is
+                        # no exchange-side stop AND no in-memory check either.
+                        # The real backstop for this window is the periodic
+                        # reconciler (confirmed alive above) re-placing the stop
+                        # on its next pass. Deferring still beats emergency-
+                        # closing a seconds-old position on a lookup that may
+                        # clear on that very next pass -- the open-then-
+                        # emergency-close churn this repo's capital-erosion
+                        # postmortem flagged. `place_protection` already wrote
+                        # the UNPROTECTED audit row above.
+                        logger.critical(
+                            "Stop-loss placement for %s could not be confirmed after "
+                            "%s attempts (guard lookup unconfirmed) — leaving the "
+                            "freshly-opened position tracked and UNPROTECTED on the "
+                            "exchange, with no in-memory stop check either until the "
+                            "next bar (same-bar-entry guard). Deferring to the "
+                            "periodic reconciler (~%ss cadence) instead of "
+                            "emergency-closing on a transient lookup failure.",
+                            symbol,
+                            DEFAULT_STOP_LOSS_MAX_RETRIES,
+                            reconciler.interval,
+                        )
+                        state._record_event(
+                            EventType.ALERT,
+                            f"{symbol} entry stop-loss placement UNCONFIRMED after "
+                            f"retries — position left open with NO exchange-side "
+                            f"stop and NO in-memory stop check until the next bar; "
+                            f"the periodic reconciler (~{reconciler.interval}s "
+                            f"cadence) is the live backstop for this window.",
+                            severity="critical",
+                            component="execution",
+                            error_code="ENTRY_SL_UNCONFIRMED",
+                            alert=True,
+                        )
+                        return
+
+                    if placement.is_unconfirmed_refusal and not reconciler_alive:
+                        # The defer branch above only holds because the periodic
+                        # reconciler is there to re-place the stop; without it
+                        # an UNCONFIRMED refusal would leave the position naked
+                        # indefinitely (past the next bar, only in-memory-
+                        # protected, forever). Fall through to the same
+                        # emergency-close path a genuine conflict takes.
+                        logger.warning(
+                            "%s stop-loss placement UNCONFIRMED but the periodic "
+                            "reconciler is not running — emergency-closing instead "
+                            "of deferring (no backstop available).",
+                            symbol,
+                        )
+
                     logger.critical(
                         "CRITICAL: Failed to place stop-loss after %s attempts for %s - "
                         "closing position on exchange to prevent unprotected exposure",

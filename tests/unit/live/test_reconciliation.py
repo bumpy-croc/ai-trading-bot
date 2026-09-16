@@ -102,11 +102,37 @@ def mock_exchange():
 
 @pytest.fixture
 def mock_db():
+    from contextlib import contextmanager
+
     db = MagicMock()
     db.get_unresolved_orders.return_value = []
     db.get_current_balance.return_value = 1000.0
     db.log_audit_event.return_value = 1
     db.update_order_journal.return_value = True
+    # No pre-existing terminal trade by default (#736 idempotency guard) — a bare
+    # MagicMock is truthy, so every SL-fill/reconcile-exit test would otherwise
+    # silently take the "already realized, skip PnL" branch instead of its
+    # intended flow.
+    db.has_terminal_trade_for_position.return_value = False
+
+    # Default atomic_balance_update: a real working context manager (mirrors
+    # DatabaseManager's — reads the CURRENT mock balance dynamically, rather
+    # than a value frozen at fixture-creation time, so a test that reassigns
+    # get_current_balance.return_value later still sees it) so
+    # _realize_pnl_on_close's log_trade=False fallback path (and any other
+    # direct caller) gets a real {"old_balance", "new_balance", "change"} dict
+    # instead of an unconfigured MagicMock. Individual tests may still override
+    # this attribute directly for failure-injection or call-inspection.
+    @contextmanager
+    def _default_atomic_balance_update(
+        balance_change, reason, updated_by="system", session_id=None, correlation_id=None
+    ):
+        old_balance = db.get_current_balance(session_id)
+        new_balance = old_balance + balance_change
+        yield {"old_balance": old_balance, "new_balance": new_balance, "change": balance_change}
+        db.update_balance(new_balance, reason, updated_by, session_id)
+
+    db.atomic_balance_update.side_effect = _default_atomic_balance_update
     return db
 
 
@@ -1347,7 +1373,7 @@ class TestBalanceAccountsForPositionNotional:
         result = reconciler._reconcile_balance()
 
         assert result.severity != Severity.CRITICAL
-        mock_db.update_balance.assert_not_called()
+        mock_db.atomic_balance_correction.assert_not_called()
 
     def test_genuine_discrepancy_still_triggers_critical(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
@@ -2478,18 +2504,16 @@ class TestPeriodicReconcilerSLVerification:
             reason="Stop-loss filled @ 48000.0 (periodic check)",
             severity="HIGH",
         )
-        # Realized P&L booked to the session balance (parity with the startup
-        # path): long 0.1 qty, entry 50000 -> SL fill 48000 = -200 gross,
-        # minus the SL order's 0.05 commission. (Scoped to the reconciliation
-        # P&L write; the cycle's later balance-verification step may also call
-        # update_balance.)
+        # Realized P&L booked to the session balance atomically with the trade
+        # insert and position-close (#736/#735 — via log_trade's balance_delta,
+        # not a standalone update_balance call): long 0.1 qty, entry 50000 ->
+        # SL fill 48000 = -200 gross, minus the SL order's 0.05 commission.
         pnl_calls = [
-            c
-            for c in mock_db.update_balance.call_args_list
-            if str(c.args[1]).startswith("reconciliation_close")
+            c for c in mock_db.log_trade.call_args_list if c.kwargs.get("balance_delta") is not None
         ]
         assert len(pnl_calls) == 1
-        assert pnl_calls[0].args[0] == pytest.approx(1000.0 - 200.0 - 0.05)
+        assert pnl_calls[0].kwargs["balance_delta"] == pytest.approx(-200.0 - 0.05)
+        assert pnl_calls[0].kwargs["position_id"] == 50
 
     def test_cycle_replaces_cancelled_sl(self, mock_exchange, mock_position_tracker, mock_db):
         """Periodic cycle re-places a cancelled SL order."""
@@ -6027,9 +6051,7 @@ class TestPeriodicSLFillBooksPnl:
         reconciler._reconcile_cycle()
 
         pnl_calls = [
-            c
-            for c in mock_db.update_balance.call_args_list
-            if str(c.args[1]).startswith("reconciliation_close")
+            c for c in mock_db.log_trade.call_args_list if c.kwargs.get("balance_delta") is not None
         ]
         assert pnl_calls == []
         mock_db.close_position.assert_not_called()
@@ -6062,17 +6084,18 @@ class TestPeriodicSLFillBooksPnl:
 
         # Booked as SL close with the fill price...
         mock_db.close_position.assert_called_once_with(71, exit_price=48000.0)
-        # ...with realized P&L: short entry 50000 -> cover 48000 on 0.1 qty
-        # = +200 gross, minus 0.05 SL commission. Booked exactly once even
-        # though step 2 re-sees the position in its stale snapshot (the
-        # pop-claim makes the second attempt a no-op).
+        # ...with realized P&L booked atomically with the trade insert and
+        # position-close (#736/#735, via log_trade's balance_delta): short
+        # entry 50000 -> cover 48000 on 0.1 qty = +200 gross, minus 0.05 SL
+        # commission. Booked exactly once even though step 2 re-sees the
+        # position in its stale snapshot (the pop-claim makes the second
+        # attempt a no-op).
         pnl_calls = [
-            c
-            for c in mock_db.update_balance.call_args_list
-            if str(c.args[1]).startswith("reconciliation_close")
+            c for c in mock_db.log_trade.call_args_list if c.kwargs.get("balance_delta") is not None
         ]
         assert len(pnl_calls) == 1
-        assert pnl_calls[0].args[0] == pytest.approx(1000.0 + 200.0 - 0.05)
+        assert pnl_calls[0].kwargs["balance_delta"] == pytest.approx(200.0 - 0.05)
+        assert pnl_calls[0].kwargs["position_id"] == 71
 
     def test_sl_fill_persists_deduped_trade_row(
         self, mock_exchange, mock_position_tracker, mock_db
@@ -6201,9 +6224,7 @@ class TestSpotSLFillNotExternalClose:
         # Closed as an SL fill with the real price, P&L booked...
         mock_db.close_position.assert_called_once_with(90, exit_price=48000.0)
         pnl_calls = [
-            c
-            for c in mock_db.update_balance.call_args_list
-            if str(c.args[1]).startswith("reconciliation_close")
+            c for c in mock_db.log_trade.call_args_list if c.kwargs.get("balance_delta") is not None
         ]
         assert len(pnl_calls) == 1
         # ...and NOT misclassified as an external close (no-PnL row)
@@ -6343,10 +6364,10 @@ class TestPeriodicSpotBalanceReconcile:
         corrected = reconciler._reconcile_spot_balance()
 
         assert corrected is True
-        mock_db.update_balance.assert_called_once()
+        mock_db.atomic_balance_correction.assert_called_once()
         # Corrected to exchange USDT + 0 notional (fresh tracker is empty) — NOT 900 + the
         # closed position's notional (the stale-snapshot over-correction).
-        assert mock_db.update_balance.call_args.args[0] == pytest.approx(900.0)
+        assert mock_db.atomic_balance_correction.call_args.args[0] == pytest.approx(900.0)
         # The correction is now audited (this periodic path previously wrote no
         # reconciliation_audit_events row, unlike its startup twin). #853
         mock_db.log_audit_event.assert_called_once()
@@ -6370,7 +6391,7 @@ class TestPeriodicSpotBalanceReconcile:
         corrected = reconciler._reconcile_spot_balance()
 
         assert corrected is False
-        mock_db.update_balance.assert_not_called()
+        mock_db.atomic_balance_correction.assert_not_called()
 
     def test_noop_in_margin_mode(self, mock_exchange, mock_position_tracker, mock_db):
         reconciler = PeriodicReconciler(
@@ -6384,7 +6405,7 @@ class TestPeriodicSpotBalanceReconcile:
         corrected = reconciler._reconcile_spot_balance()
 
         assert corrected is False
-        mock_db.update_balance.assert_not_called()
+        mock_db.atomic_balance_correction.assert_not_called()
         mock_exchange.get_balance.assert_not_called()
 
 
@@ -7934,3 +7955,148 @@ class TestStopLossReplacementHoldingGuard:
         mock_exchange.place_stop_loss_order.assert_not_called()
         mock_exchange.place_order.assert_not_called()
         mock_position_tracker.remove_position.assert_not_called()  # retained — no divergence
+
+
+# ---------- Crash-Recovery Idempotency Guard Tests (#736) ----------
+
+
+class TestCrashRecoveryIdempotencyGuard:
+    """A position whose PnL was already realized and Trade already logged by an
+    earlier, crash-interrupted attempt must NOT have that PnL re-applied just
+    because its DB row is still stale-OPEN (the reported #736 double-apply
+    symptom). ``has_terminal_trade_for_position`` is the guard: when it finds a
+    Trade already referencing the position, only the stale status is fixed —
+    no second balance/trade write.
+    """
+
+    def test_close_position_from_filled_sl_skips_realization_when_trade_exists(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        from types import SimpleNamespace as NS
+
+        pos = MockPosition(db_position_id=99, order_id="pos-99")
+        mock_db.has_terminal_trade_for_position.return_value = True
+        mock_db.close_position.return_value = True
+        sl_order = NS(
+            average_price=48000.0, order_id="sl-99", commission=0.0, commission_asset="USDT"
+        )
+
+        reconciler._close_position_from_filled_sl(pos, sl_order)
+
+        mock_db.has_terminal_trade_for_position.assert_called_once_with(99)
+        mock_db.close_position.assert_called_once_with(99, exit_price=48000.0)
+        # The crash-recovery guard fires BEFORE any PnL is (re-)computed: no new
+        # trade row, no balance write of any kind.
+        mock_db.log_trade.assert_not_called()
+        mock_db.update_balance.assert_not_called()
+        mock_db.atomic_balance_update.assert_not_called()
+        # Status is still fixed and the position drops out of the tracker.
+        mock_position_tracker.remove_position.assert_called_once_with("pos-99")
+
+    def test_close_position_from_filled_sl_realizes_normally_without_prior_trade(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        """Control case: the guard must not fire — and PnL must still be
+        realized exactly once — for a genuinely fresh close."""
+        from types import SimpleNamespace as NS
+
+        pos = MockPosition(db_position_id=98, order_id="pos-98")
+        mock_db.has_terminal_trade_for_position.return_value = False
+        mock_db.close_position.return_value = True
+        mock_db.get_current_balance.return_value = 1000.0
+        sl_order = NS(
+            average_price=48000.0, order_id="sl-98", commission=0.05, commission_asset="USDT"
+        )
+
+        reconciler._close_position_from_filled_sl(pos, sl_order)
+
+        mock_db.has_terminal_trade_for_position.assert_called_once_with(98)
+        mock_db.log_trade.assert_called_once()
+        assert mock_db.log_trade.call_args.kwargs["balance_delta"] is not None
+        assert mock_db.log_trade.call_args.kwargs["position_id"] == 98
+        mock_position_tracker.remove_position.assert_called_once_with("pos-98")
+
+    def test_reconcile_filled_exit_skips_realization_when_trade_exists(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        position = MockPosition(db_position_id=88)
+        mock_position_tracker._positions_lock = MagicMock()
+        mock_position_tracker._positions = {"ord_88": position}
+        mock_position_tracker.remove_position = MagicMock()
+        mock_db.has_terminal_trade_for_position.return_value = True
+        mock_db.close_position.return_value = True
+
+        order_data = {"position_id": 88, "client_order_id": "atb_exit_idem_test"}
+        reconciler._reconcile_filled_exit(order_data, fill_price=51000.0, exit_fee=0.6)
+
+        mock_db.has_terminal_trade_for_position.assert_called_once_with(88)
+        mock_db.close_position.assert_called_once_with(88, exit_price=51000.0)
+        mock_db.log_trade.assert_not_called()
+        mock_db.update_balance.assert_not_called()
+        mock_db.atomic_balance_update.assert_not_called()
+
+    def test_close_position_from_filled_sl_leaves_tracked_when_guard_close_fails(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        """close_position returning False (without raising) inside the guard branch must
+        NOT be treated as success: the tracker entry has to stay, mirroring the non-guard
+        path's divergence-avoidance a few lines below (#1224 review finding B)."""
+        from types import SimpleNamespace as NS
+
+        pos = MockPosition(db_position_id=97, order_id="pos-97")
+        mock_db.has_terminal_trade_for_position.return_value = True
+        mock_db.close_position.return_value = False  # not persisted
+        sl_order = NS(
+            average_price=48000.0, order_id="sl-97", commission=0.0, commission_asset="USDT"
+        )
+
+        reconciler._close_position_from_filled_sl(pos, sl_order)
+
+        mock_db.close_position.assert_called_once_with(97, exit_price=48000.0)
+        mock_db.log_trade.assert_not_called()
+        # Divergence guard: DB row is still OPEN, so the tracker entry must be retained.
+        mock_position_tracker.remove_position.assert_not_called()
+        assert pos.exchange_close_pending is True
+
+    def test_reconcile_filled_exit_leaves_tracked_when_guard_close_fails(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        """Same as above for the _reconcile_filled_exit twin of the guard (#1224 review
+        finding B): a False return from close_position must not strand the tracker."""
+        position = MockPosition(db_position_id=86)
+        mock_position_tracker._positions_lock = MagicMock()
+        mock_position_tracker._positions = {"ord_86": position}
+        mock_position_tracker.remove_position = MagicMock()
+        mock_db.has_terminal_trade_for_position.return_value = True
+        mock_db.close_position.return_value = False  # not persisted
+
+        order_data = {"position_id": 86, "client_order_id": "atb_exit_idem_test_3"}
+        reconciler._reconcile_filled_exit(order_data, fill_price=51000.0, exit_fee=0.6)
+
+        mock_db.close_position.assert_called_once_with(86, exit_price=51000.0)
+        mock_db.log_trade.assert_not_called()
+        mock_position_tracker.remove_position.assert_not_called()
+        # Mirrors the sibling site: the asset is confirmed gone (terminal trade
+        # exists) but the DB close didn't persist, so this retained position
+        # must not be counted as capital or have a stop re-armed against a
+        # holding that's already gone (re-review finding on #1224).
+        assert position.exchange_close_pending is True
+
+    def test_reconcile_filled_exit_realizes_normally_without_prior_trade(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        """Control case: no prior trade -> the guard must not fire."""
+        position = MockPosition(db_position_id=87)
+        mock_position_tracker._positions_lock = MagicMock()
+        mock_position_tracker._positions = {"ord_87": position}
+        mock_position_tracker.remove_position = MagicMock()
+        mock_db.has_terminal_trade_for_position.return_value = False
+        mock_db.close_position.return_value = True
+        mock_db.get_current_balance.return_value = 1000.0
+
+        order_data = {"position_id": 87, "client_order_id": "atb_exit_idem_test_2"}
+        reconciler._reconcile_filled_exit(order_data, fill_price=51000.0, exit_fee=0.6)
+
+        mock_db.log_trade.assert_called_once()
+        assert mock_db.log_trade.call_args.kwargs["balance_delta"] is not None
+        assert mock_db.log_trade.call_args.kwargs["position_id"] == 87
