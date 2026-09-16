@@ -2093,6 +2093,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     context=symbol,
                 )
                 error_params["free_base_balance"] = free_base
+                error_params["just_cancelled"] = just_cancelled
                 if free_base is not None and free_base < quantity:
                     logger.warning(
                         "Stop-loss sell qty %.8f for %s exceeds free base balance "

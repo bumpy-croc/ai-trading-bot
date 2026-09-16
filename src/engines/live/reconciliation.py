@@ -386,18 +386,6 @@ def _log_adoption(
     )
 
 
-def _just_cancelled_kwarg(just_cancelled: bool) -> dict[str, bool]:
-    """``{"just_cancelled": True}`` when set, else ``{}`` (#1173).
-
-    Omitting the kwarg entirely when ``False`` — rather than always passing
-    it — keeps every existing ``place_stop_loss_order`` call (and the tests
-    asserting its exact kwargs) unchanged for every caller that never
-    specifies it; only a caller that explicitly opts in (``reprotect()``)
-    changes what gets sent.
-    """
-    return {"just_cancelled": True} if just_cancelled else {}
-
-
 def place_or_adopt_stop_loss(
     exchange: Any,
     *,
@@ -494,7 +482,7 @@ def place_or_adopt_stop_loss(
             quantity=quantity,
             stop_price=stop_price,
             side_effect_type=side_effect_type,
-            **_just_cancelled_kwarg(just_cancelled),
+            just_cancelled=just_cancelled,
         )
 
     return _place_with_retry(
@@ -685,7 +673,7 @@ def _place_with_retry(
                     quantity=quantity,
                     stop_price=stop_price,
                     side_effect_type=side_effect_type,
-                    **_just_cancelled_kwarg(just_cancelled),
+                    just_cancelled=just_cancelled,
                 )
                 if order_id:
                     return order_id

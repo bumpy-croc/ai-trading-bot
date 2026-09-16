@@ -630,6 +630,7 @@ class LiveStopLossManager:
             retry_log_prefix="Trailing-stop move",
             on_adopt=_capture_achieved_price,
             on_refuse=_capture_refuse_reason,
+            just_cancelled=True,
         )
 
         if new_order_id:

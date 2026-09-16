@@ -36,11 +36,7 @@ from src.database.models import EventType
 from src.engines.shared.commission import order_commission_usd
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
-from src.trading.balance_retry import (
-    POST_CANCEL_BALANCE_RETRY_ATTEMPTS,
-    POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS,
-    read_free_balance_with_retry,
-)
+from src.trading.balance_retry import read_free_balance_with_retry
 from src.trading.precision import quantize_to_step
 from src.trading.symbols.factory import base_asset_from_symbol
 
@@ -59,11 +55,7 @@ logger = logging.getLogger(__name__)
 # generous relative to that, since the base-asset lock it runs under already
 # tolerates multi-second waits elsewhere in this same close path. The retry
 # loop itself lives in ``src.trading.balance_retry`` (#1173) so the re-protect
-# path can share it instead of a third copy; the constants are re-bound under
-# their original module-private names here for backward compatibility (tests
-# import them from this module).
-_POST_CANCEL_BALANCE_RETRY_ATTEMPTS = POST_CANCEL_BALANCE_RETRY_ATTEMPTS
-_POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS = POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS
+# path can share it instead of a third copy.
 
 # Free base-asset value at or below this is ignorable dust for the SHORT
 # inventory guard; above it, MARGIN_BUY would sell held inventory instead of
@@ -1490,8 +1482,8 @@ class LiveExecutionEngine:
         already padded by one lot step so a "settled" verdict here survives the
         caller's later floor-to-step normalization — see ``_close_live_order``),
         the shared ``read_free_balance_with_retry`` (``src.trading.balance_retry``)
-        polls the read up to ``_POST_CANCEL_BALANCE_RETRY_ATTEMPTS`` times,
-        ``_POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS`` apart, and returns as soon
+        polls the read up to ``POST_CANCEL_BALANCE_RETRY_ATTEMPTS`` times,
+        ``POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS`` apart, and returns as soon
         as a read clears it. If the budget expires the last (still-stale) read
         is returned unchanged, so the caller's existing gate still aborts a
         genuinely locked inventory — this only removes the false-positive delay.

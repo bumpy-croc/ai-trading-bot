@@ -31,16 +31,14 @@ import pytest
 
 from src.config.constants import CLOSE_ABORT_CLOSE_ONLY_STREAK, HOLDINGS_CAP_MIN_RATIO
 from src.data_providers.exchange_interface import Order, OrderSide, OrderStatus, OrderType
-from src.engines.live.execution.execution_engine import (
-    _POST_CANCEL_BALANCE_RETRY_ATTEMPTS,
-    LiveExecutionEngine,
-)
+from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.stop_loss_manager import LiveStopLossManager
 from src.engines.live.order_tracker import (
     SELF_CANCEL_SUPPRESSION_TTL_SECONDS,
     OrderTracker,
 )
 from src.engines.shared.models import PositionSide
+from src.trading.balance_retry import POST_CANCEL_BALANCE_RETRY_ATTEMPTS
 
 pytestmark = pytest.mark.fast
 
@@ -426,7 +424,7 @@ class TestStaleBalanceRetryAfterStopCancel:
         assert [code for code, _ in h.events] == ["CLOSE_INVENTORY_LOCKED"]
         assert h.events[0][1]["stop_just_cancelled"] is True
         # Pin the retry actually ran its full budget rather than bailing early.
-        assert h.exchange.get_balance.call_count == _POST_CANCEL_BALANCE_RETRY_ATTEMPTS
+        assert h.exchange.get_balance.call_count == POST_CANCEL_BALANCE_RETRY_ATTEMPTS
 
     def test_ordinary_close_does_not_retry_or_add_latency(self, monkeypatch):
         """Without stop_just_cancelled the call is unchanged: one read, no sleep."""
@@ -560,7 +558,7 @@ class TestReprotectStaleBalanceRetry:
         assert result is None
         provider._call_create_order.assert_not_called()
         # Pin the retry actually ran its full budget rather than bailing early.
-        assert provider._free_base_balance.call_count == _POST_CANCEL_BALANCE_RETRY_ATTEMPTS
+        assert provider._free_base_balance.call_count == POST_CANCEL_BALANCE_RETRY_ATTEMPTS
 
     def test_ordinary_placement_does_not_retry_even_with_a_low_balance(self, monkeypatch):
         """Without ``just_cancelled`` a low reading isn't stale -- it's genuinely
