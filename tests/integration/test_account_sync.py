@@ -6,7 +6,7 @@ that cover all critical functionality without unnecessary repetition.
 """
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -100,8 +100,14 @@ class TestAccountSynchronizer:
 
     @pytest.fixture
     def mock_db_manager(self):
-        """Create a mock database manager"""
-        db_manager = Mock()
+        """Create a mock database manager.
+
+        MagicMock (not plain Mock): ``_sync_balances``'s correction now goes
+        through ``db_manager.atomic_balance_correction(...)`` as a context
+        manager (#735b), which needs __enter__/__exit__ support that only
+        MagicMock auto-provides.
+        """
+        db_manager = MagicMock()
         db_manager.get_current_balance.return_value = 10000.0
         db_manager.get_active_positions.return_value = []
         db_manager.get_pending_orders.return_value = []
@@ -205,7 +211,7 @@ class TestAccountSynchronizer:
         assert result["new_balance"] == 11000.0
         assert result["difference"] == 1000.0
         assert result["difference_percent"] == 10.0
-        mock_db_manager.update_balance.assert_called_once()
+        mock_db_manager.atomic_balance_correction.assert_called_once()
 
         # Test no USDT balance
         balances = [
@@ -556,7 +562,9 @@ class TestAccountSynchronizerIntegration:
             exchange = BinanceProvider(api_key="test", api_secret="test", testnet=True)
         else:
             exchange = CoinbaseProvider(api_key="test", api_secret="test", testnet=True)
-        db_manager = Mock()
+        # MagicMock (not plain Mock): the balance correction goes through
+        # db_manager.atomic_balance_correction(...) as a context manager (#735b).
+        db_manager = MagicMock()
         # Setup realistic mock data
         exchange.sync_account_data = Mock(
             return_value={

@@ -1794,6 +1794,29 @@ class PositionReconciler:
                         order_id_to_remove,
                     )
 
+                # Idempotency guard (#736): a Trade already referencing this position means
+                # an earlier pass already realized PnL and logged the trade. Re-running the
+                # PnL calculation below would double-apply it to the balance — just fix the
+                # stale status and stop. Mirrors the same guard in
+                # _close_position_from_filled_sl.
+                if self.db_manager.has_terminal_trade_for_position(position_id):
+                    try:
+                        self.db_manager.close_position(
+                            position_id, exit_price=fill_price if fill_price > 0 else None
+                        )
+                        logger.warning(
+                            "Position %s already has a terminal trade — closed WITHOUT "
+                            "re-realizing PnL (crash-recovery idempotency guard).",
+                            position_id,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to close already-realized position %s: %s",
+                            position_id,
+                            e,
+                        )
+                    return
+
                 # Close in DB. close_position returns False (without raising) when the row is not
                 # found or the commit rolls back, so gate on the actual return — "did not raise" is
                 # not "closed", and logging a trade for a non-persisted close would diverge.
@@ -3178,6 +3201,28 @@ class PositionReconciler:
         """
         db_pos_id = getattr(position, "db_position_id", None)
         exit_price = float(sl_order.average_price) if sl_order.average_price else None
+
+        # Idempotency guard (#736): a Trade already referencing this position means an
+        # earlier pass already realized PnL and logged the trade — most likely a prior
+        # crash landed the atomic balance+trade commit but the process died (or this
+        # exact race re-ran) before the position's in-memory/DB state caught up. Re-running
+        # the PnL calculation below would double-apply it to the balance. Just fix the
+        # stale status and stop; heal_positions_with_terminal_trades covers the same case
+        # at startup, this covers it mid-session.
+        if db_pos_id and self.db_manager.has_terminal_trade_for_position(db_pos_id):
+            try:
+                self.db_manager.close_position(db_pos_id, exit_price=exit_price)
+            except Exception as e:
+                logger.warning("Failed to close already-realized position %s: %s", db_pos_id, e)
+                return
+            self.position_tracker.remove_position(position.order_id)
+            logger.warning(
+                "Position %s already has a terminal trade — closed WITHOUT re-realizing "
+                "PnL (crash-recovery idempotency guard).",
+                db_pos_id,
+            )
+            return
+
         db_closed = False
         if db_pos_id:
             try:
@@ -3321,7 +3366,6 @@ class PositionReconciler:
             interest_cost=0.0,
             reason="external_close_recovery",
             exit_order_id=f"reconcile_ext_{db_pos_id}",
-            balance_realized=False,
             exit_category=ExitReason.EXTERNAL_CLOSE,
         )
 
@@ -3750,14 +3794,26 @@ class PositionReconciler:
                     )
                     # Correct DB balance to match actual total capital.
                     # DB balance represents total capital (USDT + position notional),
-                    # not just free USDT on exchange.
+                    # not just free USDT on exchange. atomic_balance_correction
+                    # re-reads under the ledger lock and applies the correction as a
+                    # delta from THAT fresh value, so a concurrent delta writer
+                    # (e.g. a trade closing) is preserved instead of being
+                    # clobbered by this absolute correction (#735b).
                     corrected_balance = exchange_total + position_notional
-                    self.db_manager.update_balance(
-                        corrected_balance,
-                        "reconciliation_balance_correction",
-                        "system",
-                        self.session_id,
-                    )
+                    try:
+                        with self.db_manager.atomic_balance_correction(
+                            corrected_balance,
+                            "reconciliation_balance_correction",
+                            "system",
+                            self.session_id,
+                        ):
+                            pass
+                    except Exception as e:
+                        logger.warning(
+                            "Startup balance correction to $%.2f FAILED: %s",
+                            corrected_balance,
+                            e,
+                        )
                 elif diff_pct > 0.01:  # >1% warning
                     result.severity = Severity.LOW
                     logger.info(
@@ -3893,6 +3949,9 @@ class PositionReconciler:
                 )
 
         try:
+            # Cheap sanity pre-check only (not used for the write itself below —
+            # both atomic paths re-read the true latest balance under the ledger
+            # lock, see DatabaseManager._lock_balance_ledger / #735).
             current_balance = self.db_manager.get_current_balance(self.session_id)
             if current_balance is None or current_balance < 0:
                 logger.warning(
@@ -3906,28 +3965,8 @@ class PositionReconciler:
             if not math.isfinite(exit_fee) or exit_fee < 0:
                 exit_fee = 0.0
 
-            # Balance uses net PnL (gross minus interest and exit fee)
-            new_balance = current_balance + pnl - interest_cost - exit_fee
-            balance_updated = self.db_manager.update_balance(
-                new_balance,
-                f"reconciliation_close: {reason}",
-                "system",
-                self.session_id,
-            )
-            if not balance_updated:
-                # update_balance swallows its own errors and returns False. If the balance
-                # write failed, do NOT persist the audit or a trade row — a trades row that
-                # asserts a closure whose balance never moved is a silent
-                # account_balances/trades divergence. Escalate (CRITICAL); reconciliation
-                # continues for the remaining positions.
-                logger.critical(
-                    "Reconciliation balance update FAILED for %s (%s) — balance unchanged; "
-                    "skipping audit + trade row to avoid trades/account_balances divergence. "
-                    "Manual reconciliation required.",
-                    getattr(position, "symbol", "?"),
-                    reason,
-                )
-                return
+            # Net PnL (gross minus interest and exit fee) is what actually moves the balance.
+            net_delta = pnl - interest_cost - exit_fee
 
             if exit_fee > 0:
                 logger.info(
@@ -3937,13 +3976,59 @@ class PositionReconciler:
                     reason,
                 )
 
+            if log_trade:
+                # Balance + trade (+ position-close) commit in ONE atomic
+                # transaction (#736: a separate balance commit followed by a
+                # separate trade/position commit is exactly the split that let a
+                # crash between them double-apply or drop this PnL on recovery;
+                # #735: the write is also correctly serialized against every
+                # other ledger writer). _log_reconciliation_trade returns None
+                # on dedup or failure — either way there is nothing new to audit.
+                balance_result = self._log_reconciliation_trade(
+                    position=position,
+                    entry_price=entry_price,
+                    exit_price=exit_price,
+                    qty=qty,
+                    gross_pnl=pnl,
+                    exit_fee=exit_fee,
+                    interest_cost=interest_cost,
+                    reason=reason,
+                    exit_order_id=exit_order_id,
+                    exit_category=exit_category,
+                    balance_delta=net_delta,
+                )
+                if balance_result is None:
+                    return
+            else:
+                # No trade row wanted for this closure — apply the delta through
+                # the same correctly-serialized path as every other balance
+                # writer (#735), just without folding in a trade insert.
+                try:
+                    with self.db_manager.atomic_balance_update(
+                        net_delta,
+                        f"reconciliation_close: {reason}",
+                        "system",
+                        self.session_id,
+                    ) as result:
+                        balance_result = result
+                except Exception:
+                    logger.critical(
+                        "Reconciliation balance update FAILED for %s (%s) — balance "
+                        "unchanged; skipping audit to avoid a divergent record. Manual "
+                        "reconciliation required.",
+                        getattr(position, "symbol", "?"),
+                        reason,
+                        exc_info=True,
+                    )
+                    return
+
             # Audit the P&L correction
             audit = AuditEvent(
                 entity_type="balance",
                 entity_id=getattr(position, "db_position_id", None),
                 field="realized_pnl",
-                old_value=f"{current_balance:.2f}",
-                new_value=f"{new_balance:.2f}",
+                old_value=f"{balance_result['old_balance']:.2f}",
+                new_value=f"{balance_result['new_balance']:.2f}",
                 reason=(
                     f"Reconciliation P&L: {pnl:+.2f} "
                     f"(entry={entry_price:.2f}, exit={exit_price:.2f}, "
@@ -3958,23 +4043,6 @@ class PositionReconciler:
                 position.symbol,
                 reason,
             )
-
-            # Persist a Trade row for opted-in reconciler closures. Without this, the
-            # position is balance-corrected and DB-closed but leaves NO trades row, so
-            # commission/quantity/pnl go unrecorded for offline closures handled here.
-            if log_trade:
-                self._log_reconciliation_trade(
-                    position=position,
-                    entry_price=entry_price,
-                    exit_price=exit_price,
-                    qty=qty,
-                    gross_pnl=pnl,
-                    exit_fee=exit_fee,
-                    interest_cost=interest_cost,
-                    reason=reason,
-                    exit_order_id=exit_order_id,
-                    exit_category=exit_category,
-                )
         except Exception as e:
             logger.warning(
                 "Failed to realize P&L for position %s: %s",
@@ -3994,11 +4062,21 @@ class PositionReconciler:
         interest_cost: float,
         reason: str,
         exit_order_id: str | None,
-        balance_realized: bool = True,
         exit_category: ExitReason = ExitReason.UNKNOWN,
-    ) -> None:
+        balance_delta: float | None = None,
+    ) -> dict[str, float] | None:
         """Insert a ``trades`` row for a reconciler-closed position, commission and
         quantity populated.
+
+        When ``balance_delta`` is given, the balance adjustment, the Trade insert,
+        and the Position CLOSED flip all commit in ONE transaction (via
+        ``DatabaseManager.log_trade``'s ``balance_delta``) — closes the
+        split-transaction crash window (#736) that could otherwise double-apply
+        or silently drop this exact PnL on recovery, and the correctly-serialized
+        write closes the concurrent lost-update window (#735). Also sets the
+        Trade's ``position_id`` FK unconditionally (even when ``balance_delta`` is
+        None) so ``heal_positions_with_terminal_trades`` can find and repair this
+        trade's position if a crash ever leaves it stale-OPEN.
 
         Fault-isolated and deduped: a duplicate (same exit order id + session) raises
         ``IntegrityError`` from ``log_trade`` and is swallowed; any other DB error is
@@ -4007,9 +4085,19 @@ class PositionReconciler:
         entry fee — reconstructed from the fee model, since recovered positions carry no
         entry-fee metadata — plus the exit fee. ``qty`` is already scaled to the closed
         slice by the caller.
+
+        Returns:
+            The ``{"old_balance", "new_balance", "change"}`` dict from the atomic
+            balance write when ``balance_delta`` was given and the write
+            succeeded; otherwise None (no balance_delta, a deduped re-run, or a
+            failed write — the caller should not audit a balance change that
+            never happened).
         """
         if self.session_id is None:
-            return
+            return None
+        # Derived, not a separate caller-supplied flag, so it can never disagree
+        # with what balance_delta actually does.
+        balance_realized = balance_delta is not None
         try:
             side = getattr(position, "side", None)
             # PositionSide enum -> its .value ("LONG"/"SHORT"); a str side passes through.
@@ -4057,7 +4145,8 @@ class PositionReconciler:
             size = float(cs if cs is not None else (sz if sz is not None else 0.0))
             if not math.isfinite(size) or size <= 0:
                 size = 1.0  # degenerate recovered sizing; log_trade requires size > 0
-            self.db_manager.log_trade(
+            db_pos_id = getattr(position, "db_position_id", None)
+            trade_id = self.db_manager.log_trade(
                 symbol=getattr(position, "symbol", "UNKNOWN"),
                 side=side_str,
                 entry_price=float(entry_price),
@@ -4074,31 +4163,60 @@ class PositionReconciler:
                 commission=commission,
                 margin_interest_cost=max(0.0, float(interest_cost)),
                 exit_order_id=exit_order_id,
+                # Sets the Trade's position_id FK unconditionally (even when
+                # balance_delta is None below) so a stale-OPEN position can
+                # always be found and repaired by heal_positions_with_terminal_trades
+                # — the June-audit gap where reconciler trades had no FK at all.
+                position_id=db_pos_id,
+                # Balance + trade + position-close commit in ONE transaction
+                # when a delta was given (#736/#735); None here means this
+                # closure is balance-neutral (e.g. external close — capital is
+                # reconciled elsewhere) and only the trade/position-close happen.
+                balance_delta=balance_delta,
             )
             logger.info(
-                "Logged reconciliation trade for %s: pnl=%.2f commission=%.4f qty=%s",
+                "Logged reconciliation trade #%s for %s: pnl=%.2f commission=%.4f qty=%s",
+                trade_id,
                 getattr(position, "symbol", "?"),
                 float(gross_pnl),
                 commission,
                 "NULL" if logged_quantity is None else format(logged_quantity, ".8f"),
             )
+            if balance_delta is not None:
+                # log_trade already committed the atomic balance+trade+close write;
+                # this is a post-commit read for the caller's audit trail only (not
+                # used for any further ledger arithmetic), so "old_balance" is
+                # reconstructed by subtracting our own delta back out. In the rare
+                # case another writer commits in between this read and our own
+                # commit above, that only skews this descriptive audit string, not
+                # the ledger itself.
+                new_balance = self.db_manager.get_current_balance(self.session_id)
+                return {
+                    "old_balance": new_balance - balance_delta,
+                    "new_balance": new_balance,
+                    "change": balance_delta,
+                }
+            return None
         except IntegrityError:
             logger.info(
                 "Reconciliation trade for %s already recorded (dedup); skipping",
                 getattr(position, "symbol", "?"),
             )
+            return None
         except Exception as e:
             # Escalate (CRITICAL + stack trace) rather than swallow at WARNING — "silent
             # divergence is a bug" (CODE.md). Still do not re-raise: reconciliation must continue
-            # for the remaining positions. The alert differs by whether the caller moved the
-            # balance: a balance-realizing path (SL/exit) leaves account_balances and trades
-            # genuinely diverged; a balance-neutral path (external close) only loses an audit row
-            # (capital is reconciled by Step C / margin-equity sync), so it must NOT page as a
-            # ledger divergence.
+            # for the remaining positions. The alert differs by whether the caller wanted a
+            # balance move: when balance_delta was given, the whole write (balance + trade +
+            # position-close) is ONE transaction, so a failure here means NONE of it committed —
+            # safe to retry, no ledger divergence possible. A balance-neutral path (external
+            # close) only loses an audit row (capital is reconciled by Step C / margin-equity
+            # sync), so it must NOT page as a ledger divergence either.
             if balance_realized:
                 logger.critical(
-                    "Balance corrected for %s but FAILED to persist its trades row: %s — "
-                    "account_balances and trades have DIVERGED; manual reconciliation required.",
+                    "Atomic balance+trade write FAILED for %s: %s — balance was NOT "
+                    "adjusted and no trade was recorded (all-or-nothing); will retry on "
+                    "the next reconciliation pass.",
                     getattr(position, "symbol", "?"),
                     e,
                     exc_info=True,
@@ -4487,12 +4605,20 @@ class PeriodicReconciler:
                     ),
                     severity=Severity.CRITICAL.value,
                 )
-                self.db_manager.update_balance(
+                # atomic_balance_correction re-reads under the ledger lock and
+                # applies the correction as a delta from THAT fresh value, so a
+                # concurrent delta writer (e.g. a trade closing) is preserved
+                # instead of being clobbered by this absolute correction (#735b).
+                # Raises on failure — caught by the except below, unlike the old
+                # update_balance(...) which swallowed failures into a bare False
+                # this call site never even checked.
+                with self.db_manager.atomic_balance_correction(
                     corrected_balance,
                     "reconciliation_balance_correction",
                     "system",
                     self.session_id,
-                )
+                ):
+                    pass
                 return True
         except Exception as e:
             logger.warning("Balance check failed: %s", e)

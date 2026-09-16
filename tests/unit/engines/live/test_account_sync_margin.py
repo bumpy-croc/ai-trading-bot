@@ -7,7 +7,7 @@ exchange's account-level net equity (`get_account_equity`) and only corrects
 while flat.
 """
 
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -54,7 +54,10 @@ def _make_sync(equity, db_balance, usdt_total):
     exchange = Mock()
     exchange.get_account_equity.return_value = equity
     exchange.get_balance.return_value = Mock(total=usdt_total) if usdt_total is not None else None
-    db = Mock()
+    # MagicMock (not plain Mock): the correction now goes through
+    # db_manager.atomic_balance_correction(...) as a context manager (#735b),
+    # which needs __enter__/__exit__ support that only MagicMock auto-provides.
+    db = MagicMock()
     db.get_current_balance.return_value = db_balance
     sync = AccountSynchronizer(exchange=exchange, db_manager=db, session_id=1, use_margin=True)
     return sync, db
@@ -69,7 +72,7 @@ def test_margin_equity_corrects_when_flat_and_divergent():
     assert res["corrected"] is True
     assert res["new_balance"] == pytest.approx(84.22)
     assert res["old_balance"] == pytest.approx(99.89)
-    db.update_balance.assert_called_once()
+    db.atomic_balance_correction.assert_called_once()
 
 
 def test_margin_equity_no_correct_within_threshold():
@@ -79,7 +82,7 @@ def test_margin_equity_no_correct_within_threshold():
     res = sync._sync_margin_equity()
 
     assert res["corrected"] is False
-    db.update_balance.assert_not_called()
+    db.atomic_balance_correction.assert_not_called()
 
 
 def test_margin_equity_no_correct_when_position_held():
@@ -93,7 +96,7 @@ def test_margin_equity_no_correct_when_position_held():
 
     assert res.get("corrected") is not True
     assert res["reason"] == "position held"
-    db.update_balance.assert_not_called()
+    db.atomic_balance_correction.assert_not_called()
 
 
 def test_margin_equity_no_sync_when_equity_unavailable():
@@ -103,7 +106,7 @@ def test_margin_equity_no_sync_when_equity_unavailable():
     res = sync._sync_margin_equity()
 
     assert res["synced"] is False
-    db.update_balance.assert_not_called()
+    db.atomic_balance_correction.assert_not_called()
 
 
 def test_margin_equity_no_correct_when_equity_zero_or_negative():
@@ -113,7 +116,7 @@ def test_margin_equity_no_correct_when_equity_zero_or_negative():
     res = sync._sync_margin_equity()
 
     assert res["synced"] is False
-    db.update_balance.assert_not_called()
+    db.atomic_balance_correction.assert_not_called()
 
 
 def test_margin_equity_correction_records_audit_and_system_event():
@@ -129,7 +132,7 @@ def test_margin_equity_correction_records_audit_and_system_event():
     res = sync._sync_margin_equity()
 
     assert res["corrected"] is True
-    db.update_balance.assert_called_once()
+    db.atomic_balance_correction.assert_called_once()
 
     # (a) immutable reconciliation audit row with before/after values
     db.log_audit_event.assert_called_once()
@@ -171,7 +174,7 @@ def test_margin_equity_no_audit_or_event_when_within_threshold():
 
     sync._sync_margin_equity()
 
-    db.update_balance.assert_not_called()
+    db.atomic_balance_correction.assert_not_called()
     db.log_audit_event.assert_not_called()
     db.log_event.assert_not_called()
 
@@ -186,15 +189,17 @@ def test_margin_equity_audit_logging_failure_does_not_break_correction():
     res = sync._sync_margin_equity()  # must not raise
 
     assert res["corrected"] is True
-    db.update_balance.assert_called_once()
+    db.atomic_balance_correction.assert_called_once()
     db.log_event.assert_called_once()  # attempted despite the audit failure
 
 
 def test_margin_equity_no_audit_when_balance_update_fails():
-    """If the balance write itself fails (update_balance -> False), do NOT emit an
-    audit/alert claiming a correction that never persisted."""
+    """If the balance write itself fails (atomic_balance_correction raises), do NOT
+    emit an audit/alert claiming a correction that never persisted."""
     sync, db = _make_sync(equity=84.14, db_balance=99.89, usdt_total=84.14)
-    db.update_balance.return_value = False
+    # atomic_balance_correction communicates failure by raising, not by a bool
+    # return the caller must check (#735b's atomic path is all-or-nothing).
+    db.atomic_balance_correction.side_effect = RuntimeError("balance update failed")
 
     res = sync._sync_margin_equity()
 
@@ -208,13 +213,12 @@ def test_margin_equity_correction_audited_during_startup_session_handoff():
     """Startup edge (found in Codex review): the synchronizer's own session_id is
     still None during the INITIAL sync — trading_engine assigns it only AFTER
     sync_account_data() returns — but the DB manager already has a current session, so
-    update_balance persists via its _current_session_id fallback. The audit + system
+    the correction persists via its _current_session_id fallback. The audit + system
     event MUST still fire, bound to that resolved session, not be silently skipped.
     """
     sync, db = _make_sync(equity=84.14, db_balance=99.89, usdt_total=84.14)
     sync.session_id = None  # not yet assigned during the initial sync
-    db._current_session_id = 7  # update_balance / get_current_balance fall back to this
-    db.update_balance.return_value = True
+    db._current_session_id = 7  # the correction / get_current_balance fall back to this
 
     res = sync._sync_margin_equity()
 
@@ -239,7 +243,7 @@ def test_margin_equity_system_event_failure_does_not_break_correction():
     res = sync._sync_margin_equity()  # must not raise
 
     assert res["corrected"] is True
-    db.update_balance.assert_called_once()
+    db.atomic_balance_correction.assert_called_once()
     db.log_audit_event.assert_called_once()  # audit still written despite the event failure
 
 
