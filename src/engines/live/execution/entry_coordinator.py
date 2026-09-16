@@ -910,6 +910,15 @@ class LiveEntryCoordinator:
                                 close_quantity,
                                 result.position.quantity,
                             )
+                            # Untracked position, possibly still open and
+                            # unprotected on the exchange (tracking already
+                            # failed above) -- match the escalation both
+                            # sibling emergency-close paths use on an aborted
+                            # or unconfirmed close (#989).
+                            state._enter_close_only_mode(
+                                f"emergency close for orphaned position {symbol} aborted "
+                                "— inventory not honestly sellable"
+                            )
                         else:
                             emergency_order = state.exchange_interface.place_order(
                                 symbol=symbol,

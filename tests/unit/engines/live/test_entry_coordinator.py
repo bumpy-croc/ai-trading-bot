@@ -397,7 +397,11 @@ def test_tracking_failure_emergency_close_caps_to_free_base():
 
 def test_tracking_failure_holdings_locked_aborts_without_order():
     """Site 2: inventory locked well below the intended close -- abort instead of
-    sending a partial SELL. No refund (mirrors the unconfirmed-close case)."""
+    sending a partial SELL. No refund (mirrors the unconfirmed-close case). The
+    position is untracked (tracking already failed above) and possibly still open
+    and unprotected on the exchange, so this must escalate to close-only exactly
+    like the sibling abort/unconfirmed paths -- an abort that only logs would
+    silently keep opening new entries on top of an orphaned position (#989)."""
     position = _make_position()
     state = _make_state(position, _make_result(position))
     state.enable_live_trading = True  # no trading_session_id -> direct balance math
@@ -407,6 +411,7 @@ def test_tracking_failure_holdings_locked_aborts_without_order():
     _call(state)
 
     state.exchange_interface.place_order.assert_not_called()
+    state._enter_close_only_mode.assert_called_once()
     # Aborted (not confirmed) close -> entry fee stays charged, same as the
     # unconfirmed-close case.
     assert state.current_balance == pytest.approx(999.0)
