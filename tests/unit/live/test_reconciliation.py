@@ -3271,7 +3271,8 @@ class TestPeriodicReconcilerSLPriceDrift:
         assert pos.stop_loss == 47000.0
 
         for db_call in mock_db.update_position.call_args_list:
-            assert db_call.kwargs.get("stop_loss") != 46200.0
+
+            assert "stop_loss" not in db_call.kwargs
 
     def test_cycle_corrects_sl_price_drift_skips_persist_after_concurrent_move(
         self, mock_exchange, mock_position_tracker, mock_db
@@ -5437,6 +5438,90 @@ class TestFailClosedSLLookup:
         mock_exchange.place_stop_loss_order.assert_called_once()
         assert position.stop_loss_order_id == "new_sl_replaced"
 
+    def test_startup_verify_stop_loss_not_found_does_not_ratify_a_looser_adopted_price(
+        self, reconciler, mock_exchange, mock_db
+    ):
+        """#1211: the 'not found' re-placement branch can also ADOPT an
+        already-resting order within the 2% tolerance. A looser achieved
+        price must not be ratified into position.stop_loss."""
+        from src.data_providers.exchange_interface import OrderSide
+
+        position = MockPosition(
+            stop_loss=49000.0,
+            stop_loss_order_id="sl_gone_2",
+            db_position_id=63,
+            quantity=0.1,
+        )
+        mock_exchange.get_order.return_value = None  # confirmed absent
+
+        # Untracked resting stop at 48100 -- within the 2% tolerance of
+        # 49000, but LOWER, i.e. looser/worse for a long.
+        adopted_order = MockExchangeOrder(order_id="untracked_verify_missing_sl", status="NEW")
+        adopted_order.side = OrderSide.SELL
+        adopted_order.stop_price = 48100.0
+        mock_exchange.get_open_orders_checked.return_value = [adopted_order]
+
+        result = ReconciliationResult(
+            entity_type="position",
+            entity_id=63,
+            status="verified",
+            severity=Severity.LOW,
+        )
+        reconciler._verify_stop_loss(position, "sl_gone_2", result)
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        assert position.stop_loss_order_id == "untracked_verify_missing_sl"
+        assert position.last_placed_stop_price == 48100.0
+        assert position.stop_loss == 49000.0
+        for db_call in mock_db.update_position.call_args_list:
+
+            assert "stop_loss" not in db_call.kwargs
+
+    def test_startup_verify_stop_loss_cancelled_does_not_ratify_a_looser_adopted_price(
+        self, reconciler, mock_exchange, mock_db
+    ):
+        """#1211: the cancelled/expired re-placement branch can also ADOPT an
+        already-resting order within the 2% tolerance. A looser achieved
+        price must not be ratified into position.stop_loss, and the DB
+        persist must not carry the looser price either."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        position = MockPosition(
+            stop_loss=49000.0,
+            stop_loss_order_id="sl_cancelled_2",
+            db_position_id=64,
+            quantity=0.1,
+            current_size=0.1,
+            original_size=0.1,
+        )
+        mock_exchange.get_order.return_value = MockExchangeOrder(
+            order_id="sl_cancelled_2", status=ExOS.CANCELLED, filled_quantity=0.0
+        )
+
+        # Untracked resting stop at 48100 -- within the 2% tolerance of
+        # 49000, but LOWER, i.e. looser/worse for a long.
+        adopted_order = MockExchangeOrder(order_id="untracked_verify_cancelled_sl", status="NEW")
+        adopted_order.side = OrderSide.SELL
+        adopted_order.stop_price = 48100.0
+        mock_exchange.get_open_orders_checked.return_value = [adopted_order]
+
+        result = ReconciliationResult(
+            entity_type="position",
+            entity_id=64,
+            status="verified",
+            severity=Severity.LOW,
+        )
+        reconciler._verify_stop_loss(position, "sl_cancelled_2", result)
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        assert position.stop_loss_order_id == "untracked_verify_cancelled_sl"
+        assert position.last_placed_stop_price == 48100.0
+        assert position.stop_loss == 49000.0
+        for db_call in mock_db.update_position.call_args_list:
+
+            assert "stop_loss" not in db_call.kwargs
+
 
 class TestPeriodicSLFillBooksPnl:
     """The periodic reconciler must book a detected SL fill's P&L (it
@@ -6907,6 +6992,50 @@ class TestStopLossReplacementHoldingGuard:
             position_id=64, stop_loss_order_id="untracked_step3_sl", stop_loss=45400.0
         )
 
+    def test_startup_reconcile_position_missing_sl_does_not_ratify_a_looser_adopted_price(
+        self, reconciler, mock_exchange, mock_db
+    ):
+        """#1211: the adopt tolerance is symmetric, so an adopted resting order
+        can land FURTHER from the tracked stop than expected, not just closer.
+        last_placed_stop_price must still reflect exchange reality
+        unconditionally, but position.stop_loss must NOT be loosened to a
+        worse achieved price, and the DB persist must carry the unchanged
+        (safer) position.stop_loss, not the raw achieved price."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id=None,
+            stop_loss=45000.0,
+            db_position_id=66,
+            quantity=0.1,
+            exchange_order_id="entry_66",
+        )
+        mock_exchange.get_order.return_value = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.1
+        )
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.1)
+
+        # An untracked resting stop is at 44700 -- within the 2% adopt
+        # tolerance of the tracked 45000, but LOWER, i.e. looser/worse for a long.
+        adopted_order = MockExchangeOrder(order_id="untracked_step3_sl_loose", status="NEW")
+        adopted_order.side = OrderSide.SELL
+        adopted_order.stop_price = 44700.0
+        mock_exchange.get_open_orders_checked.return_value = [adopted_order]
+
+        reconciler.reconcile_position(pos)
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        assert pos.stop_loss_order_id == "untracked_step3_sl_loose"
+        assert pos.last_placed_stop_price == 44700.0
+        assert pos.stop_loss == 45000.0
+        # This site always persists stop_loss=position.stop_loss unconditionally
+        # (not gated by update_kwargs), so the DB must carry the safe 45000.0,
+        # never the looser 44700.0.
+        mock_db.update_position.assert_any_call(
+            position_id=66, stop_loss_order_id="untracked_step3_sl_loose", stop_loss=45000.0
+        )
+
     # --- periodic: PeriodicReconciler._reconcile_cycle ---
 
     @staticmethod
@@ -7126,6 +7255,53 @@ class TestStopLossReplacementHoldingGuard:
         mock_exchange.cancel_order.assert_called_once()
         mock_exchange.place_stop_loss_order.assert_called_once()
 
+    def test_startup_partial_exit_resize_does_not_ratify_a_looser_adopted_price(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """#1211: a SHORT's resize can also ADOPT an already-resting order within
+        the 2% tolerance of the same stop level. Safe-to-ratify for a short is
+        achieved <= intended; an adopted price ABOVE intended is looser (more
+        room before the stop triggers on a rally) and must not be ratified
+        into position.stop_loss."""
+        from src.data_providers.exchange_interface import OrderSide
+
+        reconciler = PositionReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            use_margin=True,
+        )
+        pos = MockPosition(
+            symbol="ETHUSDT",
+            side="short",
+            stop_loss_order_id="sl_old_loose",
+            stop_loss=2200.0,
+            quantity=1.0,
+            current_size=0.5,
+            original_size=1.0,
+            db_position_id=82,
+        )
+        mock_exchange.get_margin_borrowed = MagicMock(return_value=1.0)
+        mock_exchange.cancel_order.return_value = True
+
+        # Untracked resting stop at 2220 -- within the 2% tolerance of 2200,
+        # but HIGHER, i.e. looser/worse for a short.
+        adopted_order = MockExchangeOrder(order_id="untracked_resize_sl", status="NEW")
+        adopted_order.side = OrderSide.BUY
+        adopted_order.stop_price = 2220.0
+        mock_exchange.get_open_orders_checked.return_value = [adopted_order]
+
+        reconciler._resize_stop_loss_after_partial_exit(pos)
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        assert pos.stop_loss_order_id == "untracked_resize_sl"
+        assert pos.last_placed_stop_price == 2220.0
+        assert pos.stop_loss == 2200.0
+        for db_call in mock_db.update_position.call_args_list:
+
+            assert "stop_loss" not in db_call.kwargs
+
     # --- startup pending-entry recovery: _reconcile_filled_entry ---
 
     def test_recovered_entry_skips_stop_and_sell_when_holding_gone(
@@ -7224,6 +7400,56 @@ class TestStopLossReplacementHoldingGuard:
         mock_db.update_position.assert_any_call(
             position_id=102, stop_loss_order_id="untracked_recovery_sl", stop_loss=47800.0
         )
+
+    def test_recovered_entry_does_not_ratify_a_looser_adopted_price(
+        self, reconciler, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """#1211: the adopt tolerance is symmetric, so an adopted resting order
+        can land FURTHER from intent than expected, not just closer.
+        last_placed_stop_price must still reflect exchange reality
+        unconditionally, but position.stop_loss -- the engine's own software
+        exit trigger -- must NOT be loosened to a worse achieved price; it
+        stays at the safer intended default, and the DB persist must not
+        carry the looser price either."""
+        from src.data_providers.exchange_interface import OrderSide
+
+        order_data = {
+            "client_order_id": "atb_BTCUSDT_long_5",
+            "exchange_order_id": "ex_recover_5",
+            "entry_balance": 1000.0,
+        }
+        exchange_order = MockExchangeOrder(
+            order_id="ex_recover_5", average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.001)
+        mock_db.log_position.return_value = 103
+
+        # Intended default stop = 50000 * (1 - DEFAULT_STOP_LOSS_PCT=0.05) = 47500.
+        # An untracked resting stop is at 47200 -- within the 2% adopt
+        # tolerance, but LOWER, i.e. looser/worse for a long.
+        adopted_order = MockExchangeOrder(order_id="untracked_recovery_sl_loose", status="NEW")
+        adopted_order.side = OrderSide.SELL
+        adopted_order.stop_price = 47200.0
+        mock_exchange.get_open_orders_checked.return_value = [adopted_order]
+
+        reconciler._reconcile_filled_entry(
+            order_data, exchange_order, "BTCUSDT", "long", 50000.0, 0.001
+        )
+
+        position = mock_position_tracker.track_recovered_position.call_args[0][0]
+        assert position.stop_loss_order_id == "untracked_recovery_sl_loose"
+        assert position.last_placed_stop_price == 47200.0
+        assert position.stop_loss == 47500.0
+        # The SL-placement persist call (distinct from the earlier default-stop
+        # persist at position creation, which legitimately writes 47500.0) must
+        # carry only stop_loss_order_id here -- never the looser 47200.0.
+        sl_placement_calls = [
+            c
+            for c in mock_db.update_position.call_args_list
+            if c.kwargs.get("stop_loss_order_id") == "untracked_recovery_sl_loose"
+        ]
+        assert len(sl_placement_calls) == 1
+        assert "stop_loss" not in sl_placement_calls[0].kwargs
 
     def test_recovered_entry_gone_but_db_close_fails_retains_position(
         self, reconciler, mock_exchange, mock_position_tracker, mock_db
