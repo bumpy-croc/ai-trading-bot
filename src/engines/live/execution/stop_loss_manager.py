@@ -599,11 +599,13 @@ class LiveStopLossManager:
 
         from src.engines.live.reconciliation import (
             StopPlacementDecision,
+            _achieved_price_is_safe_to_ratify,
             place_or_adopt_stop_loss,
             write_unprotected_audit,
         )
 
-        sl_side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
+        side_is_long = position.side == PositionSide.LONG
+        sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
 
         # The adopted order (if any) is whatever price is actually resting on
         # the exchange, which the guard only guarantees is within
@@ -650,9 +652,23 @@ class LiveStopLossManager:
             if position.order_id is not None:
                 state.live_position_tracker.set_stop_loss_order_id(position.order_id, new_order_id)
                 if achieved_price != new_stop_price:
-                    state.live_position_tracker.set_stop_loss_price(
-                        position.order_id, float(achieved_price)
-                    )
+                    if _achieved_price_is_safe_to_ratify(
+                        side_is_long, achieved_price, new_stop_price
+                    ):
+                        state.live_position_tracker.set_stop_loss_price(
+                            position.order_id, float(achieved_price)
+                        )
+                    else:
+                        logger.critical(
+                            "Adopted trailing-stop move for %s achieved $%.2f, looser "
+                            "than the ratcheted $%.2f -- NOT ratifying into "
+                            "position.stop_loss (would weaken the engine's own exit "
+                            "trigger below where the ratchet had already advanced it); "
+                            "leaving the divergence for the next reconciliation pass.",
+                            position.symbol,
+                            achieved_price,
+                            new_stop_price,
+                        )
                 # Unconditional (unlike set_stop_loss_price above): this is the
                 # min-trailing-stop-move floor's baseline, and it must always
                 # reflect where the exchange order actually landed, even when
