@@ -419,7 +419,13 @@ class _AchievedStopPriceCapture:
     within ``_ADOPT_PRICE_TOLERANCE_FRACTION`` of the price it was asked for.
     Using the intended price as the post-placement ``last_placed_stop_price``
     baseline would leave the min-trailing-stop-move floor (#1179) with no
-    reliable anchor to the exchange's actual resting order (#1198).
+    reliable anchor to the exchange's actual resting order (#1198), and using
+    it as the reconciler's own drift-check baseline would silently ratify the
+    gap: the drift check reuses this same tolerance, so a wrong baseline is
+    never flagged as diverged on the next pass (#1187). Mirrors
+    ``stop_loss_manager.py``'s ``move()``/``place_protection()``/
+    ``reprotect()`` closures of the same name, extracted here because the
+    reconciler has several call sites that need it.
 
     Call the instance as ``on_adopt``; it defaults to (and, for a fresh
     PROCEED placement where ``on_adopt`` never fires, stays) ``intended_price``.
@@ -433,6 +439,25 @@ class _AchievedStopPriceCapture:
         price = getattr(decision.existing_order, "stop_price", None)
         if price is not None:
             self.price = price
+
+
+def _achieved_price_is_safe_to_ratify(
+    side_is_long: bool, achieved_price: float, intended_price: float
+) -> bool:
+    """True if an ADOPTed stop price is safe to ratify into ``position.stop_loss``.
+
+    ``place_or_adopt_stop_loss``'s adopt tolerance is symmetric, so the
+    achieved price can land up to ``_ADOPT_PRICE_TOLERANCE_FRACTION`` FURTHER
+    from intent than expected, not just closer. ``position.stop_loss`` is the
+    engine's own software exit trigger, independent of the resting exchange
+    order -- ratifying a looser achieved price into it would tolerate extra
+    notional risk before that trigger fires. Only a tighter-or-equal price is
+    safe to ratify; a looser one is left as an unresolved divergence for the
+    next reconciliation pass instead (#1199).
+    """
+    if side_is_long:
+        return achieved_price >= intended_price
+    return achieved_price <= intended_price
 
 
 def place_or_adopt_stop_loss(
@@ -2978,6 +3003,7 @@ class PositionReconciler:
                 position.stop_loss_order_id = None
                 return
 
+            achieved = _AchievedStopPriceCapture(tracked_price)
             new_sl_id = place_or_adopt_stop_loss(
                 self.exchange,
                 symbol=symbol,
@@ -2986,6 +3012,7 @@ class PositionReconciler:
                 stop_price=tracked_price,
                 side_effect_type=SideEffectType.AUTO_REPAY,
                 exclude_order_id=sl_order_id,
+                on_adopt=achieved,
             )
         except Exception as e:
             logger.critical(
@@ -2995,12 +3022,38 @@ class PositionReconciler:
                 e,
             )
             new_sl_id = None
+            achieved = _AchievedStopPriceCapture(tracked_price)
 
         position.stop_loss_order_id = new_sl_id
+        update_kwargs: dict[str, Any] = {"stop_loss_order_id": new_sl_id}
+        if new_sl_id:
+            # last_placed_stop_price is the min-trailing-stop-move floor's
+            # baseline (#1179) -- it must reflect where the exchange order
+            # actually landed, not what this correction intended (#1187).
+            position.last_placed_stop_price = achieved.price
+            if achieved.price != tracked_price:
+                if _achieved_price_is_safe_to_ratify(side_is_long, achieved.price, tracked_price):
+                    # The adopted order may rest at a price within tolerance of
+                    # but not equal to tracked_price -- correct position.stop_loss
+                    # too so the engine's own exit check never diverges from what
+                    # the exchange will actually trigger at (mirrors move(), #1167).
+                    position.stop_loss = achieved.price
+                    update_kwargs["stop_loss"] = achieved.price
+                else:
+                    logger.critical(
+                        "Adopted stop-loss for %s achieved $%.2f, looser than the "
+                        "intended $%.2f -- NOT ratifying into position.stop_loss "
+                        "(would weaken the engine's own exit trigger); leaving the "
+                        "divergence for the next reconciliation pass.",
+                        symbol,
+                        achieved.price,
+                        tracked_price,
+                    )
+
         db_pos_id = getattr(position, "db_position_id", None)
         if db_pos_id is not None:
             try:
-                self.db_manager.update_position(position_id=db_pos_id, stop_loss_order_id=new_sl_id)
+                self.db_manager.update_position(position_id=db_pos_id, **update_kwargs)
             except Exception as e:
                 logger.warning(
                     "Failed to persist corrected stop-loss order ID for %s: %s", symbol, e
@@ -3011,7 +3064,7 @@ class PositionReconciler:
                 "Corrected diverged stop-loss for %s: new order %s @ %.2f",
                 symbol,
                 new_sl_id,
-                tracked_price,
+                achieved.price,
             )
         else:
             logger.critical(
@@ -4907,6 +4960,8 @@ class PeriodicReconciler:
                                     position.symbol,
                                 )
                                 continue
+                            achieved = _AchievedStopPriceCapture(stop_price)
+                            ratified_stop_loss = False
                             with self._stop_loss_placement_lock(position.symbol):
                                 # Null and (on success) re-set INSIDE the lock:
                                 # move()'s trailing-stop ratchet serialises on
@@ -4922,10 +4977,37 @@ class PeriodicReconciler:
                                     quantity=qty,
                                     stop_price=stop_price,
                                     side_effect_type=SideEffectType.AUTO_REPAY,
+                                    on_adopt=achieved,
                                 )
                                 if new_sl_id:
                                     position.stop_loss_order_id = new_sl_id
-                                    position.last_placed_stop_price = stop_price
+                                    # Baseline for the min-trailing-stop-move
+                                    # floor (#1179) -- must reflect where the
+                                    # exchange order actually landed, not this
+                                    # re-placement's own intent (#1187).
+                                    position.last_placed_stop_price = achieved.price
+                                    if achieved.price != stop_price:
+                                        if _achieved_price_is_safe_to_ratify(
+                                            side_is_long, achieved.price, stop_price
+                                        ):
+                                            # Mirrors move() (#1167): keep the
+                                            # engine's own exit check from trusting
+                                            # a price the exchange isn't actually
+                                            # resting at.
+                                            position.stop_loss = achieved.price
+                                            ratified_stop_loss = True
+                                        else:
+                                            logger.critical(
+                                                "Adopted stop-loss for %s achieved $%.2f, "
+                                                "looser than the intended $%.2f -- NOT "
+                                                "ratifying into position.stop_loss (would "
+                                                "weaken the engine's own exit trigger); "
+                                                "leaving the divergence for the next "
+                                                "reconciliation pass.",
+                                                position.symbol,
+                                                achieved.price,
+                                                stop_price,
+                                            )
                             if new_sl_id:
                                 if self.order_tracker:
                                     self.order_tracker.track_order(new_sl_id, position.symbol)
@@ -4933,21 +5015,34 @@ class PeriodicReconciler:
                                     "Re-placed stop-loss for %s: %s @ %.2f " "(periodic check)",
                                     position.symbol,
                                     new_sl_id,
-                                    stop_price,
+                                    achieved.price,
                                 )
                                 db_pos_id = getattr(position, "db_position_id", None)
                                 if db_pos_id is not None:
                                     try:
-                                        _update_kw: dict[str, Any] = {
-                                            "stop_loss_order_id": new_sl_id,
-                                        }
+                                        _update_kw: dict[str, Any] = {}
                                         _cs = getattr(position, "current_size", None)
                                         if _cs is not None:
                                             _update_kw["current_size"] = _cs
-                                        self.db_manager.update_position(
-                                            position_id=db_pos_id,
-                                            **_update_kw,
-                                        )
+                                        # Re-verify under the lock before persisting
+                                        # stop_loss_order_id/stop_loss: a concurrent
+                                        # move() could have acquired the placement
+                                        # lock the instant it was released above,
+                                        # ratcheted the stop, and persisted its own
+                                        # newer values -- persisting ours
+                                        # unconditionally here would clobber them
+                                        # back to stale ones (#1199 P1).
+                                        with self._stop_loss_placement_lock(position.symbol):
+                                            still_ours = position.stop_loss_order_id == new_sl_id
+                                        if still_ours:
+                                            _update_kw["stop_loss_order_id"] = new_sl_id
+                                            if ratified_stop_loss:
+                                                _update_kw["stop_loss"] = achieved.price
+                                        if _update_kw:
+                                            self.db_manager.update_position(
+                                                position_id=db_pos_id,
+                                                **_update_kw,
+                                            )
                                     except Exception as e:
                                         logger.warning(
                                             "Failed to persist re-placed SL " "order ID for %s: %s",
@@ -5411,6 +5506,7 @@ class PeriodicReconciler:
         with self._stop_loss_placement_lock(symbol):
             position.stop_loss_order_id = None
 
+        ratified_stop_loss = False
         try:
             from src.data_providers.exchange_interface import OrderSide
 
@@ -5433,6 +5529,7 @@ class PeriodicReconciler:
             # Place and (on success) re-set INSIDE the lock too, so a concurrent
             # move() re-reading stop_loss_order_id never observes a state this
             # correction hasn't fully committed.
+            achieved = _AchievedStopPriceCapture(tracked_price)
             with self._stop_loss_placement_lock(symbol):
                 new_sl_id = place_or_adopt_stop_loss(
                     self.exchange,
@@ -5442,10 +5539,34 @@ class PeriodicReconciler:
                     stop_price=tracked_price,
                     side_effect_type=SideEffectType.AUTO_REPAY,
                     exclude_order_id=sl_order_id,
+                    on_adopt=achieved,
                 )
                 if new_sl_id:
                     position.stop_loss_order_id = new_sl_id
-                    position.last_placed_stop_price = tracked_price
+                    # Baseline for the min-trailing-stop-move floor (#1179) --
+                    # must reflect where the exchange order actually landed,
+                    # not this correction's own intent (#1187).
+                    position.last_placed_stop_price = achieved.price
+                    if achieved.price != tracked_price:
+                        if _achieved_price_is_safe_to_ratify(
+                            side_is_long, achieved.price, tracked_price
+                        ):
+                            # Mirrors move() (#1167): keep the engine's own exit
+                            # check from trusting a price the exchange isn't
+                            # actually resting at.
+                            position.stop_loss = achieved.price
+                            ratified_stop_loss = True
+                        else:
+                            logger.critical(
+                                "Adopted stop-loss for %s achieved $%.2f, looser than "
+                                "the intended $%.2f -- NOT ratifying into "
+                                "position.stop_loss (would weaken the engine's own "
+                                "exit trigger); leaving the divergence for the next "
+                                "reconciliation pass.",
+                                symbol,
+                                achieved.price,
+                                tracked_price,
+                            )
         except Exception as e:
             logger.critical(
                 "Exception re-placing diverged stop-loss for %s: %s — position may be "
@@ -5454,11 +5575,24 @@ class PeriodicReconciler:
                 e,
             )
             new_sl_id = None
+            achieved = _AchievedStopPriceCapture(tracked_price)
 
         db_pos_id = getattr(position, "db_position_id", None)
         if db_pos_id is not None:
             try:
-                self.db_manager.update_position(position_id=db_pos_id, stop_loss_order_id=new_sl_id)
+                # Re-verify under the lock before persisting: a concurrent
+                # move() could have acquired the placement lock the instant
+                # this correction released it above, ratcheted the stop, and
+                # persisted its own newer values -- persisting ours
+                # unconditionally here would clobber them back to stale ones
+                # (#1199 P1).
+                with self._stop_loss_placement_lock(symbol):
+                    still_ours = position.stop_loss_order_id == new_sl_id
+                if still_ours:
+                    update_kwargs: dict[str, Any] = {"stop_loss_order_id": new_sl_id}
+                    if ratified_stop_loss:
+                        update_kwargs["stop_loss"] = achieved.price
+                    self.db_manager.update_position(position_id=db_pos_id, **update_kwargs)
             except Exception as e:
                 logger.warning(
                     "Failed to persist corrected stop-loss order ID for %s: %s", symbol, e
@@ -5471,7 +5605,7 @@ class PeriodicReconciler:
                 "Corrected diverged stop-loss for %s: new order %s @ %.2f (periodic check)",
                 symbol,
                 new_sl_id,
-                tracked_price,
+                achieved.price,
             )
         else:
             logger.critical(
@@ -5540,6 +5674,8 @@ class PeriodicReconciler:
             if current is not None and original is not None and original > 0:
                 qty = qty * (current / original)
 
+            achieved = _AchievedStopPriceCapture(stop_price)
+            ratified_stop_loss = False
             with self._stop_loss_placement_lock(position.symbol):
                 new_sl_id = place_or_adopt_stop_loss(
                     self.exchange,
@@ -5548,6 +5684,7 @@ class PeriodicReconciler:
                     quantity=qty,
                     stop_price=stop_price,
                     side_effect_type=SideEffectType.AUTO_REPAY,
+                    on_adopt=achieved,
                 )
                 # Set INSIDE the lock — see the Step-2 re-placement's own
                 # comment: move()'s trailing-stop ratchet serialises on this
@@ -5555,7 +5692,33 @@ class PeriodicReconciler:
                 # it (#1179).
                 if new_sl_id:
                     position.stop_loss_order_id = new_sl_id
-                    position.last_placed_stop_price = stop_price
+                    # Baseline for the min-trailing-stop-move floor (#1179) --
+                    # must reflect where the exchange order actually landed,
+                    # not this placement's own intent (#1187, an untracked
+                    # resting stop can be ADOPTed here too).
+                    position.last_placed_stop_price = achieved.price
+                    if achieved.price != stop_price:
+                        if _achieved_price_is_safe_to_ratify(
+                            side_is_long, achieved.price, stop_price
+                        ):
+                            # Mirrors move() (#1167): keep the engine's own exit
+                            # check from trusting a price the exchange isn't
+                            # actually resting at.
+                            position.stop_loss = achieved.price
+                            ratified_stop_loss = True
+                        else:
+                            logger.critical(
+                                "Adopted stop-loss for %s achieved $%.2f, looser than "
+                                "the intended $%.2f -- NOT ratifying into "
+                                "position.stop_loss (would weaken the engine's own "
+                                "exit trigger); leaving the divergence for the next "
+                                "reconciliation pass.",
+                                position.symbol,
+                                achieved.price,
+                                stop_price,
+                            )
+                    else:
+                        ratified_stop_loss = True
             if new_sl_id:
                 if self.order_tracker:
                     self.order_tracker.track_order(new_sl_id, position.symbol)
@@ -5563,16 +5726,27 @@ class PeriodicReconciler:
                     "Placed missing stop-loss for %s: %s @ %.2f (periodic check)",
                     position.symbol,
                     new_sl_id,
-                    stop_price,
+                    achieved.price,
                 )
                 db_pos_id = getattr(position, "db_position_id", None)
                 if db_pos_id is not None:
                     try:
-                        self.db_manager.update_position(
-                            position_id=db_pos_id,
-                            stop_loss_order_id=new_sl_id,
-                            stop_loss=stop_price,
-                        )
+                        # Re-verify under the lock before persisting: a
+                        # concurrent move() could have acquired the placement
+                        # lock the instant it was released above, ratcheted
+                        # the stop, and persisted its own newer values --
+                        # persisting ours unconditionally here would clobber
+                        # them back to stale ones (#1199 P1).
+                        with self._stop_loss_placement_lock(position.symbol):
+                            still_ours = position.stop_loss_order_id == new_sl_id
+                        if still_ours:
+                            _update_kw: dict[str, Any] = {"stop_loss_order_id": new_sl_id}
+                            if ratified_stop_loss:
+                                _update_kw["stop_loss"] = achieved.price
+                            self.db_manager.update_position(
+                                position_id=db_pos_id,
+                                **_update_kw,
+                            )
                     except Exception as e:
                         logger.warning(
                             "Failed to persist SL order ID for %s: %s",
