@@ -1713,14 +1713,35 @@ class PositionReconciler:
                         # real money-moving action; leave the position tracked
                         # (its state, including position.stop_loss, is untouched)
                         # for the periodic reconciler's next pass to retry (#1160).
-                        logger.warning(
+                        # This deliberately leaves the position genuinely
+                        # unprotected on the exchange in the meantime (no resting
+                        # stop), so it gets the same audit trail + page every
+                        # other unprotected-position path in this module writes
+                        # -- a log line alone is exactly the "detect without
+                        # act" gap #853 closed for the reconciler.
+                        detail = write_unprotected_audit(
+                            self.db_manager,
+                            self.session_id,
+                            position,
+                            "recovery stop-loss unconfirmed — deferred to next reconciler pass",
+                            exchange_reason=refusal_decision.reason,
+                        )
+                        logger.critical(
                             "Recovery SL placement for %s (order_id=%s) could not be "
-                            "confirmed this cycle (%s) — leaving position tracked for "
-                            "the next reconciler pass instead of emergency-closing on "
-                            "an unconfirmed lookup.",
+                            "confirmed this cycle (%s) — leaving position tracked and "
+                            "UNPROTECTED for the next reconciler pass instead of "
+                            "emergency-closing on an unconfirmed lookup.",
                             symbol,
                             order_id,
                             refusal_decision.reason,
+                        )
+                        _emit_event(
+                            self.on_event,
+                            EventType.ALERT,
+                            detail,
+                            severity="critical",
+                            error_code="RECOVERY_SL_UNCONFIRMED",
+                            alert=True,
                         )
                         return
 
