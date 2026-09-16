@@ -997,6 +997,135 @@ class TestPlaceStopLossOrder:
         assert result is None
 
 
+def _exchange_info_for(symbol: str) -> dict:
+    return {
+        "symbols": [
+            {
+                "symbol": symbol,
+                "baseAsset": symbol[:-4],
+                "quoteAsset": "USDT",
+                "status": "TRADING",
+                "filters": [
+                    {"filterType": "LOT_SIZE", "minQty": "0.00001", "stepSize": "0.00001"},
+                    {"filterType": "PRICE_FILTER", "minPrice": "0.01", "tickSize": "0.01"},
+                    {"filterType": "MIN_NOTIONAL", "minNotional": "5"},
+                ],
+            }
+        ]
+    }
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True)
+class TestGetSymbolInfoCache:
+    """#1155: a transient get_exchange_info failure must not make a previously
+    known-good symbol look unknown -- only a symbol that has NEVER been fetched
+    successfully should return falsy on failure.
+    """
+
+    @pytest.mark.fast
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_transient_failure_on_warm_cache_returns_last_known_good(
+        self, mock_config, mock_client_class
+    ):
+        """A symbol fetched successfully once must survive a later transient failure.
+
+        This is the discriminating case for #1155: pre-fix, get_symbol_info
+        returns None/falsy on ANY exception regardless of prior successful
+        fetches, which flows straight into place_stop_loss_order's #1126
+        fail-closed guard and forces an emergency-close on a routine blip.
+        """
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+
+        mock_client.get_exchange_info.return_value = _exchange_info_for("BTCUSDT")
+        provider = BinanceProvider()
+
+        # Warm the cache with a successful fetch.
+        first = provider.get_symbol_info("BTCUSDT")
+        assert first is not None
+        assert first["step_size"] == pytest.approx(0.00001)
+
+        # Simulate a transient rate-limit / upstream 5xx blip.
+        mock_client.get_exchange_info.side_effect = ConnectionError("rate limited")
+
+        result = provider.get_symbol_info("BTCUSDT")
+
+        assert result is not None, (
+            "a warm-cache symbol must fall back to the last known-good filters "
+            "on a transient failure, not fail closed"
+        )
+        assert result["step_size"] == pytest.approx(0.00001)
+        assert result["tick_size"] == pytest.approx(0.01)
+
+    @pytest.mark.fast
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_never_fetched_symbol_fails_closed_on_first_failure(
+        self, mock_config, mock_client_class
+    ):
+        """A symbol with no prior successful fetch still fails closed (#1126 intact)."""
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.get_exchange_info.side_effect = ConnectionError("rate limited")
+
+        provider = BinanceProvider()
+
+        result = provider.get_symbol_info("BTCUSDT")
+
+        assert result is None
+
+    @pytest.mark.fast
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_cache_is_per_symbol(self, mock_config, mock_client_class):
+        """A warm cache entry for one symbol must not mask a never-fetched other symbol."""
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+
+        mock_client.get_exchange_info.return_value = _exchange_info_for("BTCUSDT")
+        provider = BinanceProvider()
+        assert provider.get_symbol_info("BTCUSDT") is not None
+
+        mock_client.get_exchange_info.side_effect = ConnectionError("rate limited")
+
+        assert provider.get_symbol_info("ETHUSDT") is None
+
+    @pytest.mark.fast
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_successful_refetch_updates_cache(self, mock_config, mock_client_class):
+        """A live fetch is always attempted -- the cache reflects the latest filters,
+        not just the first ones ever seen (this is a fallback cache, not a static one).
+        """
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+
+        mock_client.get_exchange_info.return_value = _exchange_info_for("BTCUSDT")
+        provider = BinanceProvider()
+        assert provider.get_symbol_info("BTCUSDT")["step_size"] == pytest.approx(0.00001)
+
+        updated = _exchange_info_for("BTCUSDT")
+        updated["symbols"][0]["filters"][0]["stepSize"] = "0.001"
+        mock_client.get_exchange_info.return_value = updated
+
+        result = provider.get_symbol_info("BTCUSDT")
+        assert result["step_size"] == pytest.approx(0.001)
+
+
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
 @patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True)
 class TestStopLossQuantityStepPrecision:
