@@ -4997,6 +4997,109 @@ class TestEmergencySellVerification:
         assert alerts[0].kwargs["severity"] == "critical"
         assert alerts[0].kwargs["alert"] is True
 
+    def test_emergency_sell_caps_to_free_base_when_commission_eats_base(
+        self, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """#989: the entry BUY's commission can be deducted from the base fill, so
+        the raw fill_qty (0.001) can exceed real holdings. The recovery
+        emergency-close SELL must cap to what's actually held instead of sending
+        the gross fill quantity — an uncapped SELL here risks a -2010 reject that
+        leaves an already-unprotected recovered position open."""
+        reconciler = self._drive_failed_emergency_sell(
+            mock_exchange, mock_db, mock_position_tracker, MagicMock()
+        )
+        # 0.00099 / 0.001 = 0.99 clears HOLDINGS_CAP_MIN_RATIO (0.98) -- capped, not aborted.
+        mock_exchange.get_balance.return_value = MockBalance(free=0.00099)
+        mock_exchange.get_symbol_info.return_value = {
+            "step_size": 0.00001,
+            "min_qty": 0.00001,
+            "min_notional": 1.0,
+        }
+        mock_exchange.place_order.return_value = MagicMock()
+
+        reconciler.resolve_pending_orders()
+
+        mock_exchange.place_order.assert_called_once()
+        sent_qty = mock_exchange.place_order.call_args.kwargs["quantity"]
+        assert sent_qty <= 0.00099
+        assert sent_qty < 0.001
+
+    def test_emergency_sell_holdings_locked_aborts_without_order(
+        self, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """#989: when free base covers far less than the intended close, the
+        recovery emergency-close must refuse to submit a doomed-to-reject SELL
+        (and a partial sell would book a full close while abandoning the rest of
+        the inventory) — it aborts and pages an operator instead."""
+        on_event = MagicMock()
+        reconciler = self._drive_failed_emergency_sell(
+            mock_exchange, mock_db, mock_position_tracker, on_event
+        )
+        mock_exchange.get_balance.return_value = MockBalance(free=0.0001)
+        mock_exchange.get_symbol_info.return_value = {
+            "step_size": 0.00001,
+            "min_qty": 0.00001,
+            "min_notional": 1.0,
+        }
+
+        reconciler.resolve_pending_orders()
+
+        mock_exchange.place_order.assert_not_called()
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
+        alerts = [
+            c
+            for c in on_event.call_args_list
+            if c.kwargs.get("error_code") == "EMERGENCY_SELL_UNCONFIRMED"
+        ]
+        assert alerts, f"expected EMERGENCY_SELL_UNCONFIRMED alert, got {on_event.call_args_list}"
+
+    def test_emergency_sell_short_cover_buy_ignores_holdings_cap(
+        self, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """A short-cover BUY repays the full margin borrow, so it is funded from
+        quote, not the base holdings cap -- the #989 guard applies only to
+        closing SELLs (mirrors LiveExecutionEngine._close_live_order)."""
+        import threading
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        reconciler = PositionReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        mock_position_tracker._positions_lock = threading.Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 58
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 23,
+                "client_order_id": "atb_BTCUSDT_short_4444_ffff",
+                "symbol": "BTCUSDT",
+                "side": "SHORT",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        mock_exchange.place_stop_loss_order.return_value = None  # -> emergency close path
+        # free_base=0.0 would zero a wrongly-capped BUY.
+        mock_exchange.get_balance.return_value = MockBalance(free=0.0)
+        mock_exchange.place_order.return_value = MagicMock()
+
+        reconciler.resolve_pending_orders()
+
+        mock_exchange.place_order.assert_called_once()
+        sent_qty = mock_exchange.place_order.call_args.kwargs["quantity"]
+        assert sent_qty == pytest.approx(0.001)
+
 
 # ---------- Fee Accounting Tests ----------
 
