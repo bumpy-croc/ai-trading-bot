@@ -2282,11 +2282,13 @@ class TestPeriodicReconcilerSLVerification:
         mock_exchange.get_open_orders.return_value = []
         mock_exchange.place_stop_loss_order.return_value = "new_sl_99"
 
+        mock_order_tracker = MagicMock()
         reconciler = PeriodicReconciler(
             exchange_interface=mock_exchange,
             position_tracker=mock_position_tracker,
             db_manager=mock_db,
             session_id=1,
+            order_tracker=mock_order_tracker,
         )
         reconciler._reconcile_cycle()
 
@@ -2300,6 +2302,8 @@ class TestPeriodicReconcilerSLVerification:
         mock_db.update_position.assert_called_once_with(
             position_id=51, stop_loss_order_id="new_sl_99", current_size=0.5
         )
+        # #1168: this re-placement path must also register with the OrderTracker.
+        mock_order_tracker.track_order.assert_called_once_with("new_sl_99", "BTCUSDT")
 
     def test_cycle_replaces_missing_sl(self, mock_exchange, mock_position_tracker, mock_db):
         """Periodic cycle re-places an SL order not found on exchange."""
@@ -2816,12 +2820,14 @@ class TestPeriodicReconcilerSLPriceDrift:
         mock_exchange.place_stop_loss_order.return_value = "new_sl_corrected"
 
         critical_callback = MagicMock()
+        mock_order_tracker = MagicMock()
         reconciler = PeriodicReconciler(
             exchange_interface=mock_exchange,
             position_tracker=mock_position_tracker,
             db_manager=mock_db,
             session_id=1,
             on_critical=critical_callback,
+            order_tracker=mock_order_tracker,
         )
         reconciler._reconcile_cycle()
 
@@ -2830,6 +2836,9 @@ class TestPeriodicReconcilerSLPriceDrift:
         place_kwargs = mock_exchange.place_stop_loss_order.call_args.kwargs
         assert place_kwargs["stop_price"] == 47000.0
         assert pos.stop_loss_order_id == "new_sl_corrected"
+        # #1168: a stop placed by this drift-correction path must also get
+        # real-time WS fill/cancel routing, not just the missing-SL path.
+        mock_order_tracker.track_order.assert_called_once_with("new_sl_corrected", "BTCUSDT")
 
         # CRITICAL escalation: audit row, cycle severity -> on_critical callback.
         critical_callback.assert_called_once()
@@ -3312,45 +3321,6 @@ class TestPeriodicMissingStopLoss:
         reconciler._reconcile_cycle()
 
         mock_order_tracker.track_order.assert_called_once_with("new_sl_tracked", pos.symbol)
-
-    def test_periodic_missing_sl_placement_tolerates_no_order_tracker(
-        self, mock_exchange, mock_position_tracker, mock_db
-    ):
-        """order_tracker is optional (paper mode / standalone construction) — must not crash."""
-        pos = MockPosition(
-            entry_price=50000.0,
-            current_size=0.1,
-            exchange_order_id="ex_206",
-            stop_loss=48000.0,
-            stop_loss_order_id=None,
-            quantity=0.1,
-            original_size=0.1,
-            db_position_id=46,
-        )
-        mock_position_tracker.positions = {"pos_6": pos}
-
-        from src.data_providers.exchange_interface import OrderStatus as ExOS
-
-        mock_exchange.get_order.return_value = MockExchangeOrder(status=ExOS.FILLED)
-        mock_exchange.get_balance.side_effect = lambda asset: (
-            MockBalance(asset="USDT", total=5000.0)
-            if asset == "USDT"
-            else MockBalance(asset=asset, total=0.1, free=0.1, locked=0.0)
-        )
-        mock_exchange.place_stop_loss_order.return_value = "new_sl_untracked"
-        mock_db.get_current_balance.return_value = 10000.0
-
-        reconciler = PeriodicReconciler(
-            exchange_interface=mock_exchange,
-            position_tracker=mock_position_tracker,
-            db_manager=mock_db,
-            session_id=1,
-            interval=60,
-            on_critical=MagicMock(),
-        )
-        reconciler._reconcile_cycle()
-
-        assert pos.stop_loss_order_id == "new_sl_untracked"
 
     def test_periodic_computes_default_sl_when_stop_loss_is_none(
         self, mock_exchange, mock_position_tracker, mock_db

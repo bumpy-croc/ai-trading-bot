@@ -4765,6 +4765,8 @@ class PeriodicReconciler:
                                     position.stop_loss_order_id = new_sl_id
                                     position.last_placed_stop_price = stop_price
                             if new_sl_id:
+                                if self.order_tracker:
+                                    self.order_tracker.track_order(new_sl_id, position.symbol)
                                 logger.info(
                                     "Re-placed stop-loss for %s: %s @ %.2f " "(periodic check)",
                                     position.symbol,
@@ -5250,6 +5252,8 @@ class PeriodicReconciler:
                 )
 
         if new_sl_id:
+            if self.order_tracker:
+                self.order_tracker.track_order(new_sl_id, symbol)
             logger.warning(
                 "Corrected diverged stop-loss for %s: new order %s @ %.2f (periodic check)",
                 symbol,
