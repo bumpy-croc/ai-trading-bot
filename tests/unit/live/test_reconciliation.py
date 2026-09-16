@@ -821,6 +821,34 @@ class TestFindMatchingOrder:
         assert result is not None
         assert result.order_id == "ex_999"
 
+    def test_stop_loss_order_never_matches_an_exit_journal_row(self, reconciler):
+        """A protective stop-loss ("atbsl_") must never be correlated to an
+        entry/exit journal row (#740 follow-up): it shares the same
+        symbol/side/quantity as the exit it protects and can be re-created by
+        a trailing-stop move() minutes before the exit, so without this
+        exclusion it would satisfy every other filter and get incorrectly
+        resolved as the matching exchange order."""
+        from src.data_providers.exchange_interface import OrderSide
+
+        order_data = {
+            "id": 4,
+            "client_order_id": "atbx_BTCUSDT_exit_4242",
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "quantity": 0.001,
+            "order_type": "FULL_EXIT",
+            "created_at": datetime.now(UTC),
+        }
+        stop_loss_order = MockExchangeOrder(
+            order_id="sl_4242",
+            quantity=0.001,
+            side=OrderSide.SELL,
+            client_order_id="atbsl_19d360981ab_3a4b0d5a",
+            create_time=datetime.now(UTC),
+        )
+        result = reconciler._find_matching_order(order_data, [stop_loss_order])
+        assert result is None
+
     def test_entry_order_with_atb_prefix_still_matches(self, reconciler):
         """Entry orders using 'atb_' prefix continue to match."""
         from src.data_providers.exchange_interface import OrderSide
@@ -2571,16 +2599,19 @@ class TestPeriodicReconcilerStopLossIdMutationInsideLock:
         with patch.object(reconciler, "_stop_loss_placement_lock", return_value=_ObservingLock()):
             reconciler._reconcile_cycle()
 
-        # Two lock scopes: the early None-reset (on confirming the order dead)
+        # Three lock scopes: the early None-reset (on confirming the order dead)
         # releases first, then the placement block re-acquires the lock and
-        # releases with the new id set -- both transitions must be visible
-        # AT release, never patched in afterwards.
-        assert observed_at_release == [None, "new_sl_scope"], (
+        # releases with the new id set, then the orphan sweep (#740) acquires
+        # the same per-symbol lock once more at the end of the cycle -- all
+        # three transitions must be visible AT release, never patched in
+        # afterwards.
+        assert observed_at_release == [None, "new_sl_scope", "new_sl_scope"], (
             "stop_loss_order_id must be None at the first lock release (the "
             "dead-order reset) and the NEW id at the second (the placement) "
             "-- a write outside either lock's scope races "
             "LiveStopLossManager.move()'s fresh re-read once it acquires "
-            "this same lock (#1179)"
+            "this same lock (#1179) -- and unchanged at the sweep's own "
+            "release (#740)"
         )
         assert pos.stop_loss_order_id == "new_sl_scope"
 
@@ -2627,7 +2658,9 @@ class TestPeriodicReconcilerStopLossIdMutationInsideLock:
         with patch.object(reconciler, "_stop_loss_placement_lock", return_value=_ObservingLock()):
             reconciler._reconcile_cycle()
 
-        assert observed_at_release == ["new_sl_missing_scope"]
+        # Two releases: the placement itself, then the orphan sweep (#740)
+        # acquiring the same per-symbol lock once more at cycle end.
+        assert observed_at_release == ["new_sl_missing_scope", "new_sl_missing_scope"]
         assert pos.stop_loss_order_id == "new_sl_missing_scope"
 
     def test_missing_lock_registry_logs_a_one_time_warning(
@@ -3701,6 +3734,28 @@ class TestGuardStopPlacementUnit:
         assert result == "sl_new"
         exchange.place_stop_loss_order.assert_called_once()
 
+    def test_place_or_adopt_passes_an_atb_prefixed_client_order_id(self):
+        """#740: every stop-loss placement must carry an ``atb``-prefixed
+        client_order_id -- pre-fix, no call site passed one, so Binance
+        auto-generated ids for every resting stop-loss and the orphan sweep
+        (which only matches the ``atb`` prefix) could never catch one."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.return_value = "sl_new"
+        place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+        )
+        kwargs = exchange.place_stop_loss_order.call_args.kwargs
+        assert "client_order_id" in kwargs
+        assert kwargs["client_order_id"].startswith("atb")
+
     def test_refuses_to_adopt_a_same_side_resting_stop_at_the_wrong_price(self):
         """A stale same-side orphan resting at an unrelated price is exactly the
         mis-protection #1112 guards against -- side alone is not sufficient
@@ -3852,6 +3907,36 @@ class TestPlaceOrAdoptStopLossRetry:
         assert result == "sl-new"
         assert exchange.place_stop_loss_order.call_count == 2
         mock_sleep.assert_called_once_with(1.0)
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_retry_generates_a_distinct_client_order_id_per_attempt(self, mock_sleep):
+        """#740: each actual exchange call in the retry loop is a genuinely new
+        placement attempt (guard_stop_placement would ADOPT instead of retrying
+        if a prior attempt actually landed) -- reusing one client_order_id across
+        attempts would risk Binance rejecting or silently deduping a retry that
+        legitimately needed to place a new order."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.side_effect = [ConnectionError("boom"), "sl-new"]
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+        )
+
+        assert result == "sl-new"
+        ids = [c.kwargs["client_order_id"] for c in exchange.place_stop_loss_order.call_args_list]
+        assert len(ids) == 2
+        assert len(set(ids)) == 2
+        assert all(i.startswith("atb") for i in ids)
 
     @patch("src.engines.live.reconciliation.time.sleep")
     def test_exhausts_retries_and_returns_none(self, mock_sleep):
@@ -5983,6 +6068,139 @@ class TestOrphanedBorrowSweepSurfacedInCycle:
         ), on_event.call_args_list
 
 
+class TestSweepOrphanedOrdersMethod:
+    """#740: the orphaned-order sweep (``PeriodicReconciler._sweep_orphaned_orders``)
+    must (1) check every CONFIGURED symbol, not only symbols with a currently
+    tracked position, and (2) run even when the position tracker is completely
+    flat -- an orphaned order is DEFINED by having no tracked position, so both
+    pre-fix restrictions made it structurally unable to ever catch the exact case
+    it exists for. It must also never cancel an order that IS still protecting a
+    live position, however that order's client_order_id happens to look."""
+
+    @staticmethod
+    def _reconciler(mock_exchange, mock_position_tracker, mock_db, symbols):
+        return PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            symbols=symbols,
+        )
+
+    def test_checks_every_configured_symbol_not_just_ones_with_a_position(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """BTCUSDT carries the only tracked position; ETHUSDT is configured but
+        flat and carries an orphaned atb-prefixed stop-loss. Pre-fix, only
+        symbols with an active position were ever queried, so ETHUSDT's orphan
+        was invisible to the sweep."""
+        mock_position_tracker.positions = {
+            "BTCUSDT:long": MockPosition(
+                symbol="BTCUSDT", exchange_order_id="entry_1", stop_loss_order_id="sl_btc"
+            )
+        }
+
+        def get_open_orders(symbol):
+            if symbol == "ETHUSDT":
+                orphan = MagicMock()
+                orphan.order_id = "orphan_sl_eth"
+                orphan.client_order_id = "atbsl_deadbeef_aaaaaaaa"
+                return [orphan]
+            return []
+
+        mock_exchange.get_open_orders.side_effect = get_open_orders
+        pr = self._reconciler(
+            mock_exchange, mock_position_tracker, mock_db, symbols=["BTCUSDT", "ETHUSDT"]
+        )
+
+        severity = pr._sweep_orphaned_orders()
+
+        assert severity == Severity.HIGH
+        mock_exchange.cancel_order.assert_called_once_with("orphan_sl_eth", "ETHUSDT")
+
+    def test_finds_orphan_when_the_bot_is_completely_flat(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """No tracked position anywhere. Pre-fix this entire check was skipped
+        because ``_reconcile_cycle`` returned before step 3 ever ran."""
+        mock_position_tracker.positions = {}
+        orphan = MagicMock()
+        orphan.order_id = "orphan_sl_1"
+        orphan.client_order_id = "atbsl_19d360981ab_3a4b0d5a"
+        mock_exchange.get_open_orders.return_value = [orphan]
+
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, symbols=["ETHUSDT"])
+
+        severity = pr._sweep_orphaned_orders()
+
+        assert severity == Severity.HIGH
+        mock_exchange.get_open_orders.assert_any_call("ETHUSDT")
+        mock_exchange.cancel_order.assert_called_once_with("orphan_sl_1", "ETHUSDT")
+
+    def test_never_cancels_a_tracked_stop_loss_regardless_of_its_client_id(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """A currently-protecting stop-loss must never be cancelled no matter what
+        its client_order_id looks like. Uses an "atbsl_"-prefixed id so this
+        actually discriminates the id-membership exclusion (:5092) from the
+        prefix filter a few lines below it -- both would otherwise skip a
+        non-"atb"-prefixed order for an unrelated reason, silently passing
+        even if the membership check were deleted."""
+        mock_position_tracker.positions = {
+            "BTCUSDT:long": MockPosition(
+                symbol="BTCUSDT", exchange_order_id="entry_1", stop_loss_order_id="sl_btc_legacy"
+            )
+        }
+        tracked_sl = MagicMock()
+        tracked_sl.order_id = "sl_btc_legacy"
+        tracked_sl.client_order_id = "atbsl_19d360981ab_3a4b0d5a"
+        mock_exchange.get_open_orders.return_value = [tracked_sl]
+
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, symbols=["BTCUSDT"])
+
+        severity = pr._sweep_orphaned_orders()
+
+        assert severity is None
+        mock_exchange.cancel_order.assert_not_called()
+
+    def test_ignores_a_legacy_pre_740_stop_loss_with_no_atb_prefix(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """A stop-loss placed before #740 shipped (Binance-autogenerated id, no
+        'atb' prefix) is skipped by the prefix filter -- it is neither
+        cancelled nor mistaken for an orphan just because it predates this
+        fix."""
+        mock_position_tracker.positions = {}
+        legacy_sl = MagicMock()
+        legacy_sl.order_id = "sl_btc_legacy"
+        legacy_sl.client_order_id = "8x7fa2b91c3d"  # Binance auto-generated, no atb prefix
+        mock_exchange.get_open_orders.return_value = [legacy_sl]
+
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, symbols=["BTCUSDT"])
+
+        severity = pr._sweep_orphaned_orders()
+
+        assert severity is None
+        mock_exchange.cancel_order.assert_not_called()
+
+    def test_reconcile_cycle_runs_the_sweep_even_when_flat(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Full ``_reconcile_cycle`` integration: the flat early-return must not
+        skip the sweep -- this is #740's core symptom, the sweep never ran at
+        all while the bot was flat."""
+        mock_position_tracker.positions = {}
+        orphan = MagicMock()
+        orphan.order_id = "orphan_sl_1"
+        orphan.client_order_id = "atbsl_19d360981ab_3a4b0d5a"
+        mock_exchange.get_open_orders.return_value = [orphan]
+
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, symbols=["ETHUSDT"])
+        pr._reconcile_cycle()
+
+        mock_exchange.cancel_order.assert_called_once_with("orphan_sl_1", "ETHUSDT")
+
+
 # ---------- SL Re-placement Naked-Position Guard (externally-closed positions) ----------
 
 
@@ -6133,6 +6351,40 @@ class TestStopLossReplacementHoldingGuard:
         mock_exchange.place_stop_loss_order.assert_called_once()
         assert pos.stop_loss_order_id == "new_sl_real"
 
+    def test_startup_missing_sl_replacement_adopts_achieved_not_intended_price(
+        self, reconciler, mock_exchange, mock_db
+    ):
+        """#1198: the 'SL order not found' re-placement can itself ADOPT an
+        already-resting order within the 2% adopt tolerance of the tracked stop
+        rather than placing fresh at that exact price. last_placed_stop_price
+        (the min-trailing-stop-move floor's baseline, #1179) and position.stop_loss
+        must both end up as the ACHIEVED/adopted price, not the intended tracked
+        one -- this call site previously set neither field at all."""
+        from src.data_providers.exchange_interface import OrderSide
+
+        pos = MockPosition(stop_loss_order_id="sl_real2", db_position_id=72, quantity=0.1)
+        pos.stop_loss = 45000.0
+        mock_exchange.get_order.return_value = None  # SL order not found on exchange
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.1)
+
+        # An untracked resting stop is already at 45300 -- within the 2% adopt
+        # tolerance of the tracked 45000, but not equal to it.
+        adopted_order = MockExchangeOrder(order_id="untracked_not_found_sl", status="NEW")
+        adopted_order.side = OrderSide.SELL
+        adopted_order.stop_price = 45300.0
+        mock_exchange.get_open_orders_checked.return_value = [adopted_order]
+
+        result = ReconciliationResult(entity_type="position", entity_id=72, status="verified")
+        reconciler._verify_stop_loss(pos, "sl_real2", result)
+
+        mock_exchange.place_stop_loss_order.assert_not_called()  # adopted, not placed fresh
+        assert pos.stop_loss_order_id == "untracked_not_found_sl"
+        assert pos.last_placed_stop_price == 45300.0
+        assert pos.stop_loss == 45300.0
+        mock_db.update_position.assert_any_call(
+            position_id=72, stop_loss_order_id="untracked_not_found_sl", stop_loss=45300.0
+        )
+
     # --- startup: PositionReconciler._verify_stop_loss_price (#1172) ---
 
     def test_startup_verify_stop_loss_price_within_tolerance_no_op(self, reconciler, mock_exchange):
@@ -6205,6 +6457,49 @@ class TestStopLossReplacementHoldingGuard:
         # Step 4 detected the external close and removed the phantom.
         mock_position_tracker.pop_position.assert_called_once_with(pos.order_id)
         assert result.status == "corrected"
+
+    def test_startup_reconcile_position_missing_sl_adopts_achieved_not_intended_price(
+        self, reconciler, mock_exchange, mock_db
+    ):
+        """#1198: Step 3's 'no live SL order at all' placement can itself ADOPT an
+        already-resting order within the 2% adopt tolerance of the tracked stop
+        rather than placing fresh at that exact price. last_placed_stop_price
+        (the min-trailing-stop-move floor's baseline, #1179) and position.stop_loss
+        must both end up as the ACHIEVED/adopted price -- this call site previously
+        set neither field at all."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id=None,
+            stop_loss=45000.0,
+            db_position_id=64,
+            quantity=0.1,
+            exchange_order_id="entry_64",
+        )
+        # Entry confirmed FILLED with matching price/qty → no correction, so Step 3 runs.
+        mock_exchange.get_order.return_value = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.1
+        )
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.1)
+
+        # An untracked resting stop is already at 45400 -- within the 2% adopt
+        # tolerance of the tracked 45000, but not equal to it.
+        adopted_order = MockExchangeOrder(order_id="untracked_step3_sl", status="NEW")
+        adopted_order.side = OrderSide.SELL
+        adopted_order.stop_price = 45400.0
+        mock_exchange.get_open_orders_checked.return_value = [adopted_order]
+
+        result = reconciler.reconcile_position(pos)
+
+        mock_exchange.place_stop_loss_order.assert_not_called()  # adopted, not placed fresh
+        assert pos.stop_loss_order_id == "untracked_step3_sl"
+        assert pos.last_placed_stop_price == 45400.0
+        assert pos.stop_loss == 45400.0
+        assert result.status != "corrected"  # Step 3 itself doesn't mark "corrected"
+        mock_db.update_position.assert_any_call(
+            position_id=64, stop_loss_order_id="untracked_step3_sl", stop_loss=45400.0
+        )
 
     # --- periodic: PeriodicReconciler._reconcile_cycle ---
 
@@ -6479,6 +6774,50 @@ class TestStopLossReplacementHoldingGuard:
 
         mock_exchange.place_stop_loss_order.assert_called_once()
         mock_position_tracker.remove_position.assert_not_called()
+
+    def test_recovered_entry_adopts_achieved_not_intended_stop_price(
+        self, reconciler, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """#1198: the crash-recovery stop-loss placement can itself ADOPT an
+        already-resting order within the 2% adopt tolerance of the intended
+        (conservative default) stop rather than placing fresh at that exact
+        price. last_placed_stop_price (the min-trailing-stop-move floor's
+        baseline, #1179) and position.stop_loss must both end up as the
+        ACHIEVED/adopted price -- this call site previously set neither field
+        at all."""
+        from src.data_providers.exchange_interface import OrderSide
+
+        order_data = {
+            "client_order_id": "atb_BTCUSDT_long_4",
+            "exchange_order_id": "ex_recover_4",
+            "entry_balance": 1000.0,
+        }
+        exchange_order = MockExchangeOrder(
+            order_id="ex_recover_4", average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.001)
+        mock_db.log_position.return_value = 102
+
+        # Intended default stop = 50000 * (1 - DEFAULT_STOP_LOSS_PCT=0.05) = 47500.
+        # An untracked resting stop is already at 47800 -- within the 2% adopt
+        # tolerance, but not equal to it.
+        adopted_order = MockExchangeOrder(order_id="untracked_recovery_sl", status="NEW")
+        adopted_order.side = OrderSide.SELL
+        adopted_order.stop_price = 47800.0
+        mock_exchange.get_open_orders_checked.return_value = [adopted_order]
+
+        reconciler._reconcile_filled_entry(
+            order_data, exchange_order, "BTCUSDT", "long", 50000.0, 0.001
+        )
+
+        mock_exchange.place_stop_loss_order.assert_not_called()  # adopted, not placed fresh
+        position = mock_position_tracker.track_recovered_position.call_args[0][0]
+        assert position.stop_loss_order_id == "untracked_recovery_sl"
+        assert position.last_placed_stop_price == 47800.0
+        assert position.stop_loss == 47800.0
+        mock_db.update_position.assert_any_call(
+            position_id=102, stop_loss_order_id="untracked_recovery_sl", stop_loss=47800.0
+        )
 
     def test_recovered_entry_gone_but_db_close_fails_retains_position(
         self, reconciler, mock_exchange, mock_position_tracker, mock_db

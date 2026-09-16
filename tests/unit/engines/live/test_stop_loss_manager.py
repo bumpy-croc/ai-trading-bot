@@ -9,7 +9,7 @@ engine-state reads, placement retry/registration, and offline-fill detection.
 import threading
 import time
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import pytest
 
@@ -111,7 +111,9 @@ class TestPlaceProtection:
             side=OrderSide.SELL,
             quantity=0.5,
             stop_price=48000.0,
+            client_order_id=ANY,  # #740: atbsl_-prefixed, generated fresh per placement
             side_effect_type=SideEffectType.AUTO_REPAY,
+            just_cancelled=False,
         )
         state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
             "entry-1", "sl-99"
@@ -318,7 +320,9 @@ class TestReprotect:
             side=OrderSide.SELL,
             quantity=0.5,
             stop_price=48000.0,
+            client_order_id=ANY,  # #740: atbsl_-prefixed, generated fresh per placement
             side_effect_type=SideEffectType.AUTO_REPAY,
+            just_cancelled=True,
         )
         state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
             "entry-1", "sl-new"
@@ -438,7 +442,9 @@ class TestMove:
             side=OrderSide.SELL,
             quantity=0.5,
             stop_price=49000.0,
+            client_order_id=ANY,  # #740: atbsl_-prefixed, generated fresh per placement
             side_effect_type=SideEffectType.AUTO_REPAY,
+            just_cancelled=True,
         )
         state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
             "entry-1", "sl-new"
