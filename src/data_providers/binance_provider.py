@@ -34,6 +34,7 @@ from src.config.constants import (
     DEFAULT_WS_RECONNECT_MAX_RETRIES,
     DEFAULT_WS_USER_LIVENESS_PROBE_TIMEOUT,
     DEFAULT_WS_USER_STALENESS_THRESHOLD,
+    EXCHANGE_IP_RATE_LIMIT_BAN_CODE,
     HOLDINGS_CAP_MIN_RATIO,
 )
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
@@ -84,13 +85,16 @@ from src.infrastructure.runtime.geo import get_binance_api_endpoint, is_us_locat
 T = TypeVar("T")
 
 # Rate limit error codes from Binance
-RATE_LIMIT_ERROR_CODES = {-1003, -1015}  # -1003: Too many requests, -1015: Too many orders
+RATE_LIMIT_ERROR_CODES = {
+    EXCHANGE_IP_RATE_LIMIT_BAN_CODE,  # -1003: Too many requests (IP-wide ban)
+    -1015,  # Too many new orders
+}
 
 # Definitive reject codes — exchange explicitly refused the order.
 # BinanceOrderException and BinanceAPIException both carry these.
 # Treating them as ambiguous (return None) creates phantom positions.
 DEFINITIVE_REJECT_CODES = {
-    -1003,  # Too many requests (rate limit) — order not placed
+    EXCHANGE_IP_RATE_LIMIT_BAN_CODE,  # Too many requests (rate limit) — order not placed
     -1015,  # Too many new orders (rate limit) — order not placed
     -1013,  # LOT_SIZE / MIN_NOTIONAL filter failure
     -1021,  # TIMESTAMP out of recv window
@@ -1187,6 +1191,17 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         lookup cannot be confirmed, so a caller deciding whether it is safe to
         place a new stop-loss (#1112) can treat ``None`` as "unknown — do not
         place" rather than silently reading it as "no open orders".
+
+        Re-raises rather than swallowing when the lookup itself fails with an
+        exchange-wide rate-limit ban code (``RATE_LIMIT_ERROR_CODES``): during
+        a real -1003 ban EVERY REST call fails identically, including this
+        lookup, so it is usually the first thing to fail — swallowing that
+        into a bare ``None`` would erase the one signal
+        ``guard_stop_placement`` needs to tell "we're banned" from "a generic
+        transient lookup failure" (#738). The caller (``guard_stop_placement``)
+        already wraps this call in its own try/except and still ends up
+        REFUSE/fail-closed either way — this only makes the REFUSE reason
+        specific instead of generic.
         """
         if not BINANCE_AVAILABLE or not self._client:
             return None
@@ -1209,6 +1224,8 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 return None
             return cast(list[Order], parsed)
         except Exception as e:
+            if _exchange_error_code(e) in RATE_LIMIT_ERROR_CODES:
+                raise
             logger.warning("Open-orders lookup failed for %s: %s", symbol, e)
             return None
 
@@ -1606,6 +1623,13 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get recent trades for {symbol}: {e}")
             return []
 
+    # Vestigial: every BinanceAPIException path inside this method's own try/except
+    # below either raises ValueError (DEFINITIVE_REJECT_CODES, #738) or returns None
+    # -- none re-raises the original exception -- so this decorator's retry-on-
+    # BinanceAPIException wrapper can never actually see one propagate. Left in
+    # place for symmetry with place_stop_loss_order (where it IS load-bearing) and
+    # as a deliberate fail-fast: a rate-limited entry should surface immediately as
+    # a definitive rejection, not silently retry and delay the caller noticing.
     @with_rate_limit_retry(max_retries=3, base_delay=1.0)
     def place_order(
         self,

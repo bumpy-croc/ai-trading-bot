@@ -838,6 +838,25 @@ class LiveEntryCoordinator:
                                             "update failure",
                                             symbol,
                                         )
+                        except ValueError as close_err:
+                            # place_order raises ValueError for a DEFINITIVE_REJECT_CODES
+                            # rejection (e.g. -1003/-1015 rate-limit ban) instead of
+                            # returning None -- at least as dangerous as the ambiguous
+                            # None case above (the position may still be open and
+                            # unprotected), so it must not fall through to a weaker,
+                            # log-only handler (#738).
+                            logger.critical(
+                                "CRITICAL: Emergency close for %s DEFINITIVELY REJECTED "
+                                "after balance update failure — position may remain open "
+                                "on the exchange. Entering close-only mode until restart "
+                                "reconciles. MANUAL INTERVENTION REQUIRED. Error: %s",
+                                symbol,
+                                close_err,
+                            )
+                            state._enter_close_only_mode(
+                                f"emergency close for {symbol} rejected after a "
+                                f"balance-update failure: {close_err}"
+                            )
                         except Exception as close_err:
                             logger.critical(
                                 "CRITICAL: Emergency close FAILED after balance update failure for %s. "
@@ -948,6 +967,24 @@ class LiveEntryCoordinator:
                                     "Emergency close order placed for orphaned position %s",
                                     symbol,
                                 )
+                    except ValueError as close_err:
+                        # place_order raises ValueError for a DEFINITIVE_REJECT_CODES
+                        # rejection (e.g. -1003/-1015 rate-limit ban) instead of
+                        # returning None -- at least as dangerous as the ambiguous
+                        # None case above (the orphaned position may still be open
+                        # and unprotected), so it must not fall through to a weaker,
+                        # log-only handler (#738).
+                        logger.critical(
+                            "CRITICAL: Emergency close for orphaned position %s "
+                            "DEFINITIVELY REJECTED — position may remain open on the "
+                            "exchange. Entering close-only mode until restart "
+                            "reconciles. MANUAL INTERVENTION REQUIRED. Error: %s",
+                            symbol,
+                            close_err,
+                        )
+                        state._enter_close_only_mode(
+                            f"emergency close for orphaned position {symbol} rejected: {close_err}"
+                        )
                     except Exception as close_err:
                         logger.critical(
                             "CRITICAL: Emergency close FAILED for %s. "

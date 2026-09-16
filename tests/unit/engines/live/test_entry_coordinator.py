@@ -300,6 +300,48 @@ def test_tracking_failure_confirmed_emergency_close_refunds_fee():
     assert state.current_balance == pytest.approx(1000.0)  # -1.0 fee then +1.0 refund
 
 
+def test_balance_update_failure_rate_limited_emergency_close_enters_close_only():
+    """Site 1, #738 review follow-up: place_order now raises ValueError for a
+    DEFINITIVE_REJECT_CODES rejection (e.g. -1003/-1015 rate-limit ban)
+    instead of returning None. A rate-limited emergency close is at least as
+    dangerous as an ambiguous one -- the position may remain open and
+    unprotected -- so it must escalate to close-only exactly like the
+    None-return branch, not fall through to the weaker generic-exception
+    handler that only logs."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.trading_session_id = 42
+    state.db_manager.atomic_balance_update.side_effect = RuntimeError("db down")
+    state.exchange_interface.place_order.side_effect = ValueError(
+        "Order rejected by exchange (code=-1003): Too many requests"
+    )
+
+    _call(state)
+
+    state.exchange_interface.place_order.assert_called_once()
+    state._enter_close_only_mode.assert_called_once()
+
+
+def test_tracking_failure_rate_limited_emergency_close_enters_close_only_no_refund():
+    """Site 2, #738 review follow-up: same ValueError-escalation gap as Site 1
+    above, on the orphaned-position emergency-close path."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True  # no trading_session_id → direct balance math
+    state.live_position_tracker.open_position.side_effect = RuntimeError("tracker down")
+    state.exchange_interface.place_order.side_effect = ValueError(
+        "Order rejected by exchange (code=-1003): Too many requests"
+    )
+
+    _call(state)
+
+    state.exchange_interface.place_order.assert_called_once()
+    state._enter_close_only_mode.assert_called_once()
+    # Unconfirmed close → entry fee stays charged (deducted, not refunded).
+    assert state.current_balance == pytest.approx(999.0)
+
+
 # ---------------------------------------------------------------------------
 # #989: emergency-close SELLs must cap to free base holdings (commission haircut)
 # ---------------------------------------------------------------------------

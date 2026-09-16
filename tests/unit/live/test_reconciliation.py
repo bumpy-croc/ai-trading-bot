@@ -4601,6 +4601,48 @@ class TestPlaceOrAdoptStopLossRetry:
         assert callback_calls == []
 
     @patch("src.engines.live.reconciliation.time.sleep")
+    def test_rate_limit_ban_on_guard_lookup_aborts_and_invokes_callback(self, mock_sleep):
+        """#738 review follow-up: during a REAL -1003 ban, the exchange-wide
+        ban usually hits the GUARD's own open-orders lookup FIRST (every REST
+        endpoint fails identically) -- so place_stop_loss_order is never even
+        called. The existing ban-detection at the placement-exception site
+        (test_rate_limit_ban_aborts_retry_budget_and_invokes_callback above)
+        only fires when place_stop_loss_order itself raises -1003 after an
+        empty ([]) open-orders lookup, which is precisely the ONE lookup
+        outcome that cannot happen while a real ban is active. This is the
+        realistic shape: get_open_orders_checked raises with the ban code, so
+        guard_stop_placement REFUSEs unconfirmed and place_stop_loss_order is
+        never reached at all -- on_rate_limit_ban must still fire from here.
+        """
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        ban_error = Exception("Too many requests")
+        ban_error.code = -1003  # type: ignore[attr-defined]
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.side_effect = ban_error
+
+        callback_calls = []
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+            on_rate_limit_ban=callback_calls.append,
+        )
+
+        assert result is None
+        # The guard's own lookup was banned -- place_stop_loss_order must
+        # never have been called, and the retry budget must not be spent.
+        exchange.place_stop_loss_order.assert_not_called()
+        mock_sleep.assert_not_called()
+        assert callback_calls == [ban_error]
+
+    @patch("src.engines.live.reconciliation.time.sleep")
     def test_retry_log_prefix_is_used_in_the_per_attempt_warning(self, mock_sleep, caplog):
         from src.data_providers.exchange_interface import OrderSide
         from src.engines.live.reconciliation import place_or_adopt_stop_loss

@@ -112,8 +112,13 @@ class LiveStopLossManager:
         failure (which the existing UNPROTECTED-audit-and-alert branch below
         each call site already covers unchanged). Entering close-only mode
         stops the engine from compounding the outage with more failed order
-        attempts while the ban clears; the periodic reconciler restores
-        protection once it does.
+        attempts while the ban clears; the periodic reconciler restores stop-
+        loss PROTECTION once it does. Close-only mode itself does NOT self-
+        clear when the ban lifts -- it requires a manual ``resume_trading()``
+        after review, same as every other close-only trigger. A Binance ban
+        can be as short as ~2 minutes, well inside the window an operator
+        needs to notice and act, which is deliberate: this condition is meant
+        to get human eyes, not silently resolve itself.
         """
 
         def _callback(exc: BaseException) -> None:
