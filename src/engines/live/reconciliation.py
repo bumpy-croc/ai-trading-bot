@@ -386,6 +386,31 @@ def _log_adoption(
     )
 
 
+class _AchievedStopPriceCapture:
+    """``on_adopt`` callback that captures the ACHIEVED resting price, not the
+    intended one, for callers that place or re-place a stop via
+    ``place_or_adopt_stop_loss``.
+
+    ``place_or_adopt_stop_loss`` can ADOPT an already-resting order anywhere
+    within ``_ADOPT_PRICE_TOLERANCE_FRACTION`` of the price it was asked for.
+    Using the intended price as the post-placement ``last_placed_stop_price``
+    baseline would leave the min-trailing-stop-move floor (#1179) with no
+    reliable anchor to the exchange's actual resting order (#1198).
+
+    Call the instance as ``on_adopt``; it defaults to (and, for a fresh
+    PROCEED placement where ``on_adopt`` never fires, stays) ``intended_price``.
+    Read ``.price`` after the call for the value to actually use.
+    """
+
+    def __init__(self, intended_price: float) -> None:
+        self.price = intended_price
+
+    def __call__(self, decision: StopPlacementDecision) -> None:
+        price = getattr(decision.existing_order, "stop_price", None)
+        if price is not None:
+            self.price = price
+
+
 def place_or_adopt_stop_loss(
     exchange: Any,
     *,
@@ -1488,16 +1513,33 @@ class PositionReconciler:
                     from src.data_providers.exchange_interface import OrderSide
 
                     sl_side = OrderSide.SELL if side_lower == "long" else OrderSide.BUY
+                    intended_stop_price = position.stop_loss
+                    achieved = _AchievedStopPriceCapture(intended_stop_price)
                     sl_order_id = place_or_adopt_stop_loss(
                         self.exchange,
                         symbol=symbol,
                         side=sl_side,
                         quantity=fill_qty,
-                        stop_price=position.stop_loss,
+                        stop_price=intended_stop_price,
                         side_effect_type=SideEffectType.AUTO_REPAY,
+                        on_adopt=achieved,
                     )
                     if sl_order_id:
                         position.stop_loss_order_id = sl_order_id
+                        # Baseline for the min-trailing-stop-move floor (#1179)
+                        # -- must reflect where the exchange order actually
+                        # landed, not this placement's own intent (#1198).
+                        position.last_placed_stop_price = achieved.price
+                        update_kwargs: dict[str, Any] = {"stop_loss_order_id": sl_order_id}
+                        if achieved.price != intended_stop_price:
+                            # The adopted order may rest at a price within
+                            # tolerance of but not equal to what this default
+                            # stop intended -- correct position.stop_loss too
+                            # so the engine's own exit check never diverges
+                            # from what the exchange will actually trigger at
+                            # (mirrors move(), #1167/#1187).
+                            position.stop_loss = achieved.price
+                            update_kwargs["stop_loss"] = achieved.price
                         sl_placed = True
                         logger.info(
                             "Placed recovery stop-loss for %s: %s @ %.2f",
@@ -1510,7 +1552,7 @@ class PositionReconciler:
                             try:
                                 self.db_manager.update_position(
                                     position_id=db_id,
-                                    stop_loss_order_id=sl_order_id,
+                                    **update_kwargs,
                                 )
                             except Exception as e:
                                 logger.warning(
@@ -1876,6 +1918,7 @@ class PositionReconciler:
             side = getattr(position, "side", "long")
             side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
             sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
+            achieved = _AchievedStopPriceCapture(stop_loss)
             new_sl_id = place_or_adopt_stop_loss(
                 self.exchange,
                 symbol=symbol,
@@ -1887,14 +1930,28 @@ class PositionReconciler:
                 # open-orders view yet; without this the just-cancelled order
                 # could be re-adopted as if it were a genuine untracked stop.
                 exclude_order_id=sl_order_id,
+                on_adopt=achieved,
             )
             if new_sl_id:
                 position.stop_loss_order_id = new_sl_id  # type: ignore[attr-defined]
+                # Baseline for the min-trailing-stop-move floor (#1179) --
+                # must reflect where the exchange order actually landed, not
+                # this resize's own intent (#1198).
+                position.last_placed_stop_price = achieved.price  # type: ignore[attr-defined]
+                update_kwargs: dict[str, Any] = {"stop_loss_order_id": new_sl_id}
+                if achieved.price != stop_loss:
+                    # Mirrors move() (#1167/#1187): keep the engine's own exit
+                    # check from trusting a price the exchange isn't actually
+                    # resting at. The resize intentionally keeps the same
+                    # stop level as before the partial exit -- only an adopt
+                    # can move it.
+                    position.stop_loss = achieved.price  # type: ignore[attr-defined]
+                    update_kwargs["stop_loss"] = achieved.price
                 logger.info(
                     "Replaced stop-loss for %s after partial exit: %s @ %.2f " "(qty=%.6f)",
                     symbol,
                     new_sl_id,
-                    stop_loss,
+                    achieved.price,
                     qty,
                 )
                 # Persist the new SL order ID to DB
@@ -1902,7 +1959,7 @@ class PositionReconciler:
                     try:
                         self.db_manager.update_position(
                             position_id=db_pos_id,
-                            stop_loss_order_id=new_sl_id,
+                            **update_kwargs,
                         )
                     except Exception as e:
                         logger.warning(
@@ -2162,6 +2219,7 @@ class PositionReconciler:
                     original = getattr(position, "original_size", None)
                     if current is not None and original is not None and float(original) > 0:
                         qty = qty * (float(current) / float(original))
+                    achieved = _AchievedStopPriceCapture(sl_price)
                     new_sl_id = place_or_adopt_stop_loss(
                         self.exchange,
                         symbol=position.symbol,
@@ -2169,14 +2227,25 @@ class PositionReconciler:
                         quantity=qty,
                         stop_price=sl_price,
                         side_effect_type=SideEffectType.AUTO_REPAY,
+                        on_adopt=achieved,
                     )
                     if new_sl_id:
                         position.stop_loss_order_id = new_sl_id
+                        # Baseline for the min-trailing-stop-move floor
+                        # (#1179) -- must reflect where the exchange order
+                        # actually landed, not this placement's own intent
+                        # (#1198).
+                        position.last_placed_stop_price = achieved.price
+                        if achieved.price != sl_price:
+                            # Mirrors move() (#1167/#1187): keep the engine's
+                            # own exit check from trusting a price the
+                            # exchange isn't actually resting at.
+                            position.stop_loss = achieved.price
                         logger.info(
                             "Placed missing stop-loss for %s: %s @ %.2f",
                             position.symbol,
                             new_sl_id,
-                            sl_price,
+                            achieved.price,
                         )
                         # Persist to DB
                         db_pos_id = getattr(position, "db_position_id", None)
@@ -2185,7 +2254,7 @@ class PositionReconciler:
                                 self.db_manager.update_position(
                                     position_id=db_pos_id,
                                     stop_loss_order_id=new_sl_id,
-                                    stop_loss=sl_price,
+                                    stop_loss=achieved.price,
                                 )
                             except Exception as e:
                                 logger.warning(
@@ -2475,21 +2544,39 @@ class PositionReconciler:
                         original = getattr(position, "original_size", None)
                         if current is not None and original is not None and original > 0:
                             qty = qty * (current / original)
+                        intended_stop_price = position.stop_loss
+                        achieved = _AchievedStopPriceCapture(intended_stop_price)
                         new_sl_id = place_or_adopt_stop_loss(
                             self.exchange,
                             symbol=position.symbol,
                             side=sl_side,
                             quantity=qty,
-                            stop_price=position.stop_loss,
+                            stop_price=intended_stop_price,
                             side_effect_type=SideEffectType.AUTO_REPAY,
+                            on_adopt=achieved,
                         )
                         if new_sl_id:
                             position.stop_loss_order_id = new_sl_id
+                            # Baseline for the min-trailing-stop-move floor
+                            # (#1179) -- must reflect where the exchange order
+                            # actually landed, not this re-placement's own
+                            # intent (#1198).
+                            position.last_placed_stop_price = achieved.price
+                            update_kwargs: dict[str, Any] = {
+                                "stop_loss_order_id": new_sl_id,
+                            }
+                            if achieved.price != intended_stop_price:
+                                # Mirrors move() (#1167/#1187): keep the
+                                # engine's own exit check from trusting a
+                                # price the exchange isn't actually resting
+                                # at.
+                                position.stop_loss = achieved.price
+                                update_kwargs["stop_loss"] = achieved.price
                             logger.info(
                                 "Re-placed missing stop-loss for %s: %s @ %.2f",
                                 position.symbol,
                                 new_sl_id,
-                                position.stop_loss,
+                                achieved.price,
                             )
                             # Persist the new SL order ID to DB
                             db_pos_id = getattr(position, "db_position_id", None)
@@ -2497,7 +2584,7 @@ class PositionReconciler:
                                 try:
                                     self.db_manager.update_position(
                                         position_id=db_pos_id,
-                                        stop_loss_order_id=new_sl_id,
+                                        **update_kwargs,
                                     )
                                 except Exception as e:
                                     logger.warning(
@@ -2645,33 +2732,49 @@ class PositionReconciler:
                                 position.symbol,
                             )
                             return
+                        intended_stop_price = position.stop_loss
+                        achieved = _AchievedStopPriceCapture(intended_stop_price)
                         new_sl_id = place_or_adopt_stop_loss(
                             self.exchange,
                             symbol=position.symbol,
                             side=sl_side,
                             quantity=qty,
-                            stop_price=position.stop_loss,
+                            stop_price=intended_stop_price,
                             side_effect_type=SideEffectType.AUTO_REPAY,
+                            on_adopt=achieved,
                         )
                         if new_sl_id:
                             position.stop_loss_order_id = new_sl_id
+                            # Baseline for the min-trailing-stop-move floor
+                            # (#1179) -- must reflect where the exchange order
+                            # actually landed, not this re-placement's own
+                            # intent (#1198).
+                            position.last_placed_stop_price = achieved.price
+                            if achieved.price != intended_stop_price:
+                                # Mirrors move() (#1167/#1187): keep the
+                                # engine's own exit check from trusting a
+                                # price the exchange isn't actually resting
+                                # at.
+                                position.stop_loss = achieved.price
                             logger.info(
                                 "Re-placed stop-loss for %s: %s @ %.2f",
                                 position.symbol,
                                 new_sl_id,
-                                position.stop_loss,
+                                achieved.price,
                             )
                             # Persist new SL order ID and updated current_size
                             # so restart doesn't reload stale values.
                             db_pos_id = getattr(position, "db_position_id", None)
                             if db_pos_id is not None:
                                 try:
-                                    update_kwargs: dict[str, Any] = {
+                                    update_kwargs = {
                                         "stop_loss_order_id": new_sl_id,
                                     }
                                     _cs = getattr(position, "current_size", None)
                                     if _cs is not None:
                                         update_kwargs["current_size"] = _cs
+                                    if achieved.price != intended_stop_price:
+                                        update_kwargs["stop_loss"] = achieved.price
                                     self.db_manager.update_position(
                                         position_id=db_pos_id,
                                         **update_kwargs,
