@@ -76,6 +76,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the ungated path still diverges.
 
 ### Fixed
+- **Startup-recovery stop-loss placement emergency-closed a recovered position on a
+  transient, unconfirmed exchange lookup, not just a genuine conflict** (#1160).
+  `StopPlacementDecision.reason` was free text only, so `_reconcile_filled_entry`'s
+  `sl_placed` check could not tell an `UNCONFIRMED` `guard_stop_placement` refusal (the
+  open-orders lookup returned `None`, raised, or hit the `exclude_order_id`
+  eventual-consistency lag — a network blip that might clear on the very next attempt)
+  from a confirmed `AMBIGUOUS`/`WRONG_SIDE`/`PRICE_MISMATCH` conflict — both collapsed
+  into the same `sl_placed = False` and triggered an emergency market-sell of the
+  recovered position. Added a machine-readable `StopPlacementRefuseReason` enum and a new
+  `reason_code` field on `StopPlacementDecision` (additive — `reason` and `unconfirmed`
+  keep their exact prior meaning), and wired the startup-recovery call site's existing
+  `on_refuse` hook to capture the decision: an `UNCONFIRMED` refusal now logs and leaves
+  the position tracked for the next periodic reconciler pass instead of emergency-closing;
+  `AMBIGUOUS`/`WRONG_SIDE`/`PRICE_MISMATCH` still emergency-close exactly as before.
 - **Order quantity sent to Binance as a raw float serialized as scientific notation
   for values below 1e-4** (#745). python-binance urlencodes order params, and Python's
   default float-to-str conversion renders small floats in scientific notation

@@ -2196,6 +2196,121 @@ class TestFilledOrderPositionReconciliation:
         mock_position_tracker.remove_position.assert_called_once()
         mock_db.close_position.assert_called_once_with(100)
 
+    def test_filled_entry_sl_unconfirmed_refusal_defers_not_emergency_closes(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """#1160: an UNCONFIRMED guard refusal (the open-orders lookup itself
+        couldn't be confirmed -- a transient network blip, not a genuine
+        conflict) at the startup-recovery site must defer to the next
+        reconciler pass, NOT emergency-close the recovered position. The
+        exchange might answer fine on the very next attempt; liquidating on a
+        single unconfirmed lookup is itself a real money-moving action."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 200
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 20,
+                "client_order_id": "atb_BTCUSDT_long_1111_cccc",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        # The guard's own lookup could not be confirmed (#1112's fail-closed
+        # get_open_orders_checked returning None) -- not a genuine conflict.
+        mock_exchange.get_open_orders_checked.return_value = None
+        on_event = MagicMock()
+        reconciler.on_event = on_event
+
+        reconciler.resolve_pending_orders()
+
+        # Position stays tracked for the next reconciler pass -- no emergency
+        # sell, no DB close, no removal from the tracker.
+        mock_position_tracker.track_recovered_position.assert_called_once()
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
+        mock_exchange.place_order.assert_not_called()
+        # The guard refused before ever reaching the real placement call.
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        # Deferring still leaves the position genuinely unprotected on the
+        # exchange -- must get the same audit trail + page every other
+        # unprotected-position path in this module writes, not just a log
+        # line (#853's "detect without act" gap).
+        unprotected_calls = [
+            c
+            for c in mock_db.log_audit_event.call_args_list
+            if c.kwargs.get("field") == "stop_loss_order_id"
+        ]
+        assert len(unprotected_calls) == 1
+        assert unprotected_calls[0].kwargs["severity"] == Severity.CRITICAL.value
+        on_event.assert_called_once()
+        event_args, event_kwargs = on_event.call_args
+        assert event_args[0] == EventType.ALERT
+        assert event_kwargs["severity"] == "critical"
+        assert event_kwargs["error_code"] == "RECOVERY_SL_UNCONFIRMED"
+        assert event_kwargs["alert"] is True
+
+    def test_filled_entry_sl_ambiguous_refusal_still_emergency_closes(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """#1160 regression guard: a genuinely confirmed refusal (here,
+        AMBIGUOUS -- multiple resting stop-type orders already exist) must
+        STILL emergency-close exactly as before. Only UNCONFIRMED refusals
+        defer; retrying an ambiguous/wrong-side/price-mismatch conflict will
+        not change what's actually resting on the exchange."""
+        from types import SimpleNamespace
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 201
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 21,
+                "client_order_id": "atb_BTCUSDT_long_2222_dddd",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        # Two resting stop-type orders already exist for the symbol -- a
+        # confirmed, genuine conflict (AMBIGUOUS), not an unconfirmed lookup.
+        mock_exchange.get_open_orders_checked.return_value = [
+            SimpleNamespace(order_id="dup_sl_1", stop_price=47500.0),
+            SimpleNamespace(order_id="dup_sl_2", stop_price=47500.0),
+        ]
+
+        reconciler.resolve_pending_orders()
+
+        # Emergency-close still fires: the guard's refusal is confirmed, not
+        # transient, so retrying next cycle would not resolve it.
+        mock_position_tracker.track_recovered_position.assert_called_once()
+        mock_position_tracker.remove_position.assert_called_once()
+        mock_db.close_position.assert_called_once_with(201)
+        mock_exchange.place_order.assert_called_once()
+        # The guard refused before ever reaching the real placement call.
+        mock_exchange.place_stop_loss_order.assert_not_called()
+
 
 # ---------- Asset Holdings Excess Detection Tests ----------
 
@@ -4067,6 +4182,7 @@ class TestGuardStopPlacementUnit:
         exchange.get_open_orders_checked.return_value = []
         decision = guard_stop_placement(exchange, "BTCUSDT", OrderSide.SELL)
         assert decision.check == StopPlacementCheck.PROCEED
+        assert decision.reason_code is None
 
     def test_guard_refuses_when_accessor_missing(self):
         from src.data_providers.exchange_interface import OrderSide
@@ -4168,6 +4284,7 @@ class TestGuardStopPlacementUnit:
         assert decision.existing_order_id == "resting_sl_1"
         assert decision.existing_order is not None
         assert decision.existing_order.stop_price == 48000.0
+        assert decision.reason_code is None
 
     def test_refuses_rather_than_resurrects_a_just_cancelled_stop(self):
         """The cancel-then-replace call sites must exclude the id they just
@@ -4232,6 +4349,83 @@ class TestGuardStopPlacementUnit:
         exchange.get_open_orders_checked.return_value = [ExplodesOnAttributeAccess()]
         decision = guard_stop_placement(exchange, "BTCUSDT", OrderSide.SELL)
         assert decision.check == StopPlacementCheck.REFUSE
+
+    @pytest.mark.parametrize(
+        "case_name",
+        [
+            "no_accessor",
+            "lookup_none",
+            "lookup_raises",
+            "exclude_id_lag",
+            "ambiguous",
+            "wrong_side",
+            "price_mismatch",
+        ],
+    )
+    def test_refuse_reason_code_classification(self, case_name):
+        """#1160 P1: a parametrized guard over all 7 REFUSE shapes, pinning the
+        (check, unconfirmed, reason_code) triple money-path callers key off of
+        (e.g. the startup-recovery site defers only on UNCONFIRMED, still
+        emergency-closing every other shape). A future edit that mis-tags one
+        of these -- e.g. WRONG_SIDE classified as UNCONFIRMED -- would
+        silently stop emergency-closing a genuine conflict with nothing
+        failing; this is the guard against exactly that regression."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import (
+            StopPlacementCheck,
+            StopPlacementRefuseReason,
+            guard_stop_placement,
+        )
+
+        exchange = MagicMock()
+        kwargs: dict = {}
+        expected_unconfirmed = True
+        expected_reason_code = StopPlacementRefuseReason.UNCONFIRMED
+
+        if case_name == "no_accessor":
+
+            class NoAccessor:
+                pass
+
+            exchange = NoAccessor()
+            expected_unconfirmed = False
+            expected_reason_code = StopPlacementRefuseReason.NO_ACCESSOR
+        elif case_name == "lookup_none":
+            exchange.get_open_orders_checked.return_value = None
+        elif case_name == "lookup_raises":
+            exchange.get_open_orders_checked.side_effect = RuntimeError("boom")
+        elif case_name == "exclude_id_lag":
+            exchange.get_open_orders_checked.return_value = [
+                self._resting_stop_order(order_id="just_cancelled", side=OrderSide.SELL)
+            ]
+            kwargs["exclude_order_id"] = "just_cancelled"
+            kwargs["stop_price"] = 48000.0
+        elif case_name == "ambiguous":
+            exchange.get_open_orders_checked.return_value = [
+                self._resting_stop_order(order_id="dup_1", side=OrderSide.SELL),
+                self._resting_stop_order(order_id="dup_2", side=OrderSide.SELL),
+            ]
+            expected_unconfirmed = False
+            expected_reason_code = StopPlacementRefuseReason.AMBIGUOUS
+        elif case_name == "wrong_side":
+            exchange.get_open_orders_checked.return_value = [
+                self._resting_stop_order(order_id="wrong_side_order", side=OrderSide.BUY)
+            ]
+            expected_unconfirmed = False
+            expected_reason_code = StopPlacementRefuseReason.WRONG_SIDE
+        elif case_name == "price_mismatch":
+            exchange.get_open_orders_checked.return_value = [
+                self._resting_stop_order(order_id="stale", side=OrderSide.SELL, stop_price=48000.0)
+            ]
+            kwargs["stop_price"] = 30000.0
+            expected_unconfirmed = False
+            expected_reason_code = StopPlacementRefuseReason.PRICE_MISMATCH
+
+        decision = guard_stop_placement(exchange, "BTCUSDT", OrderSide.SELL, **kwargs)
+
+        assert decision.check == StopPlacementCheck.REFUSE
+        assert decision.unconfirmed is expected_unconfirmed
+        assert decision.reason_code == expected_reason_code
 
 
 class TestPlaceOrAdoptStopLossRetry:
