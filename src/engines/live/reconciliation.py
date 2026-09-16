@@ -3380,7 +3380,6 @@ class PositionReconciler:
             original_size = getattr(position, "original_size", None)
             # allow_scale_in=True: feeds the margin external-close threshold below, not a
             # persisted record — under-sizing would falsely flag a real scale-in as gone
-            # .
             scaled = held_base_quantity(qty, current_size, original_size, allow_scale_in=True)
             position_qty = qty if scaled is None else scaled
 
@@ -3544,8 +3543,7 @@ class PositionReconciler:
                 # Scale by current_size/original_size to account for partial exits.
                 # allow_scale_in=True: this feeds the balance-reconciliation notional
                 # estimate, not a persisted record — under-sizing a real scale-in would
-                # understate deployed capital and misfire the balance-discrepancy alert
-                # .
+                # understate deployed capital and misfire the balance-discrepancy alert.
                 current = getattr(position, "current_size", None)
                 original = getattr(position, "original_size", None)
                 scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
@@ -5677,8 +5675,7 @@ def classify_severity(
 # Closing repays via AUTO_REPAY on the order, but a flat bot fires no close, so an
 # orphaned borrow is never repaid. This sweep repays it — strictly guarded, per
 # BASE ASSET (a borrow is asset-scoped, not tied to one symbol). Default mode is
-# dry-run (detect + log only). See docs/plan and ORPHANED_BORROW_* constants.
-#
+# dry-run (detect + log only). See docs/plan and ORPHANED_BORROW_* constants..
 # Active mode serialises against entry/exit via a shared per-base-asset
 # exchange-mutation lock (BaseAssetLockRegistry), so a repay can never race a
 # just-opened short whose borrow isn't tracked yet (#703).

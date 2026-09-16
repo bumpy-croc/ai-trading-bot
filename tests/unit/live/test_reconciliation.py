@@ -1294,7 +1294,7 @@ class TestBalanceAccountsForPositionNotional:
     def test_estimate_notional_scales_past_original_for_scale_in(
         self, reconciler, mock_position_tracker
     ):
-        """Regression (): a scale-in (current_size > original_size) still
+        """a scale-in (current_size > original_size) still
         contributes its real, scaled-up notional — unchanged from the pre-consolidation
         unguarded scaling (allow_scale_in=True), since this feeds a balance-discrepancy
         estimate, not a persisted record."""
@@ -2373,7 +2373,7 @@ class TestPeriodicReconcilerSLVerification:
     def test_cycle_replaces_partially_filled_cancelled_sl(
         self, mock_exchange, mock_position_tracker, mock_db
     ):
-        """Regression (): the periodic cycle's own partial-SL-fill-then-
+        """the periodic cycle's own partial-SL-fill-then-
         replace path (distinct from PositionReconciler._verify_stop_loss's startup
         equivalent) computes the same held-quantity-minus-fill remaining amount, unchanged
         by the extraction.
@@ -2420,7 +2420,7 @@ class TestPeriodicReconcilerSLVerification:
     def test_cycle_replaces_partially_filled_cancelled_sl_after_scale_in(
         self, mock_exchange, mock_position_tracker, mock_db
     ):
-        """Regression (): allow_scale_in=True preserves the pre-
+        """allow_scale_in=True preserves the pre-
         consolidation unguarded scaling for a scale-in (current_size > original_size) in
         this same periodic partial-fill-then-replace path — held scales PAST 1.0 rather
         than being nulled out.
@@ -3193,7 +3193,7 @@ class TestPartialSLFillQuantityCalculation:
     def test_partial_sl_fill_after_scale_in_correct_qty(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
     ):
-        """Regression (): a scale-in (current_size > original_size) still
+        """a scale-in (current_size > original_size) still
         scales PAST 1.0 for the pre-fill held-quantity and replacement-quantity computations
         (allow_scale_in=True) — unchanged from the pre-consolidation unguarded scaling, since
         this sizes an actual re-placed stop, not a persisted record.
@@ -6475,7 +6475,7 @@ class TestStopLossReplacementHoldingGuard:
         mock_exchange.get_balance.assert_not_called()
 
     def test_helper_scale_in_position_not_falsely_gone(self, mock_exchange):
-        """Regression (): a scale-in (current_size > original_size) still
+        """a scale-in (current_size > original_size) still
         compares against the real, scaled-up held quantity (allow_scale_in=True) — unchanged
         from the pre-consolidation unguarded scaling. Tracked qty 0.1 scaled to 0.15; the
         exchange holds 0.15, so the position is NOT gone (0.15 held is not < 0.075)."""
