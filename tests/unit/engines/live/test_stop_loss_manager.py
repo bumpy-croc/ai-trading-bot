@@ -112,6 +112,7 @@ class TestPlaceProtection:
             quantity=0.5,
             stop_price=48000.0,
             side_effect_type=SideEffectType.AUTO_REPAY,
+            just_cancelled=False,
         )
         state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
             "entry-1", "sl-99"
@@ -319,6 +320,7 @@ class TestReprotect:
             quantity=0.5,
             stop_price=48000.0,
             side_effect_type=SideEffectType.AUTO_REPAY,
+            just_cancelled=True,
         )
         state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
             "entry-1", "sl-new"
@@ -439,6 +441,7 @@ class TestMove:
             quantity=0.5,
             stop_price=49000.0,
             side_effect_type=SideEffectType.AUTO_REPAY,
+            just_cancelled=True,
         )
         state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
             "entry-1", "sl-new"

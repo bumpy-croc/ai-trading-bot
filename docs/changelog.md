@@ -57,6 +57,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the ungated path still diverges.
 
 ### Fixed
+- **A close order confirmed EXPIRED with zero fill reported `success=True`, popping the
+  position from tracking with a simulated PnL while the exchange still held the real
+  inventory** (#744; found by a June 2026 code audit). `LiveExecutionEngine.execute_exit`
+  fetches the close order's status after placement, but only branched on the FILLED/
+  PARTIALLY_FILLED case — any other *confirmed* terminal status (e.g. `EXPIRED` from book
+  exhaustion) fell through the same path as "pending" and returned success with the
+  pre-computed simulated price. Since the resting stop-loss is already cancelled before a
+  live close is submitted (#710's cancel-then-close sequence), this left the position
+  genuinely naked and untracked until a reconciler sweep eventually noticed the divergence.
+  A confirmed non-fill status (order details fetched, status present and not a fill) now
+  returns `success=False` with the exchange-reported filled quantity, so the caller
+  (`LiveExitCoordinator.execute_exit_locked`) keeps the position tracked and its existing
+  `_reprotect_position` backstop re-places the stop-loss instead. `ExitExecutionResult`
+  gains a `filled_quantity` field so a caller can tell a zero-fill expiry apart from a
+  partial-fill-then-expire. The FILLED/PARTIALLY_FILLED paths, and the ambiguous case where
+  the order-detail fetch itself fails (ineligible for a confirmed non-fill verdict — see
+  CODE.md "Exchange `None` Returns"), are unchanged.
+- **`DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL` was dead code, shadowed by `runner.py`'s hardcoded
+  `--snapshot-interval` default** (#1184). The constant claimed 1800s (30 min), but every real
+  entry point (`atb live`, `atb live-health`, prod's Railway `startCommand`) goes through
+  `runner.py`, which hardcodes `default=3600` and never imports the constant — so every actual
+  deployment snapshots hourly, not every 30 minutes. This previously caused a real docs
+  regression (PR #1180, closed unmerged) that "corrected" ops docs from the true "hourly" to
+  the false "30-minute" value, trusting the unreachable constant over the deployed behavior.
+  No behavior change: the constant now reads 3600, matching what has always actually run.
 - **Trailing-stop ratchets never moved the exchange-side stop-loss order** (#1167; found
   root-causing #1165's abort storm). `LiveExitHandler.update_trailing_stops` updated
   `position.stop_loss` in memory and the DB as the trail ratcheted, but the resting exchange
