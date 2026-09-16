@@ -716,6 +716,116 @@ class TestCloseSellHoldingsGuard:
 
 
 # ============================================================================
+# Tests for #737: close quantity sized from the stored fill quantity, not
+# fee-reduced notional/price arithmetic.
+# ============================================================================
+
+
+@pytest.mark.unit
+class TestCloseQuantityFromStoredFill:
+    """A market close must size off ``position.quantity`` (#737), not
+    ``entry_balance * fraction * price_adjustment / price`` — the notional
+    formula is systematically off by the entry-fee dilution versus what is
+    actually held (typically under, occasionally over — see #737 / #710).
+
+    These run the real ``LiveExitHandler.execute_exit`` -> ``execution_engine
+    .execute_exit`` -> ``_close_live_order`` stack (not mocks of either) so
+    the discrimination is proven at the quantity actually submitted to the
+    exchange, exactly where the historical bug lived.
+    """
+
+    def test_typical_case_closes_full_held_quantity_not_fee_diluted_fraction(
+        self, live_exit_handler, live_position_tracker, mock_exchange
+    ):
+        """Every-close case: entry_balance (post entry-fee) is a bit below the
+        raw balance the position was actually sized from, so the notional
+        formula would under-close by that same dilution. The fix must submit
+        the full held quantity regardless.
+        """
+        mock_exchange.get_balance.return_value = Mock(free=5.0)
+
+        position = LivePosition(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.5,
+            original_size=0.5,
+            current_size=0.5,
+            entry_price=100.0,
+            entry_time=datetime.now(UTC),
+            entry_balance=999.5,  # 1000 balance minus a $0.5 entry fee
+            quantity=5.0,  # actual filled base quantity, entry-fee dilution has no bearing on it
+            order_id="entry-737-under",
+        )
+        live_position_tracker.open_position(position)
+
+        # Old (buggy) formula: entry_balance * fraction * price_adjustment / price
+        #   = 999.5 * 0.5 * 1.0 / 100.0 = 4.9975 -- under the true 5.0 held.
+        buggy_quantity = (999.5 * 0.5 * (100.0 / 100.0)) / 100.0
+        assert buggy_quantity < 5.0
+
+        result = live_exit_handler.execute_exit(
+            position=position,
+            exit_reason="signal_exit",
+            current_price=100.0,
+            limit_price=None,
+            current_balance=1000.0,
+        )
+
+        assert result.success is True
+        sent = mock_exchange.place_order.call_args.kwargs["quantity"]
+        assert sent == pytest.approx(5.0)
+        assert sent != pytest.approx(buggy_quantity)
+
+    def test_occasional_case_does_not_over_close_past_held_quantity(
+        self, live_exit_handler, live_position_tracker, mock_exchange
+    ):
+        """Occasional case: entry_balance is unavailable (e.g. a position
+        recovered after a restart, which does not persist it), so the
+        notional formula falls back to the CURRENT balance -- decoupled from
+        what was actually invested at entry. If the account has since grown,
+        that derives a quantity far above what is actually held, which the
+        old code could only rescue via the holdings cap/floor (or abort the
+        close outright if the gap is too large). The fix must never need
+        rescuing: it sizes directly from the held quantity from the start.
+        """
+        mock_exchange.get_balance.return_value = Mock(free=5.0)
+
+        position = LivePosition(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.5,
+            original_size=0.5,
+            current_size=0.5,
+            entry_price=100.0,
+            entry_time=datetime.now(UTC),
+            entry_balance=None,  # lost on recovery -- forces the current-balance fallback
+            quantity=5.0,  # actual held quantity, unaffected by the balance fallback
+            order_id="entry-737-over",
+        )
+        live_position_tracker.open_position(position)
+
+        # Old (buggy) formula falls back to current_balance, decoupled from the
+        # $500 actually invested at entry: 2000 * 0.5 * 1.0 / 100.0 = 10.0 --
+        # double the 5.0 actually held, and far outside the 0.98 holdings-cap
+        # ratio the execution engine uses to decide whether to rescue or abort.
+        buggy_quantity = (2000.0 * 0.5 * (100.0 / 100.0)) / 100.0
+        assert buggy_quantity > 5.0
+
+        result = live_exit_handler.execute_exit(
+            position=position,
+            exit_reason="signal_exit",
+            current_price=100.0,
+            limit_price=None,
+            current_balance=2000.0,
+        )
+
+        assert result.success is True
+        sent = mock_exchange.place_order.call_args.kwargs["quantity"]
+        assert sent == pytest.approx(5.0)
+        assert sent <= 5.0
+
+
+# ============================================================================
 # Tests for LiveExitHandler filled exits
 # ============================================================================
 
