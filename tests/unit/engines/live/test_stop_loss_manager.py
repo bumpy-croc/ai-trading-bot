@@ -16,7 +16,7 @@ import pytest
 from src.data_providers.exchange_interface import OrderSide, SideEffectType
 from src.data_providers.exchange_interface import OrderStatus as ExchangeOrderStatus
 from src.engines.live.execution.stop_loss_manager import LiveStopLossManager
-from src.engines.live.reconciliation import BaseAssetLockRegistry
+from src.engines.live.reconciliation import BaseAssetLockRegistry, StopPlacementRefuseReason
 from src.engines.shared.models import PositionSide
 
 pytestmark = pytest.mark.fast
@@ -138,7 +138,7 @@ class TestPlaceProtection:
         manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
         position = make_position(stop_loss_order_id=None)
 
-        sl_order_id = manager.place_protection(
+        result = manager.place_protection(
             position=position,
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -146,7 +146,8 @@ class TestPlaceProtection:
             stop_price=48000.0,
         )
 
-        assert sl_order_id == "sl-99"
+        assert result.order_id == "sl-99"
+        assert result.refuse_reason_code is None
         state.exchange_interface.place_stop_loss_order.assert_called_once_with(
             symbol="BTCUSDT",
             side=OrderSide.SELL,
@@ -191,7 +192,7 @@ class TestPlaceProtection:
         ]
         manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
 
-        sl_order_id = manager.place_protection(
+        result = manager.place_protection(
             position=make_position(),
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -199,7 +200,8 @@ class TestPlaceProtection:
             stop_price=48000.0,
         )
 
-        assert sl_order_id == "sl-after-retry"
+        assert result.order_id == "sl-after-retry"
+        assert result.refuse_reason_code is None
         assert state.exchange_interface.place_stop_loss_order.call_count == 2
 
     @patch("src.engines.live.reconciliation.time.sleep")
@@ -208,7 +210,7 @@ class TestPlaceProtection:
         state.exchange_interface.place_stop_loss_order.return_value = None
         manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
 
-        sl_order_id = manager.place_protection(
+        result = manager.place_protection(
             position=make_position(),
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -216,7 +218,11 @@ class TestPlaceProtection:
             stop_price=48000.0,
         )
 
-        assert sl_order_id is None
+        assert result.order_id is None
+        # The guard PROCEEDed every attempt -- place_stop_loss_order itself
+        # returning falsy is a different failure class than a guard REFUSE,
+        # so no reason_code is captured (#1218).
+        assert result.refuse_reason_code is None
         assert state.exchange_interface.place_stop_loss_order.call_count == 3
         state.live_position_tracker.set_stop_loss_order_id.assert_not_called()
         state.order_tracker.track_order.assert_not_called()
@@ -259,7 +265,7 @@ class TestPlaceProtectionRestingStopGuard1112:
         manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
         position = make_position(stop_loss_order_id=None)
 
-        sl_order_id = manager.place_protection(
+        result = manager.place_protection(
             position=position,
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -267,7 +273,7 @@ class TestPlaceProtectionRestingStopGuard1112:
             stop_price=48000.0,
         )
 
-        assert sl_order_id == "already_resting"
+        assert result.order_id == "already_resting"
         state.exchange_interface.place_stop_loss_order.assert_not_called()
         state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
             "entry-1", "already_resting"
@@ -287,7 +293,7 @@ class TestPlaceProtectionRestingStopGuard1112:
         ]
         manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
 
-        sl_order_id = manager.place_protection(
+        result = manager.place_protection(
             position=make_position(stop_loss_order_id=None),
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -295,7 +301,10 @@ class TestPlaceProtectionRestingStopGuard1112:
             stop_price=48000.0,
         )
 
-        assert sl_order_id is None
+        assert result.order_id is None
+        # A confirmed conflict (WRONG_SIDE), not an UNCONFIRMED lookup -- the
+        # caller must still emergency-close on this reason_code (#1218).
+        assert result.refuse_reason_code == StopPlacementRefuseReason.WRONG_SIDE
         state.exchange_interface.place_stop_loss_order.assert_not_called()
         state.order_tracker.track_order.assert_not_called()
         # #1185: a fail-closed refusal is an unprotected entry too.
@@ -318,7 +327,7 @@ class TestPlaceProtectionRestingStopGuard1112:
         state.exchange_interface.get_open_orders_checked.return_value = None
         manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
 
-        sl_order_id = manager.place_protection(
+        result = manager.place_protection(
             position=make_position(stop_loss_order_id=None),
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -326,7 +335,11 @@ class TestPlaceProtectionRestingStopGuard1112:
             stop_price=48000.0,
         )
 
-        assert sl_order_id is None
+        assert result.order_id is None
+        # #1218: the terminal decision on the final attempt is UNCONFIRMED --
+        # this is the reason_code entry_coordinator.py branches on to defer
+        # instead of emergency-closing.
+        assert result.refuse_reason_code == StopPlacementRefuseReason.UNCONFIRMED
         state.exchange_interface.place_stop_loss_order.assert_not_called()
         state.db_manager.log_audit_event.assert_called_once()
         audit_call = state.db_manager.log_audit_event.call_args.kwargs

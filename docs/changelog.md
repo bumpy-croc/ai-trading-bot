@@ -12,6 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Entry-path stop-loss placement now threads `reason_code` through and defers on a
+  terminal UNCONFIRMED refusal instead of always emergency-closing** (#1218, follow-up to
+  #1160). `LiveStopLossManager.place_protection()` now returns a `StopLossPlacementResult`
+  (`order_id` + `refuse_reason_code`) instead of a bare `str | None`, capturing the full
+  `StopPlacementDecision` from the guard instead of just its free-text `reason`. When all
+  `DEFAULT_STOP_LOSS_MAX_RETRIES` placement attempts terminate in an `UNCONFIRMED` guard
+  refusal (the exchange open-orders lookup itself couldn't be confirmed — a transient
+  blip, not a genuine conflict), `entry_coordinator.py`'s post-entry flow now leaves the
+  freshly-opened position tracked for the next periodic-reconciler pass instead of
+  emergency-market-selling it, mirroring #1160's startup-recovery fix. This is safe
+  specifically because the position's own `stop_loss` (the strategy's intended stop, set
+  at position creation) is already enforced every cycle by the live loop's in-memory
+  `_check_exit_conditions`, independent of whether an exchange-side stop is resting — so
+  deferral does not leave the position genuinely unprotected against adverse price, only
+  missing the exchange-native stop that would still fire if the process crashed. A
+  confirmed conflict (`AMBIGUOUS`/`WRONG_SIDE`/`PRICE_MISMATCH`/`NO_ACCESSOR`) still
+  emergency-closes exactly as before.
 - **Consolidated the duplicated "held quantity" scaling in `reconciliation.py`** (#1208).
   ~17 independent inline reimplementations of `qty * (current_size / original_size)` —
   used for stop-loss re-placement sizing, external-close/margin-position threshold checks,

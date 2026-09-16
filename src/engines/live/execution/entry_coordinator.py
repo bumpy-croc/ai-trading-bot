@@ -1089,15 +1089,68 @@ class LiveEntryCoordinator:
                         else 0.0
                     )
 
-                sl_order_id = state.stop_loss_manager.place_protection(
+                placement = state.stop_loss_manager.place_protection(
                     position=position,
                     symbol=symbol,
                     side=side,
                     quantity=quantity,
                     stop_price=stop_loss,
                 )
+                sl_order_id = placement.order_id
 
                 if not sl_order_id:
+                    from src.engines.live.reconciliation import (
+                        StopPlacementRefuseReason,
+                    )
+
+                    if placement.refuse_reason_code == StopPlacementRefuseReason.UNCONFIRMED:
+                        # #1218: mirrors #1160's startup-recovery defer. An
+                        # UNCONFIRMED refusal means the guard's own open-orders
+                        # lookup couldn't be confirmed on every one of the
+                        # DEFAULT_STOP_LOSS_MAX_RETRIES attempts -- a transient
+                        # blip, not a genuine conflict -- so it may clear on
+                        # the periodic reconciler's very next pass. Emergency-
+                        # market-selling a position that is seconds old on a
+                        # lookup that might succeed moments later is itself a
+                        # real money-moving action, and repeating it on every
+                        # entry during an exchange-side blip is exactly the
+                        # open-then-emergency-close churn this repo's capital-
+                        # erosion postmortem flagged. Deferring is safe here
+                        # (unlike a bare "leave it and hope"): `position`
+                        # already carries the strategy's own intended
+                        # `stop_loss` from creation above, and the live loop's
+                        # `_check_exit_conditions` enforces that in memory
+                        # every cycle regardless of whether an exchange-side
+                        # stop is resting -- so the position is not actually
+                        # unprotected against adverse price, only missing the
+                        # exchange-native stop that would still fire if this
+                        # process crashed. `place_protection` already wrote
+                        # the UNPROTECTED audit row above.
+                        logger.critical(
+                            "Stop-loss placement for %s could not be confirmed after "
+                            "%s attempts (guard lookup unconfirmed) — leaving the "
+                            "freshly-opened position tracked and UNPROTECTED on the "
+                            "exchange for the next reconciler pass instead of "
+                            "emergency-closing on a transient lookup failure. The "
+                            "position's own stop_loss ($%.4f) still backstops it via "
+                            "the engine's in-memory exit check.",
+                            symbol,
+                            DEFAULT_STOP_LOSS_MAX_RETRIES,
+                            stop_loss,
+                        )
+                        state._record_event(
+                            EventType.ALERT,
+                            f"{symbol} entry stop-loss placement UNCONFIRMED after "
+                            f"retries — position left open, UNPROTECTED on the "
+                            f"exchange, pending the next reconciler pass (the "
+                            f"engine's in-memory stop-loss check remains active).",
+                            severity="critical",
+                            component="execution",
+                            error_code="ENTRY_SL_UNCONFIRMED",
+                            alert=True,
+                        )
+                        return
+
                     logger.critical(
                         "CRITICAL: Failed to place stop-loss after %s attempts for %s - "
                         "closing position on exchange to prevent unprotected exposure",

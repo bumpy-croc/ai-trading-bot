@@ -22,6 +22,8 @@ from src.engines.live.execution.entry_coordinator import (
     LiveEntryCoordinator,
     LiveEntryEngineState,
 )
+from src.engines.live.execution.stop_loss_manager import StopLossPlacementResult
+from src.engines.live.reconciliation import StopPlacementRefuseReason
 from src.engines.shared.models import PositionSide
 from src.strategies.components import SignalDirection
 
@@ -80,7 +82,9 @@ def _make_state(position: MagicMock, result: MagicMock, **overrides) -> MagicMoc
     state.live_position_tracker.position_count = 0
     state.risk_manager.get_max_concurrent_positions.return_value = 1
     state.live_entry_handler.execute_entry.return_value = result
-    state.stop_loss_manager.place_protection.return_value = "sl-order-1"
+    state.stop_loss_manager.place_protection.return_value = StopLossPlacementResult(
+        order_id="sl-order-1"
+    )
     state._strategy_name.return_value = "test_strategy"
 
     for k, v in overrides.items():
@@ -234,15 +238,61 @@ def test_ambiguous_submission_enters_close_only_mode_without_stop_loss():
 
 
 def test_stop_loss_placement_failure_triggers_emergency_exit():
+    """A confirmed conflict (not UNCONFIRMED) still emergency-closes exactly
+    as before #1218 -- only a terminal UNCONFIRMED refusal defers."""
     position = _make_position()
     state = _make_state(position, _make_result(position))
     state.enable_live_trading = True
-    state.stop_loss_manager.place_protection.return_value = None  # placement failed
+    state.stop_loss_manager.place_protection.return_value = StopLossPlacementResult(
+        order_id=None, refuse_reason_code=StopPlacementRefuseReason.WRONG_SIDE
+    )
 
     _call(state)
 
     state._record_event.assert_called_once()
+    assert state._record_event.call_args.kwargs["error_code"] == "EMERGENCY_CLOSE"
     state._execute_exit.assert_called_once()
+
+
+def test_stop_loss_placement_failure_with_no_reason_code_triggers_emergency_exit():
+    """Retries exhausted purely on place_stop_loss_order returning falsy (guard
+    never refused) also has no reason_code -- must still emergency-close, not
+    silently defer just because the field is None."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.stop_loss_manager.place_protection.return_value = StopLossPlacementResult(
+        order_id=None, refuse_reason_code=None
+    )
+
+    _call(state)
+
+    state._record_event.assert_called_once()
+    assert state._record_event.call_args.kwargs["error_code"] == "EMERGENCY_CLOSE"
+    state._execute_exit.assert_called_once()
+
+
+def test_stop_loss_placement_unconfirmed_refusal_defers_instead_of_closing():
+    """#1218: a terminal UNCONFIRMED refusal (the guard's own open-orders
+    lookup couldn't be confirmed after all retries) defers to the next
+    reconciler pass instead of emergency-closing the freshly-opened position --
+    mirroring #1160's startup-recovery site. The position stays tracked and
+    the in-memory stop_loss it was created with is left untouched."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.stop_loss_manager.place_protection.return_value = StopLossPlacementResult(
+        order_id=None, refuse_reason_code=StopPlacementRefuseReason.UNCONFIRMED
+    )
+
+    _call(state)
+
+    state._record_event.assert_called_once()
+    assert state._record_event.call_args.kwargs["error_code"] == "ENTRY_SL_UNCONFIRMED"
+    state._execute_exit.assert_not_called()
+    # The position was already tracked via open_position() earlier in the
+    # flow and must NOT be closed/removed on defer.
+    state.live_position_tracker.open_position.assert_called_once()
 
 
 def test_balance_update_failure_unconfirmed_emergency_close_enters_close_only():
