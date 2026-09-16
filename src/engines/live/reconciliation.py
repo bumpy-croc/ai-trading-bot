@@ -529,6 +529,7 @@ def place_or_adopt_stop_loss(
     retry_log_prefix: str = "Stop-loss placement",
     on_adopt: Callable[[StopPlacementDecision], None] | None = None,
     on_refuse: Callable[[StopPlacementDecision], None] | None = None,
+    on_rate_limit_ban: Callable[[BaseException], None] | None = None,
 ) -> str | None:
     """Place a protective stop, first checking for one already resting (#1112).
 
@@ -586,6 +587,15 @@ def place_or_adopt_stop_loss(
     in its own alert/audit instead of a generic message. Both callbacks are
     fault-isolated: an exception from either is logged and swallowed rather
     than propagated.
+
+    ``on_rate_limit_ban``, if given (retry path only, ``max_attempts`` > 1), is
+    invoked once with the exception when ``place_stop_loss_order`` raises
+    Binance's -1003 (IP-wide rate-limit ban, #738): every exchange call fails
+    identically for the ban's duration, so the retry loop aborts immediately
+    instead of burning the rest of its budget, and this callback is the
+    caller's hook to escalate beyond the usual UNPROTECTED-audit-and-alert
+    (e.g. entering close-only mode). Not invoked on the single-attempt path,
+    which already propagates the exception directly to the caller.
     """
     if max_attempts <= 1:
         decision = guard_stop_placement(
@@ -628,6 +638,7 @@ def place_or_adopt_stop_loss(
         retry_log_prefix=retry_log_prefix,
         on_adopt=on_adopt,
         on_refuse=on_refuse,
+        on_rate_limit_ban=on_rate_limit_ban,
     )
 
 
@@ -761,6 +772,7 @@ def _place_with_retry(
     retry_log_prefix: str,
     on_adopt: Callable[[StopPlacementDecision], None] | None,
     on_refuse: Callable[[StopPlacementDecision], None] | None,
+    on_rate_limit_ban: Callable[[BaseException], None] | None = None,
 ) -> str | None:
     """The exponential-backoff retry loop behind ``place_or_adopt_stop_loss``'s
     ``max_attempts > 1`` path.
@@ -808,6 +820,28 @@ def _place_with_retry(
                 if order_id:
                     return order_id
             except Exception as e:
+                # -1003 is Binance's IP-wide rate-limit ban (RATE_LIMIT_ERROR_CODES
+                # in binance_provider.py): every exchange call fails identically
+                # for its duration, so spending the rest of this budget retrying
+                # is pointless and only delays the caller noticing (#738). Abort
+                # immediately and let on_rate_limit_ban escalate; any other
+                # exception keeps the existing warn-and-retry behavior.
+                if getattr(e, "code", None) == -1003:
+                    logger.critical(
+                        "%s attempt %s/%s for %s hit an exchange-wide rate-limit "
+                        "ban (-1003) — aborting remaining attempts: %s",
+                        retry_log_prefix,
+                        attempt + 1,
+                        max_attempts,
+                        symbol,
+                        e,
+                    )
+                    if on_rate_limit_ban:
+                        try:
+                            on_rate_limit_ban(e)
+                        except Exception:
+                            logger.exception("on_rate_limit_ban callback failed for %s", symbol)
+                    return None
                 logger.warning(
                     "%s attempt %s/%s for %s failed: %s",
                     retry_log_prefix,

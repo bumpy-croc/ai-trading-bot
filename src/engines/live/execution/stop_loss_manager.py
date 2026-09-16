@@ -78,6 +78,11 @@ class StopLossEngineState(Protocol):
     trading_session_id: int | None
     _base_asset_locks: BaseAssetLockRegistry
 
+    # Engine helper the manager escalates to on an exchange-wide rate-limit ban
+    # (-1003, #738); called via this backref so subclass/test overrides on the
+    # engine still apply (mirrors entry_coordinator.py's identical use).
+    def _enter_close_only_mode(self, reason: str | None = None) -> None: ...
+
 
 class LiveStopLossManager:
     """Places, cancels, verifies and re-places server-side stop-loss orders."""
@@ -96,6 +101,28 @@ class LiveStopLossManager:
         """
         self._state = engine_state
         self._send_alert = send_alert
+
+    def _on_rate_limit_ban(self, symbol: str) -> Callable[[BaseException], None]:
+        """Build the ``place_or_adopt_stop_loss(on_rate_limit_ban=...)`` callback.
+
+        Fires when a placement attempt hits Binance's -1003 (exchange-wide
+        rate-limit ban, #738): every order call fails identically for the
+        ban's duration, including the emergency-close a caller might attempt
+        next, so this is categorically different from an ordinary placement
+        failure (which the existing UNPROTECTED-audit-and-alert branch below
+        each call site already covers unchanged). Entering close-only mode
+        stops the engine from compounding the outage with more failed order
+        attempts while the ban clears; the periodic reconciler restores
+        protection once it does.
+        """
+
+        def _callback(exc: BaseException) -> None:
+            self._state._enter_close_only_mode(
+                f"stop-loss placement for {symbol} hit an exchange-wide "
+                f"rate-limit ban (-1003): {exc}"
+            )
+
+        return _callback
 
     def place_protection(
         self,
@@ -156,6 +183,7 @@ class LiveStopLossManager:
             retry_log_prefix="Stop-loss placement",
             on_adopt=_capture_achieved_price,
             on_refuse=_capture_refuse_reason,
+            on_rate_limit_ban=self._on_rate_limit_ban(symbol),
         )
 
         if sl_order_id:
@@ -438,6 +466,7 @@ class LiveStopLossManager:
             retry_log_prefix="Re-protect",
             on_adopt=_capture_achieved_price,
             on_refuse=_capture_refuse_reason,
+            on_rate_limit_ban=self._on_rate_limit_ban(position.symbol),
         )
 
         if sl_order_id:
@@ -645,6 +674,7 @@ class LiveStopLossManager:
             retry_log_prefix="Trailing-stop move",
             on_adopt=_capture_achieved_price,
             on_refuse=_capture_refuse_reason,
+            on_rate_limit_ban=self._on_rate_limit_ban(position.symbol),
             just_cancelled=True,
         )
 

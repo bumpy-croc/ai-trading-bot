@@ -242,6 +242,55 @@ class TestPlaceProtection:
 
         state.db_manager.log_audit_event.assert_not_called()
 
+    def test_rate_limit_ban_enters_close_only_mode(self):
+        """#738: a -1003 exchange-wide rate-limit ban on stop-loss placement
+        must escalate to close-only mode, not just the ordinary UNPROTECTED
+        audit — during the ban, the caller's own emergency-close would hit
+        the identical failure, so the engine must stop opening new positions
+        rather than keep failing loudly at the old retry budget."""
+        state = make_state(_enter_close_only_mode=Mock())
+        ban_error = Exception("Too many requests")
+        ban_error.code = -1003  # type: ignore[attr-defined]
+        state.exchange_interface.place_stop_loss_order.side_effect = ban_error
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        sl_order_id = manager.place_protection(
+            position=make_position(),
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            quantity=0.5,
+            stop_price=48000.0,
+        )
+
+        assert sl_order_id is None
+        # No retry against a live IP-wide ban: one placement attempt only.
+        assert state.exchange_interface.place_stop_loss_order.call_count == 1
+        state._enter_close_only_mode.assert_called_once()
+        reason = state._enter_close_only_mode.call_args.args[0]
+        assert "BTCUSDT" in reason
+        assert "-1003" in reason
+        # The existing UNPROTECTED escalation still runs unchanged alongside
+        # the new close-only mode -- this is additive, not a replacement.
+        state.db_manager.log_audit_event.assert_called_once()
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_non_ban_exception_does_not_enter_close_only_mode(self, mock_sleep):
+        """Only the -1003 ban class escalates to close-only; an ordinary
+        placement failure keeps using just the existing UNPROTECTED audit."""
+        state = make_state(_enter_close_only_mode=Mock())
+        state.exchange_interface.place_stop_loss_order.return_value = None
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        manager.place_protection(
+            position=make_position(),
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            quantity=0.5,
+            stop_price=48000.0,
+        )
+
+        state._enter_close_only_mode.assert_not_called()
+
 
 class TestPlaceProtectionRestingStopGuard1112:
     """#1112: place_protection must consult the resting-stop guard before

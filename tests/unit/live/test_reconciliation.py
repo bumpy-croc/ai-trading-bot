@@ -4534,6 +4534,73 @@ class TestPlaceOrAdoptStopLossRetry:
         assert mock_sleep.call_args_list == [call(1.0), call(2.0)]
 
     @patch("src.engines.live.reconciliation.time.sleep")
+    def test_rate_limit_ban_aborts_retry_budget_and_invokes_callback(self, mock_sleep):
+        """#738: a -1003 exchange-wide rate-limit ban must abort the retry loop
+        immediately (every exchange call fails identically for the ban's
+        duration, so spending the rest of the budget retrying is pointless)
+        and hand the exception to on_rate_limit_ban so the caller can escalate
+        (e.g. close-only mode) instead of the ordinary warn-and-retry path."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        ban_error = Exception("Too many requests")
+        ban_error.code = -1003  # type: ignore[attr-defined]
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.side_effect = ban_error
+
+        callback_calls = []
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+            on_rate_limit_ban=callback_calls.append,
+        )
+
+        assert result is None
+        # No retry: one placement attempt, no backoff sleep, one callback call.
+        assert exchange.place_stop_loss_order.call_count == 1
+        mock_sleep.assert_not_called()
+        assert callback_calls == [ban_error]
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_non_ban_exception_still_uses_normal_retry_budget(self, mock_sleep):
+        """A -1003 ban aborts early, but every other exception (including other
+        rate-limit codes) must keep the existing warn-and-retry behavior --
+        on_rate_limit_ban is never invoked for them."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        other_error = Exception("Too many new orders")
+        other_error.code = -1015  # type: ignore[attr-defined]
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.side_effect = [other_error, "sl-new"]
+
+        callback_calls = []
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+            on_rate_limit_ban=callback_calls.append,
+        )
+
+        assert result == "sl-new"
+        assert exchange.place_stop_loss_order.call_count == 2
+        mock_sleep.assert_called_once_with(1.0)
+        assert callback_calls == []
+
+    @patch("src.engines.live.reconciliation.time.sleep")
     def test_retry_log_prefix_is_used_in_the_per_attempt_warning(self, mock_sleep, caplog):
         from src.data_providers.exchange_interface import OrderSide
         from src.engines.live.reconciliation import place_or_adopt_stop_loss

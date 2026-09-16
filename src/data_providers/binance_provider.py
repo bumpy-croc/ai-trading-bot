@@ -90,6 +90,8 @@ RATE_LIMIT_ERROR_CODES = {-1003, -1015}  # -1003: Too many requests, -1015: Too 
 # BinanceOrderException and BinanceAPIException both carry these.
 # Treating them as ambiguous (return None) creates phantom positions.
 DEFINITIVE_REJECT_CODES = {
+    -1003,  # Too many requests (rate limit) — order not placed
+    -1015,  # Too many new orders (rate limit) — order not placed
     -1013,  # LOT_SIZE / MIN_NOTIONAL filter failure
     -1021,  # TIMESTAMP out of recv window
     -1100,  # Illegal characters in parameter
@@ -2221,6 +2223,42 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 symbol,
                 error_message=str(e),
                 error_code=_exchange_error_code(e),
+                error_type=type(e).__name__,
+                params=error_params,
+            )
+            return None
+        except BinanceAPIException as e:
+            # Rate-limit codes (-1003 IP ban, -1015 too many orders) previously fell
+            # through to the generic handler below and returned None, which made
+            # the @with_rate_limit_retry(ban_safe=True) decorator on this method
+            # dead code: it can only retry/fail-fast on an exception it actually
+            # sees. Re-raising here lets it retry -1015 with backoff and raise
+            # -1003 immediately (see its ban_safe docstring) instead of silently
+            # reporting "stop-loss not placed" with no distinction from any other
+            # failure (#738).
+            error_code = getattr(e, "code", None)
+            if error_code in RATE_LIMIT_ERROR_CODES:
+                logger.warning(
+                    "Rate-limited placing stop-loss for %s (code=%s): %s",
+                    symbol,
+                    error_code,
+                    e,
+                )
+                self._record_order_error(
+                    "place_stop_loss_order",
+                    symbol,
+                    error_message=str(e),
+                    error_code=error_code if isinstance(error_code, int) else None,
+                    error_type=type(e).__name__,
+                    params=error_params,
+                )
+                raise
+            logger.error(f"Binance API error placing stop-loss order: {e}")
+            self._record_order_error(
+                "place_stop_loss_order",
+                symbol,
+                error_message=str(e),
+                error_code=error_code if isinstance(error_code, int) else None,
                 error_type=type(e).__name__,
                 params=error_params,
             )
