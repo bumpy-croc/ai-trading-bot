@@ -2196,6 +2196,102 @@ class TestFilledOrderPositionReconciliation:
         mock_position_tracker.remove_position.assert_called_once()
         mock_db.close_position.assert_called_once_with(100)
 
+    def test_filled_entry_sl_unconfirmed_refusal_defers_not_emergency_closes(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """#1160: an UNCONFIRMED guard refusal (the open-orders lookup itself
+        couldn't be confirmed -- a transient network blip, not a genuine
+        conflict) at the startup-recovery site must defer to the next
+        reconciler pass, NOT emergency-close the recovered position. The
+        exchange might answer fine on the very next attempt; liquidating on a
+        single unconfirmed lookup is itself a real money-moving action."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 200
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 20,
+                "client_order_id": "atb_BTCUSDT_long_1111_cccc",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        # The guard's own lookup could not be confirmed (#1112's fail-closed
+        # get_open_orders_checked returning None) -- not a genuine conflict.
+        mock_exchange.get_open_orders_checked.return_value = None
+
+        reconciler.resolve_pending_orders()
+
+        # Position stays tracked for the next reconciler pass -- no emergency
+        # sell, no DB close, no removal from the tracker.
+        mock_position_tracker.track_recovered_position.assert_called_once()
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
+        mock_exchange.place_order.assert_not_called()
+        # The guard refused before ever reaching the real placement call.
+        mock_exchange.place_stop_loss_order.assert_not_called()
+
+    def test_filled_entry_sl_ambiguous_refusal_still_emergency_closes(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """#1160 regression guard: a genuinely confirmed refusal (here,
+        AMBIGUOUS -- multiple resting stop-type orders already exist) must
+        STILL emergency-close exactly as before. Only UNCONFIRMED refusals
+        defer; retrying an ambiguous/wrong-side/price-mismatch conflict will
+        not change what's actually resting on the exchange."""
+        from types import SimpleNamespace
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 201
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 21,
+                "client_order_id": "atb_BTCUSDT_long_2222_dddd",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        # Two resting stop-type orders already exist for the symbol -- a
+        # confirmed, genuine conflict (AMBIGUOUS), not an unconfirmed lookup.
+        mock_exchange.get_open_orders_checked.return_value = [
+            SimpleNamespace(order_id="dup_sl_1", stop_price=47500.0),
+            SimpleNamespace(order_id="dup_sl_2", stop_price=47500.0),
+        ]
+
+        reconciler.resolve_pending_orders()
+
+        # Emergency-close still fires: the guard's refusal is confirmed, not
+        # transient, so retrying next cycle would not resolve it.
+        mock_position_tracker.track_recovered_position.assert_called_once()
+        mock_position_tracker.remove_position.assert_called_once()
+        mock_db.close_position.assert_called_once_with(201)
+        mock_exchange.place_order.assert_called_once()
+        # The guard refused before ever reaching the real placement call.
+        mock_exchange.place_stop_loss_order.assert_not_called()
+
 
 # ---------- Asset Holdings Excess Detection Tests ----------
 

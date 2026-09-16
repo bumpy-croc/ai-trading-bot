@@ -163,6 +163,41 @@ class StopPlacementCheck(str, Enum):
 _ADOPT_PRICE_TOLERANCE_FRACTION = 0.02
 
 
+class StopPlacementRefuseReason(str, Enum):
+    """Machine-readable sub-classification of a REFUSE decision (#1160).
+
+    ``StopPlacementDecision.reason`` is free text meant for logs, not branching
+    -- a caller that needs to tell "we couldn't confirm" from "we confirmed a
+    real problem" had nothing to key off other than parsing that string. This
+    enum names every REFUSE shape ``_classify_stop_placement``/
+    ``guard_stop_placement`` actually produce today, additive alongside
+    ``reason`` and ``unconfirmed`` (neither changes meaning or is removed).
+
+    - ``UNCONFIRMED``: the open-orders lookup itself couldn't be confirmed --
+      it returned ``None``, raised, or the only resting order is one we just
+      confirmed cancelled and the exchange's view simply hasn't caught up
+      (the ``exclude_order_id`` eventual-consistency lag). All three are "we
+      couldn't tell", not "we found a conflict" -- equivalent to
+      ``unconfirmed=True``, retryable, and safe to treat as transient.
+    - ``NO_ACCESSOR``: the exchange object has no fail-closed open-orders
+      accessor at all. Structural, not transient -- retrying won't help.
+    - ``AMBIGUOUS``: more than one resting stop-type order already exists.
+    - ``WRONG_SIDE``: exactly one resting stop exists but on the wrong side.
+    - ``PRICE_MISMATCH``: exactly one resting stop exists, correct side, but
+      outside ``_ADOPT_PRICE_TOLERANCE_FRACTION`` of the intended price.
+
+    ``NO_ACCESSOR``/``AMBIGUOUS``/``WRONG_SIDE``/``PRICE_MISMATCH`` are all
+    confirmed, genuine conflicts -- retrying without human/reconciler
+    intervention will not change what's actually resting on the exchange.
+    """
+
+    UNCONFIRMED = "unconfirmed"
+    NO_ACCESSOR = "no_accessor"
+    AMBIGUOUS = "ambiguous"
+    WRONG_SIDE = "wrong_side"
+    PRICE_MISMATCH = "price_mismatch"
+
+
 @dataclass(frozen=True)
 class StopPlacementDecision:
     check: StopPlacementCheck
@@ -176,6 +211,12 @@ class StopPlacementDecision:
     # conflict (wrong side, wrong price, multiple resting orders) never will,
     # since retrying won't change what's actually resting (#1186).
     unconfirmed: bool = False
+    # Machine-readable sub-classification of a REFUSE decision (#1160), set
+    # whenever check == REFUSE and left None for PROCEED/ADOPT. Additive:
+    # `reason` (free text) and `unconfirmed` keep their exact prior meaning
+    # for any caller/log already depending on them -- this is a new field
+    # callers may optionally branch on instead of parsing `reason`.
+    reason_code: StopPlacementRefuseReason | None = None
 
 
 def guard_stop_placement(
@@ -232,6 +273,7 @@ def guard_stop_placement(
         return StopPlacementDecision(
             StopPlacementCheck.REFUSE,
             reason="exchange has no fail-closed open-orders accessor",
+            reason_code=StopPlacementRefuseReason.NO_ACCESSOR,
         )
     # The classification below (attribute access, comprehensions, arithmetic) is
     # inside the same try as the lookup itself: this function's whole contract is
@@ -242,7 +284,10 @@ def guard_stop_placement(
         orders = checked(symbol)
         if orders is None:
             return StopPlacementDecision(
-                StopPlacementCheck.REFUSE, reason="lookup unconfirmed", unconfirmed=True
+                StopPlacementCheck.REFUSE,
+                reason="lookup unconfirmed",
+                unconfirmed=True,
+                reason_code=StopPlacementRefuseReason.UNCONFIRMED,
             )
         return _classify_stop_placement(
             orders,
@@ -253,7 +298,10 @@ def guard_stop_placement(
         )
     except Exception as e:
         return StopPlacementDecision(
-            StopPlacementCheck.REFUSE, reason=f"lookup raised: {e}", unconfirmed=True
+            StopPlacementCheck.REFUSE,
+            reason=f"lookup raised: {e}",
+            unconfirmed=True,
+            reason_code=StopPlacementRefuseReason.UNCONFIRMED,
         )
 
 
@@ -284,6 +332,7 @@ def _classify_stop_placement(
                 # view of a cancel we already confirmed simply hasn't caught up
                 # yet, and may well clear on the very next lookup.
                 unconfirmed=True,
+                reason_code=StopPlacementRefuseReason.UNCONFIRMED,
             )
         resting = remaining
 
@@ -296,6 +345,7 @@ def _classify_stop_placement(
                 f"{len(resting)} resting stop orders already exist for {symbol}: "
                 f"{[o.order_id for o in resting]}"
             ),
+            reason_code=StopPlacementRefuseReason.AMBIGUOUS,
         )
     only = resting[0]
     if getattr(only, "side", None) != side:
@@ -305,6 +355,7 @@ def _classify_stop_placement(
                 f"a resting stop {only.order_id} exists for {symbol} but on the "
                 f"wrong side ({only.side} vs expected {side}) — will not adopt or duplicate"
             ),
+            reason_code=StopPlacementRefuseReason.WRONG_SIDE,
         )
     if stop_price is not None and stop_price > 0:
         resting_price = getattr(only, "stop_price", None)
@@ -320,6 +371,7 @@ def _classify_stop_placement(
                     f"{_ADOPT_PRICE_TOLERANCE_FRACTION:.0%} tolerance, will not adopt a "
                     "stale/unrelated order or duplicate"
                 ),
+                reason_code=StopPlacementRefuseReason.PRICE_MISMATCH,
             )
     return StopPlacementDecision(
         StopPlacementCheck.ADOPT, existing_order_id=only.order_id, existing_order=only
@@ -1562,6 +1614,18 @@ class PositionReconciler:
             side_lower = side.lower()
             sl_placed = False
             if position.stop_loss and hasattr(self.exchange, "place_stop_loss_order"):
+                # Populated only when the guard itself REFUSEs (never on a genuine
+                # placement exception) -- lets the not-sl_placed branch below tell
+                # an UNCONFIRMED lookup (transient, defer to the reconciler) from a
+                # confirmed conflict (AMBIGUOUS/WRONG_SIDE/PRICE_MISMATCH, still
+                # emergency-close) instead of collapsing every refusal into the
+                # same escalation (#1160).
+                refusal_decision: StopPlacementDecision | None = None
+
+                def _capture_refusal(decision: StopPlacementDecision) -> None:
+                    nonlocal refusal_decision
+                    refusal_decision = decision
+
                 try:
                     from src.data_providers.exchange_interface import OrderSide
 
@@ -1576,6 +1640,7 @@ class PositionReconciler:
                         stop_price=intended_stop_price,
                         side_effect_type=SideEffectType.AUTO_REPAY,
                         on_adopt=achieved,
+                        on_refuse=_capture_refusal,
                     )
                     if sl_order_id:
                         position.stop_loss_order_id = sl_order_id
@@ -1636,6 +1701,29 @@ class PositionReconciler:
                     )
 
                 if not sl_placed:
+                    if (
+                        refusal_decision is not None
+                        and refusal_decision.reason_code == StopPlacementRefuseReason.UNCONFIRMED
+                    ):
+                        # The guard couldn't confirm the exchange's open-orders
+                        # state this cycle (network blip, transient API error, or
+                        # an eventual-consistency lag) -- not a genuine conflict.
+                        # Emergency-selling the recovered position on a lookup
+                        # that might succeed on the very next attempt is itself a
+                        # real money-moving action; leave the position tracked
+                        # (its state, including position.stop_loss, is untouched)
+                        # for the periodic reconciler's next pass to retry (#1160).
+                        logger.warning(
+                            "Recovery SL placement for %s (order_id=%s) could not be "
+                            "confirmed this cycle (%s) — leaving position tracked for "
+                            "the next reconciler pass instead of emergency-closing on "
+                            "an unconfirmed lookup.",
+                            symbol,
+                            order_id,
+                            refusal_decision.reason,
+                        )
+                        return
+
                     # Emergency-close: sell on exchange, remove from tracker,
                     # and close in DB. The position can be re-entered on the
                     # next signal.
