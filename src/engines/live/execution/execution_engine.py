@@ -837,6 +837,7 @@ class LiveExecutionEngine:
         apply_slippage: bool = True,
         position_db_id: int | None = None,
         stop_just_cancelled: bool = False,
+        close_quantity: float | None = None,
     ) -> ExitExecutionResult:
         """Execute an exit order with fees and slippage.
 
@@ -845,7 +846,8 @@ class LiveExecutionEngine:
             side: Position side (LONG or SHORT).
             order_id: Order ID of position to close.
             base_price: Exit price before slippage.
-            position_notional: Notional value of position.
+            position_notional: Notional value of position, used for the fee/
+                slippage cost model (unaffected by ``close_quantity`` below).
             liquidity: Liquidity classification for fee and slippage handling.
             apply_slippage: When False, slippage is suppressed.
             position_db_id: Database row ID for the position being closed.
@@ -855,6 +857,15 @@ class LiveExecutionEngine:
                 free-balance read used to size the close (#1165) then races
                 Binance's eventually-consistent margin wallet, so pass this
                 through to retry that read before trusting it.
+            close_quantity: Actual base-asset quantity to submit to the
+                exchange (#737), sized by the caller off the position's stored
+                fill quantity rather than ``position_notional / base_price``.
+                That notional-derived quantity is systematically off by the
+                entry-fee fraction versus what is actually held (typically
+                under, once in a while over — see #737), so it is used only as
+                a fallback when the caller cannot supply a trustworthy
+                quantity (missing/legacy ``position.quantity``, or a scale-in
+                that grew the position past its original size).
 
         Returns:
             ExitExecutionResult with execution details.
@@ -896,8 +907,18 @@ class LiveExecutionEngine:
 
             # Execute real order if enabled
             if self.enable_live_trading:
-                # Already validated base_price > 0 above
-                quantity = position_notional / base_price
+                # #737: prefer the caller's stored-quantity-derived sizing over the
+                # notional/price fallback, which is systematically off by the entry-fee
+                # fraction versus what is actually held (see close_quantity docstring).
+                if (
+                    close_quantity is not None
+                    and close_quantity > 0
+                    and math.isfinite(close_quantity)
+                ):
+                    quantity = close_quantity
+                else:
+                    # Already validated base_price > 0 above
+                    quantity = position_notional / base_price
                 close_order_id = self._close_live_order(
                     symbol,
                     side,
