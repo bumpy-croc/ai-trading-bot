@@ -565,9 +565,11 @@ class TestPlaceStopLossOrder:
         assert result == "sl1"
         provider.get_balance.assert_called_once_with("ETH")
         # min(0.005, 0.004995)=0.004995 -> floor(/0.0001)*0.0001 = 0.0049 (never > holdings)
-        assert mock_client.create_order.call_args.kwargs["quantity"] == pytest.approx(
-            0.0049, abs=1e-9
-        )
+        # Sent as a fixed-point string (not a raw float) so urlencode() never renders
+        # it in scientific notation (#745).
+        sent_qty = mock_client.create_order.call_args.kwargs["quantity"]
+        assert isinstance(sent_qty, str)
+        assert float(sent_qty) == pytest.approx(0.0049, abs=1e-9)
 
     @patch("src.data_providers.binance_provider.Client")
     @patch("src.data_providers.binance_provider.get_config")
@@ -704,9 +706,9 @@ class TestPlaceStopLossOrder:
         )
 
         assert result == "sl4"
-        assert mock_client.create_order.call_args.kwargs["quantity"] == pytest.approx(
-            0.005, abs=1e-9
-        )
+        sent_qty = mock_client.create_order.call_args.kwargs["quantity"]
+        assert isinstance(sent_qty, str)
+        assert float(sent_qty) == pytest.approx(0.005, abs=1e-9)
 
     @patch("src.data_providers.binance_provider.Client")
     @patch("src.data_providers.binance_provider.get_config")
@@ -731,9 +733,9 @@ class TestPlaceStopLossOrder:
         )
 
         assert result == "sl5"
-        assert mock_client.create_order.call_args.kwargs["quantity"] == pytest.approx(
-            0.005, abs=1e-9
-        )
+        sent_qty = mock_client.create_order.call_args.kwargs["quantity"]
+        assert isinstance(sent_qty, str)
+        assert float(sent_qty) == pytest.approx(0.005, abs=1e-9)
 
     @patch("src.data_providers.binance_provider.Client")
     @patch("src.data_providers.binance_provider.get_config")
@@ -757,9 +759,9 @@ class TestPlaceStopLossOrder:
 
         assert result == "sl6"
         # 0.29 / 0.01 = 28.9999996 in float; a naive floor -> 0.28. Epsilon keeps 0.29.
-        assert mock_client.create_order.call_args.kwargs["quantity"] == pytest.approx(
-            0.29, abs=1e-9
-        )
+        sent_qty = mock_client.create_order.call_args.kwargs["quantity"]
+        assert isinstance(sent_qty, str)
+        assert float(sent_qty) == pytest.approx(0.29, abs=1e-9)
 
     @patch("src.data_providers.binance_provider.Client")
     @patch("src.data_providers.binance_provider.get_config")
@@ -793,8 +795,8 @@ class TestPlaceStopLossOrder:
 
         assert result == "sl7"
         sent_qty = mock_client.create_order.call_args.kwargs["quantity"]
-        assert isinstance(sent_qty, float)
-        assert sent_qty == pytest.approx(0.005, abs=1e-9)
+        assert isinstance(sent_qty, str)
+        assert float(sent_qty) == pytest.approx(0.005, abs=1e-9)
 
     @patch("src.data_providers.binance_provider.Client")
     @patch("src.data_providers.binance_provider.get_config")
@@ -1055,11 +1057,13 @@ class TestStopLossQuantityStepPrecision:
 
         assert result == "slp"
         sent_qty = mock_client.create_order.call_args.kwargs["quantity"]
+        # Sent as a fixed-point string, never scientific notation (#745).
+        assert isinstance(sent_qty, str)
         step_decimals = max(0, -Decimal(str(step_size)).as_tuple().exponent)
         # No more decimal places than the step implies (exponent not below -step_decimals).
-        assert Decimal(str(sent_qty)).as_tuple().exponent >= -step_decimals
+        assert Decimal(sent_qty).as_tuple().exponent >= -step_decimals
         # The quantize preserves the intended quantity (rounding artifact only).
-        assert sent_qty == pytest.approx(quantity, abs=step_size / 2)
+        assert float(sent_qty) == pytest.approx(quantity, abs=step_size / 2)
 
     @pytest.mark.fast
     @pytest.mark.parametrize(
@@ -1085,9 +1089,10 @@ class TestStopLossQuantityStepPrecision:
 
         assert result == "slp"
         sent_qty = mock_client.create_order.call_args.kwargs["quantity"]
+        assert isinstance(sent_qty, str)
         step_decimals = max(0, -Decimal(str(step_size)).as_tuple().exponent)
-        assert Decimal(str(sent_qty)).as_tuple().exponent >= -step_decimals
-        assert sent_qty == pytest.approx(quantity, abs=step_size / 2)
+        assert Decimal(sent_qty).as_tuple().exponent >= -step_decimals
+        assert float(sent_qty) == pytest.approx(quantity, abs=step_size / 2)
 
     @pytest.mark.fast
     @patch("src.data_providers.binance_provider.Client")
@@ -1104,8 +1109,108 @@ class TestStopLossQuantityStepPrecision:
 
         assert result == "slp"
         sent_qty = mock_client.create_order.call_args.kwargs["quantity"]
-        assert Decimal(str(sent_qty)).as_tuple().exponent >= -4
-        assert sent_qty == pytest.approx(0.0003, abs=1e-9)
+        assert isinstance(sent_qty, str)
+        assert Decimal(sent_qty).as_tuple().exponent >= -4
+        assert float(sent_qty) == pytest.approx(0.0003, abs=1e-9)
+
+
+@pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
+@patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True)
+class TestQuantityScientificNotationAvoided:
+    """A quantity in [1e-5, 1e-4) must never reach the exchange as scientific notation.
+
+    python-binance urlencodes order params. `urlencode({"quantity": 0.00009})` renders
+    the value with Python's default float-to-str conversion, which switches to
+    scientific notation below 1e-4 (`str(0.00009) == "9e-05"`). Binance then rejects
+    the request with -1100 ("illegal characters"), which independently breaks entries,
+    stop-loss placement, and closes (#745). Without the fix, the "9e-05"/"e-05"
+    assertions below FAIL because the raw float is sent unformatted; with it, quantity
+    is always a plain fixed-point string.
+    """
+
+    @pytest.mark.fast
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_place_order_small_quantity_not_scientific_notation(
+        self, mock_config, mock_client_class
+    ):
+        """place_order (entries/closes) formats a sub-1e-4 quantity as fixed-point."""
+        from src.data_providers.exchange_interface import OrderType
+
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.create_order.return_value = {
+            "orderId": "1",
+            "status": "FILLED",
+            "origQty": "0.00009",
+            "executedQty": "0.00009",
+            "cummulativeQuoteQty": "5.0",
+            "fills": [],
+        }
+        mock_client.get_exchange_info.return_value = {
+            "symbols": [
+                {
+                    "symbol": "BTCUSDT",
+                    "baseAsset": "BTC",
+                    "quoteAsset": "USDT",
+                    "status": "TRADING",
+                    "filters": [
+                        {"filterType": "LOT_SIZE", "minQty": "0.00001", "stepSize": "0.00001"},
+                        {"filterType": "PRICE_FILTER", "minPrice": "0.01", "tickSize": "0.01"},
+                        {"filterType": "MIN_NOTIONAL", "minNotional": "5"},
+                    ],
+                }
+            ]
+        }
+        provider = BinanceProvider()
+
+        result = provider.place_order(
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            quantity=0.00009,
+        )
+
+        assert result is not None
+        sent_qty = mock_client.create_order.call_args.kwargs["quantity"]
+        assert isinstance(sent_qty, str)
+        assert "e" not in sent_qty.lower()
+        assert sent_qty == "0.00009"
+
+    @pytest.mark.fast
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_place_stop_loss_order_small_quantity_not_scientific_notation(
+        self, mock_config, mock_client_class
+    ):
+        """place_stop_loss_order formats a sub-1e-4 quantity as fixed-point."""
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        mock_client.create_order.return_value = {"orderId": "sl1"}
+        provider = BinanceProvider()
+        provider.get_symbol_info = Mock(
+            return_value={"step_size": 0.00001, "tick_size": 0.01, "base_asset": "BTC"}
+        )
+        provider.get_balance = Mock(return_value=Mock(free=1.0))
+
+        result = provider.place_stop_loss_order(
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.00009,
+            stop_price=50000.0,
+        )
+
+        assert result == "sl1"
+        sent_qty = mock_client.create_order.call_args.kwargs["quantity"]
+        assert isinstance(sent_qty, str)
+        assert "e" not in sent_qty.lower()
+        assert sent_qty == "0.00009"
 
 
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")

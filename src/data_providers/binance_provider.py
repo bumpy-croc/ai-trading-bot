@@ -39,7 +39,7 @@ from src.config.constants import (
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
 from src.infrastructure.timeout import run_with_timeout
 from src.trading.balance_retry import read_free_balance_with_retry
-from src.trading.precision import quantize_to_step
+from src.trading.precision import format_quantity, quantize_to_step
 from src.trading.symbols.factory import SymbolFactory, base_asset_from_symbol
 
 from .data_provider import DataProvider
@@ -1669,11 +1669,17 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             binance_type = self._convert_to_binance_order_type(order_type)
 
             # Prepare order parameters
+            # quantity is formatted as a fixed-point string here (not passed as a raw
+            # float) because urlencode() renders small floats in scientific notation
+            # (str(0.00009) == "9e-05"), which Binance rejects with -1100 ("illegal
+            # characters"). Callers are expected to have already quantized the value
+            # to the symbol's LOT_SIZE step (see quantize_to_step); format_quantity
+            # derives the decimal count from that already-clean value.
             order_params = {
                 "symbol": symbol,
                 "side": binance_side,
                 "type": binance_type,
-                "quantity": quantity,
+                "quantity": format_quantity(quantity),
             }
 
             if price is not None:
@@ -2173,7 +2179,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 "symbol": symbol,
                 "side": binance_side,
                 "type": "STOP_LOSS_LIMIT",
-                "quantity": quantity,
+                # Formatted as a fixed-point string (not a raw float) for the same
+                # reason stopPrice/price are below: urlencode() renders small floats
+                # in scientific notation (str(0.00009) == "9e-05"), which Binance
+                # rejects with -1100. step_size is already known here, so the decimal
+                # count comes from it directly rather than the value's own precision.
+                "quantity": format_quantity(quantity, step_size),
                 "stopPrice": str(stop_price),
                 "price": str(limit_price),
                 "timeInForce": "GTC",
