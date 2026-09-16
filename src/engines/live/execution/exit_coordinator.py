@@ -709,10 +709,24 @@ class LiveExitCoordinator:
                 if atomic_close_with_balance:
                     # Authoritative post-commit read: the atomic write above is
                     # what actually moved the ledger, so re-read rather than
-                    # approximate in memory.
-                    state.current_balance = state.db_manager.get_current_balance(
-                        state.trading_session_id
-                    )
+                    # approximate in memory. The close itself already committed
+                    # successfully by this point, so a failure here (pool
+                    # pressure, a CRITICAL_READ timeout) must not unwind into
+                    # the generic except below and log a false "failed to close"
+                    # — fall back to applying the same delta the atomic commit
+                    # already applied in-memory instead.
+                    try:
+                        state.current_balance = state.db_manager.get_current_balance(
+                            state.trading_session_id
+                        )
+                    except Exception as read_err:
+                        state.current_balance += realized_pnl
+                        logger.warning(
+                            "Post-close balance re-read failed for %s: %s — applied the "
+                            "known realized PnL delta in-memory instead of re-reading.",
+                            position.symbol,
+                            read_err,
+                        )
 
             # NOTE(#710): the resting stop-loss is now cancelled BEFORE the market
             # close (see the close path above) so it cannot reserve the base asset

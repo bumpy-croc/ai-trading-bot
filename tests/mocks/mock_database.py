@@ -632,12 +632,17 @@ class MockDatabaseManager:
         reason: str,
         updated_by: str = "system",
         session_id: int | None = None,
+        *,
+        caller_snapshot: float | None = None,
     ):
         """Context manager for absolute balance corrections.
 
         Mimics DatabaseManager's atomic_balance_correction (#735b): computes the
         delta from the CURRENT mock balance (not a caller-supplied stale value),
         so callers see the same {"old_balance", "new_balance", "change"} shape.
+        ``caller_snapshot`` is accepted for signature parity with the real
+        implementation but unused — this single-threaded mock has no concurrent
+        writer to preserve.
         """
         from contextlib import contextmanager
 

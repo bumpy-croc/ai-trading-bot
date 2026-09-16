@@ -3197,20 +3197,37 @@ class DatabaseManager:
         reason: str,
         updated_by: str = "system",
         session_id: int | None = None,
+        *,
+        caller_snapshot: float | None = None,
     ) -> Generator[dict[str, float], None, None]:
         """Correct the session balance to an authoritative absolute value (e.g.
         exchange equity/balance), serialized against every other ledger writer.
 
         Unlike ``atomic_balance_update`` (a caller-supplied delta), callers here
         already know the TRUE target value from an external source of truth and
-        want to set the ledger to it. The target is still applied as a delta —
-        computed from the balance read AFTER acquiring the ledger lock, not the
-        caller's own pre-lock read used to decide whether a correction is even
-        warranted — so a concurrent delta writer's contribution (e.g. a trade
-        closing mid-sync) is preserved instead of being silently clobbered by an
-        absolute overwrite (#735b). Replaces the former pattern of
-        ``get_current_balance()`` followed by a bare ``update_balance(new_balance)``
-        used by ``account_sync``'s correction sites.
+        want to set the ledger to it. The target is applied as a delta computed
+        against ``caller_snapshot`` — the balance the caller read BEFORE
+        acquiring the ledger lock, i.e. the value it used to decide a correction
+        was warranted — not the fresh value read after the lock. That means a
+        concurrent delta writer that commits between the caller's read and lock
+        acquisition (e.g. a trade closing mid-sync) is preserved instead of
+        being silently clobbered: with ``locked_current = caller_snapshot +
+        concurrent_delta``, the result is
+        ``locked_current + (new_absolute_balance - caller_snapshot)
+        == new_absolute_balance + concurrent_delta`` (#735b). When no concurrent
+        write occurred, ``locked_current == caller_snapshot`` and this reduces
+        to the plain absolute correction ``new_absolute_balance``.
+
+        ``caller_snapshot`` is optional only for backward compatibility with
+        callers that have no pre-lock reading to offer (e.g. a target computed
+        without first reading the ledger) — omitting it falls back to computing
+        the delta from the lock-fresh read, which is a plain absolute overwrite
+        with no concurrent-delta protection. Every production call site has a
+        pre-lock balance already in scope and must pass it.
+
+        Replaces the former pattern of ``get_current_balance()`` followed by a
+        bare ``update_balance(new_balance)`` used by ``account_sync``'s
+        correction sites.
 
         Yields:
             dict with 'old_balance', 'new_balance', 'change' keys
@@ -3236,12 +3253,16 @@ class DatabaseManager:
 
                 with session.begin_nested():
                     self._lock_balance_ledger(session, session_id)
-                    # Fresh read under the lock — the delta is computed against
-                    # the true latest balance, not the caller's pre-lock snapshot.
+                    # Fresh read under the lock — this is what the delta is
+                    # actually applied against (via _apply_balance_delta), so a
+                    # concurrent writer's commit is never lost even though the
+                    # delta magnitude below is computed against the caller's
+                    # pre-lock snapshot.
                     locked_current = AccountBalance.get_current_balance(
                         session_id, session, for_update=False
                     )
-                    delta = new_absolute_balance - locked_current
+                    baseline = locked_current if caller_snapshot is None else caller_snapshot
+                    delta = new_absolute_balance - baseline
                     result = self._apply_balance_delta(
                         session, session_id, delta, reason, updated_by
                     )

@@ -1786,28 +1786,22 @@ class PositionReconciler:
                             matched_position = pos
                             break
 
-                if order_id_to_remove is not None:
-                    self.position_tracker.remove_position(order_id_to_remove)
-                    logger.info(
-                        "Reconciled filled exit %s: removed position %s from tracker",
-                        client_order_id,
-                        order_id_to_remove,
-                    )
-
                 # Idempotency guard (#736): a Trade already referencing this position means
                 # an earlier pass already realized PnL and logged the trade. Re-running the
                 # PnL calculation below would double-apply it to the balance — just fix the
                 # stale status and stop. Mirrors the same guard in
-                # _close_position_from_filled_sl.
+                # _close_position_from_filled_sl. Checked BEFORE the unconditional tracker
+                # removal below: close_position returns False (without raising) when the row
+                # isn't found or the commit rolls back, so the tracker entry must only be
+                # dropped once the close is confirmed persisted — otherwise memory would say
+                # "gone" while the DB row stays OPEN (CODE.md: no silent divergence).
                 if self.db_manager.has_terminal_trade_for_position(position_id):
+                    guard_closed = False
                     try:
-                        self.db_manager.close_position(
-                            position_id, exit_price=fill_price if fill_price > 0 else None
-                        )
-                        logger.warning(
-                            "Position %s already has a terminal trade — closed WITHOUT "
-                            "re-realizing PnL (crash-recovery idempotency guard).",
-                            position_id,
+                        guard_closed = bool(
+                            self.db_manager.close_position(
+                                position_id, exit_price=fill_price if fill_price > 0 else None
+                            )
                         )
                     except Exception as e:
                         logger.warning(
@@ -1815,7 +1809,30 @@ class PositionReconciler:
                             position_id,
                             e,
                         )
+                    if guard_closed:
+                        if order_id_to_remove is not None:
+                            self.position_tracker.remove_position(order_id_to_remove)
+                        logger.warning(
+                            "Position %s already has a terminal trade — closed WITHOUT "
+                            "re-realizing PnL (crash-recovery idempotency guard).",
+                            position_id,
+                        )
+                    else:
+                        logger.warning(
+                            "Position %s already has a terminal trade but close_position "
+                            "did not persist — leaving tracked for re-reconciliation on a "
+                            "later pass.",
+                            position_id,
+                        )
                     return
+
+                if order_id_to_remove is not None:
+                    self.position_tracker.remove_position(order_id_to_remove)
+                    logger.info(
+                        "Reconciled filled exit %s: removed position %s from tracker",
+                        client_order_id,
+                        order_id_to_remove,
+                    )
 
                 # Close in DB. close_position returns False (without raising) when the row is not
                 # found or the commit rolls back, so gate on the actual return — "did not raise" is
@@ -3210,17 +3227,30 @@ class PositionReconciler:
         # stale status and stop; heal_positions_with_terminal_trades covers the same case
         # at startup, this covers it mid-session.
         if db_pos_id and self.db_manager.has_terminal_trade_for_position(db_pos_id):
+            guard_closed = False
             try:
-                self.db_manager.close_position(db_pos_id, exit_price=exit_price)
+                # Gate on the actual return value — same reasoning as the non-guard path
+                # below: "did not raise" is not "closed", and removing the tracker entry
+                # for a row that's still OPEN would diverge memory from the DB.
+                guard_closed = bool(
+                    self.db_manager.close_position(db_pos_id, exit_price=exit_price)
+                )
             except Exception as e:
                 logger.warning("Failed to close already-realized position %s: %s", db_pos_id, e)
-                return
-            self.position_tracker.remove_position(position.order_id)
-            logger.warning(
-                "Position %s already has a terminal trade — closed WITHOUT re-realizing "
-                "PnL (crash-recovery idempotency guard).",
-                db_pos_id,
-            )
+            if guard_closed:
+                self.position_tracker.remove_position(position.order_id)
+                logger.warning(
+                    "Position %s already has a terminal trade — closed WITHOUT re-realizing "
+                    "PnL (crash-recovery idempotency guard).",
+                    db_pos_id,
+                )
+            else:
+                position.exchange_close_pending = True
+                logger.warning(
+                    "Position %s already has a terminal trade but close_position did not "
+                    "persist — leaving tracked for re-reconciliation on a later pass.",
+                    db_pos_id,
+                )
             return
 
         db_closed = False
@@ -3794,11 +3824,11 @@ class PositionReconciler:
                     )
                     # Correct DB balance to match actual total capital.
                     # DB balance represents total capital (USDT + position notional),
-                    # not just free USDT on exchange. atomic_balance_correction
-                    # re-reads under the ledger lock and applies the correction as a
-                    # delta from THAT fresh value, so a concurrent delta writer
-                    # (e.g. a trade closing) is preserved instead of being
-                    # clobbered by this absolute correction (#735b).
+                    # not just free USDT on exchange. atomic_balance_correction applies
+                    # the correction as a delta from this function's pre-lock db_balance
+                    # snapshot, so a concurrent delta writer (e.g. a trade closing) is
+                    # preserved instead of being clobbered by this absolute correction
+                    # (#735b).
                     corrected_balance = exchange_total + position_notional
                     try:
                         with self.db_manager.atomic_balance_correction(
@@ -3806,6 +3836,7 @@ class PositionReconciler:
                             "reconciliation_balance_correction",
                             "system",
                             self.session_id,
+                            caller_snapshot=db_balance,
                         ):
                             pass
                     except Exception as e:
@@ -4209,14 +4240,19 @@ class PositionReconciler:
             # for the remaining positions. The alert differs by whether the caller wanted a
             # balance move: when balance_delta was given, the whole write (balance + trade +
             # position-close) is ONE transaction, so a failure here means NONE of it committed —
-            # safe to retry, no ledger divergence possible. A balance-neutral path (external
-            # close) only loses an audit row (capital is reconciled by Step C / margin-equity
-            # sync), so it must NOT page as a ledger divergence either.
+            # no ledger divergence possible from THIS write. But by the time this runs,
+            # close_position() has already committed in its own upfront transaction (the caller
+            # only reaches here once db_closed is True) — the position is CLOSED, so it will
+            # never again surface as needing exit reconciliation. There is no "next pass" that
+            # retries this: the realized PnL for this close is permanently dropped, not
+            # deferred. Narrow gap tracked as #1223 (a full fix needs the close+trade+balance
+            # write to be one transaction, same as the normal exit path).
             if balance_realized:
                 logger.critical(
-                    "Atomic balance+trade write FAILED for %s: %s — balance was NOT "
-                    "adjusted and no trade was recorded (all-or-nothing); will retry on "
-                    "the next reconciliation pass.",
+                    "Atomic balance+trade write FAILED for %s: %s — the position was already "
+                    "closed in the DB but its balance/trade could NOT be persisted. This PnL "
+                    "is PERMANENTLY DROPPED, not deferred — reconciliation will not retry it "
+                    "(see #1223). Manual reconciliation required.",
                     getattr(position, "symbol", "?"),
                     e,
                     exc_info=True,
@@ -4605,18 +4641,19 @@ class PeriodicReconciler:
                     ),
                     severity=Severity.CRITICAL.value,
                 )
-                # atomic_balance_correction re-reads under the ledger lock and
-                # applies the correction as a delta from THAT fresh value, so a
-                # concurrent delta writer (e.g. a trade closing) is preserved
-                # instead of being clobbered by this absolute correction (#735b).
-                # Raises on failure — caught by the except below, unlike the old
-                # update_balance(...) which swallowed failures into a bare False
-                # this call site never even checked.
+                # atomic_balance_correction applies the correction as a delta from
+                # this function's pre-lock db_balance snapshot, so a concurrent delta
+                # writer (e.g. a trade closing) is preserved instead of being
+                # clobbered by this absolute correction (#735b). Raises on failure —
+                # caught by the except below, unlike the old update_balance(...)
+                # which swallowed failures into a bare False this call site never
+                # even checked.
                 with self.db_manager.atomic_balance_correction(
                     corrected_balance,
                     "reconciliation_balance_correction",
                     "system",
                     self.session_id,
+                    caller_snapshot=db_balance,
                 ):
                     pass
                 return True

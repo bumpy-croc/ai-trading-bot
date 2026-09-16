@@ -246,13 +246,17 @@ class AccountSynchronizer:
             diff_pct,
         )
         try:
-            # atomic_balance_correction re-reads the balance under the ledger
-            # lock and applies the correction as a delta from THAT fresh value
-            # (not this function's pre-lock current_db_balance), so a delta
-            # writer (e.g. a trade closing) that commits in between is preserved
-            # instead of being clobbered by this absolute correction (#735b).
+            # atomic_balance_correction applies the correction as a delta from
+            # this function's pre-lock current_db_balance snapshot, so a delta
+            # writer (e.g. a trade closing) that commits between this read and
+            # lock acquisition is preserved instead of being clobbered by this
+            # absolute correction (#735b).
             with self.db_manager.atomic_balance_correction(
-                equity, "margin_equity_sync_correction", "system", effective_session_id
+                equity,
+                "margin_equity_sync_correction",
+                "system",
+                effective_session_id,
+                caller_snapshot=current_db_balance,
             ):
                 pass
         except Exception as e:
@@ -432,12 +436,16 @@ class AccountSynchronizer:
                     )
 
                     # Update database with exchange balance. atomic_balance_correction
-                    # re-reads the balance under the ledger lock and applies the
-                    # correction as a delta from THAT fresh value, so a concurrent
-                    # delta writer (e.g. a trade closing) is preserved instead of
-                    # being clobbered by this absolute correction (#735b).
+                    # applies the correction as a delta from this function's pre-lock
+                    # current_db_balance snapshot, so a concurrent delta writer (e.g. a
+                    # trade closing) is preserved instead of being clobbered by this
+                    # absolute correction (#735b).
                     with self.db_manager.atomic_balance_correction(
-                        exchange_balance, "exchange_sync_correction", "system", self.session_id
+                        exchange_balance,
+                        "exchange_sync_correction",
+                        "system",
+                        self.session_id,
+                        caller_snapshot=current_db_balance,
                     ):
                         pass
 

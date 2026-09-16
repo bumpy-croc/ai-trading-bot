@@ -776,7 +776,14 @@ class AccountBalance(Base):
     session_id = Column(Integer, ForeignKey("trading_sessions.id"))
 
     # Ensure we have one current balance per session
-    __table_args__ = (Index("idx_balance_session_updated", "session_id", "last_updated"),)
+    __table_args__ = (
+        Index("idx_balance_session_updated", "session_id", "last_updated"),
+        # get_current_balance orders by id (not last_updated) to break same-microsecond
+        # ties unambiguously (#735); this index keeps that query an index scan instead
+        # of a full sort of every row for the session, now that it runs inside
+        # DatabaseManager._lock_balance_ledger on every balance write.
+        Index("idx_balance_session_id", "session_id", "id"),
+    )
 
     created_at = Column(DateTime, default=utc_now)
 

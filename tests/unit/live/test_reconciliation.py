@@ -7577,6 +7577,48 @@ class TestCrashRecoveryIdempotencyGuard:
         mock_db.update_balance.assert_not_called()
         mock_db.atomic_balance_update.assert_not_called()
 
+    def test_close_position_from_filled_sl_leaves_tracked_when_guard_close_fails(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        """close_position returning False (without raising) inside the guard branch must
+        NOT be treated as success: the tracker entry has to stay, mirroring the non-guard
+        path's divergence-avoidance a few lines below (#1224 review finding B)."""
+        from types import SimpleNamespace as NS
+
+        pos = MockPosition(db_position_id=97, order_id="pos-97")
+        mock_db.has_terminal_trade_for_position.return_value = True
+        mock_db.close_position.return_value = False  # not persisted
+        sl_order = NS(
+            average_price=48000.0, order_id="sl-97", commission=0.0, commission_asset="USDT"
+        )
+
+        reconciler._close_position_from_filled_sl(pos, sl_order)
+
+        mock_db.close_position.assert_called_once_with(97, exit_price=48000.0)
+        mock_db.log_trade.assert_not_called()
+        # Divergence guard: DB row is still OPEN, so the tracker entry must be retained.
+        mock_position_tracker.remove_position.assert_not_called()
+        assert pos.exchange_close_pending is True
+
+    def test_reconcile_filled_exit_leaves_tracked_when_guard_close_fails(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        """Same as above for the _reconcile_filled_exit twin of the guard (#1224 review
+        finding B): a False return from close_position must not strand the tracker."""
+        position = MockPosition(db_position_id=86)
+        mock_position_tracker._positions_lock = MagicMock()
+        mock_position_tracker._positions = {"ord_86": position}
+        mock_position_tracker.remove_position = MagicMock()
+        mock_db.has_terminal_trade_for_position.return_value = True
+        mock_db.close_position.return_value = False  # not persisted
+
+        order_data = {"position_id": 86, "client_order_id": "atb_exit_idem_test_3"}
+        reconciler._reconcile_filled_exit(order_data, fill_price=51000.0, exit_fee=0.6)
+
+        mock_db.close_position.assert_called_once_with(86, exit_price=51000.0)
+        mock_db.log_trade.assert_not_called()
+        mock_position_tracker.remove_position.assert_not_called()
+
     def test_reconcile_filled_exit_realizes_normally_without_prior_trade(
         self, reconciler, mock_db, mock_position_tracker
     ):
