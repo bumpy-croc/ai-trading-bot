@@ -227,6 +227,18 @@ class LiveSessionRecoverer:
                     error_code="ACTIVE_SESSION_BALANCE_UNRECOVERABLE",
                     alert=True,
                 )
+                # An unrecoverable balance means current_balance falls back to the
+                # configured default (e.g. INITIAL_BALANCE), not the reused
+                # session's true balance -- sizing new entries off that fabricated
+                # number is exactly the phantom-balance failure mode this repo has
+                # been burned by before. The alert above tells an operator; this
+                # stops the engine from opening new exposure before they look.
+                # Exits/stops keep running, so the recovered position isn't stuck.
+                state._enter_close_only_mode(
+                    f"crash recovery: active session #{session_id}'s balance "
+                    "could not be recovered — refusing to size new entries off "
+                    "the default balance until verified"
+                )
 
             logger.warning("⚠️  Session #%s found but no balance to recover", session_id)
             return None
@@ -244,6 +256,28 @@ class LiveSessionRecoverer:
             # expect history, retry, and latch `seed_unavailable` with a WARNING.
             state._history_seed_lookup_failed = True
             logger.error("❌ Error recovering session: %s", e, exc_info=True)
+            if state.trading_session_id is not None:
+                # _reuse_active_session() already ran before this balance lookup
+                # (see the try block above), so a failure here -- unlike the
+                # falsy-balance case -- would otherwise leave the reused session
+                # wired with no alert and no escalation at all: a silent gap in
+                # the exact contract this method exists to enforce.
+                state._record_event(
+                    EventType.ALERT,
+                    f"Crash recovery: reusing active session #{state.trading_session_id} "
+                    f"but the balance lookup failed ({e}). Starting on the configured "
+                    "default balance — verify the session's balance and open P&L by hand.",
+                    severity="critical",
+                    component="session_recovery",
+                    error_code="ACTIVE_SESSION_BALANCE_UNRECOVERABLE",
+                    exc=e,
+                    alert=True,
+                )
+                state._enter_close_only_mode(
+                    f"crash recovery: active session #{state.trading_session_id}'s "
+                    f"balance lookup raised ({e}) — refusing to size new entries off "
+                    "the default balance until verified"
+                )
             return None
 
     def _reuse_active_session(self, session_id: int) -> None:

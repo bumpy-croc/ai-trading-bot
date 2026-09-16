@@ -218,6 +218,23 @@ class TestActiveSessionReusedDespiteUnrecoverableBalance:
         assert alert_calls[0].kwargs["alert"] is True
         assert alert_calls[0].kwargs["severity"] == "critical"
 
+    def test_close_only_mode_entered_for_unrecoverable_balance(self, reconciler_cls):
+        """An unrecoverable balance leaves current_balance at the configured
+        default, not the reused session's true balance -- sizing NEW entries
+        off that fabricated number is the phantom-balance failure mode this
+        repo has already been burned by. The engine must refuse new entries
+        (close-only) until an operator verifies the true balance, while still
+        allowing the recovered position to be exited normally."""
+        db = DatabaseManager("sqlite:///:memory:")
+        _seed_active_session_with_open_position(db)
+        engine = _make_live_engine_with_real_db(db)
+        engine.db_manager.recover_last_balance = MagicMock(return_value=None)
+
+        _run_start_with_mocked_runtime(engine, reconciler_cls)
+
+        assert engine._close_only_mode is True
+        assert "balance" in (engine._close_only_reason or "").lower()
+
     def test_no_second_session_created(self, reconciler_cls):
         """Regression guard for the core bug: recovering with a bad balance
         must not call create_trading_session a second time."""
@@ -262,3 +279,30 @@ class TestRecoverExistingSessionActivePathUnitLevel:
 
         assert recovered is None
         assert engine.trading_session_id == 56
+
+    def test_active_session_alerts_and_closes_only_when_balance_lookup_raises(self):
+        """The active session is reused BEFORE the balance lookup runs, so a
+        raised exception (not just a falsy return) leaves it wired too -- this
+        must get the identical alert + close-only escalation as the falsy-
+        balance case, not just a logger.error with no operator signal."""
+        db = DatabaseManager("sqlite:///:memory:")
+        engine = _make_live_engine_with_real_db(db)
+        engine._active_symbol = SYMBOL
+        engine.db_manager.get_active_session_id = MagicMock(return_value=57)
+        engine.db_manager.recover_last_balance = MagicMock(
+            side_effect=RuntimeError("db unavailable")
+        )
+        engine._record_event = MagicMock(wraps=engine._record_event)
+
+        recovered = engine._recover_existing_session()
+
+        assert recovered is None
+        assert engine.trading_session_id == 57
+        alert_calls = [
+            call
+            for call in engine._record_event.call_args_list
+            if call.kwargs.get("error_code") == "ACTIVE_SESSION_BALANCE_UNRECOVERABLE"
+        ]
+        assert len(alert_calls) == 1
+        assert alert_calls[0].kwargs["alert"] is True
+        assert engine._close_only_mode is True
