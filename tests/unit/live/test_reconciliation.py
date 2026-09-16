@@ -3701,6 +3701,28 @@ class TestGuardStopPlacementUnit:
         assert result == "sl_new"
         exchange.place_stop_loss_order.assert_called_once()
 
+    def test_place_or_adopt_passes_an_atb_prefixed_client_order_id(self):
+        """#740: every stop-loss placement must carry an ``atb``-prefixed
+        client_order_id -- pre-fix, no call site passed one, so Binance
+        auto-generated ids for every resting stop-loss and the orphan sweep
+        (which only matches the ``atb`` prefix) could never catch one."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.return_value = "sl_new"
+        place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+        )
+        kwargs = exchange.place_stop_loss_order.call_args.kwargs
+        assert "client_order_id" in kwargs
+        assert kwargs["client_order_id"].startswith("atb")
+
     def test_refuses_to_adopt_a_same_side_resting_stop_at_the_wrong_price(self):
         """A stale same-side orphan resting at an unrelated price is exactly the
         mis-protection #1112 guards against -- side alone is not sufficient
@@ -3852,6 +3874,36 @@ class TestPlaceOrAdoptStopLossRetry:
         assert result == "sl-new"
         assert exchange.place_stop_loss_order.call_count == 2
         mock_sleep.assert_called_once_with(1.0)
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_retry_generates_a_distinct_client_order_id_per_attempt(self, mock_sleep):
+        """#740: each actual exchange call in the retry loop is a genuinely new
+        placement attempt (guard_stop_placement would ADOPT instead of retrying
+        if a prior attempt actually landed) -- reusing one client_order_id across
+        attempts would risk Binance rejecting or silently deduping a retry that
+        legitimately needed to place a new order."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.side_effect = [ConnectionError("boom"), "sl-new"]
+
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+        )
+
+        assert result == "sl-new"
+        ids = [c.kwargs["client_order_id"] for c in exchange.place_stop_loss_order.call_args_list]
+        assert len(ids) == 2
+        assert len(set(ids)) == 2
+        assert all(i.startswith("atb") for i in ids)
 
     @patch("src.engines.live.reconciliation.time.sleep")
     def test_exhausts_retries_and_returns_none(self, mock_sleep):
@@ -5981,6 +6033,117 @@ class TestOrphanedBorrowSweepSurfacedInCycle:
             c.kwargs.get("error_code") == "ORPHANED_BORROW_CRITICAL"
             for c in on_event.call_args_list
         ), on_event.call_args_list
+
+
+class TestSweepOrphanedOrdersMethod:
+    """#740: the orphaned-order sweep (``PeriodicReconciler._sweep_orphaned_orders``)
+    must (1) check every CONFIGURED symbol, not only symbols with a currently
+    tracked position, and (2) run even when the position tracker is completely
+    flat -- an orphaned order is DEFINED by having no tracked position, so both
+    pre-fix restrictions made it structurally unable to ever catch the exact case
+    it exists for. It must also never cancel an order that IS still protecting a
+    live position, however that order's client_order_id happens to look."""
+
+    @staticmethod
+    def _reconciler(mock_exchange, mock_position_tracker, mock_db, symbols):
+        return PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            symbols=symbols,
+        )
+
+    def test_checks_every_configured_symbol_not_just_ones_with_a_position(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """BTCUSDT carries the only tracked position; ETHUSDT is configured but
+        flat and carries an orphaned atb-prefixed stop-loss. Pre-fix, only
+        symbols with an active position were ever queried, so ETHUSDT's orphan
+        was invisible to the sweep."""
+        mock_position_tracker.positions = {
+            "BTCUSDT:long": MockPosition(
+                symbol="BTCUSDT", exchange_order_id="entry_1", stop_loss_order_id="sl_btc"
+            )
+        }
+
+        def get_open_orders(symbol):
+            if symbol == "ETHUSDT":
+                orphan = MagicMock()
+                orphan.order_id = "orphan_sl_eth"
+                orphan.client_order_id = "atbsl_deadbeef_aaaaaaaa"
+                return [orphan]
+            return []
+
+        mock_exchange.get_open_orders.side_effect = get_open_orders
+        pr = self._reconciler(
+            mock_exchange, mock_position_tracker, mock_db, symbols=["BTCUSDT", "ETHUSDT"]
+        )
+
+        severity = pr._sweep_orphaned_orders()
+
+        assert severity == Severity.HIGH
+        mock_exchange.cancel_order.assert_called_once_with("orphan_sl_eth", "ETHUSDT")
+
+    def test_finds_orphan_when_the_bot_is_completely_flat(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """No tracked position anywhere. Pre-fix this entire check was skipped
+        because ``_reconcile_cycle`` returned before step 3 ever ran."""
+        mock_position_tracker.positions = {}
+        orphan = MagicMock()
+        orphan.order_id = "orphan_sl_1"
+        orphan.client_order_id = "atbsl_19d360981ab_3a4b0d5a"
+        mock_exchange.get_open_orders.return_value = [orphan]
+
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, symbols=["ETHUSDT"])
+
+        severity = pr._sweep_orphaned_orders()
+
+        assert severity == Severity.HIGH
+        mock_exchange.get_open_orders.assert_any_call("ETHUSDT")
+        mock_exchange.cancel_order.assert_called_once_with("orphan_sl_1", "ETHUSDT")
+
+    def test_never_cancels_a_tracked_stop_loss_regardless_of_its_client_id(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """A currently-protecting stop-loss must never be cancelled no matter what
+        its client_order_id looks like -- e.g. one placed before this fix
+        landed, carrying a Binance-autogenerated id with no 'atb' prefix.
+        Exclusion is by order id membership in the tracked set, not by prefix."""
+        mock_position_tracker.positions = {
+            "BTCUSDT:long": MockPosition(
+                symbol="BTCUSDT", exchange_order_id="entry_1", stop_loss_order_id="sl_btc_legacy"
+            )
+        }
+        legacy_sl = MagicMock()
+        legacy_sl.order_id = "sl_btc_legacy"
+        legacy_sl.client_order_id = "8x7fa2b91c3d"  # Binance auto-generated, no atb prefix
+        mock_exchange.get_open_orders.return_value = [legacy_sl]
+
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, symbols=["BTCUSDT"])
+
+        severity = pr._sweep_orphaned_orders()
+
+        assert severity is None
+        mock_exchange.cancel_order.assert_not_called()
+
+    def test_reconcile_cycle_runs_the_sweep_even_when_flat(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Full ``_reconcile_cycle`` integration: the flat early-return must not
+        skip the sweep -- this is #740's core symptom, the sweep never ran at
+        all while the bot was flat."""
+        mock_position_tracker.positions = {}
+        orphan = MagicMock()
+        orphan.order_id = "orphan_sl_1"
+        orphan.client_order_id = "atbsl_19d360981ab_3a4b0d5a"
+        mock_exchange.get_open_orders.return_value = [orphan]
+
+        pr = self._reconciler(mock_exchange, mock_position_tracker, mock_db, symbols=["ETHUSDT"])
+        pr._reconcile_cycle()
+
+        mock_exchange.cancel_order.assert_called_once_with("orphan_sl_1", "ETHUSDT")
 
 
 # ---------- SL Re-placement Naked-Position Guard (externally-closed positions) ----------
