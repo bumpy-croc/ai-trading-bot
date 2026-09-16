@@ -493,6 +493,90 @@ class TestExecuteExit:
         expected_fee = 1000.0 * engine._cost_calculator.maker_fee_rate
         assert result.exit_fee == pytest.approx(expected_fee)
 
+    def test_execute_exit_expired_zero_fill_reports_failure(
+        self, execution_engine_with_exchange, mock_exchange
+    ):
+        """#744: a close order confirmed EXPIRED with zero fill must NOT report success.
+
+        The resting stop-loss is already cancelled by the time a real close is
+        submitted (#710), so silently reporting success=True here (as the code
+        used to, falling through to the pre-computed simulated price) leaves
+        the position naked and untracked while the exchange still holds the
+        full inventory. This must surface as a failure so the caller keeps the
+        position tracked and re-protects it.
+        """
+        order_details = Mock()
+        order_details.status = ExchangeOrderStatus.EXPIRED
+        order_details.filled_quantity = 0.0
+        order_details.average_price = None
+        mock_exchange.get_order.return_value = order_details
+
+        result = execution_engine_with_exchange.execute_exit(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            order_id="order123",
+            base_price=50000.0,
+            position_notional=1000.0,
+        )
+
+        assert result.success is False
+        assert result.filled_quantity == 0.0
+        assert result.error is not None
+
+    def test_execute_exit_partial_fill_then_expired_surfaces_filled_quantity(
+        self, execution_engine_with_exchange, mock_exchange
+    ):
+        """A partial-fill-then-expire must be distinguishable from a zero-fill expiry.
+
+        The order never reached a FILLED/PARTIALLY_FILLED terminal state (it
+        expired), so it is still a close failure -- but the caller needs the
+        actually-filled quantity to tell it apart from a clean zero-fill expiry.
+        """
+        order_details = Mock()
+        order_details.status = ExchangeOrderStatus.EXPIRED
+        order_details.filled_quantity = 0.004
+        order_details.average_price = 50000.0
+        mock_exchange.get_order.return_value = order_details
+
+        result = execution_engine_with_exchange.execute_exit(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            order_id="order123",
+            base_price=50000.0,
+            position_notional=1000.0,
+        )
+
+        assert result.success is False
+        assert result.filled_quantity == pytest.approx(0.004)
+
+    def test_execute_exit_pending_status_is_not_treated_as_confirmed_failure(
+        self, execution_engine_with_exchange, mock_exchange
+    ):
+        """PENDING is not terminal -- must NOT take the #744 confirmed-failure path.
+
+        Every provider maps NEW (and any unrecognized status) to PENDING, so
+        treating it as a confirmed non-fill would turn an ordinary in-flight
+        close into a false failure, cascading into CLOSE_INVENTORY_LOCKED
+        pages for a position that is (or will shortly be) actually closed.
+        PENDING must keep falling through to the simulated-price path exactly
+        as it did before #744's fix.
+        """
+        order_details = Mock()
+        order_details.status = ExchangeOrderStatus.PENDING
+        order_details.filled_quantity = 0.0
+        order_details.average_price = None
+        mock_exchange.get_order.return_value = order_details
+
+        result = execution_engine_with_exchange.execute_exit(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            order_id="order123",
+            base_price=50000.0,
+            position_notional=1000.0,
+        )
+
+        assert result.success is True
+
 
 # ============================================================================
 # Tests for the close-quantity holdings guard (-2010 class)
@@ -660,6 +744,116 @@ class TestCloseSellHoldingsGuard:
 
 
 # ============================================================================
+# Tests for #737: close quantity sized from the stored fill quantity, not
+# fee-reduced notional/price arithmetic.
+# ============================================================================
+
+
+@pytest.mark.unit
+class TestCloseQuantityFromStoredFill:
+    """A market close must size off ``position.quantity`` (#737), not
+    ``entry_balance * fraction * price_adjustment / price`` — the notional
+    formula is systematically off by the entry-fee dilution versus what is
+    actually held (typically under, occasionally over — see #737 / #710).
+
+    These run the real ``LiveExitHandler.execute_exit`` -> ``execution_engine
+    .execute_exit`` -> ``_close_live_order`` stack (not mocks of either) so
+    the discrimination is proven at the quantity actually submitted to the
+    exchange, exactly where the historical bug lived.
+    """
+
+    def test_typical_case_closes_full_held_quantity_not_fee_diluted_fraction(
+        self, live_exit_handler, live_position_tracker, mock_exchange
+    ):
+        """Every-close case: entry_balance (post entry-fee) is a bit below the
+        raw balance the position was actually sized from, so the notional
+        formula would under-close by that same dilution. The fix must submit
+        the full held quantity regardless.
+        """
+        mock_exchange.get_balance.return_value = Mock(free=5.0)
+
+        position = LivePosition(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.5,
+            original_size=0.5,
+            current_size=0.5,
+            entry_price=100.0,
+            entry_time=datetime.now(UTC),
+            entry_balance=999.5,  # 1000 balance minus a $0.5 entry fee
+            quantity=5.0,  # actual filled base quantity, entry-fee dilution has no bearing on it
+            order_id="entry-737-under",
+        )
+        live_position_tracker.open_position(position)
+
+        # Old (buggy) formula: entry_balance * fraction * price_adjustment / price
+        #   = 999.5 * 0.5 * 1.0 / 100.0 = 4.9975 -- under the true 5.0 held.
+        buggy_quantity = (999.5 * 0.5 * (100.0 / 100.0)) / 100.0
+        assert buggy_quantity < 5.0
+
+        result = live_exit_handler.execute_exit(
+            position=position,
+            exit_reason="signal_exit",
+            current_price=100.0,
+            limit_price=None,
+            current_balance=1000.0,
+        )
+
+        assert result.success is True
+        sent = mock_exchange.place_order.call_args.kwargs["quantity"]
+        assert sent == pytest.approx(5.0)
+        assert sent != pytest.approx(buggy_quantity)
+
+    def test_occasional_case_does_not_over_close_past_held_quantity(
+        self, live_exit_handler, live_position_tracker, mock_exchange
+    ):
+        """Occasional case: entry_balance is unavailable (e.g. a position
+        recovered after a restart, which does not persist it), so the
+        notional formula falls back to the CURRENT balance -- decoupled from
+        what was actually invested at entry. If the account has since grown,
+        that derives a quantity far above what is actually held, which the
+        old code could only rescue via the holdings cap/floor (or abort the
+        close outright if the gap is too large). The fix must never need
+        rescuing: it sizes directly from the held quantity from the start.
+        """
+        mock_exchange.get_balance.return_value = Mock(free=5.0)
+
+        position = LivePosition(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.5,
+            original_size=0.5,
+            current_size=0.5,
+            entry_price=100.0,
+            entry_time=datetime.now(UTC),
+            entry_balance=None,  # lost on recovery -- forces the current-balance fallback
+            quantity=5.0,  # actual held quantity, unaffected by the balance fallback
+            order_id="entry-737-over",
+        )
+        live_position_tracker.open_position(position)
+
+        # Old (buggy) formula falls back to current_balance, decoupled from the
+        # $500 actually invested at entry: 2000 * 0.5 * 1.0 / 100.0 = 10.0 --
+        # double the 5.0 actually held, and far outside the 0.98 holdings-cap
+        # ratio the execution engine uses to decide whether to rescue or abort.
+        buggy_quantity = (2000.0 * 0.5 * (100.0 / 100.0)) / 100.0
+        assert buggy_quantity > 5.0
+
+        result = live_exit_handler.execute_exit(
+            position=position,
+            exit_reason="signal_exit",
+            current_price=100.0,
+            limit_price=None,
+            current_balance=2000.0,
+        )
+
+        assert result.success is True
+        sent = mock_exchange.place_order.call_args.kwargs["quantity"]
+        assert sent == pytest.approx(5.0)
+        assert sent <= 5.0
+
+
+# ============================================================================
 # Tests for LiveExitHandler filled exits
 # ============================================================================
 
@@ -715,6 +909,46 @@ class TestExecuteFilledExit:
         assert result.success is True
         assert result.exit_price == pytest.approx(220.0)
         assert not live_position_tracker.has_position("entry_order_456")
+
+    def test_execute_exit_keeps_position_tracked_when_close_order_expires_unfilled(
+        self, live_exit_handler, live_position_tracker, mock_exchange
+    ):
+        """#744: an EXPIRED zero-fill close must not pop the position or book PnL.
+
+        Regression for the reported symptom: execute_exit returning
+        success=True with a simulated price for a close order that never
+        actually filled, which popped the position from tracking (with the
+        stop-loss already cancelled) even though the exchange still held the
+        real inventory.
+        """
+        position = LivePosition(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.1,
+            entry_price=50000.0,
+            entry_time=datetime.now(UTC),
+            order_id="entry_order_789",
+            entry_balance=10000.0,
+        )
+        live_position_tracker.track_recovered_position(position, db_id=None)
+
+        order_details = Mock()
+        order_details.status = ExchangeOrderStatus.EXPIRED
+        order_details.filled_quantity = 0.0
+        order_details.average_price = None
+        mock_exchange.get_order.return_value = order_details
+
+        result = live_exit_handler.execute_exit(
+            position=position,
+            exit_reason="stop_loss",
+            current_price=48000.0,
+            limit_price=48000.0,
+            current_balance=10000.0,
+        )
+
+        assert result.success is False
+        assert result.realized_pnl == 0.0
+        assert live_position_tracker.has_position("entry_order_789")
 
 
 # ============================================================================

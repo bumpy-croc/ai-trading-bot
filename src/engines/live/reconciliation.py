@@ -14,6 +14,7 @@ import logging
 import math
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -43,6 +44,7 @@ from src.config.feature_flags import get_flag
 from src.data_providers.exchange_interface import OrderLookupError, SideEffectType
 from src.database.models import EventType
 from src.engines.live.margin_interest_tracker import MarginInterestTracker
+from src.engines.live.trade_close_accounting import held_base_quantity
 from src.engines.shared.commission import order_commission_usd, split_base_quote
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
@@ -386,6 +388,79 @@ def _log_adoption(
     )
 
 
+def _generate_stop_loss_client_order_id() -> str:
+    """Build an ``atbsl_``-prefixed client order id for one stop-loss placement.
+
+    Mirrors the ``atb_``/``atbx_`` idempotency-key format execution_engine.py
+    generates for entry/exit orders (timestamp-hex + a short uuid4 suffix, well
+    under Binance's 36-char client-order-id limit), with its own ``atbsl_``
+    prefix so operators can tell order classes apart in exchange logs and the
+    orphaned-order sweep (``_sweep_orphaned_orders``) can recognize a stop-loss
+    specifically, not just any ``atb``-prefixed order (#740).
+
+    Called once per actual ``place_stop_loss_order`` call, never reused across a
+    retry: unlike the entry path, a stop-loss retry's idempotency comes from
+    ``guard_stop_placement`` re-querying the exchange before every attempt and
+    ADOPTing an order a prior attempt placed but failed to confirm, not from
+    resubmitting the same client_order_id. Each attempt that actually reaches
+    the exchange is therefore always a distinct order request, so a fresh id
+    per attempt carries no dedup/collision risk.
+    """
+    timestamp_ms = int(time.time() * 1000)
+    unique_suffix = uuid.uuid4().hex[:8]
+    return f"atbsl_{timestamp_ms:x}_{unique_suffix}"
+
+
+class _AchievedStopPriceCapture:
+    """``on_adopt`` callback that captures the ACHIEVED resting price, not the
+    intended one, for callers that place or re-place a stop via
+    ``place_or_adopt_stop_loss``.
+
+    ``place_or_adopt_stop_loss`` can ADOPT an already-resting order anywhere
+    within ``_ADOPT_PRICE_TOLERANCE_FRACTION`` of the price it was asked for.
+    Using the intended price as the post-placement ``last_placed_stop_price``
+    baseline would leave the min-trailing-stop-move floor (#1179) with no
+    reliable anchor to the exchange's actual resting order (#1198), and using
+    it as the reconciler's own drift-check baseline would silently ratify the
+    gap: the drift check reuses this same tolerance, so a wrong baseline is
+    never flagged as diverged on the next pass (#1187). Mirrors
+    ``stop_loss_manager.py``'s ``move()``/``place_protection()``/
+    ``reprotect()`` closures of the same name, extracted here because the
+    reconciler has several call sites that need it.
+
+    Call the instance as ``on_adopt``; it defaults to (and, for a fresh
+    PROCEED placement where ``on_adopt`` never fires, stays) ``intended_price``.
+    Read ``.price`` after the call for the value to actually use.
+    """
+
+    def __init__(self, intended_price: float) -> None:
+        self.price = intended_price
+
+    def __call__(self, decision: StopPlacementDecision) -> None:
+        price = getattr(decision.existing_order, "stop_price", None)
+        if price is not None:
+            self.price = price
+
+
+def _achieved_price_is_safe_to_ratify(
+    side_is_long: bool, achieved_price: float, intended_price: float
+) -> bool:
+    """True if an ADOPTed stop price is safe to ratify into ``position.stop_loss``.
+
+    ``place_or_adopt_stop_loss``'s adopt tolerance is symmetric, so the
+    achieved price can land up to ``_ADOPT_PRICE_TOLERANCE_FRACTION`` FURTHER
+    from intent than expected, not just closer. ``position.stop_loss`` is the
+    engine's own software exit trigger, independent of the resting exchange
+    order -- ratifying a looser achieved price into it would tolerate extra
+    notional risk before that trigger fires. Only a tighter-or-equal price is
+    safe to ratify; a looser one is left as an unresolved divergence for the
+    next reconciliation pass instead (#1199).
+    """
+    if side_is_long:
+        return achieved_price >= intended_price
+    return achieved_price <= intended_price
+
+
 def place_or_adopt_stop_loss(
     exchange: Any,
     *,
@@ -395,6 +470,7 @@ def place_or_adopt_stop_loss(
     stop_price: float,
     side_effect_type: str | None = None,
     exclude_order_id: str | None = None,
+    just_cancelled: bool = False,
     max_attempts: int = 1,
     retry_delay: float = 1.0,
     retry_log_prefix: str = "Stop-loss placement",
@@ -417,6 +493,14 @@ def place_or_adopt_stop_loss(
     Pass ``exclude_order_id`` when this call immediately follows cancelling a
     specific tracked stop, so the just-cancelled order (which may still
     briefly appear on the exchange's open-orders view) is never re-adopted.
+    Pass ``just_cancelled=True`` in that same situation so an
+    implementation that sizes a SELL against a free-balance read (e.g.
+    ``BinanceProvider.place_stop_loss_order``) knows to retry that read
+    briefly instead of trusting a possibly-stale post-cancel snapshot on the
+    first try (#1173, mirrors ``stop_just_cancelled`` on the close path,
+    #1165). The two flags guard different eventual-consistency windows — the
+    open-orders view vs. the margin wallet balance — so pass both together
+    whenever this call follows a cancel.
 
     By default this makes a single placement attempt with no retry — the
     periodic reconciler's own call sites rely on that (they already wrap this
@@ -472,7 +556,9 @@ def place_or_adopt_stop_loss(
             side=side,
             quantity=quantity,
             stop_price=stop_price,
+            client_order_id=_generate_stop_loss_client_order_id(),
             side_effect_type=side_effect_type,
+            just_cancelled=just_cancelled,
         )
 
     return _place_with_retry(
@@ -483,6 +569,7 @@ def place_or_adopt_stop_loss(
         stop_price=stop_price,
         side_effect_type=side_effect_type,
         exclude_order_id=exclude_order_id,
+        just_cancelled=just_cancelled,
         max_attempts=max_attempts,
         retry_delay=retry_delay,
         retry_log_prefix=retry_log_prefix,
@@ -615,6 +702,7 @@ def _place_with_retry(
     stop_price: float,
     side_effect_type: str | None,
     exclude_order_id: str | None,
+    just_cancelled: bool = False,
     max_attempts: int,
     retry_delay: float,
     retry_log_prefix: str,
@@ -660,7 +748,9 @@ def _place_with_retry(
                     side=side,
                     quantity=quantity,
                     stop_price=stop_price,
+                    client_order_id=_generate_stop_loss_client_order_id(),
                     side_effect_type=side_effect_type,
+                    just_cancelled=just_cancelled,
                 )
                 if order_id:
                     return order_id
@@ -888,10 +978,11 @@ def _position_holding_is_gone(exchange: Any, use_margin: bool, position: Any) ->
     qty = float(getattr(position, "quantity", 0) or 0.0)
     current_size = getattr(position, "current_size", None)
     original_size = getattr(position, "original_size", None)
-    if current_size is not None and original_size is not None and float(original_size) > 0:
-        position_qty = qty * (float(current_size) / float(original_size))
-    else:
-        position_qty = qty
+    # allow_scale_in=True: this feeds a "still held?" threshold check, not a persisted
+    # record — under-sizing a real scale-in to the unscaled qty would falsely declare a
+    # still-live position gone.
+    scaled = held_base_quantity(qty, current_size, original_size, allow_scale_in=True)
+    position_qty = qty if scaled is None else scaled
 
     try:
         if use_margin and is_short:
@@ -1475,16 +1566,33 @@ class PositionReconciler:
                     from src.data_providers.exchange_interface import OrderSide
 
                     sl_side = OrderSide.SELL if side_lower == "long" else OrderSide.BUY
+                    intended_stop_price = position.stop_loss
+                    achieved = _AchievedStopPriceCapture(intended_stop_price)
                     sl_order_id = place_or_adopt_stop_loss(
                         self.exchange,
                         symbol=symbol,
                         side=sl_side,
                         quantity=fill_qty,
-                        stop_price=position.stop_loss,
+                        stop_price=intended_stop_price,
                         side_effect_type=SideEffectType.AUTO_REPAY,
+                        on_adopt=achieved,
                     )
                     if sl_order_id:
                         position.stop_loss_order_id = sl_order_id
+                        # Baseline for the min-trailing-stop-move floor (#1179)
+                        # -- must reflect where the exchange order actually
+                        # landed, not this placement's own intent (#1198).
+                        position.last_placed_stop_price = achieved.price
+                        update_kwargs: dict[str, Any] = {"stop_loss_order_id": sl_order_id}
+                        if achieved.price != intended_stop_price:
+                            # The adopted order may rest at a price within
+                            # tolerance of but not equal to what this default
+                            # stop intended -- correct position.stop_loss too
+                            # so the engine's own exit check never diverges
+                            # from what the exchange will actually trigger at
+                            # (mirrors move(), #1167/#1187).
+                            position.stop_loss = achieved.price
+                            update_kwargs["stop_loss"] = achieved.price
                         sl_placed = True
                         logger.info(
                             "Placed recovery stop-loss for %s: %s @ %.2f",
@@ -1497,7 +1605,7 @@ class PositionReconciler:
                             try:
                                 self.db_manager.update_position(
                                     position_id=db_id,
-                                    stop_loss_order_id=sl_order_id,
+                                    **update_kwargs,
                                 )
                             except Exception as e:
                                 logger.warning(
@@ -1846,12 +1954,14 @@ class PositionReconciler:
 
         position.stop_loss_order_id = None  # type: ignore[attr-defined]
 
-        # Compute remaining quantity based on current_size / original_size
+        # Compute remaining quantity based on current_size / original_size. allow_scale_in=True:
+        # this sizes the actual re-placed stop, so a real (even legacy-scaled-in) held amount
+        # must still be protected rather than under-sized to the unscaled qty.
         qty = getattr(position, "quantity", 0) or 0.0
         current = getattr(position, "current_size", None)
         original = getattr(position, "original_size", None)
-        if current is not None and original is not None and original > 0:
-            qty = qty * (current / original)
+        scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
+        qty = qty if scaled is None else scaled
 
         if qty <= 0:
             return
@@ -1863,6 +1973,7 @@ class PositionReconciler:
             side = getattr(position, "side", "long")
             side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
             sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
+            achieved = _AchievedStopPriceCapture(stop_loss)
             new_sl_id = place_or_adopt_stop_loss(
                 self.exchange,
                 symbol=symbol,
@@ -1874,14 +1985,28 @@ class PositionReconciler:
                 # open-orders view yet; without this the just-cancelled order
                 # could be re-adopted as if it were a genuine untracked stop.
                 exclude_order_id=sl_order_id,
+                on_adopt=achieved,
             )
             if new_sl_id:
                 position.stop_loss_order_id = new_sl_id  # type: ignore[attr-defined]
+                # Baseline for the min-trailing-stop-move floor (#1179) --
+                # must reflect where the exchange order actually landed, not
+                # this resize's own intent (#1198).
+                position.last_placed_stop_price = achieved.price  # type: ignore[attr-defined]
+                update_kwargs: dict[str, Any] = {"stop_loss_order_id": new_sl_id}
+                if achieved.price != stop_loss:
+                    # Mirrors move() (#1167/#1187): keep the engine's own exit
+                    # check from trusting a price the exchange isn't actually
+                    # resting at. The resize intentionally keeps the same
+                    # stop level as before the partial exit -- only an adopt
+                    # can move it.
+                    position.stop_loss = achieved.price  # type: ignore[attr-defined]
+                    update_kwargs["stop_loss"] = achieved.price
                 logger.info(
                     "Replaced stop-loss for %s after partial exit: %s @ %.2f " "(qty=%.6f)",
                     symbol,
                     new_sl_id,
-                    stop_loss,
+                    achieved.price,
                     qty,
                 )
                 # Persist the new SL order ID to DB
@@ -1889,7 +2014,7 @@ class PositionReconciler:
                     try:
                         self.db_manager.update_position(
                             position_id=db_pos_id,
-                            stop_loss_order_id=new_sl_id,
+                            **update_kwargs,
                         )
                     except Exception as e:
                         logger.warning(
@@ -2006,6 +2131,17 @@ class PositionReconciler:
             # Accepts both "atb_" (entry) and "atbx_" (exit) prefixed orders.
             client_id = getattr(order, "client_order_id", None)
             if not client_id or not client_id.startswith(client_prefix):
+                continue
+
+            # A protective stop-loss shares the same symbol/side/quantity as
+            # the entry/exit it protects (and a trailing-stop move() often
+            # re-creates one minutes before an exit), so an "atbsl_"-prefixed
+            # order can otherwise satisfy every remaining filter below and get
+            # incorrectly correlated to an unresolved journal row -- a FILLED
+            # stop-loss would then fabricate/repair a position from the wrong
+            # order's price, and a CANCELLED one would resolve the row as
+            # "never happened" (#740 follow-up).
+            if client_id.startswith("atbsl_"):
                 continue
 
             # Filter: matching side
@@ -2147,8 +2283,10 @@ class PositionReconciler:
                     qty = float(getattr(position, "quantity", 0) or 0.0)
                     current = getattr(position, "current_size", None)
                     original = getattr(position, "original_size", None)
-                    if current is not None and original is not None and float(original) > 0:
-                        qty = qty * (float(current) / float(original))
+                    # allow_scale_in=True: sizes the actual re-placed stop.
+                    scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
+                    qty = qty if scaled is None else scaled
+                    achieved = _AchievedStopPriceCapture(sl_price)
                     new_sl_id = place_or_adopt_stop_loss(
                         self.exchange,
                         symbol=position.symbol,
@@ -2156,14 +2294,25 @@ class PositionReconciler:
                         quantity=qty,
                         stop_price=sl_price,
                         side_effect_type=SideEffectType.AUTO_REPAY,
+                        on_adopt=achieved,
                     )
                     if new_sl_id:
                         position.stop_loss_order_id = new_sl_id
+                        # Baseline for the min-trailing-stop-move floor
+                        # (#1179) -- must reflect where the exchange order
+                        # actually landed, not this placement's own intent
+                        # (#1198).
+                        position.last_placed_stop_price = achieved.price
+                        if achieved.price != sl_price:
+                            # Mirrors move() (#1167/#1187): keep the engine's
+                            # own exit check from trusting a price the
+                            # exchange isn't actually resting at.
+                            position.stop_loss = achieved.price
                         logger.info(
                             "Placed missing stop-loss for %s: %s @ %.2f",
                             position.symbol,
                             new_sl_id,
-                            sl_price,
+                            achieved.price,
                         )
                         # Persist to DB
                         db_pos_id = getattr(position, "db_position_id", None)
@@ -2172,7 +2321,7 @@ class PositionReconciler:
                                 self.db_manager.update_position(
                                     position_id=db_pos_id,
                                     stop_loss_order_id=new_sl_id,
-                                    stop_loss=sl_price,
+                                    stop_loss=achieved.price,
                                 )
                             except Exception as e:
                                 logger.warning(
@@ -2456,27 +2605,46 @@ class PositionReconciler:
                         side = getattr(position, "side", "long")
                         side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
                         sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
-                        # Scale quantity by remaining size after partial exits
+                        # Scale quantity by remaining size after partial exits.
+                        # allow_scale_in=True: sizes the actual re-placed stop.
                         qty = getattr(position, "quantity", 0) or 0.0
                         current = getattr(position, "current_size", None)
                         original = getattr(position, "original_size", None)
-                        if current is not None and original is not None and original > 0:
-                            qty = qty * (current / original)
+                        scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
+                        qty = qty if scaled is None else scaled
+                        intended_stop_price = position.stop_loss
+                        achieved = _AchievedStopPriceCapture(intended_stop_price)
                         new_sl_id = place_or_adopt_stop_loss(
                             self.exchange,
                             symbol=position.symbol,
                             side=sl_side,
                             quantity=qty,
-                            stop_price=position.stop_loss,
+                            stop_price=intended_stop_price,
                             side_effect_type=SideEffectType.AUTO_REPAY,
+                            on_adopt=achieved,
                         )
                         if new_sl_id:
                             position.stop_loss_order_id = new_sl_id
+                            # Baseline for the min-trailing-stop-move floor
+                            # (#1179) -- must reflect where the exchange order
+                            # actually landed, not this re-placement's own
+                            # intent (#1198).
+                            position.last_placed_stop_price = achieved.price
+                            update_kwargs: dict[str, Any] = {
+                                "stop_loss_order_id": new_sl_id,
+                            }
+                            if achieved.price != intended_stop_price:
+                                # Mirrors move() (#1167/#1187): keep the
+                                # engine's own exit check from trusting a
+                                # price the exchange isn't actually resting
+                                # at.
+                                position.stop_loss = achieved.price
+                                update_kwargs["stop_loss"] = achieved.price
                             logger.info(
                                 "Re-placed missing stop-loss for %s: %s @ %.2f",
                                 position.symbol,
                                 new_sl_id,
-                                position.stop_loss,
+                                achieved.price,
                             )
                             # Persist the new SL order ID to DB
                             db_pos_id = getattr(position, "db_position_id", None)
@@ -2484,7 +2652,7 @@ class PositionReconciler:
                                 try:
                                     self.db_manager.update_position(
                                         position_id=db_pos_id,
-                                        stop_loss_order_id=new_sl_id,
+                                        **update_kwargs,
                                     )
                                 except Exception as e:
                                     logger.warning(
@@ -2529,12 +2697,17 @@ class PositionReconciler:
                 # the SL fills some of that, the remaining is held_qty - filled_qty.
                 if filled_qty > 0 and hasattr(position, "quantity") and position.quantity > 0:
                     old_quantity = position.quantity
-                    # Compute what we actually hold before the SL fill
+                    # Compute what we actually hold before the SL fill. allow_scale_in=True:
+                    # this is the real held amount used to derive the remaining size below, not
+                    # a persisted record.
                     held_qty = position.quantity
                     current = getattr(position, "current_size", None)
                     original = getattr(position, "original_size", None)
-                    if current is not None and original is not None and original > 0:
-                        held_qty = position.quantity * (current / original)
+                    scaled = held_base_quantity(
+                        position.quantity, current, original, allow_scale_in=True
+                    )
+                    if scaled is not None:
+                        held_qty = scaled
                     # After SL fill, what remains
                     remaining_qty = max(held_qty - filled_qty, 0.0)
 
@@ -2618,13 +2791,14 @@ class PositionReconciler:
                         side = getattr(position, "side", "long")
                         side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
                         sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
-                        # Scale quantity by current_size/original_size to get
-                        # actual held amount after partial exits and SL fills.
+                        # Scale quantity by current_size/original_size to get actual held
+                        # amount after partial exits and SL fills. allow_scale_in=True:
+                        # sizes the actual re-placed stop.
                         qty = getattr(position, "quantity", 0) or 0.0
                         cs = getattr(position, "current_size", None)
                         os_ = getattr(position, "original_size", None)
-                        if cs is not None and os_ is not None and os_ > 0:
-                            qty = qty * (cs / os_)
+                        scaled = held_base_quantity(qty, cs, os_, allow_scale_in=True)
+                        qty = qty if scaled is None else scaled
                         # Position is flat — no SL needed
                         if qty <= 0:
                             logger.info(
@@ -2632,33 +2806,49 @@ class PositionReconciler:
                                 position.symbol,
                             )
                             return
+                        intended_stop_price = position.stop_loss
+                        achieved = _AchievedStopPriceCapture(intended_stop_price)
                         new_sl_id = place_or_adopt_stop_loss(
                             self.exchange,
                             symbol=position.symbol,
                             side=sl_side,
                             quantity=qty,
-                            stop_price=position.stop_loss,
+                            stop_price=intended_stop_price,
                             side_effect_type=SideEffectType.AUTO_REPAY,
+                            on_adopt=achieved,
                         )
                         if new_sl_id:
                             position.stop_loss_order_id = new_sl_id
+                            # Baseline for the min-trailing-stop-move floor
+                            # (#1179) -- must reflect where the exchange order
+                            # actually landed, not this re-placement's own
+                            # intent (#1198).
+                            position.last_placed_stop_price = achieved.price
+                            if achieved.price != intended_stop_price:
+                                # Mirrors move() (#1167/#1187): keep the
+                                # engine's own exit check from trusting a
+                                # price the exchange isn't actually resting
+                                # at.
+                                position.stop_loss = achieved.price
                             logger.info(
                                 "Re-placed stop-loss for %s: %s @ %.2f",
                                 position.symbol,
                                 new_sl_id,
-                                position.stop_loss,
+                                achieved.price,
                             )
                             # Persist new SL order ID and updated current_size
                             # so restart doesn't reload stale values.
                             db_pos_id = getattr(position, "db_position_id", None)
                             if db_pos_id is not None:
                                 try:
-                                    update_kwargs: dict[str, Any] = {
+                                    update_kwargs = {
                                         "stop_loss_order_id": new_sl_id,
                                     }
                                     _cs = getattr(position, "current_size", None)
                                     if _cs is not None:
                                         update_kwargs["current_size"] = _cs
+                                    if achieved.price != intended_stop_price:
+                                        update_kwargs["stop_loss"] = achieved.price
                                     self.db_manager.update_position(
                                         position_id=db_pos_id,
                                         **update_kwargs,
@@ -2815,8 +3005,9 @@ class PositionReconciler:
             qty = getattr(position, "quantity", 0) or 0.0
             current = getattr(position, "current_size", None)
             original = getattr(position, "original_size", None)
-            if current is not None and original is not None and original > 0:
-                qty = qty * (current / original)
+            # allow_scale_in=True: sizes the actual re-placed stop.
+            scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
+            qty = qty if scaled is None else scaled
             if qty <= 0:
                 logger.info(
                     "Position %s is flat — skipping stop-loss re-placement after cancel",
@@ -2825,6 +3016,7 @@ class PositionReconciler:
                 position.stop_loss_order_id = None
                 return
 
+            achieved = _AchievedStopPriceCapture(tracked_price)
             new_sl_id = place_or_adopt_stop_loss(
                 self.exchange,
                 symbol=symbol,
@@ -2833,6 +3025,7 @@ class PositionReconciler:
                 stop_price=tracked_price,
                 side_effect_type=SideEffectType.AUTO_REPAY,
                 exclude_order_id=sl_order_id,
+                on_adopt=achieved,
             )
         except Exception as e:
             logger.critical(
@@ -2842,12 +3035,38 @@ class PositionReconciler:
                 e,
             )
             new_sl_id = None
+            achieved = _AchievedStopPriceCapture(tracked_price)
 
         position.stop_loss_order_id = new_sl_id
+        update_kwargs: dict[str, Any] = {"stop_loss_order_id": new_sl_id}
+        if new_sl_id:
+            # last_placed_stop_price is the min-trailing-stop-move floor's
+            # baseline (#1179) -- it must reflect where the exchange order
+            # actually landed, not what this correction intended (#1187).
+            position.last_placed_stop_price = achieved.price
+            if achieved.price != tracked_price:
+                if _achieved_price_is_safe_to_ratify(side_is_long, achieved.price, tracked_price):
+                    # The adopted order may rest at a price within tolerance of
+                    # but not equal to tracked_price -- correct position.stop_loss
+                    # too so the engine's own exit check never diverges from what
+                    # the exchange will actually trigger at (mirrors move(), #1167).
+                    position.stop_loss = achieved.price
+                    update_kwargs["stop_loss"] = achieved.price
+                else:
+                    logger.critical(
+                        "Adopted stop-loss for %s achieved $%.2f, looser than the "
+                        "intended $%.2f -- NOT ratifying into position.stop_loss "
+                        "(would weaken the engine's own exit trigger); leaving the "
+                        "divergence for the next reconciliation pass.",
+                        symbol,
+                        achieved.price,
+                        tracked_price,
+                    )
+
         db_pos_id = getattr(position, "db_position_id", None)
         if db_pos_id is not None:
             try:
-                self.db_manager.update_position(position_id=db_pos_id, stop_loss_order_id=new_sl_id)
+                self.db_manager.update_position(position_id=db_pos_id, **update_kwargs)
             except Exception as e:
                 logger.warning(
                     "Failed to persist corrected stop-loss order ID for %s: %s", symbol, e
@@ -2858,7 +3077,7 @@ class PositionReconciler:
                 "Corrected diverged stop-loss for %s: new order %s @ %.2f",
                 symbol,
                 new_sl_id,
-                tracked_price,
+                achieved.price,
             )
         else:
             logger.critical(
@@ -2949,21 +3168,19 @@ class PositionReconciler:
         """Base quantity represented by a reconciler close: the original fill scaled by
         ``current_size / original_size``. For a partial exit this is the remaining slice;
         for a scale-in it is the larger held amount (what the exit actually sells). Returns
-        the unscaled fill when sizing metadata is missing."""
+        the unscaled fill when sizing metadata is missing.
+
+        ``allow_scale_in=True``: this feeds the real P&L and sell quantity for a
+        reconciler-driven close, not a persisted record — a scale-in's actual held amount
+        must be used even though ``_log_reconciliation_trade`` separately NULLs the
+        *logged* ``trades.quantity`` for the same case (mirroring the engine's own
+        ``_closed_base_quantity`` policy for that persisted column).
+        """
         qty = abs(float(getattr(position, "quantity", 0.0) or 0.0))
         original = getattr(position, "original_size", None)
         current = getattr(position, "current_size", None)
-        try:
-            if (
-                original is not None
-                and original != 0
-                and current is not None
-                and float(original) > 0
-            ):
-                return qty * (float(current) / float(original))
-        except (TypeError, ValueError):
-            pass
-        return qty
+        scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
+        return qty if scaled is None else scaled
 
     def _external_close_exit_price(self, position: Any) -> float:
         """Best-effort exit price for an externally-closed position.
@@ -3076,10 +3293,11 @@ class PositionReconciler:
 
         current_size = getattr(position, "current_size", None)
         original_size = getattr(position, "original_size", None)
-        if current_size is not None and original_size is not None and original_size > 0:
-            position_qty = qty * (current_size / original_size)
-        else:
-            position_qty = qty
+        # allow_scale_in=True: this feeds the external-close detection threshold below, not
+        # a persisted record — under-sizing a real scale-in would falsely flag a still-held
+        # position as externally closed.
+        scaled = held_base_quantity(qty, current_size, original_size, allow_scale_in=True)
+        position_qty = qty if scaled is None else scaled
 
         try:
             balance = self.exchange.get_balance(base_asset)
@@ -3213,10 +3431,10 @@ class PositionReconciler:
             qty = float(getattr(position, "quantity", 0) or 0.0)
             current_size = getattr(position, "current_size", None)
             original_size = getattr(position, "original_size", None)
-            if current_size is not None and original_size is not None and float(original_size) > 0:
-                position_qty = qty * (float(current_size) / float(original_size))
-            else:
-                position_qty = qty
+            # allow_scale_in=True: feeds the margin external-close threshold below, not a
+            # persisted record — under-sizing would falsely flag a real scale-in as gone
+            scaled = held_base_quantity(qty, current_size, original_size, allow_scale_in=True)
+            position_qty = qty if scaled is None else scaled
 
             if is_short:
                 # Short positions create debt — check raw borrowed amount.
@@ -3375,11 +3593,14 @@ class PositionReconciler:
             qty = float(getattr(position, "quantity", None) or 0.0)
             price = float(getattr(position, "entry_price", 0) or 0.0)
             if qty > 0 and price > 0:
-                # Scale by current_size/original_size to account for partial exits
+                # Scale by current_size/original_size to account for partial exits.
+                # allow_scale_in=True: this feeds the balance-reconciliation notional
+                # estimate, not a persisted record — under-sizing a real scale-in would
+                # understate deployed capital and misfire the balance-discrepancy alert.
                 current = getattr(position, "current_size", None)
                 original = getattr(position, "original_size", None)
-                if current is not None and original is not None and float(original) > 0:
-                    qty = qty * (float(current) / float(original))
+                scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
+                qty = qty if scaled is None else scaled
                 total += qty * price
         return total
 
@@ -3545,10 +3766,12 @@ class PositionReconciler:
         # Scale quantity by current_size/original_size to account for partial
         # exits. Without this, closing after a 50% partial exit would calculate
         # P&L on the full original quantity, doubling the realized amount.
+        # allow_scale_in=True: this is a real balance-affecting P&L calculation, not a
+        # persisted record — under-sizing a real scale-in would misrealize P&L.
         current = getattr(position, "current_size", None)
         original = getattr(position, "original_size", None)
-        if current is not None and original is not None and float(original) > 0:
-            qty = qty * (float(current) / float(original))
+        scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
+        qty = qty if scaled is None else scaled
 
         # Calculate realized P&L (long: sell higher = profit)
         side = getattr(position, "side", "long")
@@ -3722,20 +3945,29 @@ class PositionReconciler:
             # held quantity is not reliably derivable. The engine stores NULL quantity and
             # does not inflate the entry fee (_closed_base_quantity -> None,
             # _close_position_portion -> 1.0); mirror that here rather than over-reporting.
+            # held_base_quantity's DEFAULT guard (no allow_scale_in) is that same policy for
+            # a scale-in and every other corrupted-sizing case -- unlike every other
+            # reconciliation.py call site, this one feeds a persisted ``trades.quantity``
+            # audit column, so it must NOT allow_scale_in. One case is not identical to
+            # _closed_base_quantity: a flat current_size == 0.0 is a valid (not nulled) input
+            # here, since the qty this function receives for a flat slice is already 0 by the
+            # time it gets here (unchanged from before this consolidation) -- there is nothing
+            # left to fabricate by logging quantity=0.
+            # Fall back to ``size`` when original_size/current_size were never set (None) --
+            # e.g. a recovered position that was never partially exited or scaled in, so the
+            # lazy current_size/original_size = size init in apply_partial_exit/apply_scale_in
+            # never ran. Mirrors _closed_base_quantity's identical fallback exactly: without
+            # it, held_base_quantity's stricter "both required" guard would null a perfectly
+            # ordinary, unscaled close's logged quantity.
+            size = getattr(position, "size", None)
             original = getattr(position, "original_size", None)
             current = getattr(position, "current_size", None)
-            try:
-                scaled_in = (
-                    original is not None
-                    and original != 0
-                    and current is not None
-                    and float(current) > float(original)
-                )
-            except (TypeError, ValueError):
-                scaled_in = False
-            if scaled_in:
+            effective_original = original if original is not None else size
+            effective_current = current if current is not None else size
+            raw_quantity = getattr(position, "quantity", 0.0) or 0.0
+            if held_base_quantity(raw_quantity, effective_current, effective_original) is None:
                 logged_quantity = None
-                fee_base_qty = abs(float(getattr(position, "quantity", 0.0) or 0.0))
+                fee_base_qty = abs(float(raw_quantity))
             else:
                 logged_quantity = qty_abs
                 fee_base_qty = qty_abs
@@ -3921,6 +4153,7 @@ class PeriodicReconciler:
         sweep_cooldown: dict[str, float] | None = None,
         lock_registry: Any = None,
         data_provider: Any | None = None,
+        order_tracker: Any = None,
     ) -> None:
         """Initialize periodic reconciler.
 
@@ -3940,9 +4173,14 @@ class PeriodicReconciler:
                 to cross-margin accounts.
             symbols: Configured trading symbols, used by the orphaned-borrow sweep
                 to know which base assets it may repay.
+            order_tracker: The engine's OrderTracker, so stop-losses placed by this
+                reconciler (e.g. ``_place_missing_stop_loss``) get real-time WS
+                fill/cancel routing instead of waiting for the next reconcile pass
+                to discover them independently. None in paper mode / standalone use.
         """
         self.exchange = exchange_interface
         self.position_tracker = position_tracker
+        self.order_tracker = order_tracker
         self.db_manager = db_manager
         self.session_id = session_id
         self._use_margin = use_margin
@@ -4132,10 +4370,12 @@ class PeriodicReconciler:
                 qty = float(getattr(position, "quantity", None) or 0.0)
                 price = float(getattr(position, "entry_price", 0) or 0.0)
                 if qty > 0 and price > 0:
+                    # allow_scale_in=True: feeds the notional estimate for the balance
+                    # discrepancy check, not a persisted record.
                     current = getattr(position, "current_size", None)
                     original = getattr(position, "original_size", None)
-                    if current is not None and original is not None and float(original) > 0:
-                        qty = qty * (float(current) / float(original))
+                    scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
+                    qty = qty if scaled is None else scaled
                     position_notional += qty * price
             expected_usdt = db_balance - position_notional
             # Use abs(expected_usdt) to avoid a false CRITICAL when expected_usdt is
@@ -4206,6 +4446,15 @@ class PeriodicReconciler:
         # Snapshot positions (release lock before API calls)
         positions_snapshot = self.position_tracker.positions
         if not positions_snapshot:
+            # An orphaned order is DEFINED by having no tracked position, so this
+            # sweep must run precisely in the flat case this early return would
+            # otherwise skip entirely (#740) -- mirroring the orphaned-borrow
+            # sweep above, which runs before the flat return for the same reason.
+            sweep_severity = self._sweep_orphaned_orders()
+            if sweep_severity is not None:
+                self._emit_cycle_severity(
+                    sweep_severity, ["orphaned order(s) cancelled while flat"]
+                )
             return
 
         max_severity = Severity.LOW
@@ -4296,10 +4545,10 @@ class PeriodicReconciler:
                     qty = float(getattr(position, "quantity", None) or 0.0)
                     cur = getattr(position, "current_size", None)
                     orig = getattr(position, "original_size", None)
-                    if cur is not None and orig is not None and float(orig) > 0:
-                        pos_qty = qty * (float(cur) / float(orig))
-                    else:
-                        pos_qty = qty
+                    # allow_scale_in=True: feeds the margin external-close threshold below,
+                    # not a persisted record.
+                    scaled = held_base_quantity(qty, cur, orig, allow_scale_in=True)
+                    pos_qty = qty if scaled is None else scaled
 
                     if is_short:
                         # Short detection: use raw borrowed amount.
@@ -4495,10 +4744,10 @@ class PeriodicReconciler:
 
                 current_size = getattr(position, "current_size", None)
                 original_size = getattr(position, "original_size", None)
-                if current_size is not None and original_size is not None and original_size > 0:
-                    position_qty = qty * (current_size / original_size)
-                else:
-                    position_qty = qty
+                # allow_scale_in=True: feeds the external-close detection threshold below,
+                # not a persisted record.
+                scaled = held_base_quantity(qty, current_size, original_size, allow_scale_in=True)
+                position_qty = qty if scaled is None else scaled
 
                 try:
                     base_asset = PositionReconciler._extract_base_asset(position.symbol)
@@ -4683,13 +4932,15 @@ class PeriodicReconciler:
                             pos_qty = getattr(position, "quantity", 0) or 0.0
                             current = getattr(position, "current_size", None)
                             original = getattr(position, "original_size", None)
-                            if (
-                                current is not None
-                                and original is not None
-                                and original > 0
-                                and pos_qty > 0
-                            ):
-                                held = pos_qty * (current / original)
+                            # allow_scale_in=True: this derives the real remaining held amount
+                            # after the SL's partial fill, not a persisted record.
+                            # held_base_quantity already guarantees original is finite-positive
+                            # whenever it returns non-None; `original is not None` below is
+                            # just the mypy narrowing for the `original * ...` use.
+                            held = held_base_quantity(
+                                pos_qty, current, original, allow_scale_in=True
+                            )
+                            if held is not None and original is not None:
                                 remaining = max(held - partial_fill, 0.0)
                                 position.current_size = original * (remaining / max(pos_qty, 1e-9))
                             else:
@@ -4725,12 +4976,13 @@ class PeriodicReconciler:
                             side = getattr(position, "side", "long")
                             side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
                             sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
-                            # Compute held qty accounting for partial exits
+                            # Compute held qty accounting for partial exits.
+                            # allow_scale_in=True: sizes the actual re-placed stop.
                             qty = getattr(position, "quantity", 0) or 0.0
                             current = getattr(position, "current_size", None)
                             original = getattr(position, "original_size", None)
-                            if current is not None and original is not None and original > 0:
-                                qty = qty * (current / original)
+                            scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
+                            qty = qty if scaled is None else scaled
                             # Position is flat — skip SL, remove from tracker
                             if qty <= 0:
                                 logger.info(
@@ -4739,6 +4991,8 @@ class PeriodicReconciler:
                                     position.symbol,
                                 )
                                 continue
+                            achieved = _AchievedStopPriceCapture(stop_price)
+                            ratified_stop_loss = False
                             with self._stop_loss_placement_lock(position.symbol):
                                 # Null and (on success) re-set INSIDE the lock:
                                 # move()'s trailing-stop ratchet serialises on
@@ -4754,30 +5008,72 @@ class PeriodicReconciler:
                                     quantity=qty,
                                     stop_price=stop_price,
                                     side_effect_type=SideEffectType.AUTO_REPAY,
+                                    on_adopt=achieved,
                                 )
                                 if new_sl_id:
                                     position.stop_loss_order_id = new_sl_id
-                                    position.last_placed_stop_price = stop_price
+                                    # Baseline for the min-trailing-stop-move
+                                    # floor (#1179) -- must reflect where the
+                                    # exchange order actually landed, not this
+                                    # re-placement's own intent (#1187).
+                                    position.last_placed_stop_price = achieved.price
+                                    if achieved.price != stop_price:
+                                        if _achieved_price_is_safe_to_ratify(
+                                            side_is_long, achieved.price, stop_price
+                                        ):
+                                            # Mirrors move() (#1167): keep the
+                                            # engine's own exit check from trusting
+                                            # a price the exchange isn't actually
+                                            # resting at.
+                                            position.stop_loss = achieved.price
+                                            ratified_stop_loss = True
+                                        else:
+                                            logger.critical(
+                                                "Adopted stop-loss for %s achieved $%.2f, "
+                                                "looser than the intended $%.2f -- NOT "
+                                                "ratifying into position.stop_loss (would "
+                                                "weaken the engine's own exit trigger); "
+                                                "leaving the divergence for the next "
+                                                "reconciliation pass.",
+                                                position.symbol,
+                                                achieved.price,
+                                                stop_price,
+                                            )
                             if new_sl_id:
+                                if self.order_tracker:
+                                    self.order_tracker.track_order(new_sl_id, position.symbol)
                                 logger.info(
                                     "Re-placed stop-loss for %s: %s @ %.2f " "(periodic check)",
                                     position.symbol,
                                     new_sl_id,
-                                    stop_price,
+                                    achieved.price,
                                 )
                                 db_pos_id = getattr(position, "db_position_id", None)
                                 if db_pos_id is not None:
                                     try:
-                                        _update_kw: dict[str, Any] = {
-                                            "stop_loss_order_id": new_sl_id,
-                                        }
+                                        _update_kw: dict[str, Any] = {}
                                         _cs = getattr(position, "current_size", None)
                                         if _cs is not None:
                                             _update_kw["current_size"] = _cs
-                                        self.db_manager.update_position(
-                                            position_id=db_pos_id,
-                                            **_update_kw,
-                                        )
+                                        # Re-verify under the lock before persisting
+                                        # stop_loss_order_id/stop_loss: a concurrent
+                                        # move() could have acquired the placement
+                                        # lock the instant it was released above,
+                                        # ratcheted the stop, and persisted its own
+                                        # newer values -- persisting ours
+                                        # unconditionally here would clobber them
+                                        # back to stale ones (#1199 P1).
+                                        with self._stop_loss_placement_lock(position.symbol):
+                                            still_ours = position.stop_loss_order_id == new_sl_id
+                                        if still_ours:
+                                            _update_kw["stop_loss_order_id"] = new_sl_id
+                                            if ratified_stop_loss:
+                                                _update_kw["stop_loss"] = achieved.price
+                                        if _update_kw:
+                                            self.db_manager.update_position(
+                                                position_id=db_pos_id,
+                                                **_update_kw,
+                                            )
                                     except Exception as e:
                                         logger.warning(
                                             "Failed to persist re-placed SL " "order ID for %s: %s",
@@ -4837,52 +5133,15 @@ class PeriodicReconciler:
                     e,
                 )
 
-        # 3. Check for orphaned orders with our prefix.
-        # Rebuild tracked IDs from a fresh position snapshot so that any
-        # positions closed during steps 1-2 are excluded, preventing
-        # cancellation of valid stop-loss orders on newly opened positions.
-        try:
-            fresh_snapshot = self.position_tracker.positions
-            if fresh_snapshot:
-                tracked_exchange_ids = set()
-                for pos in fresh_snapshot.values():
-                    eid = getattr(pos, "exchange_order_id", None)
-                    if eid:
-                        tracked_exchange_ids.add(eid)
-                    sl_id = getattr(pos, "stop_loss_order_id", None)
-                    if sl_id:
-                        tracked_exchange_ids.add(sl_id)
-
-                # Query open orders for every symbol with active positions
-                symbols = set(pos.symbol for pos in fresh_snapshot.values())
-                for symbol in symbols:
-                    open_orders = self.exchange.get_open_orders(symbol)
-                    for order in open_orders:
-                        if order.order_id not in tracked_exchange_ids:
-                            client_id = getattr(order, "client_order_id", "") or ""
-                            if client_id.startswith("atb"):  # Catches atb_ (entry) and atbx_ (exit)
-                                logger.warning(
-                                    "Orphaned order found: %s (%s) on %s — cancelling",
-                                    order.order_id,
-                                    client_id,
-                                    symbol,
-                                )
-                                try:
-                                    self.exchange.cancel_order(order.order_id, symbol)
-                                    logger.info(
-                                        "Cancelled orphaned order %s on %s",
-                                        order.order_id,
-                                        symbol,
-                                    )
-                                except Exception as cancel_err:
-                                    logger.warning(
-                                        "Failed to cancel orphaned order %s: %s",
-                                        order.order_id,
-                                        cancel_err,
-                                    )
-                                max_severity = Severity.HIGH
-        except Exception as e:
-            logger.warning("Orphaned order check failed: %s", e)
+        # 3. Check for orphaned orders (entry/exit/stop-loss) with no tracked
+        # position. Uses a snapshot taken fresh right now (not positions_snapshot
+        # from the top of the cycle) so a position closed during steps 1-2 above
+        # is already excluded -- an orphaned stop-loss left behind by that close
+        # is caught THIS cycle instead of waiting for the next one.
+        sweep_severity = self._sweep_orphaned_orders()
+        if sweep_severity is not None and sweep_severity > max_severity:
+            max_severity = sweep_severity
+            findings.append("orphaned order(s) cancelled")
 
         # 4. Verify balance — delegates to the shared, self-contained reconcile that
         # values a FRESH position snapshot (a position closed earlier this cycle is
@@ -4909,6 +5168,94 @@ class PeriodicReconciler:
         # cycle and per-item locks are released, so the alert webhook cannot
         # block a position mutation.
         self._emit_cycle_severity(max_severity, findings)
+
+    def _sweep_orphaned_orders(self) -> Severity | None:
+        """Cancel resting exchange orders that belong to no tracked position (#740).
+
+        An orphaned order is defined by the ABSENCE of a tracked position, so this
+        must check every configured symbol (``self._symbols``), not only symbols
+        that currently have one -- a stop-loss left resting on a symbol the bot is
+        flat on is exactly the case this exists to catch, and is invisible to a
+        scan scoped to symbols with an open position. Callers must run this
+        regardless of whether the tracker is flat; see the two call sites in
+        ``_reconcile_cycle``.
+
+        Matches on the ``atb`` client-order-id prefix, which every entry (``atb_``)
+        and exit (``atbx_``) order carries, and which ``place_or_adopt_stop_loss``
+        now also stamps on every stop-loss placement (``atbsl_``) -- so this one
+        sweep covers all three order classes this bot places. An order whose id is
+        in ``tracked_exchange_ids`` (built from every known position's
+        ``exchange_order_id``/``stop_loss_order_id``, not filtered by symbol) is
+        never cancelled even if untracked-looking by prefix, which is what keeps a
+        currently-protecting stop-loss for a live position safe here.
+
+        Returns ``Severity.HIGH`` if anything was cancelled this call, else
+        ``None`` (nothing found, or the sweep itself failed -- fail-open by
+        design, matching ``get_open_orders``'s own fail-open contract, since a
+        lookup failure here must not block the rest of the reconciliation cycle).
+
+        Runs each symbol's query+cancel under ``_stop_loss_placement_lock``
+        (#740 follow-up): before this order class carried the ``atb`` prefix a
+        stop-loss could never match here, so this sweep never needed to
+        serialise against placement. Now that it does, an unlocked sweep could
+        observe the window between a stop actually landing on the exchange and
+        ``stop_loss_order_id`` being recorded -- every placement path
+        (``place_protection``/``reprotect``/``move``) already serialises that
+        exact window on this same lock -- and cancel a live protective stop.
+        The per-symbol snapshot is re-read fresh inside the lock so an id
+        recorded while this sweep was waiting on it is honoured.
+        """
+        found_orphan = False
+        try:
+            fresh_snapshot = self.position_tracker.positions
+            # Every configured symbol, plus (defensively) any symbol with a
+            # tracked position that isn't in that configured list.
+            symbols = set(self._symbols) | {pos.symbol for pos in fresh_snapshot.values()}
+            if not symbols:
+                return None
+
+            for symbol in symbols:
+                with self._stop_loss_placement_lock(symbol):
+                    tracked_exchange_ids = set()
+                    for pos in self.position_tracker.positions.values():
+                        eid = getattr(pos, "exchange_order_id", None)
+                        if eid:
+                            tracked_exchange_ids.add(eid)
+                        sl_id = getattr(pos, "stop_loss_order_id", None)
+                        if sl_id:
+                            tracked_exchange_ids.add(sl_id)
+
+                    open_orders = self.exchange.get_open_orders(symbol)
+                    for order in open_orders:
+                        if order.order_id in tracked_exchange_ids:
+                            continue
+                        client_id = getattr(order, "client_order_id", "") or ""
+                        if not client_id.startswith("atb"):  # atb_/atbx_/atbsl_
+                            continue
+                        logger.warning(
+                            "Orphaned order found: %s (%s) on %s — cancelling",
+                            order.order_id,
+                            client_id,
+                            symbol,
+                        )
+                        try:
+                            self.exchange.cancel_order(order.order_id, symbol)
+                            logger.info(
+                                "Cancelled orphaned order %s on %s",
+                                order.order_id,
+                                symbol,
+                            )
+                            found_orphan = True
+                        except Exception as cancel_err:
+                            logger.warning(
+                                "Failed to cancel orphaned order %s: %s",
+                                order.order_id,
+                                cancel_err,
+                            )
+            return Severity.HIGH if found_orphan else None
+        except Exception as e:
+            logger.warning("Orphaned order check failed: %s", e)
+            return Severity.HIGH if found_orphan else None
 
     def _emit_cycle_severity(
         self, max_severity: Severity, findings: list[str] | None = None
@@ -5190,6 +5537,7 @@ class PeriodicReconciler:
         with self._stop_loss_placement_lock(symbol):
             position.stop_loss_order_id = None
 
+        ratified_stop_loss = False
         try:
             from src.data_providers.exchange_interface import OrderSide
 
@@ -5199,8 +5547,9 @@ class PeriodicReconciler:
             qty = getattr(position, "quantity", 0) or 0.0
             current = getattr(position, "current_size", None)
             original = getattr(position, "original_size", None)
-            if current is not None and original is not None and original > 0:
-                qty = qty * (current / original)
+            # allow_scale_in=True: sizes the actual re-placed stop.
+            scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
+            qty = qty if scaled is None else scaled
             if qty <= 0:
                 logger.info(
                     "Position %s is flat — skipping stop-loss re-placement after cancel "
@@ -5212,6 +5561,7 @@ class PeriodicReconciler:
             # Place and (on success) re-set INSIDE the lock too, so a concurrent
             # move() re-reading stop_loss_order_id never observes a state this
             # correction hasn't fully committed.
+            achieved = _AchievedStopPriceCapture(tracked_price)
             with self._stop_loss_placement_lock(symbol):
                 new_sl_id = place_or_adopt_stop_loss(
                     self.exchange,
@@ -5221,10 +5571,34 @@ class PeriodicReconciler:
                     stop_price=tracked_price,
                     side_effect_type=SideEffectType.AUTO_REPAY,
                     exclude_order_id=sl_order_id,
+                    on_adopt=achieved,
                 )
                 if new_sl_id:
                     position.stop_loss_order_id = new_sl_id
-                    position.last_placed_stop_price = tracked_price
+                    # Baseline for the min-trailing-stop-move floor (#1179) --
+                    # must reflect where the exchange order actually landed,
+                    # not this correction's own intent (#1187).
+                    position.last_placed_stop_price = achieved.price
+                    if achieved.price != tracked_price:
+                        if _achieved_price_is_safe_to_ratify(
+                            side_is_long, achieved.price, tracked_price
+                        ):
+                            # Mirrors move() (#1167): keep the engine's own exit
+                            # check from trusting a price the exchange isn't
+                            # actually resting at.
+                            position.stop_loss = achieved.price
+                            ratified_stop_loss = True
+                        else:
+                            logger.critical(
+                                "Adopted stop-loss for %s achieved $%.2f, looser than "
+                                "the intended $%.2f -- NOT ratifying into "
+                                "position.stop_loss (would weaken the engine's own "
+                                "exit trigger); leaving the divergence for the next "
+                                "reconciliation pass.",
+                                symbol,
+                                achieved.price,
+                                tracked_price,
+                            )
         except Exception as e:
             logger.critical(
                 "Exception re-placing diverged stop-loss for %s: %s — position may be "
@@ -5233,22 +5607,37 @@ class PeriodicReconciler:
                 e,
             )
             new_sl_id = None
+            achieved = _AchievedStopPriceCapture(tracked_price)
 
         db_pos_id = getattr(position, "db_position_id", None)
         if db_pos_id is not None:
             try:
-                self.db_manager.update_position(position_id=db_pos_id, stop_loss_order_id=new_sl_id)
+                # Re-verify under the lock before persisting: a concurrent
+                # move() could have acquired the placement lock the instant
+                # this correction released it above, ratcheted the stop, and
+                # persisted its own newer values -- persisting ours
+                # unconditionally here would clobber them back to stale ones
+                # (#1199 P1).
+                with self._stop_loss_placement_lock(symbol):
+                    still_ours = position.stop_loss_order_id == new_sl_id
+                if still_ours:
+                    update_kwargs: dict[str, Any] = {"stop_loss_order_id": new_sl_id}
+                    if ratified_stop_loss:
+                        update_kwargs["stop_loss"] = achieved.price
+                    self.db_manager.update_position(position_id=db_pos_id, **update_kwargs)
             except Exception as e:
                 logger.warning(
                     "Failed to persist corrected stop-loss order ID for %s: %s", symbol, e
                 )
 
         if new_sl_id:
+            if self.order_tracker:
+                self.order_tracker.track_order(new_sl_id, symbol)
             logger.warning(
                 "Corrected diverged stop-loss for %s: new order %s @ %.2f (periodic check)",
                 symbol,
                 new_sl_id,
-                tracked_price,
+                achieved.price,
             )
         else:
             logger.critical(
@@ -5310,13 +5699,16 @@ class PeriodicReconciler:
 
             sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
 
-            # Compute held qty accounting for partial exits
+            # Compute held qty accounting for partial exits.
+            # allow_scale_in=True: sizes the actual placed stop.
             qty = getattr(position, "quantity", 0) or 0.0
             current = getattr(position, "current_size", None)
             original = getattr(position, "original_size", None)
-            if current is not None and original is not None and original > 0:
-                qty = qty * (current / original)
+            scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
+            qty = qty if scaled is None else scaled
 
+            achieved = _AchievedStopPriceCapture(stop_price)
+            ratified_stop_loss = False
             with self._stop_loss_placement_lock(position.symbol):
                 new_sl_id = place_or_adopt_stop_loss(
                     self.exchange,
@@ -5325,6 +5717,7 @@ class PeriodicReconciler:
                     quantity=qty,
                     stop_price=stop_price,
                     side_effect_type=SideEffectType.AUTO_REPAY,
+                    on_adopt=achieved,
                 )
                 # Set INSIDE the lock — see the Step-2 re-placement's own
                 # comment: move()'s trailing-stop ratchet serialises on this
@@ -5332,22 +5725,61 @@ class PeriodicReconciler:
                 # it (#1179).
                 if new_sl_id:
                     position.stop_loss_order_id = new_sl_id
-                    position.last_placed_stop_price = stop_price
+                    # Baseline for the min-trailing-stop-move floor (#1179) --
+                    # must reflect where the exchange order actually landed,
+                    # not this placement's own intent (#1187, an untracked
+                    # resting stop can be ADOPTed here too).
+                    position.last_placed_stop_price = achieved.price
+                    if achieved.price != stop_price:
+                        if _achieved_price_is_safe_to_ratify(
+                            side_is_long, achieved.price, stop_price
+                        ):
+                            # Mirrors move() (#1167): keep the engine's own exit
+                            # check from trusting a price the exchange isn't
+                            # actually resting at.
+                            position.stop_loss = achieved.price
+                            ratified_stop_loss = True
+                        else:
+                            logger.critical(
+                                "Adopted stop-loss for %s achieved $%.2f, looser than "
+                                "the intended $%.2f -- NOT ratifying into "
+                                "position.stop_loss (would weaken the engine's own "
+                                "exit trigger); leaving the divergence for the next "
+                                "reconciliation pass.",
+                                position.symbol,
+                                achieved.price,
+                                stop_price,
+                            )
+                    else:
+                        ratified_stop_loss = True
             if new_sl_id:
+                if self.order_tracker:
+                    self.order_tracker.track_order(new_sl_id, position.symbol)
                 logger.info(
                     "Placed missing stop-loss for %s: %s @ %.2f (periodic check)",
                     position.symbol,
                     new_sl_id,
-                    stop_price,
+                    achieved.price,
                 )
                 db_pos_id = getattr(position, "db_position_id", None)
                 if db_pos_id is not None:
                     try:
-                        self.db_manager.update_position(
-                            position_id=db_pos_id,
-                            stop_loss_order_id=new_sl_id,
-                            stop_loss=stop_price,
-                        )
+                        # Re-verify under the lock before persisting: a
+                        # concurrent move() could have acquired the placement
+                        # lock the instant it was released above, ratcheted
+                        # the stop, and persisted its own newer values --
+                        # persisting ours unconditionally here would clobber
+                        # them back to stale ones (#1199 P1).
+                        with self._stop_loss_placement_lock(position.symbol):
+                            still_ours = position.stop_loss_order_id == new_sl_id
+                        if still_ours:
+                            _update_kw: dict[str, Any] = {"stop_loss_order_id": new_sl_id}
+                            if ratified_stop_loss:
+                                _update_kw["stop_loss"] = achieved.price
+                            self.db_manager.update_position(
+                                position_id=db_pos_id,
+                                **_update_kw,
+                            )
                     except Exception as e:
                         logger.warning(
                             "Failed to persist SL order ID for %s: %s",
@@ -5417,8 +5849,7 @@ def classify_severity(
 # Closing repays via AUTO_REPAY on the order, but a flat bot fires no close, so an
 # orphaned borrow is never repaid. This sweep repays it — strictly guarded, per
 # BASE ASSET (a borrow is asset-scoped, not tied to one symbol). Default mode is
-# dry-run (detect + log only). See docs/plan and ORPHANED_BORROW_* constants.
-#
+# dry-run (detect + log only). See docs/plan and ORPHANED_BORROW_* constants..
 # Active mode serialises against entry/exit via a shared per-base-asset
 # exchange-mutation lock (BaseAssetLockRegistry), so a repay can never race a
 # just-opened short whose borrow isn't tracked yet (#703).

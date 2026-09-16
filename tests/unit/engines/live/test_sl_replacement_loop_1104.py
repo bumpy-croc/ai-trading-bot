@@ -31,16 +31,14 @@ import pytest
 
 from src.config.constants import CLOSE_ABORT_CLOSE_ONLY_STREAK, HOLDINGS_CAP_MIN_RATIO
 from src.data_providers.exchange_interface import Order, OrderSide, OrderStatus, OrderType
-from src.engines.live.execution.execution_engine import (
-    _POST_CANCEL_BALANCE_RETRY_ATTEMPTS,
-    LiveExecutionEngine,
-)
+from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.stop_loss_manager import LiveStopLossManager
 from src.engines.live.order_tracker import (
     SELF_CANCEL_SUPPRESSION_TTL_SECONDS,
     OrderTracker,
 )
 from src.engines.shared.models import PositionSide
+from src.trading.balance_retry import POST_CANCEL_BALANCE_RETRY_ATTEMPTS
 
 pytestmark = pytest.mark.fast
 
@@ -426,7 +424,7 @@ class TestStaleBalanceRetryAfterStopCancel:
         assert [code for code, _ in h.events] == ["CLOSE_INVENTORY_LOCKED"]
         assert h.events[0][1]["stop_just_cancelled"] is True
         # Pin the retry actually ran its full budget rather than bailing early.
-        assert h.exchange.get_balance.call_count == _POST_CANCEL_BALANCE_RETRY_ATTEMPTS
+        assert h.exchange.get_balance.call_count == POST_CANCEL_BALANCE_RETRY_ATTEMPTS
 
     def test_ordinary_close_does_not_retry_or_add_latency(self, monkeypatch):
         """Without stop_just_cancelled the call is unchanged: one read, no sleep."""
@@ -487,3 +485,99 @@ class TestUndersizedStopIsRefused:
 
         assert result == "new-sl"
         assert provider._call_create_order.called
+
+
+class TestReprotectStaleBalanceRetry:
+    """#1173: the SAME post-cancel eventual-consistency race #1165 fixed on the
+    close path also hits ``place_stop_loss_order``'s free-base read when this
+    call immediately follows cancelling the old stop (the re-protect path).
+    A stale read here is arguably worse than on the close side: it REFUSES to
+    place the replacement stop-loss and leaves the position visibly
+    UNPROTECTED, rather than just deferring a close. ``just_cancelled=True``
+    (threaded from ``LiveStopLossManager.reprotect``) opts into the same
+    bounded retry #1165 added to ``_free_base_for_close``.
+    """
+
+    INTENDED = 0.0087
+    STEP = 0.00001  # LOT_SIZE step from get_symbol_info below
+    # Mirrors the close-path padding: the retry verdicts on the RAW balance,
+    # but the floor-to-step snap below it can shave a "settled" read back
+    # under the ratio it just cleared.
+    MIN_REQUIRED = INTENDED * HOLDINGS_CAP_MIN_RATIO + STEP  # ~0.008536
+
+    def _provider(self):
+        from src.data_providers.binance_provider import BinanceProvider
+
+        provider = BinanceProvider.__new__(BinanceProvider)
+        provider._client = Mock()
+        provider.order_error_sink = None
+        provider.get_symbol_info = lambda symbol: {  # type: ignore[method-assign]
+            "tick_size": 0.01,
+            "step_size": self.STEP,
+            "base_asset": "ETH",
+        }
+        provider._call_create_order = Mock(return_value={"orderId": "new-sl"})
+        return provider
+
+    def test_stale_read_recovers_within_the_retry_budget_when_just_cancelled(self, monkeypatch):
+        provider = self._provider()
+        # Dust locked by the just-cancelled stop, then two more stale reads,
+        # then the exchange finally reflects the freed balance.
+        provider._free_base_balance = Mock(side_effect=[0.00009419, 0.00009419, self.INTENDED])
+        sleeps: list[float] = []
+        monkeypatch.setattr("src.trading.balance_retry.time.sleep", sleeps.append)
+
+        result = provider.place_stop_loss_order(
+            symbol="ETHUSDT",
+            side=OrderSide.SELL,
+            quantity=self.INTENDED,
+            stop_price=2072.3612,
+            just_cancelled=True,
+        )
+
+        assert result == "new-sl"
+        provider._call_create_order.assert_called_once()
+        assert provider._free_base_balance.call_count == 3
+        assert len(sleeps) == 2  # retried twice before the third read cleared the gate
+
+    def test_stale_read_still_refuses_once_the_retry_budget_expires(self, monkeypatch):
+        """A genuinely locked inventory (#1104) must still refuse -- just ~1.2s later,
+        not on the very first (possibly-stale) read."""
+        provider = self._provider()
+        provider._free_base_balance = Mock(return_value=0.00009419)
+        monkeypatch.setattr("src.trading.balance_retry.time.sleep", lambda *_: None)
+
+        result = provider.place_stop_loss_order(
+            symbol="ETHUSDT",
+            side=OrderSide.SELL,
+            quantity=self.INTENDED,
+            stop_price=2072.3612,
+            just_cancelled=True,
+        )
+
+        assert result is None
+        provider._call_create_order.assert_not_called()
+        # Pin the retry actually ran its full budget rather than bailing early.
+        assert provider._free_base_balance.call_count == POST_CANCEL_BALANCE_RETRY_ATTEMPTS
+
+    def test_ordinary_placement_does_not_retry_even_with_a_low_balance(self, monkeypatch):
+        """Without ``just_cancelled`` a low reading isn't stale -- it's genuinely
+        low (a first-time placement with no preceding cancel) -- so no retry
+        latency is paid on the common case."""
+        provider = self._provider()
+        provider._free_base_balance = Mock(return_value=0.00009419)
+        monkeypatch.setattr(
+            "src.trading.balance_retry.time.sleep",
+            Mock(side_effect=AssertionError("must not sleep without just_cancelled")),
+        )
+
+        result = provider.place_stop_loss_order(
+            symbol="ETHUSDT",
+            side=OrderSide.SELL,
+            quantity=self.INTENDED,
+            stop_price=2072.3612,
+        )
+
+        assert result is None
+        provider._call_create_order.assert_not_called()
+        assert provider._free_base_balance.call_count == 1

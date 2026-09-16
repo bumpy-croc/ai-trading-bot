@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Consolidated the duplicated "held quantity" scaling in `reconciliation.py`** (#1208).
+  ~17 independent inline reimplementations of `qty * (current_size / original_size)` —
+  used for stop-loss re-placement sizing, external-close/margin-position threshold checks,
+  balance-notional estimates, and P&L on close — had inconsistent (or missing) overflow
+  and finiteness guards. Extracted one shared `held_base_quantity()` helper (in
+  `trade_close_accounting.py`, alongside the existing `_closed_base_quantity`) and routed
+  every call site, plus `LiveStopLossManager.held_protection_quantity`, through it.
+
+  The new helper mirrors `_closed_base_quantity`'s guard semantics and adds an
+  `allow_scale_in` flag: operational sizing sites (stop-loss protection, notional,
+  P&L) pass `allow_scale_in=True` to preserve their pre-existing behavior of scaling
+  past 1.0 for a scale-in, while `_log_reconciliation_trade` (which feeds the persisted
+  `trades.quantity` audit column) keeps the strict default that nulls it, matching
+  `_closed_base_quantity`'s own no-fabrication policy. Every consolidated site also gained
+  a guard that did not exist before: a non-finite or negative `current_size` now falls
+  back to the unscaled quantity instead of silently propagating a NaN or negative value
+  into a stop-loss order, a notional estimate, or a P&L calculation.
+
 ### Added
 - **Closed-candle gating for live signal decisions** (#1106; parity plan decision D1,
   `docs/refactor/backtest_live_parity_plan.md` §2 divergence #1). Live rewrites the
@@ -57,6 +76,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the ungated path still diverges.
 
 ### Fixed
+- **Order quantity sent to Binance as a raw float serialized as scientific notation
+  for values below 1e-4** (#745). python-binance urlencodes order params, and Python's
+  default float-to-str conversion renders small floats in scientific notation
+  (`str(0.00009) == "9e-05"`), which Binance rejects with -1100 ("illegal characters").
+  Any exchange-bound quantity in `[1e-5, 1e-4)` — realistic on BTCUSDT (stepSize `1e-5`)
+  at small account sizes, or as a post-partial-exit remainder — independently broke
+  entries, stop-loss placement, and closes in `place_order`/`place_stop_loss_order`
+  (`src/data_providers/binance_provider.py`), since `stopPrice`/`price` were already
+  `str()`-ed but `quantity` was not. Added `format_quantity()` to
+  `src/trading/precision.py`, which formats using the decimal count implied by the
+  symbol's step size (never a fixed guess, avoiding the LESSONS.md §1.1 float-artifact
+  bug class), and applied it at both order-placement call sites.
+- **A close order confirmed EXPIRED with zero fill reported `success=True`, popping the
+  position from tracking with a simulated PnL while the exchange still held the real
+  inventory** (#744; found by a June 2026 code audit). `LiveExecutionEngine.execute_exit`
+  fetches the close order's status after placement, but only branched on the FILLED/
+  PARTIALLY_FILLED case — any other *confirmed* terminal status (e.g. `EXPIRED` from book
+  exhaustion) fell through the same path as "pending" and returned success with the
+  pre-computed simulated price. Since the resting stop-loss is already cancelled before a
+  live close is submitted (#710's cancel-then-close sequence), this left the position
+  genuinely naked and untracked until a reconciler sweep eventually noticed the divergence.
+  A confirmed non-fill status (order details fetched, status present and not a fill) now
+  returns `success=False` with the exchange-reported filled quantity, so the caller
+  (`LiveExitCoordinator.execute_exit_locked`) keeps the position tracked and its existing
+  `_reprotect_position` backstop re-places the stop-loss instead. `ExitExecutionResult`
+  gains a `filled_quantity` field so a caller can tell a zero-fill expiry apart from a
+  partial-fill-then-expire. The FILLED/PARTIALLY_FILLED paths, and the ambiguous case where
+  the order-detail fetch itself fails (ineligible for a confirmed non-fill verdict — see
+  CODE.md "Exchange `None` Returns"), are unchanged.
+- **`DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL` was dead code, shadowed by `runner.py`'s hardcoded
+  `--snapshot-interval` default** (#1184). The constant claimed 1800s (30 min), but every real
+  entry point (`atb live`, `atb live-health`, prod's Railway `startCommand`) goes through
+  `runner.py`, which hardcodes `default=3600` and never imports the constant — so every actual
+  deployment snapshots hourly, not every 30 minutes. This previously caused a real docs
+  regression (PR #1180, closed unmerged) that "corrected" ops docs from the true "hourly" to
+  the false "30-minute" value, trusting the unreachable constant over the deployed behavior.
+  No behavior change: the constant now reads 3600, matching what has always actually run.
 - **Trailing-stop ratchets never moved the exchange-side stop-loss order** (#1167; found
   root-causing #1165's abort storm). `LiveExitHandler.update_trailing_stops` updated
   `position.stop_loss` in memory and the DB as the trail ratcheted, but the resting exchange

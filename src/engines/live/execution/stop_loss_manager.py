@@ -51,6 +51,7 @@ from src.engines.live.execution.position_tracker import (
     LivePositionTracker,
 )
 from src.engines.live.order_tracker import OrderTracker
+from src.engines.live.trade_close_accounting import held_base_quantity
 from src.engines.shared.models import PositionSide
 from src.infrastructure.logging.events import log_order_event
 
@@ -311,17 +312,29 @@ class LiveStopLossManager:
     def held_protection_quantity(position: LivePosition) -> float:
         """Base quantity to protect, scaled for any prior partial exits.
 
-        Mirrors the reconciler's re-placement sizing ``quantity * current/original`` so
-        a re-protected stop covers the *remaining* held size, not the full entry size.
+        Delegates to the shared ``held_base_quantity`` so this mirrors the reconciler's
+        re-placement sizing off ONE implementation. ``allow_scale_in=True`` preserves this
+        method's previous behavior of scaling past 1.0 for a scale-in rather than
+        refusing to size the stop — a real held amount must still be
+        protected even for legacy/corrupted state (see the helper's docstring). Falls
+        back to the raw (unscaled) quantity when the helper cannot scale (missing/
+        invalid current_size or original_size), matching the previous inline guard;
+        that fallback path now also rejects a non-finite/negative quantity (e.g. NaN),
+        which the previous ``not quantity or quantity <= 0`` check silently let through
+        (comparisons against NaN are always False) and could have handed the exchange a
+        NaN order quantity.
         """
         quantity = getattr(position, "quantity", None)
-        if not quantity or quantity <= 0:
-            return 0.0
         current = getattr(position, "current_size", None)
         original = getattr(position, "original_size", None)
-        if current is not None and original is not None and original > 0:
-            return float(quantity) * (float(current) / float(original))
-        return float(quantity)
+        scaled = held_base_quantity(quantity, current, original, allow_scale_in=True)
+        if scaled is not None:
+            return scaled
+        try:
+            qty_f = float(quantity) if quantity is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+        return qty_f if math.isfinite(qty_f) and qty_f > 0 else 0.0
 
     def reprotect(self, position: LivePosition) -> None:
         """Re-place a stop-loss after a failed close left a position momentarily naked.
@@ -404,7 +417,13 @@ class LiveStopLossManager:
         # so without excluding it a re-appearing cancelled order would be
         # silently re-adopted as if it were a genuine untracked resting stop.
         # on_adopt captures the ACHIEVED price for last_placed_stop_price below
-        # (#1179).
+        # (#1179). just_cancelled=True (#1173): this call immediately follows
+        # the cancel above, so BinanceProvider's free-base read may still see
+        # the just-cancelled stop's pre-cancel `locked` amount for a few
+        # seconds (the same eventual-consistency window #1165 fixed on the
+        # close path) -- without this, that stale read trips the undersized-
+        # protection refusal and leaves a fully sellable position visibly
+        # UNPROTECTED.
         sl_order_id = place_or_adopt_stop_loss(
             state.exchange_interface,
             symbol=position.symbol,
@@ -413,6 +432,7 @@ class LiveStopLossManager:
             stop_price=float(stop_price),
             side_effect_type=SideEffectType.AUTO_REPAY,
             exclude_order_id=position.stop_loss_order_id,
+            just_cancelled=True,
             max_attempts=DEFAULT_STOP_LOSS_MAX_RETRIES,
             retry_delay=DEFAULT_STOP_LOSS_RETRY_DELAY,
             retry_log_prefix="Re-protect",
@@ -623,6 +643,7 @@ class LiveStopLossManager:
             retry_log_prefix="Trailing-stop move",
             on_adopt=_capture_achieved_price,
             on_refuse=_capture_refuse_reason,
+            just_cancelled=True,
         )
 
         if new_order_id:

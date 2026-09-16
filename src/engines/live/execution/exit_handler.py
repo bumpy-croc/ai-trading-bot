@@ -30,6 +30,7 @@ from src.engines.live.execution.position_tracker import (
     PositionSide,
 )
 from src.engines.live.system_halt import SystemHaltState
+from src.engines.live.trade_close_accounting import _closed_base_quantity
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
 from src.engines.shared.execution.order_intent import OrderIntent
@@ -601,6 +602,7 @@ class LiveExitHandler:
             exit_price=base_exit_price,
             close_notional_override=close_notional_override,
         )
+        close_quantity = self._calculate_close_quantity(position, close_notional_override)
 
         # Execute via execution engine
         execution_result = self.execution_engine.execute_exit(
@@ -614,6 +616,7 @@ class LiveExitHandler:
             apply_slippage=apply_slippage,
             position_db_id=position.db_position_id,
             stop_just_cancelled=stop_just_cancelled,
+            close_quantity=close_quantity,
         )
 
         if not execution_result.success:
@@ -897,6 +900,38 @@ class LiveExitHandler:
         )
         price_adjustment = exit_price / position.entry_price if position.entry_price > 0 else 1.0
         return basis_balance * fraction * price_adjustment
+
+    def _calculate_close_quantity(
+        self,
+        position: LivePosition,
+        close_notional_override: float | None = None,
+    ) -> float | None:
+        """Base-asset quantity to submit for a live close order (#737).
+
+        Sizes off ``position.quantity`` (the actual filled amount recorded at
+        entry) scaled for any partial exits — ``quantity * (current_size /
+        original_size)`` — instead of ``_calculate_position_notional``'s
+        fee-reduced fraction-of-balance formula, which the execution engine
+        would otherwise divide by price to get a quantity that is
+        systematically off by the entry-fee fraction versus what is actually
+        held (see LiveStopLossManager.held_protection_quantity, which already
+        uses this scaling for stop-loss re-placement).
+
+        Returns ``None`` — deferring to the execution engine's
+        ``position_notional / base_price`` fallback — in two cases:
+        - ``close_notional_override`` is set (the partial-exits-complete
+          route, #1183): that override is already built from
+          ``position.quantity`` directly (see
+          ``_full_close_notional_after_partials``), so ``position_notional``
+          itself is already quantity-correct here.
+        - the stored quantity can't be trusted for scaling: missing/legacy
+          ``position.quantity``, corrupt sizing, or a scale-in that grew
+          ``current_size`` past ``original_size`` (``_closed_base_quantity``
+          returns ``None`` in all of these rather than fabricating a value).
+        """
+        if close_notional_override is not None:
+            return None
+        return _closed_base_quantity(position)
 
     def update_trailing_stops(
         self,
