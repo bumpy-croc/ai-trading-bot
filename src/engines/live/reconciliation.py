@@ -14,6 +14,7 @@ import logging
 import math
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -386,6 +387,29 @@ def _log_adoption(
     )
 
 
+def _generate_stop_loss_client_order_id() -> str:
+    """Build an ``atbsl_``-prefixed client order id for one stop-loss placement.
+
+    Mirrors the ``atb_``/``atbx_`` idempotency-key format execution_engine.py
+    generates for entry/exit orders (timestamp-hex + a short uuid4 suffix, well
+    under Binance's 36-char client-order-id limit), with its own ``atbsl_``
+    prefix so operators can tell order classes apart in exchange logs and the
+    orphaned-order sweep (``_sweep_orphaned_orders``) can recognize a stop-loss
+    specifically, not just any ``atb``-prefixed order (#740).
+
+    Called once per actual ``place_stop_loss_order`` call, never reused across a
+    retry: unlike the entry path, a stop-loss retry's idempotency comes from
+    ``guard_stop_placement`` re-querying the exchange before every attempt and
+    ADOPTing an order a prior attempt placed but failed to confirm, not from
+    resubmitting the same client_order_id. Each attempt that actually reaches
+    the exchange is therefore always a distinct order request, so a fresh id
+    per attempt carries no dedup/collision risk.
+    """
+    timestamp_ms = int(time.time() * 1000)
+    unique_suffix = uuid.uuid4().hex[:8]
+    return f"atbsl_{timestamp_ms:x}_{unique_suffix}"
+
+
 class _AchievedStopPriceCapture:
     """``on_adopt`` callback that captures the ACHIEVED resting price, not the
     intended one, for callers that place or re-place a stop via
@@ -506,6 +530,7 @@ def place_or_adopt_stop_loss(
             side=side,
             quantity=quantity,
             stop_price=stop_price,
+            client_order_id=_generate_stop_loss_client_order_id(),
             side_effect_type=side_effect_type,
             just_cancelled=just_cancelled,
         )
@@ -697,6 +722,7 @@ def _place_with_retry(
                     side=side,
                     quantity=quantity,
                     stop_price=stop_price,
+                    client_order_id=_generate_stop_loss_client_order_id(),
                     side_effect_type=side_effect_type,
                     just_cancelled=just_cancelled,
                 )
@@ -2076,6 +2102,17 @@ class PositionReconciler:
             # Accepts both "atb_" (entry) and "atbx_" (exit) prefixed orders.
             client_id = getattr(order, "client_order_id", None)
             if not client_id or not client_id.startswith(client_prefix):
+                continue
+
+            # A protective stop-loss shares the same symbol/side/quantity as
+            # the entry/exit it protects (and a trailing-stop move() often
+            # re-creates one minutes before an exit), so an "atbsl_"-prefixed
+            # order can otherwise satisfy every remaining filter below and get
+            # incorrectly correlated to an unresolved journal row -- a FILLED
+            # stop-loss would then fabricate/repair a position from the wrong
+            # order's price, and a CANCELLED one would resolve the row as
+            # "never happened" (#740 follow-up).
+            if client_id.startswith("atbsl_"):
                 continue
 
             # Filter: matching side
@@ -4328,6 +4365,15 @@ class PeriodicReconciler:
         # Snapshot positions (release lock before API calls)
         positions_snapshot = self.position_tracker.positions
         if not positions_snapshot:
+            # An orphaned order is DEFINED by having no tracked position, so this
+            # sweep must run precisely in the flat case this early return would
+            # otherwise skip entirely (#740) -- mirroring the orphaned-borrow
+            # sweep above, which runs before the flat return for the same reason.
+            sweep_severity = self._sweep_orphaned_orders()
+            if sweep_severity is not None:
+                self._emit_cycle_severity(
+                    sweep_severity, ["orphaned order(s) cancelled while flat"]
+                )
             return
 
         max_severity = Severity.LOW
@@ -4961,52 +5007,15 @@ class PeriodicReconciler:
                     e,
                 )
 
-        # 3. Check for orphaned orders with our prefix.
-        # Rebuild tracked IDs from a fresh position snapshot so that any
-        # positions closed during steps 1-2 are excluded, preventing
-        # cancellation of valid stop-loss orders on newly opened positions.
-        try:
-            fresh_snapshot = self.position_tracker.positions
-            if fresh_snapshot:
-                tracked_exchange_ids = set()
-                for pos in fresh_snapshot.values():
-                    eid = getattr(pos, "exchange_order_id", None)
-                    if eid:
-                        tracked_exchange_ids.add(eid)
-                    sl_id = getattr(pos, "stop_loss_order_id", None)
-                    if sl_id:
-                        tracked_exchange_ids.add(sl_id)
-
-                # Query open orders for every symbol with active positions
-                symbols = set(pos.symbol for pos in fresh_snapshot.values())
-                for symbol in symbols:
-                    open_orders = self.exchange.get_open_orders(symbol)
-                    for order in open_orders:
-                        if order.order_id not in tracked_exchange_ids:
-                            client_id = getattr(order, "client_order_id", "") or ""
-                            if client_id.startswith("atb"):  # Catches atb_ (entry) and atbx_ (exit)
-                                logger.warning(
-                                    "Orphaned order found: %s (%s) on %s — cancelling",
-                                    order.order_id,
-                                    client_id,
-                                    symbol,
-                                )
-                                try:
-                                    self.exchange.cancel_order(order.order_id, symbol)
-                                    logger.info(
-                                        "Cancelled orphaned order %s on %s",
-                                        order.order_id,
-                                        symbol,
-                                    )
-                                except Exception as cancel_err:
-                                    logger.warning(
-                                        "Failed to cancel orphaned order %s: %s",
-                                        order.order_id,
-                                        cancel_err,
-                                    )
-                                max_severity = Severity.HIGH
-        except Exception as e:
-            logger.warning("Orphaned order check failed: %s", e)
+        # 3. Check for orphaned orders (entry/exit/stop-loss) with no tracked
+        # position. Uses a snapshot taken fresh right now (not positions_snapshot
+        # from the top of the cycle) so a position closed during steps 1-2 above
+        # is already excluded -- an orphaned stop-loss left behind by that close
+        # is caught THIS cycle instead of waiting for the next one.
+        sweep_severity = self._sweep_orphaned_orders()
+        if sweep_severity is not None and sweep_severity > max_severity:
+            max_severity = sweep_severity
+            findings.append("orphaned order(s) cancelled")
 
         # 4. Verify balance — delegates to the shared, self-contained reconcile that
         # values a FRESH position snapshot (a position closed earlier this cycle is
@@ -5033,6 +5042,94 @@ class PeriodicReconciler:
         # cycle and per-item locks are released, so the alert webhook cannot
         # block a position mutation.
         self._emit_cycle_severity(max_severity, findings)
+
+    def _sweep_orphaned_orders(self) -> Severity | None:
+        """Cancel resting exchange orders that belong to no tracked position (#740).
+
+        An orphaned order is defined by the ABSENCE of a tracked position, so this
+        must check every configured symbol (``self._symbols``), not only symbols
+        that currently have one -- a stop-loss left resting on a symbol the bot is
+        flat on is exactly the case this exists to catch, and is invisible to a
+        scan scoped to symbols with an open position. Callers must run this
+        regardless of whether the tracker is flat; see the two call sites in
+        ``_reconcile_cycle``.
+
+        Matches on the ``atb`` client-order-id prefix, which every entry (``atb_``)
+        and exit (``atbx_``) order carries, and which ``place_or_adopt_stop_loss``
+        now also stamps on every stop-loss placement (``atbsl_``) -- so this one
+        sweep covers all three order classes this bot places. An order whose id is
+        in ``tracked_exchange_ids`` (built from every known position's
+        ``exchange_order_id``/``stop_loss_order_id``, not filtered by symbol) is
+        never cancelled even if untracked-looking by prefix, which is what keeps a
+        currently-protecting stop-loss for a live position safe here.
+
+        Returns ``Severity.HIGH`` if anything was cancelled this call, else
+        ``None`` (nothing found, or the sweep itself failed -- fail-open by
+        design, matching ``get_open_orders``'s own fail-open contract, since a
+        lookup failure here must not block the rest of the reconciliation cycle).
+
+        Runs each symbol's query+cancel under ``_stop_loss_placement_lock``
+        (#740 follow-up): before this order class carried the ``atb`` prefix a
+        stop-loss could never match here, so this sweep never needed to
+        serialise against placement. Now that it does, an unlocked sweep could
+        observe the window between a stop actually landing on the exchange and
+        ``stop_loss_order_id`` being recorded -- every placement path
+        (``place_protection``/``reprotect``/``move``) already serialises that
+        exact window on this same lock -- and cancel a live protective stop.
+        The per-symbol snapshot is re-read fresh inside the lock so an id
+        recorded while this sweep was waiting on it is honoured.
+        """
+        found_orphan = False
+        try:
+            fresh_snapshot = self.position_tracker.positions
+            # Every configured symbol, plus (defensively) any symbol with a
+            # tracked position that isn't in that configured list.
+            symbols = set(self._symbols) | {pos.symbol for pos in fresh_snapshot.values()}
+            if not symbols:
+                return None
+
+            for symbol in symbols:
+                with self._stop_loss_placement_lock(symbol):
+                    tracked_exchange_ids = set()
+                    for pos in self.position_tracker.positions.values():
+                        eid = getattr(pos, "exchange_order_id", None)
+                        if eid:
+                            tracked_exchange_ids.add(eid)
+                        sl_id = getattr(pos, "stop_loss_order_id", None)
+                        if sl_id:
+                            tracked_exchange_ids.add(sl_id)
+
+                    open_orders = self.exchange.get_open_orders(symbol)
+                    for order in open_orders:
+                        if order.order_id in tracked_exchange_ids:
+                            continue
+                        client_id = getattr(order, "client_order_id", "") or ""
+                        if not client_id.startswith("atb"):  # atb_/atbx_/atbsl_
+                            continue
+                        logger.warning(
+                            "Orphaned order found: %s (%s) on %s — cancelling",
+                            order.order_id,
+                            client_id,
+                            symbol,
+                        )
+                        try:
+                            self.exchange.cancel_order(order.order_id, symbol)
+                            logger.info(
+                                "Cancelled orphaned order %s on %s",
+                                order.order_id,
+                                symbol,
+                            )
+                            found_orphan = True
+                        except Exception as cancel_err:
+                            logger.warning(
+                                "Failed to cancel orphaned order %s: %s",
+                                order.order_id,
+                                cancel_err,
+                            )
+            return Severity.HIGH if found_orphan else None
+        except Exception as e:
+            logger.warning("Orphaned order check failed: %s", e)
+            return Severity.HIGH if found_orphan else None
 
     def _emit_cycle_severity(
         self, max_severity: Severity, findings: list[str] | None = None
