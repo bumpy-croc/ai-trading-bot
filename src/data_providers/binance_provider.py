@@ -2401,11 +2401,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.warning("Binance not available - returning None for symbol info")
             return None
 
+        cache_key = SymbolFactory.to_exchange_symbol(symbol, "binance")
         try:
             exchange_info = self._client.get_exchange_info()
 
             for symbol_info in exchange_info["symbols"]:
-                if symbol_info["symbol"] == SymbolFactory.to_exchange_symbol(symbol, "binance"):
+                if symbol_info["symbol"] == cache_key:
                     # Extract relevant information
                     filters = {f["filterType"]: f for f in symbol_info["filters"]}
 
@@ -2427,15 +2428,22 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                         ),
                     }
                     with self._symbol_info_cache_lock:
-                        self._symbol_info_cache[symbol] = info
+                        self._symbol_info_cache[cache_key] = info
                     logger.debug("Refreshed symbol info cache for %s", symbol)
                     return info
 
+            # A successful lookup that confirms the symbol is genuinely absent
+            # (e.g. delisted) must drop any stale cache entry -- otherwise a
+            # later transient failure would resurrect it via the except branch
+            # below, serving filters for a symbol Binance just told us doesn't
+            # exist.
+            with self._symbol_info_cache_lock:
+                self._symbol_info_cache.pop(cache_key, None)
             return None
 
         except Exception as e:
             with self._symbol_info_cache_lock:
-                cached = self._symbol_info_cache.get(symbol)
+                cached = self._symbol_info_cache.get(cache_key)
             if cached is not None:
                 logger.warning(
                     "get_exchange_info failed for %s (%s) - serving last known-good "

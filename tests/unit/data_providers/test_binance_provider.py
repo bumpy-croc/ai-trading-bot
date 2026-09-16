@@ -1125,6 +1125,67 @@ class TestGetSymbolInfoCache:
         result = provider.get_symbol_info("BTCUSDT")
         assert result["step_size"] == pytest.approx(0.001)
 
+    @pytest.mark.fast
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_confirmed_delisting_is_not_resurrected_by_a_later_blip(
+        self, mock_config, mock_client_class
+    ):
+        """A successful lookup that confirms a symbol is genuinely gone (delisted)
+        must drop any stale cache entry -- otherwise a later transient failure
+        would serve the stale filters back out via the fallback-on-failure path,
+        contradicting what Binance just told us (code-reviewer finding on #1155).
+        """
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+
+        # Warm the cache.
+        mock_client.get_exchange_info.return_value = _exchange_info_for("BTCUSDT")
+        provider = BinanceProvider()
+        assert provider.get_symbol_info("BTCUSDT") is not None
+
+        # A successful lookup that no longer lists the symbol at all (delisted).
+        mock_client.get_exchange_info.return_value = {"symbols": []}
+        assert provider.get_symbol_info("BTCUSDT") is None
+
+        # A subsequent transient failure must NOT resurrect the stale entry.
+        mock_client.get_exchange_info.side_effect = ConnectionError("rate limited")
+        result = provider.get_symbol_info("BTCUSDT")
+
+        assert result is None, (
+            "a confirmed-absent symbol must stay absent on a later transient "
+            "failure, not serve back the pre-delisting cached filters"
+        )
+
+    @pytest.mark.fast
+    @patch("src.data_providers.binance_provider.Client")
+    @patch("src.data_providers.binance_provider.get_config")
+    def test_cache_key_is_normalized_across_symbol_casing(self, mock_config, mock_client_class):
+        """The cache must key on the normalized exchange symbol, not the caller's raw
+        string -- otherwise get_symbol_info("btcusdt") warming the cache would miss a
+        later get_symbol_info("BTCUSDT") lookup during a blip and fail closed anyway.
+        """
+        mock_config_obj = Mock()
+        mock_config_obj.get_required.return_value = "fake_key"
+        mock_config.return_value = mock_config_obj
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+
+        mock_client.get_exchange_info.return_value = _exchange_info_for("BTCUSDT")
+        provider = BinanceProvider()
+        assert provider.get_symbol_info("btcusdt") is not None
+
+        mock_client.get_exchange_info.side_effect = ConnectionError("rate limited")
+        result = provider.get_symbol_info("BTCUSDT")
+
+        assert result is not None, (
+            "a differently-cased lookup for the same symbol must hit the same "
+            "warm cache entry on a transient failure"
+        )
+
 
 @pytest.mark.skipif(not BINANCE_AVAILABLE, reason="Binance provider not available")
 @patch("src.data_providers.binance_provider.BINANCE_AVAILABLE", True)
