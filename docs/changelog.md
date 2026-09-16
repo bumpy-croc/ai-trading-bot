@@ -57,6 +57,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the ungated path still diverges.
 
 ### Fixed
+- **Order quantity sent to Binance as a raw float serialized as scientific notation
+  for values below 1e-4** (#745). python-binance urlencodes order params, and Python's
+  default float-to-str conversion renders small floats in scientific notation
+  (`str(0.00009) == "9e-05"`), which Binance rejects with -1100 ("illegal characters").
+  Any exchange-bound quantity in `[1e-5, 1e-4)` — realistic on BTCUSDT (stepSize `1e-5`)
+  at small account sizes, or as a post-partial-exit remainder — independently broke
+  entries, stop-loss placement, and closes in `place_order`/`place_stop_loss_order`
+  (`src/data_providers/binance_provider.py`), since `stopPrice`/`price` were already
+  `str()`-ed but `quantity` was not. Added `format_quantity()` to
+  `src/trading/precision.py`, which formats using the decimal count implied by the
+  symbol's step size (never a fixed guess, avoiding the LESSONS.md §1.1 float-artifact
+  bug class), and applied it at both order-placement call sites.
 - **`DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL` was dead code, shadowed by `runner.py`'s hardcoded
   `--snapshot-interval` default** (#1184). The constant claimed 1800s (30 min), but every real
   entry point (`atb live`, `atb live-health`, prod's Railway `startCommand`) goes through
