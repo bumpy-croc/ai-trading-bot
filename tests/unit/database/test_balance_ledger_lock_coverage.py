@@ -82,9 +82,7 @@ class TestBalanceLedgerLockCoverage:
         session_id = _new_session(db)
         db.update_balance(1000.0, "seed", "test", session_id)
 
-        with patch.object(
-            DatabaseManager, "_lock_balance_ledger", autospec=True
-        ) as mock_lock:
+        with patch.object(DatabaseManager, "_lock_balance_ledger", autospec=True) as mock_lock:
             with db.atomic_balance_update(
                 balance_change=-5.0, reason="entry_fee", updated_by="test", session_id=session_id
             ):
@@ -109,9 +107,7 @@ class TestBalanceLedgerLockCoverage:
             "source": TradeSource.PAPER,
         }
 
-        with patch.object(
-            DatabaseManager, "_lock_balance_ledger", autospec=True
-        ) as mock_lock:
+        with patch.object(DatabaseManager, "_lock_balance_ledger", autospec=True) as mock_lock:
             with db.atomic_position_reconciliation(
                 position_db_id=position_id,
                 realized_pnl=-5.0,
@@ -129,9 +125,7 @@ class TestBalanceLedgerLockCoverage:
         session_id = _new_session(db)
         db.update_balance(1000.0, "seed", "test", session_id)
 
-        with patch.object(
-            DatabaseManager, "_lock_balance_ledger", autospec=True
-        ) as mock_lock:
+        with patch.object(DatabaseManager, "_lock_balance_ledger", autospec=True) as mock_lock:
             with db.atomic_balance_correction(
                 950.0,
                 "exchange_sync_correction",
@@ -149,9 +143,7 @@ class TestBalanceLedgerLockCoverage:
         db.update_balance(1000.0, "seed", "test", session_id)
         position_id = _open_position(db, session_id)
 
-        with patch.object(
-            DatabaseManager, "_lock_balance_ledger", autospec=True
-        ) as mock_lock:
+        with patch.object(DatabaseManager, "_lock_balance_ledger", autospec=True) as mock_lock:
             db.log_trade(
                 symbol="BTCUSDT",
                 side="long",
@@ -179,9 +171,7 @@ class TestBalanceLedgerLockCoverage:
         db.update_balance(1000.0, "seed", "test", session_id)
         position_id = _open_position(db, session_id)
 
-        with patch.object(
-            DatabaseManager, "_lock_balance_ledger", autospec=True
-        ) as mock_lock:
+        with patch.object(DatabaseManager, "_lock_balance_ledger", autospec=True) as mock_lock:
             db.log_trade(
                 symbol="BTCUSDT",
                 side="long",
@@ -273,9 +263,7 @@ class TestAtomicBalanceCorrectionCallerSnapshot:
         session_id = _new_session(db)
         db.update_balance(1000.0, "seed", "test", session_id)
 
-        with db.atomic_balance_correction(
-            900.0, "exchange_sync_correction", "system", session_id
-        ):
+        with db.atomic_balance_correction(900.0, "exchange_sync_correction", "system", session_id):
             pass
 
         assert db.get_current_balance(session_id) == pytest.approx(900.0)
