@@ -1291,6 +1291,43 @@ class TestBalanceAccountsForPositionNotional:
         # Only the held position (0.1 * 50000 = 5000) contributes; the flat one is excluded.
         assert reconciler._estimate_position_notional() == pytest.approx(5000.0)
 
+    def test_estimate_notional_scales_past_original_for_scale_in(
+        self, reconciler, mock_position_tracker
+    ):
+        """a scale-in (current_size > original_size) still
+        contributes its real, scaled-up notional — unchanged from the pre-consolidation
+        unguarded scaling (allow_scale_in=True), since this feeds a balance-discrepancy
+        estimate, not a persisted record."""
+        pos = MockPosition(
+            entry_price=50000.0,
+            current_size=0.20,
+            original_size=0.10,
+            quantity=0.1,
+            symbol="BTCUSDT",
+        )
+        mock_position_tracker.positions = {"pos_1": pos}
+
+        # 0.1 * (0.20/0.10) = 0.2 BTC * 50000 = 10000, not the unscaled 5000.
+        assert reconciler._estimate_position_notional() == pytest.approx(10000.0)
+
+    def test_estimate_notional_falls_back_to_unscaled_for_corrupt_current_size(
+        self, reconciler, mock_position_tracker
+    ):
+        """Regression: a non-finite/negative current_size (corrupted state) is a NEW
+        guard the shared helper adds — previously this inline site had no such check and would
+        have silently computed a NaN/negative notional. It now safely falls back to the unscaled
+        quantity instead of propagating NaN into the balance-discrepancy comparison."""
+        pos = MockPosition(
+            entry_price=50000.0,
+            current_size=float("nan"),
+            original_size=0.10,
+            quantity=0.1,
+            symbol="BTCUSDT",
+        )
+        mock_position_tracker.positions = {"pos_1": pos}
+
+        assert reconciler._estimate_position_notional() == pytest.approx(5000.0)
+
     def test_exchange_close_pending_position_not_overstated(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
     ):
@@ -2333,6 +2370,100 @@ class TestPeriodicReconcilerSLVerification:
         # #1168: this re-placement path must also register with the OrderTracker.
         mock_order_tracker.track_order.assert_called_once_with("new_sl_99", "BTCUSDT")
 
+    def test_cycle_replaces_partially_filled_cancelled_sl(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """the periodic cycle's own partial-SL-fill-then-
+        replace path (distinct from PositionReconciler._verify_stop_loss's startup
+        equivalent) computes the same held-quantity-minus-fill remaining amount, unchanged
+        by the extraction.
+
+        Scenario mirrors TestPartialSLFillQuantityCalculation's startup case: 1 BTC entry
+        (quantity=1.0, original_size=1.0), 50% TP exit (current_size=0.5), so held =
+        1.0*(0.5/1.0) = 0.5 BTC; SL fills 0.2 BTC before cancellation -> remaining 0.3 BTC.
+        """
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_periodic_partial",
+            exchange_order_id="entry_partial",
+            db_position_id=52,
+            quantity=1.0,
+            current_size=0.5,
+            original_size=1.0,
+        )
+        pos.stop_loss = 45000.0
+        mock_position_tracker.positions = {"entry_partial": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(
+            order_id="sl_periodic_partial", status=ExOS.CANCELLED, filled_quantity=0.2
+        )
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.get_open_orders.return_value = []
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_partial"
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._reconcile_cycle()
+
+        assert pos.current_size == pytest.approx(0.3)
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        assert mock_exchange.place_stop_loss_order.call_args.kwargs["quantity"] == pytest.approx(
+            0.3
+        )
+
+    def test_cycle_replaces_partially_filled_cancelled_sl_after_scale_in(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """allow_scale_in=True preserves the pre-
+        consolidation unguarded scaling for a scale-in (current_size > original_size) in
+        this same periodic partial-fill-then-replace path — held scales PAST 1.0 rather
+        than being nulled out.
+
+        1 BTC entry (quantity=1.0, original_size=1.0) scaled in to current_size=1.5 ->
+        held = 1.0*(1.5/1.0) = 1.5 BTC; SL fills 0.2 BTC before cancellation -> remaining
+        1.3 BTC.
+        """
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_periodic_scalein",
+            exchange_order_id="entry_scalein",
+            db_position_id=53,
+            quantity=1.0,
+            current_size=1.5,
+            original_size=1.0,
+        )
+        pos.stop_loss = 45000.0
+        mock_position_tracker.positions = {"entry_scalein": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(
+            order_id="sl_periodic_scalein", status=ExOS.CANCELLED, filled_quantity=0.2
+        )
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.get_open_orders.return_value = []
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_scalein"
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._reconcile_cycle()
+
+        assert pos.current_size == pytest.approx(1.3)
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        assert mock_exchange.place_stop_loss_order.call_args.kwargs["quantity"] == pytest.approx(
+            1.3
+        )
+
     def test_cycle_replaces_missing_sl(self, mock_exchange, mock_position_tracker, mock_db):
         """Periodic cycle re-places an SL order not found on exchange."""
         from src.data_providers.exchange_interface import OrderStatus as ExOS
@@ -3261,6 +3392,48 @@ class TestPartialSLFillQuantityCalculation:
         mock_exchange.place_stop_loss_order.assert_called_once()
         call_kwargs = mock_exchange.place_stop_loss_order.call_args
         assert call_kwargs.kwargs["quantity"] == pytest.approx(0.3)
+
+    def test_partial_sl_fill_after_scale_in_correct_qty(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """a scale-in (current_size > original_size) still
+        scales PAST 1.0 for the pre-fill held-quantity and replacement-quantity computations
+        (allow_scale_in=True) — unchanged from the pre-consolidation unguarded scaling, since
+        this sizes an actual re-placed stop, not a persisted record.
+
+        Scenario:
+        - 1 BTC entry (quantity=1.0, original_size=1.0), scaled in to current_size=1.5
+        - Held: 1.0 * (1.5 / 1.0) = 1.5 BTC
+        - SL fills 0.2 BTC before cancellation
+        - Remaining: 1.5 - 0.2 = 1.3 BTC
+        """
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_scale_in_1",
+            db_position_id=103,
+            quantity=1.0,
+            current_size=1.5,
+            original_size=1.0,
+        )
+        pos.stop_loss = 45000.0
+
+        entry_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=1.0
+        )
+        sl_order = MockExchangeOrder(
+            order_id="sl_scale_in_1",
+            status=ExOS.CANCELLED,
+            filled_quantity=0.2,
+        )
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_scale_in"
+
+        reconciler.reconcile_position(pos)
+
+        assert pos.current_size == pytest.approx(1.3)
+        call_kwargs = mock_exchange.place_stop_loss_order.call_args
+        assert call_kwargs.kwargs["quantity"] == pytest.approx(1.3)
 
     def test_partial_sl_fill_no_prior_exit_correct_qty(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
@@ -6503,6 +6676,36 @@ class TestStopLossReplacementHoldingGuard:
         pos.exchange_close_pending = True
         assert _position_holding_is_gone(mock_exchange, False, pos) is True
         mock_exchange.get_balance.assert_not_called()
+
+    def test_helper_scale_in_position_not_falsely_gone(self, mock_exchange):
+        """a scale-in (current_size > original_size) still
+        compares against the real, scaled-up held quantity (allow_scale_in=True) — unchanged
+        from the pre-consolidation unguarded scaling. Tracked qty 0.1 scaled to 0.15; the
+        exchange holds 0.15, so the position is NOT gone (0.15 held is not < 0.075)."""
+        from src.engines.live.reconciliation import _position_holding_is_gone
+
+        pos = MockPosition(
+            symbol="BTCUSDT", side="long", quantity=0.1, current_size=0.15, original_size=0.1
+        )
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.15)
+        assert _position_holding_is_gone(mock_exchange, False, pos) is False
+
+    def test_helper_corrupt_current_size_falls_back_to_unscaled_qty(self, mock_exchange):
+        """Regression: a non-finite current_size (corrupted state) is a NEW guard the
+        shared helper adds — this inline site had no such check before and would have silently
+        compared against a NaN threshold. It now falls back to the unscaled tracked quantity."""
+        from src.engines.live.reconciliation import _position_holding_is_gone
+
+        pos = MockPosition(
+            symbol="BTCUSDT",
+            side="long",
+            quantity=0.1,
+            current_size=float("nan"),
+            original_size=0.1,
+        )
+        # Held 0.1 == tracked (unscaled) qty 0.1 -> not gone.
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.1)
+        assert _position_holding_is_gone(mock_exchange, False, pos) is False
 
     # --- startup: PositionReconciler._verify_stop_loss ---
 

@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Consolidated the duplicated "held quantity" scaling in `reconciliation.py`** (#1208).
+  ~17 independent inline reimplementations of `qty * (current_size / original_size)` —
+  used for stop-loss re-placement sizing, external-close/margin-position threshold checks,
+  balance-notional estimates, and P&L on close — had inconsistent (or missing) overflow
+  and finiteness guards. Extracted one shared `held_base_quantity()` helper (in
+  `trade_close_accounting.py`, alongside the existing `_closed_base_quantity`) and routed
+  every call site, plus `LiveStopLossManager.held_protection_quantity`, through it.
+
+  The new helper mirrors `_closed_base_quantity`'s guard semantics and adds an
+  `allow_scale_in` flag: operational sizing sites (stop-loss protection, notional,
+  P&L) pass `allow_scale_in=True` to preserve their pre-existing behavior of scaling
+  past 1.0 for a scale-in, while `_log_reconciliation_trade` (which feeds the persisted
+  `trades.quantity` audit column) keeps the strict default that nulls it, matching
+  `_closed_base_quantity`'s own no-fabrication policy. Every consolidated site also gained
+  a guard that did not exist before: a non-finite or negative `current_size` now falls
+  back to the unscaled quantity instead of silently propagating a NaN or negative value
+  into a stop-loss order, a notional estimate, or a P&L calculation.
+
 ### Added
 - **Closed-candle gating for live signal decisions** (#1106; parity plan decision D1,
   `docs/refactor/backtest_live_parity_plan.md` §2 divergence #1). Live rewrites the
