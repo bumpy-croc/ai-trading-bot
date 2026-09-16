@@ -37,15 +37,15 @@ def held_base_quantity(
     #1206 this was the NORMAL shape of a scaled-in position (``apply_scale_in`` grew
     ``current_size`` without growing ``original_size``/``quantity`` in lockstep), so it is
     only a corrupted/legacy-state signal now that #1206 keeps them in lockstep going
-    forward. ``allow_scale_in=True`` (the default at every consolidated call site except
-    ``_log_reconciliation_trade``) computes the scaled value anyway rather than returning
-    ``None`` for it: these are operational quantities (stop-loss sizing, notional
-    estimates, P&L on close) where under-sizing a real held amount to 0 risks leaving live
-    inventory unprotected, which is worse than a ratio past 1.0 for the rare legacy/
-    corrupted case. ``_log_reconciliation_trade`` keeps the strict default because its
-    consumer is a persisted ``trades.quantity`` audit column, matching
-    ``_closed_base_quantity``'s own no-fabrication policy exactly (same purpose, same
-    guard).
+    forward. Passing ``allow_scale_in=True`` computes the scaled value anyway rather than
+    returning ``None`` for it, and every consolidated ``reconciliation.py`` call site does
+    so except ``_log_reconciliation_trade``: these are operational quantities (stop-loss
+    sizing, notional estimates, P&L on close) where under-sizing a real held amount to 0
+    risks leaving live inventory unprotected, which is worse than a ratio past 1.0 for the
+    rare legacy/corrupted case. ``_log_reconciliation_trade`` keeps the strict default
+    (``allow_scale_in=False``) because its consumer is a persisted ``trades.quantity``
+    audit column, matching ``_closed_base_quantity``'s own no-fabrication policy exactly
+    (same purpose, same guard).
     """
     if qty is None:
         return None

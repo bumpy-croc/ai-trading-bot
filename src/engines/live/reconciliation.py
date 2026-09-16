@@ -4872,10 +4872,13 @@ class PeriodicReconciler:
                             original = getattr(position, "original_size", None)
                             # allow_scale_in=True: this derives the real remaining held amount
                             # after the SL's partial fill, not a persisted record (#1208).
+                            # held_base_quantity already guarantees original is finite-positive
+                            # whenever it returns non-None; `original is not None` below is
+                            # just the mypy narrowing for the `original * ...` use.
                             held = held_base_quantity(
                                 pos_qty, current, original, allow_scale_in=True
                             )
-                            if held is not None and original is not None and original > 0:
+                            if held is not None and original is not None:
                                 remaining = max(held - partial_fill, 0.0)
                                 position.current_size = original * (remaining / max(pos_qty, 1e-9))
                             else:

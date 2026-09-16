@@ -2370,6 +2370,100 @@ class TestPeriodicReconcilerSLVerification:
         # #1168: this re-placement path must also register with the OrderTracker.
         mock_order_tracker.track_order.assert_called_once_with("new_sl_99", "BTCUSDT")
 
+    def test_cycle_replaces_partially_filled_cancelled_sl(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Regression (#1208 consolidation): the periodic cycle's own partial-SL-fill-then-
+        replace path (distinct from PositionReconciler._verify_stop_loss's startup
+        equivalent) computes the same held-quantity-minus-fill remaining amount, unchanged
+        by the extraction.
+
+        Scenario mirrors TestPartialSLFillQuantityCalculation's startup case: 1 BTC entry
+        (quantity=1.0, original_size=1.0), 50% TP exit (current_size=0.5), so held =
+        1.0*(0.5/1.0) = 0.5 BTC; SL fills 0.2 BTC before cancellation -> remaining 0.3 BTC.
+        """
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_periodic_partial",
+            exchange_order_id="entry_partial",
+            db_position_id=52,
+            quantity=1.0,
+            current_size=0.5,
+            original_size=1.0,
+        )
+        pos.stop_loss = 45000.0
+        mock_position_tracker.positions = {"entry_partial": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(
+            order_id="sl_periodic_partial", status=ExOS.CANCELLED, filled_quantity=0.2
+        )
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.get_open_orders.return_value = []
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_partial"
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._reconcile_cycle()
+
+        assert pos.current_size == pytest.approx(0.3)
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        assert mock_exchange.place_stop_loss_order.call_args.kwargs["quantity"] == pytest.approx(
+            0.3
+        )
+
+    def test_cycle_replaces_partially_filled_cancelled_sl_after_scale_in(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Regression (#1208 consolidation): allow_scale_in=True preserves the pre-
+        consolidation unguarded scaling for a scale-in (current_size > original_size) in
+        this same periodic partial-fill-then-replace path — held scales PAST 1.0 rather
+        than being nulled out.
+
+        1 BTC entry (quantity=1.0, original_size=1.0) scaled in to current_size=1.5 ->
+        held = 1.0*(1.5/1.0) = 1.5 BTC; SL fills 0.2 BTC before cancellation -> remaining
+        1.3 BTC.
+        """
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_periodic_scalein",
+            exchange_order_id="entry_scalein",
+            db_position_id=53,
+            quantity=1.0,
+            current_size=1.5,
+            original_size=1.0,
+        )
+        pos.stop_loss = 45000.0
+        mock_position_tracker.positions = {"entry_scalein": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(
+            order_id="sl_periodic_scalein", status=ExOS.CANCELLED, filled_quantity=0.2
+        )
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.get_open_orders.return_value = []
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_scalein"
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._reconcile_cycle()
+
+        assert pos.current_size == pytest.approx(1.3)
+        mock_exchange.place_stop_loss_order.assert_called_once()
+        assert mock_exchange.place_stop_loss_order.call_args.kwargs["quantity"] == pytest.approx(
+            1.3
+        )
+
     def test_cycle_replaces_missing_sl(self, mock_exchange, mock_position_tracker, mock_db):
         """Periodic cycle re-places an SL order not found on exchange."""
         from src.data_providers.exchange_interface import OrderStatus as ExOS
