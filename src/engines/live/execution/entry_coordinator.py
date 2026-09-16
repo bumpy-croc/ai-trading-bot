@@ -47,6 +47,7 @@ from src.strategies.components import Signal, SignalDirection
 from src.strategies.components import Strategy as ComponentStrategy
 from src.strategies.components.ml_signal_generator import SHORT_ENTRY_SUPPRESSED_KEY
 from src.tech.adapters.row_extractors import extract_ml_predictions_from_signal
+from src.trading.close_sizing import cap_closing_sell_quantity
 from src.trading.exit_reason import ExitReason
 
 if TYPE_CHECKING:
@@ -759,48 +760,84 @@ class LiveEntryCoordinator:
                             close_side = (
                                 OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
                             )
-                            # Validate entry_price to prevent division by zero
-                            if position.entry_price <= 0:
+                            # Use quantity from position - LiveEntryResult.position.quantity.
+                            raw_quantity = result.position.quantity
+                            # Validate entry_price/quantity to prevent division by zero and
+                            # an unsizeable close.
+                            if (
+                                position.entry_price <= 0
+                                or raw_quantity is None
+                                or raw_quantity <= 0
+                            ):
                                 logger.error(
                                     "Cannot calculate emergency close quantity - invalid "
-                                    "entry_price %s for %s",
+                                    "entry_price %s or quantity %s for %s",
                                     position.entry_price,
+                                    raw_quantity,
                                     symbol,
                                     exc_info=True,
                                 )
                             else:
-                                # Use quantity from position - LiveEntryResult.position.quantity
-                                emergency_order = state.exchange_interface.place_order(
-                                    symbol=symbol,
-                                    side=close_side,
-                                    order_type=OrderType.MARKET,
-                                    quantity=result.position.quantity,
-                                    side_effect_type=SideEffectType.AUTO_REPAY,
-                                )
-                                if emergency_order is None:
-                                    # None is an ambiguous/failed placement, NOT a
-                                    # confirmed close: the position may still be open
-                                    # and unprotected on the exchange. Escalate to
-                                    # close-only instead of logging a false success;
-                                    # the reconciler resolves it on restart.
+                                # A closing SELL is capped to free base + floored lot snap
+                                # (#989): the entry BUY's commission can be deducted from the
+                                # base fill, so the raw executedQty can exceed real holdings
+                                # and an uncapped SELL risks a -2010 reject here, leaving this
+                                # already-inconsistent position open and unprotected. A
+                                # short-cover BUY repays the full base borrow, so it is left
+                                # uncapped and unrounded.
+                                close_quantity = raw_quantity
+                                if close_side == OrderSide.SELL:
+                                    close_quantity = cap_closing_sell_quantity(
+                                        state.exchange_interface,
+                                        symbol=symbol,
+                                        quantity=close_quantity,
+                                    )
+                                if close_quantity <= 0:
                                     logger.critical(
-                                        "CRITICAL: Emergency close for %s UNCONFIRMED "
-                                        "(place_order returned None) after balance update "
-                                        "failure — position may remain open on the exchange. "
+                                        "CRITICAL: Emergency close for %s aborted — holdings "
+                                        "cap left nothing honestly sellable (intended %.8f). "
                                         "Entering close-only mode until restart reconciles. "
                                         "MANUAL INTERVENTION REQUIRED.",
                                         symbol,
+                                        raw_quantity,
                                     )
                                     state._enter_close_only_mode(
-                                        f"emergency close for {symbol} UNCONFIRMED after a "
-                                        "balance-update failure"
+                                        f"emergency close for {symbol} aborted after a "
+                                        "balance-update failure — inventory not honestly "
+                                        "sellable"
                                     )
                                 else:
-                                    logger.warning(
-                                        "Emergency close placed for %s due to balance "
-                                        "update failure",
-                                        symbol,
+                                    emergency_order = state.exchange_interface.place_order(
+                                        symbol=symbol,
+                                        side=close_side,
+                                        order_type=OrderType.MARKET,
+                                        quantity=close_quantity,
+                                        side_effect_type=SideEffectType.AUTO_REPAY,
                                     )
+                                    if emergency_order is None:
+                                        # None is an ambiguous/failed placement, NOT a
+                                        # confirmed close: the position may still be open
+                                        # and unprotected on the exchange. Escalate to
+                                        # close-only instead of logging a false success;
+                                        # the reconciler resolves it on restart.
+                                        logger.critical(
+                                            "CRITICAL: Emergency close for %s UNCONFIRMED "
+                                            "(place_order returned None) after balance update "
+                                            "failure — position may remain open on the exchange. "
+                                            "Entering close-only mode until restart reconciles. "
+                                            "MANUAL INTERVENTION REQUIRED.",
+                                            symbol,
+                                        )
+                                        state._enter_close_only_mode(
+                                            f"emergency close for {symbol} UNCONFIRMED after a "
+                                            "balance-update failure"
+                                        )
+                                    else:
+                                        logger.warning(
+                                            "Emergency close placed for %s due to balance "
+                                            "update failure",
+                                            symbol,
+                                        )
                         except Exception as close_err:
                             logger.critical(
                                 "CRITICAL: Emergency close FAILED after balance update failure for %s. "
@@ -850,12 +887,27 @@ class LiveEntryCoordinator:
 
                         # Use quantity from position - LiveEntryResult.position.quantity
                         # No need to recalculate from entry_price which could introduce errors.
-                        # Live executed entries always carry the filled quantity.
-                        if cast(float, result.position.quantity) <= 0:
+                        # Live executed entries always carry the filled quantity. A closing
+                        # SELL is capped to free base + floored lot snap (#989): the entry
+                        # BUY's commission can be deducted from the base fill, so the raw
+                        # executedQty can exceed real holdings and an uncapped SELL risks a
+                        # -2010 reject here, leaving this orphaned position open and
+                        # unprotected. A short-cover BUY repays the full base borrow, so it
+                        # is left uncapped and unrounded.
+                        close_quantity = cast(float, result.position.quantity)
+                        if close_side == OrderSide.SELL and close_quantity > 0:
+                            close_quantity = cap_closing_sell_quantity(
+                                state.exchange_interface,
+                                symbol=symbol,
+                                quantity=close_quantity,
+                            )
+                        if close_quantity <= 0:
                             logger.critical(
                                 "CRITICAL: Cannot place emergency close for %s - "
-                                "invalid quantity %.8f. MANUAL INTERVENTION REQUIRED.",
+                                "invalid or unsellable quantity %.8f (intended %.8f). "
+                                "MANUAL INTERVENTION REQUIRED.",
                                 symbol,
+                                close_quantity,
                                 result.position.quantity,
                             )
                         else:
@@ -863,7 +915,7 @@ class LiveEntryCoordinator:
                                 symbol=symbol,
                                 side=close_side,
                                 order_type=OrderType.MARKET,
-                                quantity=result.position.quantity,
+                                quantity=close_quantity,
                                 side_effect_type=SideEffectType.AUTO_REPAY,
                             )
                             if emergency_order is None:

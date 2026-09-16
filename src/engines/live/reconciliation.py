@@ -48,6 +48,7 @@ from src.engines.live.trade_close_accounting import held_base_quantity
 from src.engines.shared.commission import order_commission_usd, split_base_quote
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
+from src.trading.close_sizing import cap_closing_sell_quantity
 from src.trading.exit_reason import ExitReason, classify_stop_exit
 
 if TYPE_CHECKING:
@@ -1656,44 +1657,82 @@ class PositionReconciler:
                         )
 
                         sell_side = OrderSide.SELL if side_lower == "long" else OrderSide.BUY
-                        sell_result = self.exchange.place_order(
-                            symbol=symbol,
-                            side=sell_side,
-                            order_type=OrderType.MARKET,
-                            quantity=fill_qty,
-                            side_effect_type=SideEffectType.AUTO_REPAY,
-                        )
-                        if sell_result is not None:
+                        # A closing SELL is capped to free base + floored lot snap (#989):
+                        # the entry BUY's commission can be deducted from the base fill, so
+                        # the raw fill_qty can exceed real holdings and an uncapped SELL
+                        # risks a -2010 reject here, leaving this already-unprotected
+                        # recovered position open. A short-cover BUY repays the full base
+                        # borrow, so it is left uncapped and unrounded.
+                        sell_quantity = fill_qty
+                        if sell_side == OrderSide.SELL:
+                            sell_quantity = cap_closing_sell_quantity(
+                                self.exchange,
+                                symbol=symbol,
+                                quantity=fill_qty,
+                            )
+                        if sell_quantity <= 0:
                             logger.critical(
-                                "Emergency-closed recovered %s position on "
-                                "exchange (qty=%.8f, side=%s)",
+                                "Emergency sell for %s aborted — holdings cap left nothing "
+                                "honestly sellable (intended qty=%.8f) — keeping position "
+                                "tracked",
                                 symbol,
                                 fill_qty,
-                                sell_side,
                             )
-                        else:
-                            logger.critical(
-                                "Emergency sell returned None for %s "
-                                "(qty=%.8f) — keeping position tracked",
-                                symbol,
-                                fill_qty,
-                            )
-                            # NOTE: alert=True POSTs to the webhook (10s-bounded)
-                            # while _positions_lock is held. Tolerated here: this
-                            # path runs only during startup / WS-resync recovery
-                            # (the live trading loop is not contending), and the
-                            # lock already spans the blocking emergency-sell
-                            # above. Steady-state reconciler emits (follow-up PRs)
-                            # MUST page outside the lock.
+                            # NOTE: alert=True POSTs to the webhook (10s-bounded) while
+                            # _positions_lock is held. Tolerated here: this path runs only
+                            # during startup / WS-resync recovery (the live trading loop is
+                            # not contending), and the lock already spans the blocking
+                            # holdings-cap check above. Steady-state reconciler emits
+                            # (follow-up PRs) MUST page outside the lock.
                             _emit_event(
                                 self.on_event,
                                 EventType.ALERT,
-                                f"Emergency sell unconfirmed for {symbol} — position may be "
-                                f"UNPROTECTED, manual verification required",
+                                f"Emergency sell aborted for {symbol} — inventory not "
+                                f"honestly sellable, position may be UNPROTECTED, manual "
+                                f"verification required",
                                 severity="critical",
                                 error_code="EMERGENCY_SELL_UNCONFIRMED",
                                 alert=True,
                             )
+                        else:
+                            sell_result = self.exchange.place_order(
+                                symbol=symbol,
+                                side=sell_side,
+                                order_type=OrderType.MARKET,
+                                quantity=sell_quantity,
+                                side_effect_type=SideEffectType.AUTO_REPAY,
+                            )
+                            if sell_result is not None:
+                                logger.critical(
+                                    "Emergency-closed recovered %s position on "
+                                    "exchange (qty=%.8f, side=%s)",
+                                    symbol,
+                                    sell_quantity,
+                                    sell_side,
+                                )
+                            else:
+                                logger.critical(
+                                    "Emergency sell returned None for %s "
+                                    "(qty=%.8f) — keeping position tracked",
+                                    symbol,
+                                    sell_quantity,
+                                )
+                                # NOTE: alert=True POSTs to the webhook (10s-bounded)
+                                # while _positions_lock is held. Tolerated here: this
+                                # path runs only during startup / WS-resync recovery
+                                # (the live trading loop is not contending), and the
+                                # lock already spans the blocking emergency-sell
+                                # above. Steady-state reconciler emits (follow-up PRs)
+                                # MUST page outside the lock.
+                                _emit_event(
+                                    self.on_event,
+                                    EventType.ALERT,
+                                    f"Emergency sell unconfirmed for {symbol} — position may "
+                                    f"be UNPROTECTED, manual verification required",
+                                    severity="critical",
+                                    error_code="EMERGENCY_SELL_UNCONFIRMED",
+                                    alert=True,
+                                )
                     except Exception as sell_err:
                         logger.critical(
                             "CRITICAL: Emergency sell FAILED for %s "

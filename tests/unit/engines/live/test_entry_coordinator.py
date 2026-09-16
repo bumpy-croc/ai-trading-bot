@@ -301,6 +301,134 @@ def test_tracking_failure_confirmed_emergency_close_refunds_fee():
 
 
 # ---------------------------------------------------------------------------
+# #989: emergency-close SELLs must cap to free base holdings (commission haircut)
+# ---------------------------------------------------------------------------
+
+
+def _configure_exchange_balance(state, *, free_base, step_size: float = 0.00001):
+    """Give the mocked exchange a real base-balance + symbol-info response.
+
+    Site 1/2 emergency closes use ``state.exchange_interface`` directly, whose
+    ``get_balance``/``get_symbol_info`` are bare MagicMocks by default (fail-open
+    no-ops for the #989 guard) -- tests that want to exercise the cap must wire
+    real responses.
+    """
+    state.exchange_interface.get_symbol_info.return_value = {
+        "step_size": step_size,
+        "min_qty": step_size,
+        "min_notional": 1.0,
+    }
+    balance = MagicMock()
+    balance.free = free_base
+    state.exchange_interface.get_balance.return_value = balance
+
+
+def test_balance_update_failure_emergency_close_caps_to_free_base():
+    """Site 1: the entry BUY's commission can be deducted from the base fill, so
+    the raw executedQty (position.quantity=0.01) can exceed real holdings. The
+    balance-update-failure emergency close must cap the SELL to what's actually
+    held instead of sending the gross amount."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.trading_session_id = 42
+    state.db_manager.atomic_balance_update.side_effect = RuntimeError("db down")
+    # 0.0099 / 0.01 = 0.99 clears HOLDINGS_CAP_MIN_RATIO (0.98) -- capped, not aborted.
+    _configure_exchange_balance(state, free_base=0.0099)
+
+    _call(state)
+
+    state.exchange_interface.place_order.assert_called_once()
+    sent_qty = state.exchange_interface.place_order.call_args.kwargs["quantity"]
+    assert sent_qty <= 0.0099
+    assert sent_qty < position.quantity
+
+
+def test_balance_update_failure_holdings_locked_aborts_without_order():
+    """Site 1: when free base covers far less than the intended close, the
+    emergency close must refuse to submit a doomed-to-reject SELL and escalate
+    to close-only rather than send a partial that books a full close."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.trading_session_id = 42
+    state.db_manager.atomic_balance_update.side_effect = RuntimeError("db down")
+    _configure_exchange_balance(state, free_base=0.001)  # far below position.quantity=0.01
+
+    _call(state)
+
+    state.exchange_interface.place_order.assert_not_called()
+    state._enter_close_only_mode.assert_called_once()
+
+
+def test_balance_update_failure_short_cover_buy_ignores_holdings_cap():
+    """Site 1: a short-cover BUY repays the full margin borrow -- it must not be
+    capped to free base balance (that guard applies only to closing SELLs)."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.trading_session_id = 42
+    state.db_manager.atomic_balance_update.side_effect = RuntimeError("db down")
+    _configure_exchange_balance(state, free_base=0.0)  # would zero a wrongly-capped BUY
+
+    _call(state, side=PositionSide.SHORT)
+
+    state.exchange_interface.place_order.assert_called_once()
+    sent_qty = state.exchange_interface.place_order.call_args.kwargs["quantity"]
+    assert sent_qty == pytest.approx(position.quantity)
+
+
+def test_tracking_failure_emergency_close_caps_to_free_base():
+    """Site 2: same #989 hazard as Site 1 -- the tracking-failure emergency close
+    must cap its SELL to actual free base holdings."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.live_position_tracker.open_position.side_effect = RuntimeError("tracker down")
+    _configure_exchange_balance(state, free_base=0.0099)
+
+    _call(state)
+
+    state.exchange_interface.place_order.assert_called_once()
+    sent_qty = state.exchange_interface.place_order.call_args.kwargs["quantity"]
+    assert sent_qty <= 0.0099
+    assert sent_qty < position.quantity
+
+
+def test_tracking_failure_holdings_locked_aborts_without_order():
+    """Site 2: inventory locked well below the intended close -- abort instead of
+    sending a partial SELL. No refund (mirrors the unconfirmed-close case)."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True  # no trading_session_id -> direct balance math
+    state.live_position_tracker.open_position.side_effect = RuntimeError("tracker down")
+    _configure_exchange_balance(state, free_base=0.001)
+
+    _call(state)
+
+    state.exchange_interface.place_order.assert_not_called()
+    # Aborted (not confirmed) close -> entry fee stays charged, same as the
+    # unconfirmed-close case.
+    assert state.current_balance == pytest.approx(999.0)
+
+
+def test_tracking_failure_short_cover_buy_ignores_holdings_cap():
+    """Site 2: a short-cover BUY must not be capped to free base -- it's funded
+    from quote and repays a borrow, unaffected by the #989 SELL-only guard."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.live_position_tracker.open_position.side_effect = RuntimeError("tracker down")
+    _configure_exchange_balance(state, free_base=0.0)
+
+    _call(state, side=PositionSide.SHORT)
+
+    state.exchange_interface.place_order.assert_called_once()
+    sent_qty = state.exchange_interface.place_order.call_args.kwargs["quantity"]
+    assert sent_qty == pytest.approx(position.quantity)
+
+
+# ---------------------------------------------------------------------------
 # CODE.md hardening: stop-loss gate keys on `is not None` (#813 follow-up)
 # ---------------------------------------------------------------------------
 
