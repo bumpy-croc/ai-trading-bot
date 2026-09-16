@@ -386,6 +386,18 @@ def _log_adoption(
     )
 
 
+def _just_cancelled_kwarg(just_cancelled: bool) -> dict[str, bool]:
+    """``{"just_cancelled": True}`` when set, else ``{}`` (#1173).
+
+    Omitting the kwarg entirely when ``False`` — rather than always passing
+    it — keeps every existing ``place_stop_loss_order`` call (and the tests
+    asserting its exact kwargs) unchanged for every caller that never
+    specifies it; only a caller that explicitly opts in (``reprotect()``)
+    changes what gets sent.
+    """
+    return {"just_cancelled": True} if just_cancelled else {}
+
+
 def place_or_adopt_stop_loss(
     exchange: Any,
     *,
@@ -395,6 +407,7 @@ def place_or_adopt_stop_loss(
     stop_price: float,
     side_effect_type: str | None = None,
     exclude_order_id: str | None = None,
+    just_cancelled: bool = False,
     max_attempts: int = 1,
     retry_delay: float = 1.0,
     retry_log_prefix: str = "Stop-loss placement",
@@ -417,6 +430,14 @@ def place_or_adopt_stop_loss(
     Pass ``exclude_order_id`` when this call immediately follows cancelling a
     specific tracked stop, so the just-cancelled order (which may still
     briefly appear on the exchange's open-orders view) is never re-adopted.
+    Pass ``just_cancelled=True`` in that same situation so an
+    implementation that sizes a SELL against a free-balance read (e.g.
+    ``BinanceProvider.place_stop_loss_order``) knows to retry that read
+    briefly instead of trusting a possibly-stale post-cancel snapshot on the
+    first try (#1173, mirrors ``stop_just_cancelled`` on the close path,
+    #1165). The two flags guard different eventual-consistency windows — the
+    open-orders view vs. the margin wallet balance — so pass both together
+    whenever this call follows a cancel.
 
     By default this makes a single placement attempt with no retry — the
     periodic reconciler's own call sites rely on that (they already wrap this
@@ -473,6 +494,7 @@ def place_or_adopt_stop_loss(
             quantity=quantity,
             stop_price=stop_price,
             side_effect_type=side_effect_type,
+            **_just_cancelled_kwarg(just_cancelled),
         )
 
     return _place_with_retry(
@@ -483,6 +505,7 @@ def place_or_adopt_stop_loss(
         stop_price=stop_price,
         side_effect_type=side_effect_type,
         exclude_order_id=exclude_order_id,
+        just_cancelled=just_cancelled,
         max_attempts=max_attempts,
         retry_delay=retry_delay,
         retry_log_prefix=retry_log_prefix,
@@ -615,6 +638,7 @@ def _place_with_retry(
     stop_price: float,
     side_effect_type: str | None,
     exclude_order_id: str | None,
+    just_cancelled: bool = False,
     max_attempts: int,
     retry_delay: float,
     retry_log_prefix: str,
@@ -661,6 +685,7 @@ def _place_with_retry(
                     quantity=quantity,
                     stop_price=stop_price,
                     side_effect_type=side_effect_type,
+                    **_just_cancelled_kwarg(just_cancelled),
                 )
                 if order_id:
                     return order_id

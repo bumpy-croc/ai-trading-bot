@@ -404,7 +404,13 @@ class LiveStopLossManager:
         # so without excluding it a re-appearing cancelled order would be
         # silently re-adopted as if it were a genuine untracked resting stop.
         # on_adopt captures the ACHIEVED price for last_placed_stop_price below
-        # (#1179).
+        # (#1179). just_cancelled=True (#1173): this call immediately follows
+        # the cancel above, so BinanceProvider's free-base read may still see
+        # the just-cancelled stop's pre-cancel `locked` amount for a few
+        # seconds (the same eventual-consistency window #1165 fixed on the
+        # close path) -- without this, that stale read trips the undersized-
+        # protection refusal and leaves a fully sellable position visibly
+        # UNPROTECTED.
         sl_order_id = place_or_adopt_stop_loss(
             state.exchange_interface,
             symbol=position.symbol,
@@ -413,6 +419,7 @@ class LiveStopLossManager:
             stop_price=float(stop_price),
             side_effect_type=SideEffectType.AUTO_REPAY,
             exclude_order_id=position.stop_loss_order_id,
+            just_cancelled=True,
             max_attempts=DEFAULT_STOP_LOSS_MAX_RETRIES,
             retry_delay=DEFAULT_STOP_LOSS_RETRY_DELAY,
             retry_log_prefix="Re-protect",

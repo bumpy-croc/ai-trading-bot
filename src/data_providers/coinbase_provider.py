@@ -585,6 +585,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         limit_price: float | None = None,
         client_order_id: str | None = None,
         side_effect_type: str | None = None,
+        just_cancelled: bool = False,
     ) -> str | None:
         """
         Place a server-side stop-loss order on Coinbase.
@@ -593,6 +594,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         This is a placeholder implementation - full Coinbase stop order
         support would require Advanced Trade API integration.
         side_effect_type is accepted for interface compatibility but ignored (spot only).
+        just_cancelled is accepted for interface compatibility but ignored (not implemented).
         """
         logger.warning(
             "Coinbase stop-loss orders not fully implemented - "
