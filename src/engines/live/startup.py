@@ -200,6 +200,20 @@ class LiveStartupSequencer:
                 )
                 # Also recover active positions
                 state._recover_active_positions()
+            elif state.trading_session_id is not None:
+                # #743: an active (crash-recovered) session is reused even when its
+                # balance could not be recovered — _recover_existing_session()
+                # already wired trading_session_id and fired a CRITICAL alert in
+                # that case. current_balance keeps the configured default, but the
+                # session's OPEN positions still belong to this same session id and
+                # must be loaded now, or they stay invisible to both reconcilers
+                # and the engine can double-enter the same symbol.
+                logger.warning(
+                    "🔁 Reusing active session #%s despite an unrecoverable "
+                    "balance — loading its OPEN positions to avoid orphaning them",
+                    state.trading_session_id,
+                )
+                state._recover_active_positions()
             else:
                 logger.info("🆕 No existing session found, starting fresh")
 

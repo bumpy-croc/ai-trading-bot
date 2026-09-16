@@ -162,10 +162,21 @@ class LiveSessionRecoverer:
             # OPEN positions forward into the new session — INDEPENDENT of whether a
             # positive balance was recovered. A fully-liquidated session (balance 0)
             # can still hold an OPEN position; gating this on balance > 0 would
-            # re-orphan it (#668, P2). The active/crash path reuses the session
-            # directly below and never needs this.
+            # re-orphan it (#668, P2).
             if source != "active":
                 state._recovered_inactive_session_id = session_id
+            else:
+                # Active session (crash recovery): reuse it now, unconditionally —
+                # NOT gated on the balance read below. A crash while a position is
+                # genuinely OPEN leaves its session "active"; if a non-positive/None
+                # balance read used to fall through here, this method returned None,
+                # start() created a BRAND NEW session, and the still-open position
+                # (owned by the old session id) was never reloaded into the tracker
+                # — invisible to both reconcilers, and able to be re-entered as a
+                # second, real position on the same symbol (#743). Mirrors the
+                # unconditional `_recovered_inactive_session_id` handling above for
+                # the identical reason.
+                self._reuse_active_session(session_id)
 
             recovered_balance = state.db_manager.recover_last_balance(session_id)
             # Sanitize BEFORE the positivity filter below. recover_last_balance()
@@ -184,24 +195,9 @@ class LiveSessionRecoverer:
                         "refusing to start on corrupt persisted state."
                     )
             if recovered_balance and recovered_balance > 0:
-                # Crash recovery (active session): reuse the existing session ID so
-                # trades stay attributed to the same session row. Clean restarts create
-                # a new session below; their OPEN positions are carried forward via
-                # _recovered_inactive_session_id (set above).
-                if source == "active":
-                    state.trading_session_id = session_id
-                    # Register the reused session with the DB manager. create_trading_session
-                    # sets _current_session_id for NEW sessions, but this active-recovery path
-                    # reuses an existing one — without this, every session-scoped write that
-                    # falls back to _current_session_id (balance updates, etc.) fails with
-                    # "No active trading session" on the first trade after recovery (#41).
-                    state.db_manager.set_current_session(session_id)
-                    # Wire session context to execution engine so journaling works
-                    state.live_execution_engine.session_id = session_id
-                    state.live_execution_engine.strategy_name = state._strategy_name()
-                    # Crash recovery reuses the session, so day-start snapshots
-                    # already live under it — no recovery fallback needed (#766).
-                    state.event_logger.set_session_id(session_id)
+                # Crash recovery (active session) was already reused above — clean
+                # restarts create a new session below; their OPEN positions are
+                # carried forward via _recovered_inactive_session_id (set above).
                 logger.info(
                     "💾 Recovered balance $%.2f from %s session #%s",
                     recovered_balance,
@@ -209,6 +205,28 @@ class LiveSessionRecoverer:
                     session_id,
                 )
                 return recovered_balance
+
+            if source == "active":
+                # The session (and, via start()'s position-recovery call, any OPEN
+                # position it owns) is already reused — only the *balance* is
+                # unusable. Falling through silently here (as this used to) is
+                # exactly the #743 failure: the caller must not treat this like a
+                # fresh start. Page loudly instead of just logging, via the same
+                # `_record_event(..., alert=True)` mechanism every other CRITICAL
+                # condition in this module uses (see `_emit_reconcile_summary`) —
+                # an operator must verify the true balance/PnL of the reused
+                # session by hand.
+                state._record_event(
+                    EventType.ALERT,
+                    f"Crash recovery: reusing active session #{session_id} but its "
+                    f"balance could not be recovered ({recovered_balance!r}). "
+                    "Starting on the configured default balance — verify the "
+                    "session's true balance and any open position's P&L by hand.",
+                    severity="critical",
+                    component="session_recovery",
+                    error_code="ACTIVE_SESSION_BALANCE_UNRECOVERABLE",
+                    alert=True,
+                )
 
             logger.warning("⚠️  Session #%s found but no balance to recover", session_id)
             return None
@@ -227,6 +245,30 @@ class LiveSessionRecoverer:
             state._history_seed_lookup_failed = True
             logger.error("❌ Error recovering session: %s", e, exc_info=True)
             return None
+
+    def _reuse_active_session(self, session_id: int) -> None:
+        """Wire the engine onto a still-active (crash-recovered) session.
+
+        Called unconditionally as soon as an active session is found — never
+        gated on whether its balance could also be recovered (#743). Without
+        this, an unusable balance read left the session's own OPEN position
+        un-reloaded and un-carried-forward, while a brand new session started
+        believing the symbol was flat.
+        """
+        state = self._state
+        state.trading_session_id = session_id
+        # Register the reused session with the DB manager. create_trading_session
+        # sets _current_session_id for NEW sessions, but this active-recovery path
+        # reuses an existing one — without this, every session-scoped write that
+        # falls back to _current_session_id (balance updates, etc.) fails with
+        # "No active trading session" on the first trade after recovery (#41).
+        state.db_manager.set_current_session(session_id)
+        # Wire session context to execution engine so journaling works
+        state.live_execution_engine.session_id = session_id
+        state.live_execution_engine.strategy_name = state._strategy_name()
+        # Crash recovery reuses the session, so day-start snapshots
+        # already live under it — no recovery fallback needed (#766).
+        state.event_logger.set_session_id(session_id)
 
     def ensure_positions_registered_with_risk_manager(self) -> None:
         """Register every tracked position with the risk manager.
