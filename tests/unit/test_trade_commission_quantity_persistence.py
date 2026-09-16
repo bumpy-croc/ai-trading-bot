@@ -955,6 +955,38 @@ def test_reconciler_logs_null_quantity_for_corrupt_original_size(monkeypatch):
     assert trade["commission"] == pytest.approx(0.25 + 0.11, abs=0.001)
 
 
+def test_reconciler_logs_quantity_when_sizing_fields_never_set(monkeypatch):
+    """Regression (#1208 review finding): a position that was never partially exited or
+    scaled in never gets original_size/current_size populated (they are lazily set to
+    ``size`` only inside apply_partial_exit/apply_scale_in), so both can legitimately be
+    None on an otherwise perfectly ordinary close. held_base_quantity's stricter "both
+    required" guard must NOT null the logged quantity for this common case -- it must fall
+    back to ``size`` first, exactly like _closed_base_quantity does, before applying the
+    guard. (A first pass of this refactor missed that fallback and silently nulled
+    trades.quantity for every un-partially-exited, un-scaled-in reconciler close.)"""
+    db = MockDatabaseManager()
+    reconciler = _make_reconciler(db, fee_rate=0.001)
+    position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0)
+    position.original_size = None
+    position.current_size = None
+
+    reconciler._log_reconciliation_trade(
+        position=position,
+        entry_price=100.0,
+        exit_price=110.0,
+        qty=2.5,
+        gross_pnl=25.0,
+        exit_fee=0.11,
+        interest_cost=0.0,
+        reason="stop_loss_filled_offline",
+        exit_order_id="sl-no-sizing-fields",
+    )
+
+    trade = list(db._trades.values())[0]
+    assert trade["quantity"] == pytest.approx(2.5)  # NOT NULL
+    assert trade["commission"] == pytest.approx(0.25 + 0.11, abs=0.001)
+
+
 def test_get_performance_metrics_nets_commission(monkeypatch):
     """get_performance_metrics nets commission: a gross-winner whose commission exceeds its
     gross pnl is bucketed as a loss and reduces total_pnl (the _trade_net_pnl integration)."""

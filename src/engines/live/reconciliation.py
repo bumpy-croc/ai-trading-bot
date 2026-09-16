@@ -3900,10 +3900,19 @@ class PositionReconciler:
             # also now nulls (rather than logs qty_abs for) a corrupt raw quantity/original_size,
             # not only the narrower current > original case checked here before -- consistent
             # with, not a divergence from, _closed_base_quantity's own guard.
+            # Fall back to ``size`` when original_size/current_size were never set (None) --
+            # e.g. a recovered position that was never partially exited or scaled in, so the
+            # lazy current_size/original_size = size init in apply_partial_exit/apply_scale_in
+            # never ran. Mirrors _closed_base_quantity's identical fallback exactly: without
+            # it, held_base_quantity's stricter "both required" guard would null a perfectly
+            # ordinary, unscaled close's logged quantity.
+            size = getattr(position, "size", None)
             original = getattr(position, "original_size", None)
             current = getattr(position, "current_size", None)
+            effective_original = original if original is not None else size
+            effective_current = current if current is not None else size
             raw_quantity = getattr(position, "quantity", 0.0) or 0.0
-            if held_base_quantity(raw_quantity, current, original) is None:
+            if held_base_quantity(raw_quantity, effective_current, effective_original) is None:
                 logged_quantity = None
                 fee_base_qty = abs(float(raw_quantity))
             else:

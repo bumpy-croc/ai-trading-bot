@@ -46,6 +46,13 @@ def held_base_quantity(
     (``allow_scale_in=False``) because its consumer is a persisted ``trades.quantity``
     audit column, matching ``_closed_base_quantity``'s own no-fabrication policy exactly
     (same purpose, same guard).
+
+    Unlike ``_closed_base_quantity``, this function does NOT fall back to ``position.size``
+    when ``current_size``/``original_size`` are ``None`` (it has no ``Position`` to read
+    ``size`` from) — a caller that needs that fallback (only ``_log_reconciliation_trade``
+    does, to match ``_closed_base_quantity`` exactly for a position that was never
+    partially exited or scaled in) must resolve it before calling, e.g.
+    ``current_size if current_size is not None else position.size``.
     """
     if qty is None:
         return None
