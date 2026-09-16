@@ -2567,14 +2567,18 @@ class TestPeriodicReconcilerStopLossIdMutationInsideLock:
         with patch.object(reconciler, "_stop_loss_placement_lock", return_value=_ObservingLock()):
             reconciler._reconcile_cycle()
 
-        # Two lock scopes: the early None-reset (on confirming the order dead)
-        # releases first, then the placement block re-acquires the lock and
-        # releases with the new id set -- both transitions must be visible
-        # AT release, never patched in afterwards.
-        assert observed_at_release == [None, "new_sl_scope"], (
+        # Three lock scopes: the early None-reset (on confirming the order
+        # dead) releases first, then the placement block re-acquires the lock
+        # and releases with the new id set, then the pre-persist re-check
+        # (#1199 P1 -- guards against a concurrent move() clobber between
+        # releasing the placement lock and persisting to the DB) re-acquires
+        # it once more. All three transitions must be visible AT release,
+        # never patched in afterwards.
+        assert observed_at_release == [None, "new_sl_scope", "new_sl_scope"], (
             "stop_loss_order_id must be None at the first lock release (the "
-            "dead-order reset) and the NEW id at the second (the placement) "
-            "-- a write outside either lock's scope races "
+            "dead-order reset), the NEW id at the second (the placement), "
+            "and the NEW id again at the third (the pre-persist re-check) "
+            "-- a write outside any lock's scope races "
             "LiveStopLossManager.move()'s fresh re-read once it acquires "
             "this same lock (#1179)"
         )
@@ -2623,7 +2627,11 @@ class TestPeriodicReconcilerStopLossIdMutationInsideLock:
         with patch.object(reconciler, "_stop_loss_placement_lock", return_value=_ObservingLock()):
             reconciler._reconcile_cycle()
 
-        assert observed_at_release == ["new_sl_missing_scope"]
+        # Two lock scopes: the placement itself, then the pre-persist
+        # re-check (#1199 P1) that guards against a concurrent move()
+        # clobbering the DB between releasing the placement lock and
+        # persisting to it.
+        assert observed_at_release == ["new_sl_missing_scope", "new_sl_missing_scope"]
         assert pos.stop_loss_order_id == "new_sl_missing_scope"
 
     def test_missing_lock_registry_logs_a_one_time_warning(
@@ -3026,6 +3034,132 @@ class TestPeriodicReconcilerSLPriceDrift:
         mock_db.update_position.assert_any_call(
             position_id=64, stop_loss_order_id="untracked_adopted_sl", stop_loss=47500.0
         )
+
+    def test_cycle_corrects_sl_price_drift_does_not_ratify_a_looser_adopted_price(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """#1199 P1: the adopt tolerance is symmetric, so the achieved price can
+        land FURTHER from intent than expected, not just closer. Ratifying a
+        looser achieved price into ``position.stop_loss`` -- the engine's own
+        software exit trigger, independent of the resting exchange order --
+        would tolerate extra notional risk before that trigger fires. Only a
+        tighter-or-equal achieved price may be ratified; a looser one must be
+        left as an unresolved divergence for the next pass instead."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_price_stale_loose",
+            exchange_order_id="entry_stale_loose",
+            db_position_id=65,
+            quantity=1.0,
+            current_size=1.0,
+            original_size=1.0,
+        )
+        # Long position: tracked (intended) stop is 47_000.
+        pos.stop_loss = 47000.0
+        mock_position_tracker.positions = {"entry_stale_loose": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(order_id="sl_price_stale_loose", status=ExOS.PENDING)
+        sl_order.stop_price = 45000.0
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.cancel_order.return_value = True
+
+        # After the cancel, an untracked resting stop is at 46_200 -- within
+        # the 2% adopt tolerance of the intended 47_000 (940 either way), but
+        # LOWER, i.e. looser/worse for a long (more room before it triggers).
+        adopted_order = MockExchangeOrder(order_id="untracked_loose_sl", status=ExOS.PENDING)
+        adopted_order.side = OrderSide.SELL
+        adopted_order.stop_price = 46200.0
+        mock_exchange.get_open_orders_checked.return_value = [adopted_order]
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        reconciler._reconcile_cycle()
+
+        assert pos.stop_loss_order_id == "untracked_loose_sl"
+        # last_placed_stop_price (the min-trailing-stop-move floor's baseline,
+        # #1179) is unconditional -- it must always reflect exchange reality.
+        assert pos.last_placed_stop_price == 46200.0
+        # But position.stop_loss -- the engine's own exit trigger -- must NOT
+        # be loosened to the achieved price; it stays at the safer, intended
+        # value pending the next reconciliation pass.
+        assert pos.stop_loss == 47000.0
+
+        for db_call in mock_db.update_position.call_args_list:
+            assert db_call.kwargs.get("stop_loss") != 46200.0
+
+    def test_cycle_corrects_sl_price_drift_skips_persist_after_concurrent_move(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """#1199 P1: the corrected stop_loss_order_id/stop_loss are persisted to
+        the DB AFTER the placement lock is released. If a concurrent move()
+        acquires that same lock the instant it is released and ratchets the
+        stop first, this correction's own (now stale) persist must not clobber
+        move()'s newer values back. Simulates the race by mutating
+        ``stop_loss_order_id`` out from under the correction between the
+        placement lock's release and the pre-persist re-check."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            stop_loss_order_id="sl_price_race",
+            exchange_order_id="entry_race",
+            db_position_id=66,
+            quantity=1.0,
+            current_size=1.0,
+            original_size=1.0,
+        )
+        pos.stop_loss = 47000.0
+        mock_position_tracker.positions = {"entry_race": pos}
+
+        entry_order = MockExchangeOrder(status=ExOS.FILLED, average_price=50000.0)
+        sl_order = MockExchangeOrder(order_id="sl_price_race", status=ExOS.PENDING)
+        sl_order.stop_price = 45000.0
+        mock_exchange.get_order.side_effect = [entry_order, sl_order]
+        mock_exchange.cancel_order.return_value = True
+        mock_exchange.get_open_orders_checked.return_value = []
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_race"
+
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+
+        class _RaceSimulatingLock:
+            """A no-op lock (matches the un-registried fallback) that, on the
+            SECOND scope's exit -- the placement -- mutates stop_loss_order_id
+            as a concurrent move() would, right before the third scope (the
+            pre-persist still_ours re-check) observes it."""
+
+            def __init__(self):
+                self.call_count = 0
+
+            def __enter__(self):
+                self.call_count += 1
+                return self
+
+            def __exit__(self, *exc_info):
+                if self.call_count == 2:
+                    pos.stop_loss_order_id = "concurrent_move_new_id"
+                return False
+
+        with patch.object(
+            reconciler, "_stop_loss_placement_lock", return_value=_RaceSimulatingLock()
+        ):
+            reconciler._reconcile_cycle()
+
+        # The concurrent move()'s id must survive -- this correction's stale
+        # persist must not clobber it back to its own (superseded) id.
+        assert pos.stop_loss_order_id == "concurrent_move_new_id"
+        for db_call in mock_db.update_position.call_args_list:
+            assert db_call.kwargs.get("stop_loss_order_id") != "new_sl_race"
 
 
 # ---------- Partial SL Fill Quantity Calculation Tests ----------
