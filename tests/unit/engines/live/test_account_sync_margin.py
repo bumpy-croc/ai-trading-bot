@@ -560,3 +560,27 @@ def test_margin_equity_zero_equity_retries_at_startup(mock_sleep):
     assert res["corrected"] is True
     assert exchange.get_account_equity.call_count == 3
     assert mock_sleep.call_count == 2
+    assert [c.args[0] for c in mock_sleep.call_args_list] == [1.0, 2.0]
+
+
+@patch("src.engines.live.account_sync.time.sleep")
+def test_margin_equity_nan_retries_and_never_reaches_update_balance(mock_sleep):
+    """#1226 re-review (architecture-reviewer): a non-finite equity (NaN, from a
+    malformed/non-numeric exchange field) must retry exactly like None/0.0 --
+    not slip through both predicates (neither `> 0` nor `<= 0` is True for NaN)
+    and reach update_balance(nan, ...)."""
+    exchange = Mock()
+    exchange.get_account_equity.side_effect = [float("nan"), float("nan"), 84.14]
+    exchange.get_balance.return_value = Mock(total=84.14)
+    db = Mock()
+    db.get_current_balance.return_value = 99.89
+    db.update_balance.return_value = True
+    sync = AccountSynchronizer(exchange=exchange, db_manager=db, session_id=1, use_margin=True)
+
+    res = sync._sync_margin_equity()
+
+    assert res["corrected"] is True
+    assert exchange.get_account_equity.call_count == 3
+    # NaN must never be the value passed to update_balance.
+    for call in db.update_balance.call_args_list:
+        assert call.args[0] == pytest.approx(84.14)

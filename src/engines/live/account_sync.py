@@ -7,6 +7,7 @@ or trades due to shutdowns or errors.
 """
 
 import logging
+import math
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -242,7 +243,7 @@ class AccountSynchronizer:
                 )
                 equity = None
 
-            if equity is not None and equity > 0:
+            if equity is not None and math.isfinite(equity) and equity > 0:
                 return equity
 
             if attempt < max_attempts:
@@ -250,9 +251,11 @@ class AccountSynchronizer:
                     DEFAULT_RETRY_BACKOFF_MULTIPLIER ** (attempt - 1)
                 )
                 logger.warning(
-                    "Startup margin-equity read unavailable (attempt %d/%d) — " "retrying in %.1fs",
-                    attempt + 1,
+                    "Startup margin-equity read unavailable (attempt %d/%d) — "
+                    "retrying attempt %d in %.1fs",
+                    attempt,
                     max_attempts,
+                    attempt + 1,
                     delay,
                 )
                 time.sleep(delay)
@@ -365,7 +368,7 @@ class AccountSynchronizer:
             else getattr(self.db_manager, "_current_session_id", None)
         )
 
-        if equity is None or equity <= 0:
+        if equity is None or not math.isfinite(equity) or equity <= 0:
             # A skipped correction must never be invisible in the logs (#659: this
             # branch used to return silently — no log, no metric — while the
             # tracked balance stayed stale). If this was the startup attempt,
