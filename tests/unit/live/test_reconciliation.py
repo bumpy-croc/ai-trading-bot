@@ -2261,6 +2261,58 @@ class TestFilledOrderPositionReconciliation:
         assert event_kwargs["error_code"] == "RECOVERY_SL_UNCONFIRMED"
         assert event_kwargs["alert"] is True
 
+    def test_filled_entry_sl_rate_limit_ban_refusal_defers_not_emergency_closes(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """#1228 review regression guard: a RATE_LIMIT_BAN refusal (the
+        open-orders lookup hit an exchange-wide -1003 ban) is a sub-case of
+        "couldn't confirm", not a genuine conflict -- it must defer exactly
+        like a plain UNCONFIRMED refusal, not fall through to emergency-close.
+        #738 introduced this reason_code as a new REFUSE sub-case; the #1160
+        gate at this site originally matched on the exact UNCONFIRMED enum
+        value, so a new sub-case silently fell outside it and re-armed an
+        emergency market-sell during the exact ban scenario #738 exists to
+        handle. The gate must key on `.unconfirmed` (the semantic flag every
+        REFUSE sub-case shares) rather than one specific enum identity."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 202
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 22,
+                "client_order_id": "atb_BTCUSDT_long_3333_eeee",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        # The guard's own lookup hit an IP-wide rate-limit ban -- a REFUSE
+        # sub-case distinct from plain UNCONFIRMED, but still "couldn't
+        # confirm", not a genuine conflict.
+        ban_error = Exception("banned")
+        ban_error.code = -1003
+        mock_exchange.get_open_orders_checked.side_effect = ban_error
+        on_event = MagicMock()
+        reconciler.on_event = on_event
+
+        reconciler.resolve_pending_orders()
+
+        mock_position_tracker.track_recovered_position.assert_called_once()
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
+        mock_exchange.place_order.assert_not_called()
+        mock_exchange.place_stop_loss_order.assert_not_called()
+
     def test_filled_entry_sl_ambiguous_refusal_still_emergency_closes(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
     ):

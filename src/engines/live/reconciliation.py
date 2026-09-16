@@ -1792,10 +1792,7 @@ class PositionReconciler:
                     )
 
                 if not sl_placed:
-                    if (
-                        refusal_decision is not None
-                        and refusal_decision.reason_code == StopPlacementRefuseReason.UNCONFIRMED
-                    ):
+                    if refusal_decision is not None and refusal_decision.unconfirmed:
                         # The guard couldn't confirm the exchange's open-orders
                         # state this cycle (network blip, transient API error, or
                         # an eventual-consistency lag) -- not a genuine conflict.
