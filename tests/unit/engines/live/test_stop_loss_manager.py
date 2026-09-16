@@ -74,14 +74,14 @@ def make_position(**overrides):
 
 
 class TestHeldProtectionQuantity:
-    """held_protection_quantity delegates to the shared held_base_quantity (#1208)."""
+    """held_protection_quantity delegates to the shared held_base_quantity."""
 
     def test_scales_by_partial_exit(self):
         position = make_position(quantity=1.0, current_size=0.5, original_size=1.0)
         assert LiveStopLossManager.held_protection_quantity(position) == pytest.approx(0.5)
 
     def test_scales_past_one_for_scale_in(self):
-        """allow_scale_in=True (#1208): unchanged from the pre-#1208 unguarded scaling — a
+        """allow_scale_in=True: unchanged from the previous unguarded scaling — a
         real scale-in's held amount must still be protectable, not zeroed out."""
         position = make_position(quantity=1.0, current_size=1.5, original_size=1.0)
         assert LiveStopLossManager.held_protection_quantity(position) == pytest.approx(1.5)
@@ -95,7 +95,7 @@ class TestHeldProtectionQuantity:
         assert LiveStopLossManager.held_protection_quantity(position) == 0.0
 
     def test_corrupt_current_size_falls_back_to_raw_quantity(self):
-        """Regression (#1208): a non-finite/negative current_size is a NEW guard the shared
+        """Regression: a non-finite/negative current_size is a NEW guard the shared
         helper adds — the previous inline check (`current is not None and original is not
         None and original > 0`) did not validate current_size's sign/finiteness at all, so a
         corrupted current_size would have silently scaled by a garbage ratio."""
@@ -103,7 +103,7 @@ class TestHeldProtectionQuantity:
         assert LiveStopLossManager.held_protection_quantity(position) == pytest.approx(0.5)
 
     def test_non_finite_quantity_returns_zero(self):
-        """Regression (#1208): NaN quantity previously slipped past `not quantity or quantity
+        """Regression: NaN quantity previously slipped past `not quantity or quantity
         <= 0` (both comparisons against NaN are False), and could have handed the exchange a
         NaN stop-loss order quantity. It is now rejected and returns 0.0."""
         position = make_position(quantity=float("nan"), current_size=None, original_size=None)

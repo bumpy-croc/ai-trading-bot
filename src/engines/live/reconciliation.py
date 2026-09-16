@@ -955,7 +955,7 @@ def _position_holding_is_gone(exchange: Any, use_margin: bool, position: Any) ->
     original_size = getattr(position, "original_size", None)
     # allow_scale_in=True: this feeds a "still held?" threshold check, not a persisted
     # record — under-sizing a real scale-in to the unscaled qty would falsely declare a
-    # still-live position gone (#1208).
+    # still-live position gone.
     scaled = held_base_quantity(qty, current_size, original_size, allow_scale_in=True)
     position_qty = qty if scaled is None else scaled
 
@@ -1931,7 +1931,7 @@ class PositionReconciler:
 
         # Compute remaining quantity based on current_size / original_size. allow_scale_in=True:
         # this sizes the actual re-placed stop, so a real (even legacy-scaled-in) held amount
-        # must still be protected rather than under-sized to the unscaled qty (#1208).
+        # must still be protected rather than under-sized to the unscaled qty.
         qty = getattr(position, "quantity", 0) or 0.0
         current = getattr(position, "current_size", None)
         original = getattr(position, "original_size", None)
@@ -2258,7 +2258,7 @@ class PositionReconciler:
                     qty = float(getattr(position, "quantity", 0) or 0.0)
                     current = getattr(position, "current_size", None)
                     original = getattr(position, "original_size", None)
-                    # allow_scale_in=True: sizes the actual re-placed stop (#1208).
+                    # allow_scale_in=True: sizes the actual re-placed stop.
                     scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
                     qty = qty if scaled is None else scaled
                     achieved = _AchievedStopPriceCapture(sl_price)
@@ -2581,7 +2581,7 @@ class PositionReconciler:
                         side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
                         sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
                         # Scale quantity by remaining size after partial exits.
-                        # allow_scale_in=True: sizes the actual re-placed stop (#1208).
+                        # allow_scale_in=True: sizes the actual re-placed stop.
                         qty = getattr(position, "quantity", 0) or 0.0
                         current = getattr(position, "current_size", None)
                         original = getattr(position, "original_size", None)
@@ -2674,7 +2674,7 @@ class PositionReconciler:
                     old_quantity = position.quantity
                     # Compute what we actually hold before the SL fill. allow_scale_in=True:
                     # this is the real held amount used to derive the remaining size below, not
-                    # a persisted record (#1208).
+                    # a persisted record.
                     held_qty = position.quantity
                     current = getattr(position, "current_size", None)
                     original = getattr(position, "original_size", None)
@@ -2768,7 +2768,7 @@ class PositionReconciler:
                         sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
                         # Scale quantity by current_size/original_size to get actual held
                         # amount after partial exits and SL fills. allow_scale_in=True:
-                        # sizes the actual re-placed stop (#1208).
+                        # sizes the actual re-placed stop.
                         qty = getattr(position, "quantity", 0) or 0.0
                         cs = getattr(position, "current_size", None)
                         os_ = getattr(position, "original_size", None)
@@ -2980,7 +2980,7 @@ class PositionReconciler:
             qty = getattr(position, "quantity", 0) or 0.0
             current = getattr(position, "current_size", None)
             original = getattr(position, "original_size", None)
-            # allow_scale_in=True: sizes the actual re-placed stop (#1208).
+            # allow_scale_in=True: sizes the actual re-placed stop.
             scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
             qty = qty if scaled is None else scaled
             if qty <= 0:
@@ -3117,7 +3117,7 @@ class PositionReconciler:
         for a scale-in it is the larger held amount (what the exit actually sells). Returns
         the unscaled fill when sizing metadata is missing.
 
-        ``allow_scale_in=True`` (#1208): this feeds the real P&L and sell quantity for a
+        ``allow_scale_in=True``: this feeds the real P&L and sell quantity for a
         reconciler-driven close, not a persisted record — a scale-in's actual held amount
         must be used even though ``_log_reconciliation_trade`` separately NULLs the
         *logged* ``trades.quantity`` for the same case (mirroring the engine's own
@@ -3242,7 +3242,7 @@ class PositionReconciler:
         original_size = getattr(position, "original_size", None)
         # allow_scale_in=True: this feeds the external-close detection threshold below, not
         # a persisted record — under-sizing a real scale-in would falsely flag a still-held
-        # position as externally closed (#1208).
+        # position as externally closed.
         scaled = held_base_quantity(qty, current_size, original_size, allow_scale_in=True)
         position_qty = qty if scaled is None else scaled
 
@@ -3380,7 +3380,7 @@ class PositionReconciler:
             original_size = getattr(position, "original_size", None)
             # allow_scale_in=True: feeds the margin external-close threshold below, not a
             # persisted record — under-sizing would falsely flag a real scale-in as gone
-            # (#1208).
+            # .
             scaled = held_base_quantity(qty, current_size, original_size, allow_scale_in=True)
             position_qty = qty if scaled is None else scaled
 
@@ -3545,7 +3545,7 @@ class PositionReconciler:
                 # allow_scale_in=True: this feeds the balance-reconciliation notional
                 # estimate, not a persisted record — under-sizing a real scale-in would
                 # understate deployed capital and misfire the balance-discrepancy alert
-                # (#1208).
+                # .
                 current = getattr(position, "current_size", None)
                 original = getattr(position, "original_size", None)
                 scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
@@ -3716,7 +3716,7 @@ class PositionReconciler:
         # exits. Without this, closing after a 50% partial exit would calculate
         # P&L on the full original quantity, doubling the realized amount.
         # allow_scale_in=True: this is a real balance-affecting P&L calculation, not a
-        # persisted record — under-sizing a real scale-in would misrealize P&L (#1208).
+        # persisted record — under-sizing a real scale-in would misrealize P&L.
         current = getattr(position, "current_size", None)
         original = getattr(position, "original_size", None)
         scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
@@ -3894,12 +3894,14 @@ class PositionReconciler:
             # held quantity is not reliably derivable. The engine stores NULL quantity and
             # does not inflate the entry fee (_closed_base_quantity -> None,
             # _close_position_portion -> 1.0); mirror that here rather than over-reporting.
-            # held_base_quantity's DEFAULT guard (no allow_scale_in, #1208) is exactly that
-            # policy -- unlike every other reconciliation.py call site, this one feeds a
-            # persisted ``trades.quantity`` audit column, so it must NOT allow_scale_in. This
-            # also now nulls (rather than logs qty_abs for) a corrupt raw quantity/original_size,
-            # not only the narrower current > original case checked here before -- consistent
-            # with, not a divergence from, _closed_base_quantity's own guard.
+            # held_base_quantity's DEFAULT guard (no allow_scale_in) is that same policy for
+            # a scale-in and every other corrupted-sizing case -- unlike every other
+            # reconciliation.py call site, this one feeds a persisted ``trades.quantity``
+            # audit column, so it must NOT allow_scale_in. One case is not identical to
+            # _closed_base_quantity: a flat current_size == 0.0 is a valid (not nulled) input
+            # here, since the qty this function receives for a flat slice is already 0 by the
+            # time it gets here (unchanged from before this consolidation) -- there is nothing
+            # left to fabricate by logging quantity=0.
             # Fall back to ``size`` when original_size/current_size were never set (None) --
             # e.g. a recovered position that was never partially exited or scaled in, so the
             # lazy current_size/original_size = size init in apply_partial_exit/apply_scale_in
@@ -4318,7 +4320,7 @@ class PeriodicReconciler:
                 price = float(getattr(position, "entry_price", 0) or 0.0)
                 if qty > 0 and price > 0:
                     # allow_scale_in=True: feeds the notional estimate for the balance
-                    # discrepancy check, not a persisted record (#1208).
+                    # discrepancy check, not a persisted record.
                     current = getattr(position, "current_size", None)
                     original = getattr(position, "original_size", None)
                     scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
@@ -4493,7 +4495,7 @@ class PeriodicReconciler:
                     cur = getattr(position, "current_size", None)
                     orig = getattr(position, "original_size", None)
                     # allow_scale_in=True: feeds the margin external-close threshold below,
-                    # not a persisted record (#1208).
+                    # not a persisted record.
                     scaled = held_base_quantity(qty, cur, orig, allow_scale_in=True)
                     pos_qty = qty if scaled is None else scaled
 
@@ -4692,7 +4694,7 @@ class PeriodicReconciler:
                 current_size = getattr(position, "current_size", None)
                 original_size = getattr(position, "original_size", None)
                 # allow_scale_in=True: feeds the external-close detection threshold below,
-                # not a persisted record (#1208).
+                # not a persisted record.
                 scaled = held_base_quantity(qty, current_size, original_size, allow_scale_in=True)
                 position_qty = qty if scaled is None else scaled
 
@@ -4880,7 +4882,7 @@ class PeriodicReconciler:
                             current = getattr(position, "current_size", None)
                             original = getattr(position, "original_size", None)
                             # allow_scale_in=True: this derives the real remaining held amount
-                            # after the SL's partial fill, not a persisted record (#1208).
+                            # after the SL's partial fill, not a persisted record.
                             # held_base_quantity already guarantees original is finite-positive
                             # whenever it returns non-None; `original is not None` below is
                             # just the mypy narrowing for the `original * ...` use.
@@ -4924,7 +4926,7 @@ class PeriodicReconciler:
                             side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
                             sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
                             # Compute held qty accounting for partial exits.
-                            # allow_scale_in=True: sizes the actual re-placed stop (#1208).
+                            # allow_scale_in=True: sizes the actual re-placed stop.
                             qty = getattr(position, "quantity", 0) or 0.0
                             current = getattr(position, "current_size", None)
                             original = getattr(position, "original_size", None)
@@ -5451,7 +5453,7 @@ class PeriodicReconciler:
             qty = getattr(position, "quantity", 0) or 0.0
             current = getattr(position, "current_size", None)
             original = getattr(position, "original_size", None)
-            # allow_scale_in=True: sizes the actual re-placed stop (#1208).
+            # allow_scale_in=True: sizes the actual re-placed stop.
             scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
             qty = qty if scaled is None else scaled
             if qty <= 0:
@@ -5566,7 +5568,7 @@ class PeriodicReconciler:
             sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
 
             # Compute held qty accounting for partial exits.
-            # allow_scale_in=True: sizes the actual placed stop (#1208).
+            # allow_scale_in=True: sizes the actual placed stop.
             qty = getattr(position, "quantity", 0) or 0.0
             current = getattr(position, "current_size", None)
             original = getattr(position, "original_size", None)

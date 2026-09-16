@@ -312,10 +312,10 @@ class LiveStopLossManager:
     def held_protection_quantity(position: LivePosition) -> float:
         """Base quantity to protect, scaled for any prior partial exits.
 
-        Delegates to the shared ``held_base_quantity`` (#1208) so this mirrors the
-        reconciler's re-placement sizing off ONE implementation. ``allow_scale_in=True``
-        preserves this method's pre-#1208 behavior of scaling past 1.0 for a scale-in
-        rather than refusing to size the stop — a real held amount must still be
+        Delegates to the shared ``held_base_quantity`` so this mirrors the reconciler's
+        re-placement sizing off ONE implementation. ``allow_scale_in=True`` preserves this
+        method's previous behavior of scaling past 1.0 for a scale-in rather than
+        refusing to size the stop — a real held amount must still be
         protected even for legacy/corrupted state (see the helper's docstring). Falls
         back to the raw (unscaled) quantity when the helper cannot scale (missing/
         invalid current_size or original_size), matching the previous inline guard;

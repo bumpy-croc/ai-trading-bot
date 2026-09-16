@@ -1294,7 +1294,7 @@ class TestBalanceAccountsForPositionNotional:
     def test_estimate_notional_scales_past_original_for_scale_in(
         self, reconciler, mock_position_tracker
     ):
-        """Regression (#1208 consolidation): a scale-in (current_size > original_size) still
+        """Regression (): a scale-in (current_size > original_size) still
         contributes its real, scaled-up notional — unchanged from the pre-consolidation
         unguarded scaling (allow_scale_in=True), since this feeds a balance-discrepancy
         estimate, not a persisted record."""
@@ -1313,7 +1313,7 @@ class TestBalanceAccountsForPositionNotional:
     def test_estimate_notional_falls_back_to_unscaled_for_corrupt_current_size(
         self, reconciler, mock_position_tracker
     ):
-        """Regression (#1208): a non-finite/negative current_size (corrupted state) is a NEW
+        """Regression: a non-finite/negative current_size (corrupted state) is a NEW
         guard the shared helper adds — previously this inline site had no such check and would
         have silently computed a NaN/negative notional. It now safely falls back to the unscaled
         quantity instead of propagating NaN into the balance-discrepancy comparison."""
@@ -2373,7 +2373,7 @@ class TestPeriodicReconcilerSLVerification:
     def test_cycle_replaces_partially_filled_cancelled_sl(
         self, mock_exchange, mock_position_tracker, mock_db
     ):
-        """Regression (#1208 consolidation): the periodic cycle's own partial-SL-fill-then-
+        """Regression (): the periodic cycle's own partial-SL-fill-then-
         replace path (distinct from PositionReconciler._verify_stop_loss's startup
         equivalent) computes the same held-quantity-minus-fill remaining amount, unchanged
         by the extraction.
@@ -2420,7 +2420,7 @@ class TestPeriodicReconcilerSLVerification:
     def test_cycle_replaces_partially_filled_cancelled_sl_after_scale_in(
         self, mock_exchange, mock_position_tracker, mock_db
     ):
-        """Regression (#1208 consolidation): allow_scale_in=True preserves the pre-
+        """Regression (): allow_scale_in=True preserves the pre-
         consolidation unguarded scaling for a scale-in (current_size > original_size) in
         this same periodic partial-fill-then-replace path — held scales PAST 1.0 rather
         than being nulled out.
@@ -3193,7 +3193,7 @@ class TestPartialSLFillQuantityCalculation:
     def test_partial_sl_fill_after_scale_in_correct_qty(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
     ):
-        """Regression (#1208 consolidation): a scale-in (current_size > original_size) still
+        """Regression (): a scale-in (current_size > original_size) still
         scales PAST 1.0 for the pre-fill held-quantity and replacement-quantity computations
         (allow_scale_in=True) — unchanged from the pre-consolidation unguarded scaling, since
         this sizes an actual re-placed stop, not a persisted record.
@@ -6475,7 +6475,7 @@ class TestStopLossReplacementHoldingGuard:
         mock_exchange.get_balance.assert_not_called()
 
     def test_helper_scale_in_position_not_falsely_gone(self, mock_exchange):
-        """Regression (#1208 consolidation): a scale-in (current_size > original_size) still
+        """Regression (): a scale-in (current_size > original_size) still
         compares against the real, scaled-up held quantity (allow_scale_in=True) — unchanged
         from the pre-consolidation unguarded scaling. Tracked qty 0.1 scaled to 0.15; the
         exchange holds 0.15, so the position is NOT gone (0.15 held is not < 0.075)."""
@@ -6488,7 +6488,7 @@ class TestStopLossReplacementHoldingGuard:
         assert _position_holding_is_gone(mock_exchange, False, pos) is False
 
     def test_helper_corrupt_current_size_falls_back_to_unscaled_qty(self, mock_exchange):
-        """Regression (#1208): a non-finite current_size (corrupted state) is a NEW guard the
+        """Regression: a non-finite current_size (corrupted state) is a NEW guard the
         shared helper adds — this inline site had no such check before and would have silently
         compared against a NaN threshold. It now falls back to the unscaled tracked quantity."""
         from src.engines.live.reconciliation import _position_holding_is_gone

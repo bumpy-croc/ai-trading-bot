@@ -26,18 +26,19 @@ def held_base_quantity(
 ) -> float | None:
     """Base quantity represented by ``qty`` scaled by ``current_size / original_size``.
 
-    The single implementation of the "held quantity" ratio duplicated (with divergent,
-    inconsistent guards) across ``reconciliation.py`` and ``stop_loss_manager.py`` before
-    #1208 consolidated it. Guards mirror ``_closed_base_quantity``: returns ``None`` when
-    ``qty`` is missing/non-finite/non-positive, ``original_size`` is not finite-positive,
-    or ``current_size`` is not finite-non-negative (``0.0`` is a valid, fully-exited
-    holding, not corrupt state — CODE.md Position Fields).
+    The single implementation of the "held quantity" ratio, replacing what used to be
+    divergent, inconsistently-guarded reimplementations scattered across
+    ``reconciliation.py`` and ``stop_loss_manager.py``. Guards mirror
+    ``_closed_base_quantity``: returns ``None`` when ``qty`` is missing/non-finite/
+    non-positive, ``original_size`` is not finite-positive, or ``current_size`` is not
+    finite-non-negative (``0.0`` is a valid, fully-exited holding, not corrupt state —
+    CODE.md Position Fields).
 
-    ``current_size > original_size`` (a scale-in) is guarded by default (``None``): before
-    #1206 this was the NORMAL shape of a scaled-in position (``apply_scale_in`` grew
-    ``current_size`` without growing ``original_size``/``quantity`` in lockstep), so it is
-    only a corrupted/legacy-state signal now that #1206 keeps them in lockstep going
-    forward. Passing ``allow_scale_in=True`` computes the scaled value anyway rather than
+    ``current_size > original_size`` (a scale-in) is guarded by default (``None``): a
+    scale-in that grows ``current_size`` without growing ``original_size``/``quantity`` in
+    lockstep is a corrupted/legacy sizing state (the position tracker keeps them in
+    lockstep on a scale-in going forward), so this cannot be trusted for a persisted
+    record. Passing ``allow_scale_in=True`` computes the scaled value anyway rather than
     returning ``None`` for it, and every consolidated ``reconciliation.py`` call site does
     so except ``_log_reconciliation_trade``: these are operational quantities (stop-loss
     sizing, notional estimates, P&L on close) where under-sizing a real held amount to 0

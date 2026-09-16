@@ -238,7 +238,7 @@ def test_closed_base_quantity_none_for_scaled_in_position():
     ],
 )
 def test_held_base_quantity_returns_none_for_corrupt_sizing(qty, current_size, original_size):
-    """held_base_quantity (#1208) mirrors _closed_base_quantity's guard for corrupt inputs,
+    """held_base_quantity mirrors _closed_base_quantity's guard for corrupt inputs,
     regardless of allow_scale_in."""
     assert held_base_quantity(qty, current_size, original_size) is None
     assert held_base_quantity(qty, current_size, original_size, allow_scale_in=True) is None
@@ -257,14 +257,14 @@ def test_held_base_quantity_scales_valid_inputs():
 
 def test_held_base_quantity_overflow_default_returns_none():
     """current_size > original_size (scale-in) -> None by default, matching
-    _closed_base_quantity (#1208's suggested default)."""
+    _closed_base_quantity's guard."""
     assert held_base_quantity(2.5, 0.40, 0.25) is None
 
 
 def test_held_base_quantity_overflow_allow_scale_in_scales_past_one():
     """allow_scale_in=True computes the scaled (>1.0) value instead of refusing it — the
     operational-sizing variant used by every reconciliation.py call site except
-    _log_reconciliation_trade (#1208): a real scale-in's held amount must still be usable
+    _log_reconciliation_trade: a real scale-in's held amount must still be usable
     for stop-loss sizing / notional / P&L, not zeroed out."""
     assert held_base_quantity(2.5, 0.40, 0.25, allow_scale_in=True) == pytest.approx(4.0)
 
@@ -925,7 +925,7 @@ def test_reconciler_scale_in_close_nulls_quantity_and_does_not_inflate_commissio
 
 
 def test_reconciler_logs_null_quantity_for_corrupt_original_size(monkeypatch):
-    """Regression (#1208): _log_reconciliation_trade's guard now delegates to
+    """Regression: _log_reconciliation_trade's guard now delegates to
     held_base_quantity's DEFAULT (no allow_scale_in) semantics, which also nulls a corrupt
     original_size — not only the narrower current_size > original_size check the manual
     reimplementation had before. A non-positive original_size means the sizing basis for
@@ -956,7 +956,7 @@ def test_reconciler_logs_null_quantity_for_corrupt_original_size(monkeypatch):
 
 
 def test_reconciler_logs_quantity_when_sizing_fields_never_set(monkeypatch):
-    """Regression (#1208 review finding): a position that was never partially exited or
+    """Regression: a position that was never partially exited or
     scaled in never gets original_size/current_size populated (they are lazily set to
     ``size`` only inside apply_partial_exit/apply_scale_in), so both can legitimately be
     None on an otherwise perfectly ordinary close. held_base_quantity's stricter "both
@@ -985,6 +985,33 @@ def test_reconciler_logs_quantity_when_sizing_fields_never_set(monkeypatch):
     trade = list(db._trades.values())[0]
     assert trade["quantity"] == pytest.approx(2.5)  # NOT NULL
     assert trade["commission"] == pytest.approx(0.25 + 0.11, abs=0.001)
+
+
+def test_reconciler_logs_zero_quantity_for_already_flat_slice(monkeypatch):
+    """A flat current_size (0.0) is unchanged (not nulled) behavior: held_base_quantity's
+    default guard treats current_size == 0.0 as a valid holding (unlike
+    _closed_base_quantity's stricter current_f > 0), so the caller's already-zero qty is
+    logged as 0.0 -- exactly the pre-consolidation behavior for this input, since the old
+    manual scaled_in check (current_size > original_size) was never True for current_size
+    == 0.0 either."""
+    db = MockDatabaseManager()
+    reconciler = _make_reconciler(db, fee_rate=0.001)
+    position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0, current_size=0.0)
+
+    reconciler._log_reconciliation_trade(
+        position=position,
+        entry_price=100.0,
+        exit_price=110.0,
+        qty=0.0,  # already-scaled to the flat slice by the caller
+        gross_pnl=0.0,
+        exit_fee=0.0,
+        interest_cost=0.0,
+        reason="stop_loss_filled_offline",
+        exit_order_id="sl-flat-slice",
+    )
+
+    trade = list(db._trades.values())[0]
+    assert trade["quantity"] == pytest.approx(0.0)
 
 
 def test_get_performance_metrics_nets_commission(monkeypatch):
