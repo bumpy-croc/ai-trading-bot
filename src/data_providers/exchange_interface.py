@@ -398,6 +398,7 @@ class ExchangeInterface(ABC):
         limit_price: float | None = None,
         client_order_id: str | None = None,
         side_effect_type: str | None = None,
+        just_cancelled: bool = False,
     ) -> str | None:
         """
         Place a server-side stop-loss order.
@@ -416,6 +417,13 @@ class ExchangeInterface(ABC):
             client_order_id: Optional client-generated order ID for idempotency.
             side_effect_type: Margin order intent (AUTO_REPAY for stop-losses).
                               Only used by margin-capable exchanges; ignored by spot.
+            just_cancelled: True when this call immediately follows cancelling a
+                            resting stop-loss for the same base asset (the
+                            re-protect path, #1173). Implementations that size a
+                            SELL against a free-balance read may retry that read
+                            briefly instead of trusting a possibly-stale
+                            post-cancel snapshot on the first try. Ignored by
+                            implementations with no such race.
 
         Returns:
             Order ID from exchange, or None on failure

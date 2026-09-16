@@ -38,6 +38,7 @@ from src.config.constants import (
 )
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
 from src.infrastructure.timeout import run_with_timeout
+from src.trading.balance_retry import read_free_balance_with_retry
 from src.trading.precision import quantize_to_step
 from src.trading.symbols.factory import SymbolFactory, base_asset_from_symbol
 
@@ -1914,12 +1915,26 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         limit_price: float | None = None,
         client_order_id: str | None = None,
         side_effect_type: str | None = None,
+        just_cancelled: bool = False,
     ) -> str | None:
         """
         Place a server-side stop-loss order on Binance.
 
         Uses STOP_LOSS_LIMIT order type which requires both a stop price
         (trigger) and a limit price (execution price).
+
+        Args:
+            just_cancelled: True when this call immediately follows cancelling
+                a resting stop-loss for the same base asset (the re-protect
+                path, #1173) — mirrors ``stop_just_cancelled`` on the close
+                side (#1165). Binance's cross-margin wallet read is eventually
+                consistent, so the free-base read just below can still report
+                the just-cancelled order's `locked` amount for a few seconds; a
+                caller that knows a cancel just happened opts into retrying
+                that read briefly instead of trusting it on the first try.
+                Leave False for a first-time placement with no preceding
+                cancel — there a low reading isn't stale, it's genuinely low,
+                and retrying it would only add latency to the common case.
         """
         # Requested parameters, recorded on every failure path so the rejected
         # request survives log retention. Refined below as sizing/rounding runs.
@@ -2060,8 +2075,25 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # them enforces that against what is actually sent.
             intended_quantity = quantity
             if side == OrderSide.SELL:
-                free_base = self._free_base_balance(base_asset or base_asset_from_symbol(symbol))
+                resolved_base_asset = base_asset or base_asset_from_symbol(symbol)
+                min_required = None
+                if just_cancelled:
+                    # Pad by one lot step, mirroring _close_live_order's #1165-review
+                    # padding: the retry below verdicts on the RAW balance, but the
+                    # floor-to-step snap just below it can shave a "settled" read
+                    # back under the ratio it just cleared. Capped at `quantity` so
+                    # a position narrower than ~50 lot steps can't inflate the
+                    # threshold past the position itself.
+                    min_required = min(
+                        intended_quantity, intended_quantity * HOLDINGS_CAP_MIN_RATIO + step_size
+                    )
+                free_base = read_free_balance_with_retry(
+                    lambda: self._free_base_balance(resolved_base_asset),
+                    min_required=min_required,
+                    context=symbol,
+                )
                 error_params["free_base_balance"] = free_base
+                error_params["just_cancelled"] = just_cancelled
                 if free_base is not None and free_base < quantity:
                     logger.warning(
                         "Stop-loss sell qty %.8f for %s exceeds free base balance "

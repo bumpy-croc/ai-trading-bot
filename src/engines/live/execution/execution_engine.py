@@ -36,6 +36,7 @@ from src.database.models import EventType
 from src.engines.shared.commission import order_commission_usd
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
+from src.trading.balance_retry import read_free_balance_with_retry
 from src.trading.precision import quantize_to_step
 from src.trading.symbols.factory import base_asset_from_symbol
 
@@ -52,9 +53,9 @@ logger = logging.getLogger(__name__)
 # wallet still settling ~3s after cancel at reprotect time (an upper bound, not
 # a measurement of the earliest settle point); this budget is deliberately
 # generous relative to that, since the base-asset lock it runs under already
-# tolerates multi-second waits elsewhere in this same close path.
-_POST_CANCEL_BALANCE_RETRY_ATTEMPTS = 5
-_POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS = 0.3
+# tolerates multi-second waits elsewhere in this same close path. The retry
+# loop itself lives in ``src.trading.balance_retry`` (#1173) so the re-protect
+# path can share it instead of a third copy.
 
 # Free base-asset value at or below this is ignorable dust for the SHORT
 # inventory guard; above it, MARGIN_BUY would sell held inventory instead of
@@ -1480,8 +1481,9 @@ class LiveExecutionEngine:
         caller passes ``min_required`` (the quantity it actually needs freed,
         already padded by one lot step so a "settled" verdict here survives the
         caller's later floor-to-step normalization — see ``_close_live_order``),
-        poll the read up to ``_POST_CANCEL_BALANCE_RETRY_ATTEMPTS`` times,
-        ``_POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS`` apart, and return as soon
+        the shared ``read_free_balance_with_retry`` (``src.trading.balance_retry``)
+        polls the read up to ``POST_CANCEL_BALANCE_RETRY_ATTEMPTS`` times,
+        ``POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS`` apart, and returns as soon
         as a read clears it. If the budget expires the last (still-stale) read
         is returned unchanged, so the caller's existing gate still aborts a
         genuinely locked inventory — this only removes the false-positive delay.
@@ -1490,9 +1492,8 @@ class LiveExecutionEngine:
             return None
 
         base_asset = base_asset_from_symbol(symbol)
-        attempts = _POST_CANCEL_BALANCE_RETRY_ATTEMPTS if min_required is not None else 1
-        free: float | None = None
-        for attempt in range(attempts):
+
+        def _read_free_base() -> float | None:
             try:
                 balance = self.exchange_interface.get_balance(base_asset)
                 # Convert INSIDE the try: a malformed balance (e.g. a non-numeric
@@ -1501,25 +1502,14 @@ class LiveExecutionEngine:
                 # propagates to a failed close with the stop already cancelled —
                 # the exact storm this retry exists to stop, from a new trigger
                 # (#1165 review).
-                free = float(balance.free) if balance is not None else None
+                return float(balance.free) if balance is not None else None
             except Exception as e:
                 logger.warning("Could not read free %s balance for close sizing: %s", base_asset, e)
                 return None
-            is_stale = free is not None and min_required is not None and free < min_required
-            if not is_stale or attempt == attempts - 1:
-                return free
-            logger.info(
-                "Free %s balance %.8f for %s is still below the %.8f just freed by a "
-                "stop-loss cancel (attempt %d/%d) — retrying after a short settlement wait.",
-                base_asset,
-                free,
-                symbol,
-                min_required,
-                attempt + 1,
-                attempts,
-            )
-            time.sleep(_POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS)
-        return free
+
+        return read_free_balance_with_retry(
+            _read_free_base, min_required=min_required, context=symbol
+        )
 
     def _lot_step_size(self, symbol: str) -> float | None:
         """Best-effort LOT_SIZE step for ``symbol``, or None if unavailable.
