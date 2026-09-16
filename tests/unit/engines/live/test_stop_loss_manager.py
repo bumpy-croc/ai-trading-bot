@@ -681,8 +681,45 @@ class TestMoveAdoptBranch:
 
     def test_adopts_and_persists_the_actual_resting_price_not_the_intent(self):
         exchange = TestMove._held_exchange()
-        # Adopted order rests at 48990, not the intended 49000 -- within
-        # guard_stop_placement's tolerance but not identical.
+        # Adopted order rests at 49010, not the intended 49000 -- within
+        # guard_stop_placement's tolerance but not identical, and HIGHER
+        # (tighter, safer) for a long -- safe to ratify.
+        exchange.get_open_orders_checked.return_value = [
+            self._resting_order(OrderSide.SELL, 49010.0)
+        ]
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+        position = make_position()
+
+        moved = manager.move(position, 49000.0)
+
+        assert moved is True
+        exchange.place_stop_loss_order.assert_not_called()
+        state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
+            "entry-1", "already_resting"
+        )
+        # The tracked stop_loss price must reflect what's actually resting on
+        # the exchange (49010), not the ratchet's intent (49000) -- otherwise
+        # the engine's own exit check trusts a price the exchange will never
+        # trigger at, the exact #1167 divergence in a different guise.
+        state.live_position_tracker.set_stop_loss_price.assert_called_once_with("entry-1", 49010.0)
+        # #1179: the min-move floor's baseline is the ACHIEVED price too,
+        # unconditionally (unlike set_stop_loss_price, which only fires when
+        # it differs from the intent).
+        state.live_position_tracker.set_last_placed_stop_price.assert_called_once_with(
+            "entry-1", 49010.0
+        )
+
+    def test_does_not_ratify_a_looser_adopted_price(self):
+        """#1213: the adopt tolerance is symmetric, so an adopted resting
+        order can land FURTHER from the ratchet's intent than expected, not
+        just closer. last_placed_stop_price must still reflect exchange
+        reality unconditionally, but the tracked position.stop_loss -- the
+        engine's own software exit trigger -- must NOT be loosened below
+        where the ratchet had already advanced it."""
+        exchange = TestMove._held_exchange()
+        # Adopted order rests at 48990, LOWER than the ratchet's intended
+        # 49000 -- looser/worse for a long.
         exchange.get_open_orders_checked.return_value = [
             self._resting_order(OrderSide.SELL, 48990.0)
         ]
@@ -697,14 +734,7 @@ class TestMoveAdoptBranch:
         state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
             "entry-1", "already_resting"
         )
-        # The tracked stop_loss price must reflect what's actually resting on
-        # the exchange (48990), not the ratchet's intent (49000) -- otherwise
-        # the engine's own exit check trusts a price the exchange will never
-        # trigger at, the exact #1167 divergence in a different guise.
-        state.live_position_tracker.set_stop_loss_price.assert_called_once_with("entry-1", 48990.0)
-        # #1179: the min-move floor's baseline is the ACHIEVED price too,
-        # unconditionally (unlike set_stop_loss_price, which only fires when
-        # it differs from the intent).
+        state.live_position_tracker.set_stop_loss_price.assert_not_called()
         state.live_position_tracker.set_last_placed_stop_price.assert_called_once_with(
             "entry-1", 48990.0
         )
