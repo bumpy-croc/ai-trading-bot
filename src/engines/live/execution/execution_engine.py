@@ -551,6 +551,23 @@ class LiveExecutionEngine:
             )
         return False
 
+    def _is_confirmed_terminal_non_fill_status(self, status: Any) -> bool:
+        """Return True only for a CONFIRMED terminal status that never filled.
+
+        PENDING (and NEW, which every exchange provider maps to PENDING) is
+        NOT terminal -- the order may still fill a moment later, so it must
+        keep falling through to the simulated-price path, not be treated as a
+        close failure (#744 follow-up). Only CANCELLED/REJECTED/EXPIRED are
+        confirmed-dead ends.
+        """
+        terminal = (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.EXPIRED)
+        if isinstance(status, OrderStatus):
+            return status in terminal
+        if isinstance(status, str):
+            normalized = status.upper()
+            return normalized in (s.value for s in terminal)
+        return False
+
     def _is_journal_confirmed_status(self, status: Any) -> bool:
         """Return True only for fully filled orders (journal CONFIRMED status).
 
@@ -943,7 +960,7 @@ class LiveExecutionEngine:
                 order_details = self._fetch_order_details(symbol, close_order_id)
                 if order_details:
                     status = getattr(order_details, "status", None)
-                    if status is not None and not self._is_filled_status(status):
+                    if status is not None and self._is_confirmed_terminal_non_fill_status(status):
                         # The exchange CONFIRMED a terminal status that never
                         # filled (e.g. EXPIRED from book exhaustion). This is a
                         # genuine close failure, not a pending state to paper
@@ -952,10 +969,16 @@ class LiveExecutionEngine:
                         # returning success=True here would book PnL at a
                         # fictional price while the exchange still holds the
                         # real inventory, untracked and unprotected (#744).
+                        # PENDING is deliberately excluded -- the order may
+                        # still fill a moment later, so it keeps falling
+                        # through to the simulated-price path below instead of
+                        # being treated as a confirmed failure.
                         # Surface the confirmed filled quantity (0.0 for a clean
                         # expiry) so the caller can tell a zero-fill expiry apart
                         # from a partial-fill-then-expire.
-                        filled_quantity = float(order_details.filled_quantity or 0.0)
+                        filled_quantity = float(
+                            getattr(order_details, "filled_quantity", 0.0) or 0.0
+                        )
                         logger.error(
                             "Exit order %s for %s did not fill (status=%s, filled=%.8f) "
                             "-- treating close as failed so the position stays tracked "
