@@ -102,11 +102,37 @@ def mock_exchange():
 
 @pytest.fixture
 def mock_db():
+    from contextlib import contextmanager
+
     db = MagicMock()
     db.get_unresolved_orders.return_value = []
     db.get_current_balance.return_value = 1000.0
     db.log_audit_event.return_value = 1
     db.update_order_journal.return_value = True
+    # No pre-existing terminal trade by default (#736 idempotency guard) — a bare
+    # MagicMock is truthy, so every SL-fill/reconcile-exit test would otherwise
+    # silently take the "already realized, skip PnL" branch instead of its
+    # intended flow.
+    db.has_terminal_trade_for_position.return_value = False
+
+    # Default atomic_balance_update: a real working context manager (mirrors
+    # DatabaseManager's — reads the CURRENT mock balance dynamically, rather
+    # than a value frozen at fixture-creation time, so a test that reassigns
+    # get_current_balance.return_value later still sees it) so
+    # _realize_pnl_on_close's log_trade=False fallback path (and any other
+    # direct caller) gets a real {"old_balance", "new_balance", "change"} dict
+    # instead of an unconfigured MagicMock. Individual tests may still override
+    # this attribute directly for failure-injection or call-inspection.
+    @contextmanager
+    def _default_atomic_balance_update(
+        balance_change, reason, updated_by="system", session_id=None, correlation_id=None
+    ):
+        old_balance = db.get_current_balance(session_id)
+        new_balance = old_balance + balance_change
+        yield {"old_balance": old_balance, "new_balance": new_balance, "change": balance_change}
+        db.update_balance(new_balance, reason, updated_by, session_id)
+
+    db.atomic_balance_update.side_effect = _default_atomic_balance_update
     return db
 
 
@@ -1347,7 +1373,7 @@ class TestBalanceAccountsForPositionNotional:
         result = reconciler._reconcile_balance()
 
         assert result.severity != Severity.CRITICAL
-        mock_db.update_balance.assert_not_called()
+        mock_db.atomic_balance_correction.assert_not_called()
 
     def test_genuine_discrepancy_still_triggers_critical(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
@@ -2196,6 +2222,173 @@ class TestFilledOrderPositionReconciliation:
         mock_position_tracker.remove_position.assert_called_once()
         mock_db.close_position.assert_called_once_with(100)
 
+    def test_filled_entry_sl_unconfirmed_refusal_defers_not_emergency_closes(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """#1160: an UNCONFIRMED guard refusal (the open-orders lookup itself
+        couldn't be confirmed -- a transient network blip, not a genuine
+        conflict) at the startup-recovery site must defer to the next
+        reconciler pass, NOT emergency-close the recovered position. The
+        exchange might answer fine on the very next attempt; liquidating on a
+        single unconfirmed lookup is itself a real money-moving action."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 200
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 20,
+                "client_order_id": "atb_BTCUSDT_long_1111_cccc",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        # The guard's own lookup could not be confirmed (#1112's fail-closed
+        # get_open_orders_checked returning None) -- not a genuine conflict.
+        mock_exchange.get_open_orders_checked.return_value = None
+        on_event = MagicMock()
+        reconciler.on_event = on_event
+
+        reconciler.resolve_pending_orders()
+
+        # Position stays tracked for the next reconciler pass -- no emergency
+        # sell, no DB close, no removal from the tracker.
+        mock_position_tracker.track_recovered_position.assert_called_once()
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
+        mock_exchange.place_order.assert_not_called()
+        # The guard refused before ever reaching the real placement call.
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        # Deferring still leaves the position genuinely unprotected on the
+        # exchange -- must get the same audit trail + page every other
+        # unprotected-position path in this module writes, not just a log
+        # line (#853's "detect without act" gap).
+        unprotected_calls = [
+            c
+            for c in mock_db.log_audit_event.call_args_list
+            if c.kwargs.get("field") == "stop_loss_order_id"
+        ]
+        assert len(unprotected_calls) == 1
+        assert unprotected_calls[0].kwargs["severity"] == Severity.CRITICAL.value
+        on_event.assert_called_once()
+        event_args, event_kwargs = on_event.call_args
+        assert event_args[0] == EventType.ALERT
+        assert event_kwargs["severity"] == "critical"
+        assert event_kwargs["error_code"] == "RECOVERY_SL_UNCONFIRMED"
+        assert event_kwargs["alert"] is True
+
+    def test_filled_entry_sl_rate_limit_ban_refusal_defers_not_emergency_closes(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """#1228 review regression guard: a RATE_LIMIT_BAN refusal (the
+        open-orders lookup hit an exchange-wide -1003 ban) is a sub-case of
+        "couldn't confirm", not a genuine conflict -- it must defer exactly
+        like a plain UNCONFIRMED refusal, not fall through to emergency-close.
+        #738 introduced this reason_code as a new REFUSE sub-case; the #1160
+        gate at this site originally matched on the exact UNCONFIRMED enum
+        value, so a new sub-case silently fell outside it and re-armed an
+        emergency market-sell during the exact ban scenario #738 exists to
+        handle. The gate must key on `.unconfirmed` (the semantic flag every
+        REFUSE sub-case shares) rather than one specific enum identity."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 202
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 22,
+                "client_order_id": "atb_BTCUSDT_long_3333_eeee",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        # The guard's own lookup hit an IP-wide rate-limit ban -- a REFUSE
+        # sub-case distinct from plain UNCONFIRMED, but still "couldn't
+        # confirm", not a genuine conflict.
+        ban_error = Exception("banned")
+        ban_error.code = -1003
+        mock_exchange.get_open_orders_checked.side_effect = ban_error
+        on_event = MagicMock()
+        reconciler.on_event = on_event
+
+        reconciler.resolve_pending_orders()
+
+        mock_position_tracker.track_recovered_position.assert_called_once()
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
+        mock_exchange.place_order.assert_not_called()
+        mock_exchange.place_stop_loss_order.assert_not_called()
+
+    def test_filled_entry_sl_ambiguous_refusal_still_emergency_closes(
+        self, reconciler, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """#1160 regression guard: a genuinely confirmed refusal (here,
+        AMBIGUOUS -- multiple resting stop-type orders already exist) must
+        STILL emergency-close exactly as before. Only UNCONFIRMED refusals
+        defer; retrying an ambiguous/wrong-side/price-mismatch conflict will
+        not change what's actually resting on the exchange."""
+        from types import SimpleNamespace
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        mock_position_tracker._positions_lock = __import__("threading").Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 201
+
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 21,
+                "client_order_id": "atb_BTCUSDT_long_2222_dddd",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        # Two resting stop-type orders already exist for the symbol -- a
+        # confirmed, genuine conflict (AMBIGUOUS), not an unconfirmed lookup.
+        mock_exchange.get_open_orders_checked.return_value = [
+            SimpleNamespace(order_id="dup_sl_1", stop_price=47500.0),
+            SimpleNamespace(order_id="dup_sl_2", stop_price=47500.0),
+        ]
+
+        reconciler.resolve_pending_orders()
+
+        # Emergency-close still fires: the guard's refusal is confirmed, not
+        # transient, so retrying next cycle would not resolve it.
+        mock_position_tracker.track_recovered_position.assert_called_once()
+        mock_position_tracker.remove_position.assert_called_once()
+        mock_db.close_position.assert_called_once_with(201)
+        mock_exchange.place_order.assert_called_once()
+        # The guard refused before ever reaching the real placement call.
+        mock_exchange.place_stop_loss_order.assert_not_called()
+
 
 # ---------- Asset Holdings Excess Detection Tests ----------
 
@@ -2311,18 +2504,16 @@ class TestPeriodicReconcilerSLVerification:
             reason="Stop-loss filled @ 48000.0 (periodic check)",
             severity="HIGH",
         )
-        # Realized P&L booked to the session balance (parity with the startup
-        # path): long 0.1 qty, entry 50000 -> SL fill 48000 = -200 gross,
-        # minus the SL order's 0.05 commission. (Scoped to the reconciliation
-        # P&L write; the cycle's later balance-verification step may also call
-        # update_balance.)
+        # Realized P&L booked to the session balance atomically with the trade
+        # insert and position-close (#736/#735 — via log_trade's balance_delta,
+        # not a standalone update_balance call): long 0.1 qty, entry 50000 ->
+        # SL fill 48000 = -200 gross, minus the SL order's 0.05 commission.
         pnl_calls = [
-            c
-            for c in mock_db.update_balance.call_args_list
-            if str(c.args[1]).startswith("reconciliation_close")
+            c for c in mock_db.log_trade.call_args_list if c.kwargs.get("balance_delta") is not None
         ]
         assert len(pnl_calls) == 1
-        assert pnl_calls[0].args[0] == pytest.approx(1000.0 - 200.0 - 0.05)
+        assert pnl_calls[0].kwargs["balance_delta"] == pytest.approx(-200.0 - 0.05)
+        assert pnl_calls[0].kwargs["position_id"] == 50
 
     def test_cycle_replaces_cancelled_sl(self, mock_exchange, mock_position_tracker, mock_db):
         """Periodic cycle re-places a cancelled SL order."""
@@ -4067,6 +4258,7 @@ class TestGuardStopPlacementUnit:
         exchange.get_open_orders_checked.return_value = []
         decision = guard_stop_placement(exchange, "BTCUSDT", OrderSide.SELL)
         assert decision.check == StopPlacementCheck.PROCEED
+        assert decision.reason_code is None
 
     def test_guard_refuses_when_accessor_missing(self):
         from src.data_providers.exchange_interface import OrderSide
@@ -4168,6 +4360,7 @@ class TestGuardStopPlacementUnit:
         assert decision.existing_order_id == "resting_sl_1"
         assert decision.existing_order is not None
         assert decision.existing_order.stop_price == 48000.0
+        assert decision.reason_code is None
 
     def test_refuses_rather_than_resurrects_a_just_cancelled_stop(self):
         """The cancel-then-replace call sites must exclude the id they just
@@ -4232,6 +4425,83 @@ class TestGuardStopPlacementUnit:
         exchange.get_open_orders_checked.return_value = [ExplodesOnAttributeAccess()]
         decision = guard_stop_placement(exchange, "BTCUSDT", OrderSide.SELL)
         assert decision.check == StopPlacementCheck.REFUSE
+
+    @pytest.mark.parametrize(
+        "case_name",
+        [
+            "no_accessor",
+            "lookup_none",
+            "lookup_raises",
+            "exclude_id_lag",
+            "ambiguous",
+            "wrong_side",
+            "price_mismatch",
+        ],
+    )
+    def test_refuse_reason_code_classification(self, case_name):
+        """#1160 P1: a parametrized guard over all 7 REFUSE shapes, pinning the
+        (check, unconfirmed, reason_code) triple money-path callers key off of
+        (e.g. the startup-recovery site defers only on UNCONFIRMED, still
+        emergency-closing every other shape). A future edit that mis-tags one
+        of these -- e.g. WRONG_SIDE classified as UNCONFIRMED -- would
+        silently stop emergency-closing a genuine conflict with nothing
+        failing; this is the guard against exactly that regression."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import (
+            StopPlacementCheck,
+            StopPlacementRefuseReason,
+            guard_stop_placement,
+        )
+
+        exchange = MagicMock()
+        kwargs: dict = {}
+        expected_unconfirmed = True
+        expected_reason_code = StopPlacementRefuseReason.UNCONFIRMED
+
+        if case_name == "no_accessor":
+
+            class NoAccessor:
+                pass
+
+            exchange = NoAccessor()
+            expected_unconfirmed = False
+            expected_reason_code = StopPlacementRefuseReason.NO_ACCESSOR
+        elif case_name == "lookup_none":
+            exchange.get_open_orders_checked.return_value = None
+        elif case_name == "lookup_raises":
+            exchange.get_open_orders_checked.side_effect = RuntimeError("boom")
+        elif case_name == "exclude_id_lag":
+            exchange.get_open_orders_checked.return_value = [
+                self._resting_stop_order(order_id="just_cancelled", side=OrderSide.SELL)
+            ]
+            kwargs["exclude_order_id"] = "just_cancelled"
+            kwargs["stop_price"] = 48000.0
+        elif case_name == "ambiguous":
+            exchange.get_open_orders_checked.return_value = [
+                self._resting_stop_order(order_id="dup_1", side=OrderSide.SELL),
+                self._resting_stop_order(order_id="dup_2", side=OrderSide.SELL),
+            ]
+            expected_unconfirmed = False
+            expected_reason_code = StopPlacementRefuseReason.AMBIGUOUS
+        elif case_name == "wrong_side":
+            exchange.get_open_orders_checked.return_value = [
+                self._resting_stop_order(order_id="wrong_side_order", side=OrderSide.BUY)
+            ]
+            expected_unconfirmed = False
+            expected_reason_code = StopPlacementRefuseReason.WRONG_SIDE
+        elif case_name == "price_mismatch":
+            exchange.get_open_orders_checked.return_value = [
+                self._resting_stop_order(order_id="stale", side=OrderSide.SELL, stop_price=48000.0)
+            ]
+            kwargs["stop_price"] = 30000.0
+            expected_unconfirmed = False
+            expected_reason_code = StopPlacementRefuseReason.PRICE_MISMATCH
+
+        decision = guard_stop_placement(exchange, "BTCUSDT", OrderSide.SELL, **kwargs)
+
+        assert decision.check == StopPlacementCheck.REFUSE
+        assert decision.unconfirmed is expected_unconfirmed
+        assert decision.reason_code == expected_reason_code
 
 
 class TestPlaceOrAdoptStopLossRetry:
@@ -4338,6 +4608,115 @@ class TestPlaceOrAdoptStopLossRetry:
         assert exchange.place_stop_loss_order.call_count == 3
         # Exponential backoff: 1.0s then 2.0s between the 3 attempts.
         assert mock_sleep.call_args_list == [call(1.0), call(2.0)]
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_rate_limit_ban_aborts_retry_budget_and_invokes_callback(self, mock_sleep):
+        """#738: a -1003 exchange-wide rate-limit ban must abort the retry loop
+        immediately (every exchange call fails identically for the ban's
+        duration, so spending the rest of the budget retrying is pointless)
+        and hand the exception to on_rate_limit_ban so the caller can escalate
+        (e.g. close-only mode) instead of the ordinary warn-and-retry path."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        ban_error = Exception("Too many requests")
+        ban_error.code = -1003  # type: ignore[attr-defined]
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.side_effect = ban_error
+
+        callback_calls = []
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+            on_rate_limit_ban=callback_calls.append,
+        )
+
+        assert result is None
+        # No retry: one placement attempt, no backoff sleep, one callback call.
+        assert exchange.place_stop_loss_order.call_count == 1
+        mock_sleep.assert_not_called()
+        assert callback_calls == [ban_error]
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_non_ban_exception_still_uses_normal_retry_budget(self, mock_sleep):
+        """A -1003 ban aborts early, but every other exception (including other
+        rate-limit codes) must keep the existing warn-and-retry behavior --
+        on_rate_limit_ban is never invoked for them."""
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        other_error = Exception("Too many new orders")
+        other_error.code = -1015  # type: ignore[attr-defined]
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.return_value = []
+        exchange.place_stop_loss_order.side_effect = [other_error, "sl-new"]
+
+        callback_calls = []
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+            on_rate_limit_ban=callback_calls.append,
+        )
+
+        assert result == "sl-new"
+        assert exchange.place_stop_loss_order.call_count == 2
+        mock_sleep.assert_called_once_with(1.0)
+        assert callback_calls == []
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_rate_limit_ban_on_guard_lookup_aborts_and_invokes_callback(self, mock_sleep):
+        """#738 review follow-up: during a REAL -1003 ban, the exchange-wide
+        ban usually hits the GUARD's own open-orders lookup FIRST (every REST
+        endpoint fails identically) -- so place_stop_loss_order is never even
+        called. The existing ban-detection at the placement-exception site
+        (test_rate_limit_ban_aborts_retry_budget_and_invokes_callback above)
+        only fires when place_stop_loss_order itself raises -1003 after an
+        empty ([]) open-orders lookup, which is precisely the ONE lookup
+        outcome that cannot happen while a real ban is active. This is the
+        realistic shape: get_open_orders_checked raises with the ban code, so
+        guard_stop_placement REFUSEs unconfirmed and place_stop_loss_order is
+        never reached at all -- on_rate_limit_ban must still fire from here.
+        """
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import place_or_adopt_stop_loss
+
+        ban_error = Exception("Too many requests")
+        ban_error.code = -1003  # type: ignore[attr-defined]
+
+        exchange = MagicMock()
+        exchange.get_open_orders_checked.side_effect = ban_error
+
+        callback_calls = []
+        result = place_or_adopt_stop_loss(
+            exchange,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.1,
+            stop_price=48000.0,
+            max_attempts=3,
+            retry_delay=1.0,
+            on_rate_limit_ban=callback_calls.append,
+        )
+
+        assert result is None
+        # The guard's own lookup was banned -- place_stop_loss_order must
+        # never have been called, and the retry budget must not be spent.
+        exchange.place_stop_loss_order.assert_not_called()
+        mock_sleep.assert_not_called()
+        assert callback_calls == [ban_error]
 
     @patch("src.engines.live.reconciliation.time.sleep")
     def test_retry_log_prefix_is_used_in_the_per_attempt_warning(self, mock_sleep, caplog):
@@ -4997,6 +5376,109 @@ class TestEmergencySellVerification:
         assert alerts[0].kwargs["severity"] == "critical"
         assert alerts[0].kwargs["alert"] is True
 
+    def test_emergency_sell_caps_to_free_base_when_commission_eats_base(
+        self, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """#989: the entry BUY's commission can be deducted from the base fill, so
+        the raw fill_qty (0.001) can exceed real holdings. The recovery
+        emergency-close SELL must cap to what's actually held instead of sending
+        the gross fill quantity — an uncapped SELL here risks a -2010 reject that
+        leaves an already-unprotected recovered position open."""
+        reconciler = self._drive_failed_emergency_sell(
+            mock_exchange, mock_db, mock_position_tracker, MagicMock()
+        )
+        # 0.00099 / 0.001 = 0.99 clears HOLDINGS_CAP_MIN_RATIO (0.98) -- capped, not aborted.
+        mock_exchange.get_balance.return_value = MockBalance(free=0.00099)
+        mock_exchange.get_symbol_info.return_value = {
+            "step_size": 0.00001,
+            "min_qty": 0.00001,
+            "min_notional": 1.0,
+        }
+        mock_exchange.place_order.return_value = MagicMock()
+
+        reconciler.resolve_pending_orders()
+
+        mock_exchange.place_order.assert_called_once()
+        sent_qty = mock_exchange.place_order.call_args.kwargs["quantity"]
+        assert sent_qty <= 0.00099
+        assert sent_qty < 0.001
+
+    def test_emergency_sell_holdings_locked_aborts_without_order(
+        self, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """#989: when free base covers far less than the intended close, the
+        recovery emergency-close must refuse to submit a doomed-to-reject SELL
+        (and a partial sell would book a full close while abandoning the rest of
+        the inventory) — it aborts and pages an operator instead."""
+        on_event = MagicMock()
+        reconciler = self._drive_failed_emergency_sell(
+            mock_exchange, mock_db, mock_position_tracker, on_event
+        )
+        mock_exchange.get_balance.return_value = MockBalance(free=0.0001)
+        mock_exchange.get_symbol_info.return_value = {
+            "step_size": 0.00001,
+            "min_qty": 0.00001,
+            "min_notional": 1.0,
+        }
+
+        reconciler.resolve_pending_orders()
+
+        mock_exchange.place_order.assert_not_called()
+        mock_position_tracker.remove_position.assert_not_called()
+        mock_db.close_position.assert_not_called()
+        alerts = [
+            c
+            for c in on_event.call_args_list
+            if c.kwargs.get("error_code") == "EMERGENCY_SELL_UNCONFIRMED"
+        ]
+        assert alerts, f"expected EMERGENCY_SELL_UNCONFIRMED alert, got {on_event.call_args_list}"
+
+    def test_emergency_sell_short_cover_buy_ignores_holdings_cap(
+        self, mock_exchange, mock_db, mock_position_tracker
+    ):
+        """A short-cover BUY repays the full margin borrow, so it is funded from
+        quote, not the base holdings cap -- the #989 guard applies only to
+        closing SELLs (mirrors LiveExecutionEngine._close_live_order)."""
+        import threading
+
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        reconciler = PositionReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+        mock_position_tracker._positions_lock = threading.Lock()
+        mock_position_tracker._positions = {}
+        mock_db.log_position.return_value = 58
+        mock_db.get_unresolved_orders.return_value = [
+            {
+                "id": 23,
+                "client_order_id": "atb_BTCUSDT_short_4444_ffff",
+                "symbol": "BTCUSDT",
+                "side": "SHORT",
+                "quantity": 0.001,
+                "status": "SUBMITTED",
+                "order_type": "ENTRY",
+                "created_at": datetime.now(UTC),
+            }
+        ]
+        exchange_order = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_order_by_client_id.return_value = exchange_order
+        mock_exchange.place_stop_loss_order.return_value = None  # -> emergency close path
+        # free_base=0.0 would zero a wrongly-capped BUY.
+        mock_exchange.get_balance.return_value = MockBalance(free=0.0)
+        mock_exchange.place_order.return_value = MagicMock()
+
+        reconciler.resolve_pending_orders()
+
+        mock_exchange.place_order.assert_called_once()
+        sent_qty = mock_exchange.place_order.call_args.kwargs["quantity"]
+        assert sent_qty == pytest.approx(0.001)
+
 
 # ---------- Fee Accounting Tests ----------
 
@@ -5569,9 +6051,7 @@ class TestPeriodicSLFillBooksPnl:
         reconciler._reconcile_cycle()
 
         pnl_calls = [
-            c
-            for c in mock_db.update_balance.call_args_list
-            if str(c.args[1]).startswith("reconciliation_close")
+            c for c in mock_db.log_trade.call_args_list if c.kwargs.get("balance_delta") is not None
         ]
         assert pnl_calls == []
         mock_db.close_position.assert_not_called()
@@ -5604,17 +6084,18 @@ class TestPeriodicSLFillBooksPnl:
 
         # Booked as SL close with the fill price...
         mock_db.close_position.assert_called_once_with(71, exit_price=48000.0)
-        # ...with realized P&L: short entry 50000 -> cover 48000 on 0.1 qty
-        # = +200 gross, minus 0.05 SL commission. Booked exactly once even
-        # though step 2 re-sees the position in its stale snapshot (the
-        # pop-claim makes the second attempt a no-op).
+        # ...with realized P&L booked atomically with the trade insert and
+        # position-close (#736/#735, via log_trade's balance_delta): short
+        # entry 50000 -> cover 48000 on 0.1 qty = +200 gross, minus 0.05 SL
+        # commission. Booked exactly once even though step 2 re-sees the
+        # position in its stale snapshot (the pop-claim makes the second
+        # attempt a no-op).
         pnl_calls = [
-            c
-            for c in mock_db.update_balance.call_args_list
-            if str(c.args[1]).startswith("reconciliation_close")
+            c for c in mock_db.log_trade.call_args_list if c.kwargs.get("balance_delta") is not None
         ]
         assert len(pnl_calls) == 1
-        assert pnl_calls[0].args[0] == pytest.approx(1000.0 + 200.0 - 0.05)
+        assert pnl_calls[0].kwargs["balance_delta"] == pytest.approx(200.0 - 0.05)
+        assert pnl_calls[0].kwargs["position_id"] == 71
 
     def test_sl_fill_persists_deduped_trade_row(
         self, mock_exchange, mock_position_tracker, mock_db
@@ -5743,9 +6224,7 @@ class TestSpotSLFillNotExternalClose:
         # Closed as an SL fill with the real price, P&L booked...
         mock_db.close_position.assert_called_once_with(90, exit_price=48000.0)
         pnl_calls = [
-            c
-            for c in mock_db.update_balance.call_args_list
-            if str(c.args[1]).startswith("reconciliation_close")
+            c for c in mock_db.log_trade.call_args_list if c.kwargs.get("balance_delta") is not None
         ]
         assert len(pnl_calls) == 1
         # ...and NOT misclassified as an external close (no-PnL row)
@@ -5885,10 +6364,10 @@ class TestPeriodicSpotBalanceReconcile:
         corrected = reconciler._reconcile_spot_balance()
 
         assert corrected is True
-        mock_db.update_balance.assert_called_once()
+        mock_db.atomic_balance_correction.assert_called_once()
         # Corrected to exchange USDT + 0 notional (fresh tracker is empty) — NOT 900 + the
         # closed position's notional (the stale-snapshot over-correction).
-        assert mock_db.update_balance.call_args.args[0] == pytest.approx(900.0)
+        assert mock_db.atomic_balance_correction.call_args.args[0] == pytest.approx(900.0)
         # The correction is now audited (this periodic path previously wrote no
         # reconciliation_audit_events row, unlike its startup twin). #853
         mock_db.log_audit_event.assert_called_once()
@@ -5912,7 +6391,7 @@ class TestPeriodicSpotBalanceReconcile:
         corrected = reconciler._reconcile_spot_balance()
 
         assert corrected is False
-        mock_db.update_balance.assert_not_called()
+        mock_db.atomic_balance_correction.assert_not_called()
 
     def test_noop_in_margin_mode(self, mock_exchange, mock_position_tracker, mock_db):
         reconciler = PeriodicReconciler(
@@ -5926,7 +6405,7 @@ class TestPeriodicSpotBalanceReconcile:
         corrected = reconciler._reconcile_spot_balance()
 
         assert corrected is False
-        mock_db.update_balance.assert_not_called()
+        mock_db.atomic_balance_correction.assert_not_called()
         mock_exchange.get_balance.assert_not_called()
 
 
@@ -7476,3 +7955,148 @@ class TestStopLossReplacementHoldingGuard:
         mock_exchange.place_stop_loss_order.assert_not_called()
         mock_exchange.place_order.assert_not_called()
         mock_position_tracker.remove_position.assert_not_called()  # retained — no divergence
+
+
+# ---------- Crash-Recovery Idempotency Guard Tests (#736) ----------
+
+
+class TestCrashRecoveryIdempotencyGuard:
+    """A position whose PnL was already realized and Trade already logged by an
+    earlier, crash-interrupted attempt must NOT have that PnL re-applied just
+    because its DB row is still stale-OPEN (the reported #736 double-apply
+    symptom). ``has_terminal_trade_for_position`` is the guard: when it finds a
+    Trade already referencing the position, only the stale status is fixed —
+    no second balance/trade write.
+    """
+
+    def test_close_position_from_filled_sl_skips_realization_when_trade_exists(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        from types import SimpleNamespace as NS
+
+        pos = MockPosition(db_position_id=99, order_id="pos-99")
+        mock_db.has_terminal_trade_for_position.return_value = True
+        mock_db.close_position.return_value = True
+        sl_order = NS(
+            average_price=48000.0, order_id="sl-99", commission=0.0, commission_asset="USDT"
+        )
+
+        reconciler._close_position_from_filled_sl(pos, sl_order)
+
+        mock_db.has_terminal_trade_for_position.assert_called_once_with(99)
+        mock_db.close_position.assert_called_once_with(99, exit_price=48000.0)
+        # The crash-recovery guard fires BEFORE any PnL is (re-)computed: no new
+        # trade row, no balance write of any kind.
+        mock_db.log_trade.assert_not_called()
+        mock_db.update_balance.assert_not_called()
+        mock_db.atomic_balance_update.assert_not_called()
+        # Status is still fixed and the position drops out of the tracker.
+        mock_position_tracker.remove_position.assert_called_once_with("pos-99")
+
+    def test_close_position_from_filled_sl_realizes_normally_without_prior_trade(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        """Control case: the guard must not fire — and PnL must still be
+        realized exactly once — for a genuinely fresh close."""
+        from types import SimpleNamespace as NS
+
+        pos = MockPosition(db_position_id=98, order_id="pos-98")
+        mock_db.has_terminal_trade_for_position.return_value = False
+        mock_db.close_position.return_value = True
+        mock_db.get_current_balance.return_value = 1000.0
+        sl_order = NS(
+            average_price=48000.0, order_id="sl-98", commission=0.05, commission_asset="USDT"
+        )
+
+        reconciler._close_position_from_filled_sl(pos, sl_order)
+
+        mock_db.has_terminal_trade_for_position.assert_called_once_with(98)
+        mock_db.log_trade.assert_called_once()
+        assert mock_db.log_trade.call_args.kwargs["balance_delta"] is not None
+        assert mock_db.log_trade.call_args.kwargs["position_id"] == 98
+        mock_position_tracker.remove_position.assert_called_once_with("pos-98")
+
+    def test_reconcile_filled_exit_skips_realization_when_trade_exists(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        position = MockPosition(db_position_id=88)
+        mock_position_tracker._positions_lock = MagicMock()
+        mock_position_tracker._positions = {"ord_88": position}
+        mock_position_tracker.remove_position = MagicMock()
+        mock_db.has_terminal_trade_for_position.return_value = True
+        mock_db.close_position.return_value = True
+
+        order_data = {"position_id": 88, "client_order_id": "atb_exit_idem_test"}
+        reconciler._reconcile_filled_exit(order_data, fill_price=51000.0, exit_fee=0.6)
+
+        mock_db.has_terminal_trade_for_position.assert_called_once_with(88)
+        mock_db.close_position.assert_called_once_with(88, exit_price=51000.0)
+        mock_db.log_trade.assert_not_called()
+        mock_db.update_balance.assert_not_called()
+        mock_db.atomic_balance_update.assert_not_called()
+
+    def test_close_position_from_filled_sl_leaves_tracked_when_guard_close_fails(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        """close_position returning False (without raising) inside the guard branch must
+        NOT be treated as success: the tracker entry has to stay, mirroring the non-guard
+        path's divergence-avoidance a few lines below (#1224 review finding B)."""
+        from types import SimpleNamespace as NS
+
+        pos = MockPosition(db_position_id=97, order_id="pos-97")
+        mock_db.has_terminal_trade_for_position.return_value = True
+        mock_db.close_position.return_value = False  # not persisted
+        sl_order = NS(
+            average_price=48000.0, order_id="sl-97", commission=0.0, commission_asset="USDT"
+        )
+
+        reconciler._close_position_from_filled_sl(pos, sl_order)
+
+        mock_db.close_position.assert_called_once_with(97, exit_price=48000.0)
+        mock_db.log_trade.assert_not_called()
+        # Divergence guard: DB row is still OPEN, so the tracker entry must be retained.
+        mock_position_tracker.remove_position.assert_not_called()
+        assert pos.exchange_close_pending is True
+
+    def test_reconcile_filled_exit_leaves_tracked_when_guard_close_fails(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        """Same as above for the _reconcile_filled_exit twin of the guard (#1224 review
+        finding B): a False return from close_position must not strand the tracker."""
+        position = MockPosition(db_position_id=86)
+        mock_position_tracker._positions_lock = MagicMock()
+        mock_position_tracker._positions = {"ord_86": position}
+        mock_position_tracker.remove_position = MagicMock()
+        mock_db.has_terminal_trade_for_position.return_value = True
+        mock_db.close_position.return_value = False  # not persisted
+
+        order_data = {"position_id": 86, "client_order_id": "atb_exit_idem_test_3"}
+        reconciler._reconcile_filled_exit(order_data, fill_price=51000.0, exit_fee=0.6)
+
+        mock_db.close_position.assert_called_once_with(86, exit_price=51000.0)
+        mock_db.log_trade.assert_not_called()
+        mock_position_tracker.remove_position.assert_not_called()
+        # Mirrors the sibling site: the asset is confirmed gone (terminal trade
+        # exists) but the DB close didn't persist, so this retained position
+        # must not be counted as capital or have a stop re-armed against a
+        # holding that's already gone (re-review finding on #1224).
+        assert position.exchange_close_pending is True
+
+    def test_reconcile_filled_exit_realizes_normally_without_prior_trade(
+        self, reconciler, mock_db, mock_position_tracker
+    ):
+        """Control case: no prior trade -> the guard must not fire."""
+        position = MockPosition(db_position_id=87)
+        mock_position_tracker._positions_lock = MagicMock()
+        mock_position_tracker._positions = {"ord_87": position}
+        mock_position_tracker.remove_position = MagicMock()
+        mock_db.has_terminal_trade_for_position.return_value = False
+        mock_db.close_position.return_value = True
+        mock_db.get_current_balance.return_value = 1000.0
+
+        order_data = {"position_id": 87, "client_order_id": "atb_exit_idem_test_2"}
+        reconciler._reconcile_filled_exit(order_data, fill_price=51000.0, exit_fee=0.6)
+
+        mock_db.log_trade.assert_called_once()
+        assert mock_db.log_trade.call_args.kwargs["balance_delta"] is not None
+        assert mock_db.log_trade.call_args.kwargs["position_id"] == 87

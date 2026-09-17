@@ -34,6 +34,7 @@ from src.config.constants import (
     DEFAULT_WS_RECONNECT_MAX_RETRIES,
     DEFAULT_WS_USER_LIVENESS_PROBE_TIMEOUT,
     DEFAULT_WS_USER_STALENESS_THRESHOLD,
+    EXCHANGE_IP_RATE_LIMIT_BAN_CODE,
     HOLDINGS_CAP_MIN_RATIO,
 )
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
@@ -84,12 +85,17 @@ from src.infrastructure.runtime.geo import get_binance_api_endpoint, is_us_locat
 T = TypeVar("T")
 
 # Rate limit error codes from Binance
-RATE_LIMIT_ERROR_CODES = {-1003, -1015}  # -1003: Too many requests, -1015: Too many orders
+RATE_LIMIT_ERROR_CODES = {
+    EXCHANGE_IP_RATE_LIMIT_BAN_CODE,  # -1003: Too many requests (IP-wide ban)
+    -1015,  # Too many new orders
+}
 
 # Definitive reject codes — exchange explicitly refused the order.
 # BinanceOrderException and BinanceAPIException both carry these.
 # Treating them as ambiguous (return None) creates phantom positions.
 DEFINITIVE_REJECT_CODES = {
+    EXCHANGE_IP_RATE_LIMIT_BAN_CODE,  # Too many requests (rate limit) — order not placed
+    -1015,  # Too many new orders (rate limit) — order not placed
     -1013,  # LOT_SIZE / MIN_NOTIONAL filter failure
     -1021,  # TIMESTAMP out of recv window
     -1100,  # Illegal characters in parameter
@@ -347,6 +353,19 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         # atomic (#717). Held only around the flag mutations, never around the
         # downstream on_user_event forwarding or the socket start/stop loop calls.
         self._user_stream_lock = threading.Lock()
+
+        # Last-known-good get_symbol_info() result per symbol (#1155). Filters
+        # (tick/step size, precision, min notional) change only on rare
+        # exchange-side listing updates, so a transient exchangeInfo failure
+        # (rate-limit window, brief 5xx) shouldn't make an already-known symbol
+        # look unknown to callers that fail closed on a falsy result (#1126's
+        # place_stop_loss_order guard) -- that previously turned a 3-second
+        # blip into three failed retries and an emergency-close. Guarded by a
+        # plain lock like the other small in-memory caches on this class
+        # (_twm_lock, _user_stream_lock) since get_symbol_info is called
+        # concurrently from entry, stop-loss, and reconciliation paths.
+        self._symbol_info_cache: dict[str, dict[str, Any]] = {}
+        self._symbol_info_cache_lock = threading.Lock()
 
     @staticmethod
     def _validate_credentials(
@@ -1054,6 +1073,14 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         USDT balance. Returns None if unavailable.
         """
         if not BINANCE_AVAILABLE or not self._client:
+            logger.warning(
+                "get_account_equity: cannot read equity - %s",
+                (
+                    "python-binance not installed"
+                    if not BINANCE_AVAILABLE
+                    else "client not initialized"
+                ),
+            )
             return None
         try:
             if self._use_margin:
@@ -1185,6 +1212,17 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         lookup cannot be confirmed, so a caller deciding whether it is safe to
         place a new stop-loss (#1112) can treat ``None`` as "unknown — do not
         place" rather than silently reading it as "no open orders".
+
+        Re-raises rather than swallowing when the lookup itself fails with an
+        exchange-wide rate-limit ban code (``RATE_LIMIT_ERROR_CODES``): during
+        a real -1003 ban EVERY REST call fails identically, including this
+        lookup, so it is usually the first thing to fail — swallowing that
+        into a bare ``None`` would erase the one signal
+        ``guard_stop_placement`` needs to tell "we're banned" from "a generic
+        transient lookup failure" (#738). The caller (``guard_stop_placement``)
+        already wraps this call in its own try/except and still ends up
+        REFUSE/fail-closed either way — this only makes the REFUSE reason
+        specific instead of generic.
         """
         if not BINANCE_AVAILABLE or not self._client:
             return None
@@ -1207,6 +1245,8 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 return None
             return cast(list[Order], parsed)
         except Exception as e:
+            if _exchange_error_code(e) in RATE_LIMIT_ERROR_CODES:
+                raise
             logger.warning("Open-orders lookup failed for %s: %s", symbol, e)
             return None
 
@@ -1604,6 +1644,13 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get recent trades for {symbol}: {e}")
             return []
 
+    # Vestigial: every BinanceAPIException path inside this method's own try/except
+    # below either raises ValueError (DEFINITIVE_REJECT_CODES, #738) or returns None
+    # -- none re-raises the original exception -- so this decorator's retry-on-
+    # BinanceAPIException wrapper can never actually see one propagate. Left in
+    # place for symmetry with place_stop_loss_order (where it IS load-bearing) and
+    # as a deliberate fail-fast: a rate-limited entry should surface immediately as
+    # a definitive rejection, not silently retry and delay the caller noticing.
     @with_rate_limit_retry(max_retries=3, base_delay=1.0)
     def place_order(
         self,
@@ -2225,6 +2272,42 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 params=error_params,
             )
             return None
+        except BinanceAPIException as e:
+            # Rate-limit codes (-1003 IP ban, -1015 too many orders) previously fell
+            # through to the generic handler below and returned None, which made
+            # the @with_rate_limit_retry(ban_safe=True) decorator on this method
+            # dead code: it can only retry/fail-fast on an exception it actually
+            # sees. Re-raising here lets it retry -1015 with backoff and raise
+            # -1003 immediately (see its ban_safe docstring) instead of silently
+            # reporting "stop-loss not placed" with no distinction from any other
+            # failure (#738).
+            error_code = getattr(e, "code", None)
+            if error_code in RATE_LIMIT_ERROR_CODES:
+                logger.warning(
+                    "Rate-limited placing stop-loss for %s (code=%s): %s",
+                    symbol,
+                    error_code,
+                    e,
+                )
+                self._record_order_error(
+                    "place_stop_loss_order",
+                    symbol,
+                    error_message=str(e),
+                    error_code=error_code if isinstance(error_code, int) else None,
+                    error_type=type(e).__name__,
+                    params=error_params,
+                )
+                raise
+            logger.error(f"Binance API error placing stop-loss order: {e}")
+            self._record_order_error(
+                "place_stop_loss_order",
+                symbol,
+                error_message=str(e),
+                error_code=error_code if isinstance(error_code, int) else None,
+                error_type=type(e).__name__,
+                params=error_params,
+            )
+            return None
         except Exception as e:
             logger.error(f"Failed to place stop-loss order: {e}")
             self._record_order_error(
@@ -2371,20 +2454,33 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return []
 
     def get_symbol_info(self, symbol: str) -> dict[str, Any] | None:
-        """Get trading symbol information"""
+        """Get trading symbol information (LOT_SIZE/PRICE_FILTER/MIN_NOTIONAL filters).
+
+        Always attempts a live ``get_exchange_info()`` fetch first -- filters can
+        change on exchange-side listing updates, so this is not a TTL cache that
+        skips the network call. On failure it falls back to the last
+        successfully-fetched result for ``symbol``, if this process has ever seen
+        one, since filters are otherwise static and a transient blip (rate limit,
+        brief 5xx) shouldn't make an already-known symbol look unknown. Only a
+        symbol that has NEVER been fetched successfully returns falsy on failure
+        (#1155) -- callers such as ``place_stop_loss_order``'s #1126 fail-closed
+        guard rely on that distinction to avoid treating every transient
+        exchangeInfo error as "unknown precision, refuse to place."
+        """
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - returning None for symbol info")
             return None
 
+        cache_key = SymbolFactory.to_exchange_symbol(symbol, "binance")
         try:
             exchange_info = self._client.get_exchange_info()
 
             for symbol_info in exchange_info["symbols"]:
-                if symbol_info["symbol"] == SymbolFactory.to_exchange_symbol(symbol, "binance"):
+                if symbol_info["symbol"] == cache_key:
                     # Extract relevant information
                     filters = {f["filterType"]: f for f in symbol_info["filters"]}
 
-                    return {
+                    info = {
                         "symbol": symbol,
                         "base_asset": symbol_info["baseAsset"],
                         "quote_asset": symbol_info["quoteAsset"],
@@ -2401,10 +2497,31 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                             filters.get("MIN_NOTIONAL", {}).get("minNotional", 0)
                         ),
                     }
+                    with self._symbol_info_cache_lock:
+                        self._symbol_info_cache[cache_key] = info
+                    logger.debug("Refreshed symbol info cache for %s", symbol)
+                    return info
 
+            # A successful lookup that confirms the symbol is genuinely absent
+            # (e.g. delisted) must drop any stale cache entry -- otherwise a
+            # later transient failure would resurrect it via the except branch
+            # below, serving filters for a symbol Binance just told us doesn't
+            # exist.
+            with self._symbol_info_cache_lock:
+                self._symbol_info_cache.pop(cache_key, None)
             return None
 
         except Exception as e:
+            with self._symbol_info_cache_lock:
+                cached = self._symbol_info_cache.get(cache_key)
+            if cached is not None:
+                logger.warning(
+                    "get_exchange_info failed for %s (%s) - serving last known-good "
+                    "symbol info from cache instead of failing closed",
+                    symbol,
+                    e,
+                )
+                return cached
             logger.error(f"Failed to get symbol info for {symbol}: {e}")
             return None
 

@@ -36,6 +36,7 @@ from src.config.constants import (
     DEFAULT_RECONCILIATION_ORDER_MATCH_TIME_WINDOW_MIN,
     DEFAULT_RECONCILIATION_ORDER_MATCH_TOLERANCE_PCT,
     DEFAULT_STOP_LOSS_PCT,
+    EXCHANGE_IP_RATE_LIMIT_BAN_CODE,
     NET_FLAT_DUST_USD,
     ORPHANED_BORROW_SWEEP_COOLDOWN_SECONDS,
     RECONCILE_CYCLE_ESCALATION_SECONDS,
@@ -48,6 +49,7 @@ from src.engines.live.trade_close_accounting import held_base_quantity
 from src.engines.shared.commission import order_commission_usd, split_base_quote
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
+from src.trading.close_sizing import cap_closing_sell_quantity
 from src.trading.exit_reason import ExitReason, classify_stop_exit
 
 if TYPE_CHECKING:
@@ -163,6 +165,51 @@ class StopPlacementCheck(str, Enum):
 _ADOPT_PRICE_TOLERANCE_FRACTION = 0.02
 
 
+class StopPlacementRefuseReason(str, Enum):
+    """Machine-readable sub-classification of a REFUSE decision (#1160).
+
+    ``StopPlacementDecision.reason`` is free text meant for logs, not branching
+    -- a caller that needs to tell "we couldn't confirm" from "we confirmed a
+    real problem" had nothing to key off other than parsing that string. This
+    enum names every REFUSE shape ``_classify_stop_placement``/
+    ``guard_stop_placement`` actually produce today, additive alongside
+    ``reason`` and ``unconfirmed`` (neither changes meaning or is removed).
+
+    - ``UNCONFIRMED``: the open-orders lookup itself couldn't be confirmed --
+      it returned ``None``, raised, or the only resting order is one we just
+      confirmed cancelled and the exchange's view simply hasn't caught up
+      (the ``exclude_order_id`` eventual-consistency lag). All three are "we
+      couldn't tell", not "we found a conflict" -- equivalent to
+      ``unconfirmed=True``, retryable, and safe to treat as transient.
+    - ``RATE_LIMIT_BAN``: the open-orders lookup raised with an exchange-wide
+      rate-limit ban code (``EXCHANGE_IP_RATE_LIMIT_BAN_CODE``). Every REST
+      call fails identically for the ban's duration, so this lookup is often
+      the FIRST thing to hit it -- before ``place_stop_loss_order`` is ever
+      called -- which would otherwise make the ban invisible to a caller only
+      watching for it on the placement-exception path (#738). Also
+      ``unconfirmed=True`` (retrying is still safe/expected once the ban
+      lifts), but distinct from plain ``UNCONFIRMED`` so a retry loop can
+      escalate (e.g. close-only mode) instead of silently burning its budget.
+    - ``NO_ACCESSOR``: the exchange object has no fail-closed open-orders
+      accessor at all. Structural, not transient -- retrying won't help.
+    - ``AMBIGUOUS``: more than one resting stop-type order already exists.
+    - ``WRONG_SIDE``: exactly one resting stop exists but on the wrong side.
+    - ``PRICE_MISMATCH``: exactly one resting stop exists, correct side, but
+      outside ``_ADOPT_PRICE_TOLERANCE_FRACTION`` of the intended price.
+
+    ``NO_ACCESSOR``/``AMBIGUOUS``/``WRONG_SIDE``/``PRICE_MISMATCH`` are all
+    confirmed, genuine conflicts -- retrying without human/reconciler
+    intervention will not change what's actually resting on the exchange.
+    """
+
+    UNCONFIRMED = "unconfirmed"
+    RATE_LIMIT_BAN = "rate_limit_ban"
+    NO_ACCESSOR = "no_accessor"
+    AMBIGUOUS = "ambiguous"
+    WRONG_SIDE = "wrong_side"
+    PRICE_MISMATCH = "price_mismatch"
+
+
 @dataclass(frozen=True)
 class StopPlacementDecision:
     check: StopPlacementCheck
@@ -176,6 +223,17 @@ class StopPlacementDecision:
     # conflict (wrong side, wrong price, multiple resting orders) never will,
     # since retrying won't change what's actually resting (#1186).
     unconfirmed: bool = False
+    # Machine-readable sub-classification of a REFUSE decision (#1160), set
+    # whenever check == REFUSE and left None for PROCEED/ADOPT. Additive:
+    # `reason` (free text) and `unconfirmed` keep their exact prior meaning
+    # for any caller/log already depending on them -- this is a new field
+    # callers may optionally branch on instead of parsing `reason`.
+    reason_code: StopPlacementRefuseReason | None = None
+    # The original exception the open-orders lookup raised, when reason_code
+    # is RATE_LIMIT_BAN -- lets a caller's on_rate_limit_ban callback (which
+    # takes a BaseException) fire from this REFUSE path too, not just from
+    # place_stop_loss_order's own -1003 (#738). None for every other decision.
+    error: BaseException | None = None
 
 
 def guard_stop_placement(
@@ -232,6 +290,7 @@ def guard_stop_placement(
         return StopPlacementDecision(
             StopPlacementCheck.REFUSE,
             reason="exchange has no fail-closed open-orders accessor",
+            reason_code=StopPlacementRefuseReason.NO_ACCESSOR,
         )
     # The classification below (attribute access, comprehensions, arithmetic) is
     # inside the same try as the lookup itself: this function's whole contract is
@@ -242,7 +301,10 @@ def guard_stop_placement(
         orders = checked(symbol)
         if orders is None:
             return StopPlacementDecision(
-                StopPlacementCheck.REFUSE, reason="lookup unconfirmed", unconfirmed=True
+                StopPlacementCheck.REFUSE,
+                reason="lookup unconfirmed",
+                unconfirmed=True,
+                reason_code=StopPlacementRefuseReason.UNCONFIRMED,
             )
         return _classify_stop_placement(
             orders,
@@ -252,8 +314,19 @@ def guard_stop_placement(
             exclude_order_id=exclude_order_id,
         )
     except Exception as e:
+        if getattr(e, "code", None) == EXCHANGE_IP_RATE_LIMIT_BAN_CODE:
+            return StopPlacementDecision(
+                StopPlacementCheck.REFUSE,
+                reason=f"open-orders lookup hit an exchange-wide rate-limit ban: {e}",
+                unconfirmed=True,
+                reason_code=StopPlacementRefuseReason.RATE_LIMIT_BAN,
+                error=e,
+            )
         return StopPlacementDecision(
-            StopPlacementCheck.REFUSE, reason=f"lookup raised: {e}", unconfirmed=True
+            StopPlacementCheck.REFUSE,
+            reason=f"lookup raised: {e}",
+            unconfirmed=True,
+            reason_code=StopPlacementRefuseReason.UNCONFIRMED,
         )
 
 
@@ -284,6 +357,7 @@ def _classify_stop_placement(
                 # view of a cancel we already confirmed simply hasn't caught up
                 # yet, and may well clear on the very next lookup.
                 unconfirmed=True,
+                reason_code=StopPlacementRefuseReason.UNCONFIRMED,
             )
         resting = remaining
 
@@ -296,6 +370,7 @@ def _classify_stop_placement(
                 f"{len(resting)} resting stop orders already exist for {symbol}: "
                 f"{[o.order_id for o in resting]}"
             ),
+            reason_code=StopPlacementRefuseReason.AMBIGUOUS,
         )
     only = resting[0]
     if getattr(only, "side", None) != side:
@@ -305,6 +380,7 @@ def _classify_stop_placement(
                 f"a resting stop {only.order_id} exists for {symbol} but on the "
                 f"wrong side ({only.side} vs expected {side}) — will not adopt or duplicate"
             ),
+            reason_code=StopPlacementRefuseReason.WRONG_SIDE,
         )
     if stop_price is not None and stop_price > 0:
         resting_price = getattr(only, "stop_price", None)
@@ -320,6 +396,7 @@ def _classify_stop_placement(
                     f"{_ADOPT_PRICE_TOLERANCE_FRACTION:.0%} tolerance, will not adopt a "
                     "stale/unrelated order or duplicate"
                 ),
+                reason_code=StopPlacementRefuseReason.PRICE_MISMATCH,
             )
     return StopPlacementDecision(
         StopPlacementCheck.ADOPT, existing_order_id=only.order_id, existing_order=only
@@ -476,6 +553,7 @@ def place_or_adopt_stop_loss(
     retry_log_prefix: str = "Stop-loss placement",
     on_adopt: Callable[[StopPlacementDecision], None] | None = None,
     on_refuse: Callable[[StopPlacementDecision], None] | None = None,
+    on_rate_limit_ban: Callable[[BaseException], None] | None = None,
 ) -> str | None:
     """Place a protective stop, first checking for one already resting (#1112).
 
@@ -528,11 +606,27 @@ def place_or_adopt_stop_loss(
     when an untracked resting stop is adopted — for a caller (``move()``) that
     needs the ACTUAL resting price/quantity, not just the order id, without
     re-running the guard check itself. ``on_refuse`` is the REFUSE-side
-    equivalent, invoked with the decision (and its specific ``reason``) when
-    the guard refuses — on any attempt — so a caller can surface that reason
-    in its own alert/audit instead of a generic message. Both callbacks are
-    fault-isolated: an exception from either is logged and swallowed rather
-    than propagated.
+    equivalent, invoked with the decision (and its specific ``reason``) only
+    on a TERMINAL refusal — a confirmed conflict (any attempt), or an
+    unconfirmed lookup on the final attempt — never on an unconfirmed
+    ``SKIP`` that still has retry budget left; callers (e.g. #1218's entry-path
+    defer) rely on this to distinguish "genuinely refused" from "still
+    retrying" via ``refuse_reason_code``. Both callbacks are fault-isolated:
+    an exception from either is logged and swallowed rather than propagated.
+
+    ``on_rate_limit_ban``, if given (retry path only, ``max_attempts`` > 1), is
+    invoked once with the exception when either ``place_stop_loss_order``
+    raises, or the guard's own open-orders lookup (via
+    ``get_open_orders_checked``) hits, Binance's -1003 (IP-wide rate-limit
+    ban, #738): every exchange call fails identically for the ban's duration,
+    so the retry loop aborts immediately instead of burning the rest of its
+    budget, and this callback is the caller's hook to escalate beyond the
+    usual UNPROTECTED-audit-and-alert (e.g. entering close-only mode). The
+    guard-lookup path matters because it usually fails FIRST during a real
+    ban — before ``place_stop_loss_order`` is ever reached — so relying on
+    only the placement-exception path would make the ban invisible here.
+    Not invoked on the single-attempt path, which already propagates the
+    exception directly to the caller.
     """
     if max_attempts <= 1:
         decision = guard_stop_placement(
@@ -575,6 +669,7 @@ def place_or_adopt_stop_loss(
         retry_log_prefix=retry_log_prefix,
         on_adopt=on_adopt,
         on_refuse=on_refuse,
+        on_rate_limit_ban=on_rate_limit_ban,
     )
 
 
@@ -608,6 +703,7 @@ def _resolve_stop_placement_attempt(
     retry_log_prefix: str,
     on_adopt: Callable[[StopPlacementDecision], None] | None,
     on_refuse: Callable[[StopPlacementDecision], None] | None,
+    on_rate_limit_ban: Callable[[BaseException], None] | None = None,
 ) -> _StopPlacementAttemptAction | str:
     """Consult ``guard_stop_placement`` for one attempt of the retry loop and
     decide what ``_place_with_retry`` should do next.
@@ -626,8 +722,9 @@ def _resolve_stop_placement_attempt(
     is preserved; ``...STOP`` when the caller should return ``None``
     immediately — a genuine conflict (wrong side, wrong price, multiple
     resting orders, or a just-cancelled order the exchange hasn't caught up
-    on yet), or an unconfirmed REFUSE on the final attempt; or a ``str`` — the
-    adopted order id — when the caller should return that immediately.
+    on yet), a rate-limit ban hit by the guard's OWN lookup, or an unconfirmed
+    REFUSE on the final attempt; or a ``str`` — the adopted order id — when
+    the caller should return that immediately.
     """
     decision = guard_stop_placement(
         exchange, symbol, side, stop_price=stop_price, exclude_order_id=exclude_order_id
@@ -642,6 +739,30 @@ def _resolve_stop_placement_attempt(
         return cast(str, decision.existing_order_id)
     if decision.check == StopPlacementCheck.PROCEED:
         return _StopPlacementAttemptAction.PLACE
+
+    # REFUSE, and the guard's OWN open-orders lookup is the thing that hit the
+    # ban -- place_stop_loss_order is never even attempted this round, so the
+    # placement-exception -1003 handling in _place_with_retry would never see
+    # it (#738). Escalate from here instead: terminal regardless of attempt
+    # budget, since every REST call fails identically for the ban's duration.
+    if decision.reason_code == StopPlacementRefuseReason.RATE_LIMIT_BAN:
+        logger.critical(
+            "%s attempt %s/%s for %s: the stop-placement guard's own "
+            "open-orders lookup hit an exchange-wide rate-limit ban — "
+            "aborting remaining attempts: %s",
+            retry_log_prefix,
+            attempt + 1,
+            max_attempts,
+            symbol,
+            decision.reason,
+        )
+        _invoke_on_refuse(on_refuse, decision, symbol)
+        if on_rate_limit_ban:
+            try:
+                on_rate_limit_ban(decision.error or RuntimeError(decision.reason))
+            except Exception:
+                logger.exception("on_rate_limit_ban callback failed for %s", symbol)
+        return _StopPlacementAttemptAction.STOP
 
     # REFUSE. A genuine conflict never clears just by retrying, so it is
     # terminal regardless of which attempt hit it.
@@ -708,6 +829,7 @@ def _place_with_retry(
     retry_log_prefix: str,
     on_adopt: Callable[[StopPlacementDecision], None] | None,
     on_refuse: Callable[[StopPlacementDecision], None] | None,
+    on_rate_limit_ban: Callable[[BaseException], None] | None = None,
 ) -> str | None:
     """The exponential-backoff retry loop behind ``place_or_adopt_stop_loss``'s
     ``max_attempts > 1`` path.
@@ -735,6 +857,7 @@ def _place_with_retry(
             retry_log_prefix=retry_log_prefix,
             on_adopt=on_adopt,
             on_refuse=on_refuse,
+            on_rate_limit_ban=on_rate_limit_ban,
         )
         if outcome is _StopPlacementAttemptAction.STOP:
             return None
@@ -755,6 +878,28 @@ def _place_with_retry(
                 if order_id:
                     return order_id
             except Exception as e:
+                # EXCHANGE_IP_RATE_LIMIT_BAN_CODE (-1003) is Binance's IP-wide
+                # rate-limit ban: every exchange call fails identically for
+                # its duration, so spending the rest of this budget retrying
+                # is pointless and only delays the caller noticing (#738). Abort
+                # immediately and let on_rate_limit_ban escalate; any other
+                # exception keeps the existing warn-and-retry behavior.
+                if getattr(e, "code", None) == EXCHANGE_IP_RATE_LIMIT_BAN_CODE:
+                    logger.critical(
+                        "%s attempt %s/%s for %s hit an exchange-wide rate-limit "
+                        "ban (-1003) — aborting remaining attempts: %s",
+                        retry_log_prefix,
+                        attempt + 1,
+                        max_attempts,
+                        symbol,
+                        e,
+                    )
+                    if on_rate_limit_ban:
+                        try:
+                            on_rate_limit_ban(e)
+                        except Exception:
+                            logger.exception("on_rate_limit_ban callback failed for %s", symbol)
+                    return None
                 logger.warning(
                     "%s attempt %s/%s for %s failed: %s",
                     retry_log_prefix,
@@ -1562,6 +1707,18 @@ class PositionReconciler:
             side_lower = side.lower()
             sl_placed = False
             if position.stop_loss and hasattr(self.exchange, "place_stop_loss_order"):
+                # Populated only when the guard itself REFUSEs (never on a genuine
+                # placement exception) -- lets the not-sl_placed branch below tell
+                # an UNCONFIRMED lookup (transient, defer to the reconciler) from a
+                # confirmed conflict (AMBIGUOUS/WRONG_SIDE/PRICE_MISMATCH, still
+                # emergency-close) instead of collapsing every refusal into the
+                # same escalation (#1160).
+                refusal_decision: StopPlacementDecision | None = None
+
+                def _capture_refusal(decision: StopPlacementDecision) -> None:
+                    nonlocal refusal_decision
+                    refusal_decision = decision
+
                 try:
                     from src.data_providers.exchange_interface import OrderSide
 
@@ -1576,6 +1733,7 @@ class PositionReconciler:
                         stop_price=intended_stop_price,
                         side_effect_type=SideEffectType.AUTO_REPAY,
                         on_adopt=achieved,
+                        on_refuse=_capture_refusal,
                     )
                     if sl_order_id:
                         position.stop_loss_order_id = sl_order_id
@@ -1636,6 +1794,47 @@ class PositionReconciler:
                     )
 
                 if not sl_placed:
+                    if refusal_decision is not None and refusal_decision.unconfirmed:
+                        # The guard couldn't confirm the exchange's open-orders
+                        # state this cycle (network blip, transient API error, or
+                        # an eventual-consistency lag) -- not a genuine conflict.
+                        # Emergency-selling the recovered position on a lookup
+                        # that might succeed on the very next attempt is itself a
+                        # real money-moving action; leave the position tracked
+                        # (its state, including position.stop_loss, is untouched)
+                        # for the periodic reconciler's next pass to retry (#1160).
+                        # This deliberately leaves the position genuinely
+                        # unprotected on the exchange in the meantime (no resting
+                        # stop), so it gets the same audit trail + page every
+                        # other unprotected-position path in this module writes
+                        # -- a log line alone is exactly the "detect without
+                        # act" gap #853 closed for the reconciler.
+                        detail = write_unprotected_audit(
+                            self.db_manager,
+                            self.session_id,
+                            position,
+                            "recovery stop-loss unconfirmed — deferred to next reconciler pass",
+                            exchange_reason=refusal_decision.reason,
+                        )
+                        logger.critical(
+                            "Recovery SL placement for %s (order_id=%s) could not be "
+                            "confirmed this cycle (%s) — leaving position tracked and "
+                            "UNPROTECTED for the next reconciler pass instead of "
+                            "emergency-closing on an unconfirmed lookup.",
+                            symbol,
+                            order_id,
+                            refusal_decision.reason,
+                        )
+                        _emit_event(
+                            self.on_event,
+                            EventType.ALERT,
+                            detail,
+                            severity="critical",
+                            error_code="RECOVERY_SL_UNCONFIRMED",
+                            alert=True,
+                        )
+                        return
+
                     # Emergency-close: sell on exchange, remove from tracker,
                     # and close in DB. The position can be re-entered on the
                     # next signal.
@@ -1656,44 +1855,82 @@ class PositionReconciler:
                         )
 
                         sell_side = OrderSide.SELL if side_lower == "long" else OrderSide.BUY
-                        sell_result = self.exchange.place_order(
-                            symbol=symbol,
-                            side=sell_side,
-                            order_type=OrderType.MARKET,
-                            quantity=fill_qty,
-                            side_effect_type=SideEffectType.AUTO_REPAY,
-                        )
-                        if sell_result is not None:
+                        # A closing SELL is capped to free base + floored lot snap (#989):
+                        # the entry BUY's commission can be deducted from the base fill, so
+                        # the raw fill_qty can exceed real holdings and an uncapped SELL
+                        # risks a -2010 reject here, leaving this already-unprotected
+                        # recovered position open. A short-cover BUY repays the full base
+                        # borrow, so it is left uncapped and unrounded.
+                        sell_quantity = fill_qty
+                        if sell_side == OrderSide.SELL:
+                            sell_quantity = cap_closing_sell_quantity(
+                                self.exchange,
+                                symbol=symbol,
+                                quantity=fill_qty,
+                            )
+                        if sell_quantity <= 0:
                             logger.critical(
-                                "Emergency-closed recovered %s position on "
-                                "exchange (qty=%.8f, side=%s)",
+                                "Emergency sell for %s aborted — holdings cap left nothing "
+                                "honestly sellable (intended qty=%.8f) — keeping position "
+                                "tracked",
                                 symbol,
                                 fill_qty,
-                                sell_side,
                             )
-                        else:
-                            logger.critical(
-                                "Emergency sell returned None for %s "
-                                "(qty=%.8f) — keeping position tracked",
-                                symbol,
-                                fill_qty,
-                            )
-                            # NOTE: alert=True POSTs to the webhook (10s-bounded)
-                            # while _positions_lock is held. Tolerated here: this
-                            # path runs only during startup / WS-resync recovery
-                            # (the live trading loop is not contending), and the
-                            # lock already spans the blocking emergency-sell
-                            # above. Steady-state reconciler emits (follow-up PRs)
-                            # MUST page outside the lock.
+                            # NOTE: alert=True POSTs to the webhook (10s-bounded) while
+                            # _positions_lock is held. Tolerated here: this path runs only
+                            # during startup / WS-resync recovery (the live trading loop is
+                            # not contending), and the lock already spans the blocking
+                            # holdings-cap check above. Steady-state reconciler emits
+                            # (follow-up PRs) MUST page outside the lock.
                             _emit_event(
                                 self.on_event,
                                 EventType.ALERT,
-                                f"Emergency sell unconfirmed for {symbol} — position may be "
-                                f"UNPROTECTED, manual verification required",
+                                f"Emergency sell aborted for {symbol} — inventory not "
+                                f"honestly sellable, position may be UNPROTECTED, manual "
+                                f"verification required",
                                 severity="critical",
                                 error_code="EMERGENCY_SELL_UNCONFIRMED",
                                 alert=True,
                             )
+                        else:
+                            sell_result = self.exchange.place_order(
+                                symbol=symbol,
+                                side=sell_side,
+                                order_type=OrderType.MARKET,
+                                quantity=sell_quantity,
+                                side_effect_type=SideEffectType.AUTO_REPAY,
+                            )
+                            if sell_result is not None:
+                                logger.critical(
+                                    "Emergency-closed recovered %s position on "
+                                    "exchange (qty=%.8f, side=%s)",
+                                    symbol,
+                                    sell_quantity,
+                                    sell_side,
+                                )
+                            else:
+                                logger.critical(
+                                    "Emergency sell returned None for %s "
+                                    "(qty=%.8f) — keeping position tracked",
+                                    symbol,
+                                    sell_quantity,
+                                )
+                                # NOTE: alert=True POSTs to the webhook (10s-bounded)
+                                # while _positions_lock is held. Tolerated here: this
+                                # path runs only during startup / WS-resync recovery
+                                # (the live trading loop is not contending), and the
+                                # lock already spans the blocking emergency-sell
+                                # above. Steady-state reconciler emits (follow-up PRs)
+                                # MUST page outside the lock.
+                                _emit_event(
+                                    self.on_event,
+                                    EventType.ALERT,
+                                    f"Emergency sell unconfirmed for {symbol} — position may "
+                                    f"be UNPROTECTED, manual verification required",
+                                    severity="critical",
+                                    error_code="EMERGENCY_SELL_UNCONFIRMED",
+                                    alert=True,
+                                )
                     except Exception as sell_err:
                         logger.critical(
                             "CRITICAL: Emergency sell FAILED for %s "
@@ -1785,6 +2022,53 @@ class PositionReconciler:
                             order_id_to_remove = oid
                             matched_position = pos
                             break
+
+                # Idempotency guard (#736): a Trade already referencing this position means
+                # an earlier pass already realized PnL and logged the trade. Re-running the
+                # PnL calculation below would double-apply it to the balance — just fix the
+                # stale status and stop. Mirrors the same guard in
+                # _close_position_from_filled_sl. Checked BEFORE the unconditional tracker
+                # removal below: close_position returns False (without raising) when the row
+                # isn't found or the commit rolls back, so the tracker entry must only be
+                # dropped once the close is confirmed persisted — otherwise memory would say
+                # "gone" while the DB row stays OPEN (CODE.md: no silent divergence).
+                if self.db_manager.has_terminal_trade_for_position(position_id):
+                    guard_closed = False
+                    try:
+                        guard_closed = bool(
+                            self.db_manager.close_position(
+                                position_id, exit_price=fill_price if fill_price > 0 else None
+                            )
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to close already-realized position %s: %s",
+                            position_id,
+                            e,
+                        )
+                    if guard_closed:
+                        if order_id_to_remove is not None:
+                            self.position_tracker.remove_position(order_id_to_remove)
+                        logger.warning(
+                            "Position %s already has a terminal trade — closed WITHOUT "
+                            "re-realizing PnL (crash-recovery idempotency guard).",
+                            position_id,
+                        )
+                    else:
+                        if matched_position is not None:
+                            # Mirrors the sibling guard in _close_position_from_filled_sl:
+                            # the asset is already gone (a terminal trade exists), so this
+                            # retained-but-unclosed position must not be counted as capital
+                            # (notional estimation) or have a stop re-armed against a
+                            # holding that no longer exists (#852's naked-stop guard).
+                            cast(Any, matched_position).exchange_close_pending = True
+                        logger.warning(
+                            "Position %s already has a terminal trade but close_position "
+                            "did not persist — leaving tracked for re-reconciliation on a "
+                            "later pass.",
+                            position_id,
+                        )
+                    return
 
                 if order_id_to_remove is not None:
                     self.position_tracker.remove_position(order_id_to_remove)
@@ -3178,6 +3462,41 @@ class PositionReconciler:
         """
         db_pos_id = getattr(position, "db_position_id", None)
         exit_price = float(sl_order.average_price) if sl_order.average_price else None
+
+        # Idempotency guard (#736): a Trade already referencing this position means an
+        # earlier pass already realized PnL and logged the trade — most likely a prior
+        # crash landed the atomic balance+trade commit but the process died (or this
+        # exact race re-ran) before the position's in-memory/DB state caught up. Re-running
+        # the PnL calculation below would double-apply it to the balance. Just fix the
+        # stale status and stop; heal_positions_with_terminal_trades covers the same case
+        # at startup, this covers it mid-session.
+        if db_pos_id and self.db_manager.has_terminal_trade_for_position(db_pos_id):
+            guard_closed = False
+            try:
+                # Gate on the actual return value — same reasoning as the non-guard path
+                # below: "did not raise" is not "closed", and removing the tracker entry
+                # for a row that's still OPEN would diverge memory from the DB.
+                guard_closed = bool(
+                    self.db_manager.close_position(db_pos_id, exit_price=exit_price)
+                )
+            except Exception as e:
+                logger.warning("Failed to close already-realized position %s: %s", db_pos_id, e)
+            if guard_closed:
+                self.position_tracker.remove_position(position.order_id)
+                logger.warning(
+                    "Position %s already has a terminal trade — closed WITHOUT re-realizing "
+                    "PnL (crash-recovery idempotency guard).",
+                    db_pos_id,
+                )
+            else:
+                position.exchange_close_pending = True
+                logger.warning(
+                    "Position %s already has a terminal trade but close_position did not "
+                    "persist — leaving tracked for re-reconciliation on a later pass.",
+                    db_pos_id,
+                )
+            return
+
         db_closed = False
         if db_pos_id:
             try:
@@ -3321,7 +3640,6 @@ class PositionReconciler:
             interest_cost=0.0,
             reason="external_close_recovery",
             exit_order_id=f"reconcile_ext_{db_pos_id}",
-            balance_realized=False,
             exit_category=ExitReason.EXTERNAL_CLOSE,
         )
 
@@ -3750,14 +4068,27 @@ class PositionReconciler:
                     )
                     # Correct DB balance to match actual total capital.
                     # DB balance represents total capital (USDT + position notional),
-                    # not just free USDT on exchange.
+                    # not just free USDT on exchange. atomic_balance_correction applies
+                    # the correction as a delta from this function's pre-lock db_balance
+                    # snapshot, so a concurrent delta writer (e.g. a trade closing) is
+                    # preserved instead of being clobbered by this absolute correction
+                    # (#735b).
                     corrected_balance = exchange_total + position_notional
-                    self.db_manager.update_balance(
-                        corrected_balance,
-                        "reconciliation_balance_correction",
-                        "system",
-                        self.session_id,
-                    )
+                    try:
+                        with self.db_manager.atomic_balance_correction(
+                            corrected_balance,
+                            "reconciliation_balance_correction",
+                            "system",
+                            self.session_id,
+                            caller_snapshot=db_balance,
+                        ):
+                            pass
+                    except Exception as e:
+                        logger.warning(
+                            "Startup balance correction to $%.2f FAILED: %s",
+                            corrected_balance,
+                            e,
+                        )
                 elif diff_pct > 0.01:  # >1% warning
                     result.severity = Severity.LOW
                     logger.info(
@@ -3893,6 +4224,9 @@ class PositionReconciler:
                 )
 
         try:
+            # Cheap sanity pre-check only (not used for the write itself below —
+            # both atomic paths re-read the true latest balance under the ledger
+            # lock, see DatabaseManager._lock_balance_ledger / #735).
             current_balance = self.db_manager.get_current_balance(self.session_id)
             if current_balance is None or current_balance < 0:
                 logger.warning(
@@ -3906,28 +4240,8 @@ class PositionReconciler:
             if not math.isfinite(exit_fee) or exit_fee < 0:
                 exit_fee = 0.0
 
-            # Balance uses net PnL (gross minus interest and exit fee)
-            new_balance = current_balance + pnl - interest_cost - exit_fee
-            balance_updated = self.db_manager.update_balance(
-                new_balance,
-                f"reconciliation_close: {reason}",
-                "system",
-                self.session_id,
-            )
-            if not balance_updated:
-                # update_balance swallows its own errors and returns False. If the balance
-                # write failed, do NOT persist the audit or a trade row — a trades row that
-                # asserts a closure whose balance never moved is a silent
-                # account_balances/trades divergence. Escalate (CRITICAL); reconciliation
-                # continues for the remaining positions.
-                logger.critical(
-                    "Reconciliation balance update FAILED for %s (%s) — balance unchanged; "
-                    "skipping audit + trade row to avoid trades/account_balances divergence. "
-                    "Manual reconciliation required.",
-                    getattr(position, "symbol", "?"),
-                    reason,
-                )
-                return
+            # Net PnL (gross minus interest and exit fee) is what actually moves the balance.
+            net_delta = pnl - interest_cost - exit_fee
 
             if exit_fee > 0:
                 logger.info(
@@ -3937,13 +4251,59 @@ class PositionReconciler:
                     reason,
                 )
 
+            if log_trade:
+                # Balance + trade (+ position-close) commit in ONE atomic
+                # transaction (#736: a separate balance commit followed by a
+                # separate trade/position commit is exactly the split that let a
+                # crash between them double-apply or drop this PnL on recovery;
+                # #735: the write is also correctly serialized against every
+                # other ledger writer). _log_reconciliation_trade returns None
+                # on dedup or failure — either way there is nothing new to audit.
+                balance_result = self._log_reconciliation_trade(
+                    position=position,
+                    entry_price=entry_price,
+                    exit_price=exit_price,
+                    qty=qty,
+                    gross_pnl=pnl,
+                    exit_fee=exit_fee,
+                    interest_cost=interest_cost,
+                    reason=reason,
+                    exit_order_id=exit_order_id,
+                    exit_category=exit_category,
+                    balance_delta=net_delta,
+                )
+                if balance_result is None:
+                    return
+            else:
+                # No trade row wanted for this closure — apply the delta through
+                # the same correctly-serialized path as every other balance
+                # writer (#735), just without folding in a trade insert.
+                try:
+                    with self.db_manager.atomic_balance_update(
+                        net_delta,
+                        f"reconciliation_close: {reason}",
+                        "system",
+                        self.session_id,
+                    ) as result:
+                        balance_result = result
+                except Exception:
+                    logger.critical(
+                        "Reconciliation balance update FAILED for %s (%s) — balance "
+                        "unchanged; skipping audit to avoid a divergent record. Manual "
+                        "reconciliation required.",
+                        getattr(position, "symbol", "?"),
+                        reason,
+                        exc_info=True,
+                    )
+                    return
+
             # Audit the P&L correction
             audit = AuditEvent(
                 entity_type="balance",
                 entity_id=getattr(position, "db_position_id", None),
                 field="realized_pnl",
-                old_value=f"{current_balance:.2f}",
-                new_value=f"{new_balance:.2f}",
+                old_value=f"{balance_result['old_balance']:.2f}",
+                new_value=f"{balance_result['new_balance']:.2f}",
                 reason=(
                     f"Reconciliation P&L: {pnl:+.2f} "
                     f"(entry={entry_price:.2f}, exit={exit_price:.2f}, "
@@ -3958,23 +4318,6 @@ class PositionReconciler:
                 position.symbol,
                 reason,
             )
-
-            # Persist a Trade row for opted-in reconciler closures. Without this, the
-            # position is balance-corrected and DB-closed but leaves NO trades row, so
-            # commission/quantity/pnl go unrecorded for offline closures handled here.
-            if log_trade:
-                self._log_reconciliation_trade(
-                    position=position,
-                    entry_price=entry_price,
-                    exit_price=exit_price,
-                    qty=qty,
-                    gross_pnl=pnl,
-                    exit_fee=exit_fee,
-                    interest_cost=interest_cost,
-                    reason=reason,
-                    exit_order_id=exit_order_id,
-                    exit_category=exit_category,
-                )
         except Exception as e:
             logger.warning(
                 "Failed to realize P&L for position %s: %s",
@@ -3994,11 +4337,21 @@ class PositionReconciler:
         interest_cost: float,
         reason: str,
         exit_order_id: str | None,
-        balance_realized: bool = True,
         exit_category: ExitReason = ExitReason.UNKNOWN,
-    ) -> None:
+        balance_delta: float | None = None,
+    ) -> dict[str, float] | None:
         """Insert a ``trades`` row for a reconciler-closed position, commission and
         quantity populated.
+
+        When ``balance_delta`` is given, the balance adjustment, the Trade insert,
+        and the Position CLOSED flip all commit in ONE transaction (via
+        ``DatabaseManager.log_trade``'s ``balance_delta``) — closes the
+        split-transaction crash window (#736) that could otherwise double-apply
+        or silently drop this exact PnL on recovery, and the correctly-serialized
+        write closes the concurrent lost-update window (#735). Also sets the
+        Trade's ``position_id`` FK unconditionally (even when ``balance_delta`` is
+        None) so ``heal_positions_with_terminal_trades`` can find and repair this
+        trade's position if a crash ever leaves it stale-OPEN.
 
         Fault-isolated and deduped: a duplicate (same exit order id + session) raises
         ``IntegrityError`` from ``log_trade`` and is swallowed; any other DB error is
@@ -4007,9 +4360,19 @@ class PositionReconciler:
         entry fee — reconstructed from the fee model, since recovered positions carry no
         entry-fee metadata — plus the exit fee. ``qty`` is already scaled to the closed
         slice by the caller.
+
+        Returns:
+            The ``{"old_balance", "new_balance", "change"}`` dict from the atomic
+            balance write when ``balance_delta`` was given and the write
+            succeeded; otherwise None (no balance_delta, a deduped re-run, or a
+            failed write — the caller should not audit a balance change that
+            never happened).
         """
         if self.session_id is None:
-            return
+            return None
+        # Derived, not a separate caller-supplied flag, so it can never disagree
+        # with what balance_delta actually does.
+        balance_realized = balance_delta is not None
         try:
             side = getattr(position, "side", None)
             # PositionSide enum -> its .value ("LONG"/"SHORT"); a str side passes through.
@@ -4057,7 +4420,8 @@ class PositionReconciler:
             size = float(cs if cs is not None else (sz if sz is not None else 0.0))
             if not math.isfinite(size) or size <= 0:
                 size = 1.0  # degenerate recovered sizing; log_trade requires size > 0
-            self.db_manager.log_trade(
+            db_pos_id = getattr(position, "db_position_id", None)
+            trade_id = self.db_manager.log_trade(
                 symbol=getattr(position, "symbol", "UNKNOWN"),
                 side=side_str,
                 entry_price=float(entry_price),
@@ -4074,31 +4438,65 @@ class PositionReconciler:
                 commission=commission,
                 margin_interest_cost=max(0.0, float(interest_cost)),
                 exit_order_id=exit_order_id,
+                # Sets the Trade's position_id FK unconditionally (even when
+                # balance_delta is None below) so a stale-OPEN position can
+                # always be found and repaired by heal_positions_with_terminal_trades
+                # — the June-audit gap where reconciler trades had no FK at all.
+                position_id=db_pos_id,
+                # Balance + trade + position-close commit in ONE transaction
+                # when a delta was given (#736/#735); None here means this
+                # closure is balance-neutral (e.g. external close — capital is
+                # reconciled elsewhere) and only the trade/position-close happen.
+                balance_delta=balance_delta,
             )
             logger.info(
-                "Logged reconciliation trade for %s: pnl=%.2f commission=%.4f qty=%s",
+                "Logged reconciliation trade #%s for %s: pnl=%.2f commission=%.4f qty=%s",
+                trade_id,
                 getattr(position, "symbol", "?"),
                 float(gross_pnl),
                 commission,
                 "NULL" if logged_quantity is None else format(logged_quantity, ".8f"),
             )
+            if balance_delta is not None:
+                # log_trade already committed the atomic balance+trade+close write;
+                # this is a post-commit read for the caller's audit trail only (not
+                # used for any further ledger arithmetic), so "old_balance" is
+                # reconstructed by subtracting our own delta back out. In the rare
+                # case another writer commits in between this read and our own
+                # commit above, that only skews this descriptive audit string, not
+                # the ledger itself.
+                new_balance = self.db_manager.get_current_balance(self.session_id)
+                return {
+                    "old_balance": new_balance - balance_delta,
+                    "new_balance": new_balance,
+                    "change": balance_delta,
+                }
+            return None
         except IntegrityError:
             logger.info(
                 "Reconciliation trade for %s already recorded (dedup); skipping",
                 getattr(position, "symbol", "?"),
             )
+            return None
         except Exception as e:
             # Escalate (CRITICAL + stack trace) rather than swallow at WARNING — "silent
             # divergence is a bug" (CODE.md). Still do not re-raise: reconciliation must continue
-            # for the remaining positions. The alert differs by whether the caller moved the
-            # balance: a balance-realizing path (SL/exit) leaves account_balances and trades
-            # genuinely diverged; a balance-neutral path (external close) only loses an audit row
-            # (capital is reconciled by Step C / margin-equity sync), so it must NOT page as a
-            # ledger divergence.
+            # for the remaining positions. The alert differs by whether the caller wanted a
+            # balance move: when balance_delta was given, the whole write (balance + trade +
+            # position-close) is ONE transaction, so a failure here means NONE of it committed —
+            # no ledger divergence possible from THIS write. But by the time this runs,
+            # close_position() has already committed in its own upfront transaction (the caller
+            # only reaches here once db_closed is True) — the position is CLOSED, so it will
+            # never again surface as needing exit reconciliation. There is no "next pass" that
+            # retries this: the realized PnL for this close is permanently dropped, not
+            # deferred. Narrow gap tracked as #1223 (a full fix needs the close+trade+balance
+            # write to be one transaction, same as the normal exit path).
             if balance_realized:
                 logger.critical(
-                    "Balance corrected for %s but FAILED to persist its trades row: %s — "
-                    "account_balances and trades have DIVERGED; manual reconciliation required.",
+                    "Atomic balance+trade write FAILED for %s: %s — the position was already "
+                    "closed in the DB but its balance/trade could NOT be persisted. This PnL "
+                    "is PERMANENTLY DROPPED, not deferred — reconciliation will not retry it "
+                    "(see #1223). Manual reconciliation required.",
                     getattr(position, "symbol", "?"),
                     e,
                     exc_info=True,
@@ -4325,6 +4723,17 @@ class PeriodicReconciler:
             self._thread.join(timeout=10)
         logger.info("Periodic reconciler stopped")
 
+    @property
+    def is_running(self) -> bool:
+        """Whether the reconciliation daemon thread is actually alive.
+
+        Distinct from ``self._running`` (set eagerly in ``start()``): a caller
+        deciding whether to rely on this reconciler as a safety backstop
+        (#1218's entry-path UNCONFIRMED defer) needs to know the thread is
+        genuinely running, not just that ``start()`` was called.
+        """
+        return self._running and self._thread is not None and self._thread.is_alive()
+
     def get_position_lock(self, position_key: str) -> threading.Lock:
         """Get or create a per-position mutation lock.
 
@@ -4487,12 +4896,21 @@ class PeriodicReconciler:
                     ),
                     severity=Severity.CRITICAL.value,
                 )
-                self.db_manager.update_balance(
+                # atomic_balance_correction applies the correction as a delta from
+                # this function's pre-lock db_balance snapshot, so a concurrent delta
+                # writer (e.g. a trade closing) is preserved instead of being
+                # clobbered by this absolute correction (#735b). Raises on failure —
+                # caught by the except below, unlike the old update_balance(...)
+                # which swallowed failures into a bare False this call site never
+                # even checked.
+                with self.db_manager.atomic_balance_correction(
                     corrected_balance,
                     "reconciliation_balance_correction",
                     "system",
                     self.session_id,
-                )
+                    caller_snapshot=db_balance,
+                ):
+                    pass
                 return True
         except Exception as e:
             logger.warning("Balance check failed: %s", e)

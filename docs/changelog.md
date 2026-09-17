@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Entry-path stop-loss placement now threads `reason_code` through and defers on a
+  terminal UNCONFIRMED refusal instead of always emergency-closing, but only when the
+  periodic reconciler is confirmed alive** (#1218, follow-up to #1160).
+  `LiveStopLossManager.place_protection()` now returns a `StopLossPlacementResult`
+  (`order_id` + `refuse_reason_code`) instead of a bare `str | None`, capturing the full
+  `StopPlacementDecision` from the guard instead of just its free-text `reason`. When all
+  `DEFAULT_STOP_LOSS_MAX_RETRIES` placement attempts terminate in an `UNCONFIRMED` guard
+  refusal (the exchange open-orders lookup itself couldn't be confirmed — a transient
+  blip, not a genuine conflict) AND `PeriodicReconciler.is_running` is true,
+  `entry_coordinator.py`'s post-entry flow now leaves the freshly-opened position tracked
+  for the next periodic-reconciler pass instead of emergency-market-selling it, mirroring
+  #1160's startup-recovery fix. Unlike #1160's recovered-position case, a fresh position
+  is skipped by `exit_coordinator.py`'s same-bar-entry guard for the rest of the bar it
+  was entered on, so the live loop's in-memory `_check_exit_conditions` is *not* active
+  during the defer window either — the actual backstop is the periodic reconciler
+  re-placing the exchange-side stop on its next pass (~`interval` seconds), which is why
+  deferring is gated on that reconciler actually being alive; when it is not, this falls
+  through to the same emergency-close path a confirmed conflict
+  (`AMBIGUOUS`/`WRONG_SIDE`/`PRICE_MISMATCH`/`NO_ACCESSOR`) always takes.
 - **Consolidated the duplicated "held quantity" scaling in `reconciliation.py`** (#1208).
   ~17 independent inline reimplementations of `qty * (current_size / original_size)` —
   used for stop-loss re-placement sizing, external-close/margin-position threshold checks,
@@ -76,6 +95,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the ungated path still diverges.
 
 ### Fixed
+- **A -1003 exchange-wide rate-limit ban hitting the stop-placement guard's own
+  open-orders lookup — rather than the placement call itself — never reached the
+  `on_rate_limit_ban` close-only escalation** (#738 review follow-up). The prior fix
+  only detected the ban when `place_stop_loss_order` itself raised -1003, but a real
+  IP-wide ban fails EVERY REST call identically, so `guard_stop_placement`'s
+  `get_open_orders_checked` lookup usually hits it first — REFUSE(unconfirmed=True)
+  with no placement attempt ever made, and the callback never fired.
+  `BinanceProvider.get_open_orders_checked` now re-raises (instead of swallowing to
+  `None`) when the lookup itself fails with a rate-limit ban code; a new
+  `StopPlacementRefuseReason.RATE_LIMIT_BAN` classifies that REFUSE, and
+  `_resolve_stop_placement_attempt` invokes `on_rate_limit_ban` and aborts the retry
+  budget from that path too, not just the placement-exception path. Also: adding
+  -1003/-1015 to `DEFINITIVE_REJECT_CODES` made a rate-limited emergency close raise
+  `ValueError` instead of returning `None`, which fell through the two
+  `entry_coordinator.py` emergency-close call sites' weaker generic `except Exception`
+  handler (log-only) instead of the `None`-return branch's `_enter_close_only_mode`
+  escalation — both sites now catch `ValueError` explicitly and escalate the same way.
+- **Startup-recovery stop-loss placement emergency-closed a recovered position on a
+  transient, unconfirmed exchange lookup, not just a genuine conflict** (#1160).
+  `StopPlacementDecision.reason` was free text only, so `_reconcile_filled_entry`'s
+  `sl_placed` check could not tell an `UNCONFIRMED` `guard_stop_placement` refusal (the
+  open-orders lookup returned `None`, raised, or hit the `exclude_order_id`
+  eventual-consistency lag — a network blip that might clear on the very next attempt)
+  from a confirmed `AMBIGUOUS`/`WRONG_SIDE`/`PRICE_MISMATCH` conflict — both collapsed
+  into the same `sl_placed = False` and triggered an emergency market-sell of the
+  recovered position. Added a machine-readable `StopPlacementRefuseReason` enum and a new
+  `reason_code` field on `StopPlacementDecision` (additive — `reason` and `unconfirmed`
+  keep their exact prior meaning), and wired the startup-recovery call site's existing
+  `on_refuse` hook to capture the decision: an `UNCONFIRMED` refusal now logs and leaves
+  the position tracked for the next periodic reconciler pass instead of emergency-closing;
+  `AMBIGUOUS`/`WRONG_SIDE`/`PRICE_MISMATCH` still emergency-close exactly as before.
 - **Order quantity sent to Binance as a raw float serialized as scientific notation
   for values below 1e-4** (#745). python-binance urlencodes order params, and Python's
   default float-to-str conversion renders small floats in scientific notation

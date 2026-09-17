@@ -47,6 +47,7 @@ from src.strategies.components import Signal, SignalDirection
 from src.strategies.components import Strategy as ComponentStrategy
 from src.strategies.components.ml_signal_generator import SHORT_ENTRY_SUPPRESSED_KEY
 from src.tech.adapters.row_extractors import extract_ml_predictions_from_signal
+from src.trading.close_sizing import cap_closing_sell_quantity
 from src.trading.exit_reason import ExitReason
 
 if TYPE_CHECKING:
@@ -56,7 +57,7 @@ if TYPE_CHECKING:
     from src.engines.live.execution.position_tracker import LivePosition, LivePositionTracker
     from src.engines.live.execution.stop_loss_manager import LiveStopLossManager
     from src.engines.live.order_tracker import OrderTracker
-    from src.engines.live.reconciliation import BaseAssetLockRegistry
+    from src.engines.live.reconciliation import BaseAssetLockRegistry, PeriodicReconciler
     from src.risk.risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,9 @@ class LiveEntryEngineState(Protocol):
     _component_strategy: ComponentStrategy | None
     _close_only_mode: bool
     _base_asset_locks: BaseAssetLockRegistry
+    # Read (never started) here to gate the UNCONFIRMED-defer decision (#1218)
+    # on the reconciler actually being alive to backstop it.
+    _periodic_reconciler: PeriodicReconciler | None
 
     # Engine helpers that stay on the engine; the coordinator calls them via
     # this backref (so subclass/test overrides on the engine still apply).
@@ -759,48 +763,103 @@ class LiveEntryCoordinator:
                             close_side = (
                                 OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
                             )
-                            # Validate entry_price to prevent division by zero
-                            if position.entry_price <= 0:
+                            # Use quantity from position - LiveEntryResult.position.quantity.
+                            raw_quantity = result.position.quantity
+                            # Validate entry_price/quantity to prevent division by zero and
+                            # an unsizeable close.
+                            if (
+                                position.entry_price <= 0
+                                or raw_quantity is None
+                                or raw_quantity <= 0
+                            ):
                                 logger.error(
                                     "Cannot calculate emergency close quantity - invalid "
-                                    "entry_price %s for %s",
+                                    "entry_price %s or quantity %s for %s",
                                     position.entry_price,
+                                    raw_quantity,
                                     symbol,
                                     exc_info=True,
                                 )
                             else:
-                                # Use quantity from position - LiveEntryResult.position.quantity
-                                emergency_order = state.exchange_interface.place_order(
-                                    symbol=symbol,
-                                    side=close_side,
-                                    order_type=OrderType.MARKET,
-                                    quantity=result.position.quantity,
-                                    side_effect_type=SideEffectType.AUTO_REPAY,
-                                )
-                                if emergency_order is None:
-                                    # None is an ambiguous/failed placement, NOT a
-                                    # confirmed close: the position may still be open
-                                    # and unprotected on the exchange. Escalate to
-                                    # close-only instead of logging a false success;
-                                    # the reconciler resolves it on restart.
+                                # A closing SELL is capped to free base + floored lot snap
+                                # (#989): the entry BUY's commission can be deducted from the
+                                # base fill, so the raw executedQty can exceed real holdings
+                                # and an uncapped SELL risks a -2010 reject here, leaving this
+                                # already-inconsistent position open and unprotected. A
+                                # short-cover BUY repays the full base borrow, so it is left
+                                # uncapped and unrounded.
+                                close_quantity = raw_quantity
+                                if close_side == OrderSide.SELL:
+                                    close_quantity = cap_closing_sell_quantity(
+                                        state.exchange_interface,
+                                        symbol=symbol,
+                                        quantity=close_quantity,
+                                    )
+                                if close_quantity <= 0:
                                     logger.critical(
-                                        "CRITICAL: Emergency close for %s UNCONFIRMED "
-                                        "(place_order returned None) after balance update "
-                                        "failure — position may remain open on the exchange. "
+                                        "CRITICAL: Emergency close for %s aborted — holdings "
+                                        "cap left nothing honestly sellable (intended %.8f). "
                                         "Entering close-only mode until restart reconciles. "
                                         "MANUAL INTERVENTION REQUIRED.",
                                         symbol,
+                                        raw_quantity,
                                     )
                                     state._enter_close_only_mode(
-                                        f"emergency close for {symbol} UNCONFIRMED after a "
-                                        "balance-update failure"
+                                        f"emergency close for {symbol} aborted after a "
+                                        "balance-update failure — inventory not honestly "
+                                        "sellable"
                                     )
                                 else:
-                                    logger.warning(
-                                        "Emergency close placed for %s due to balance "
-                                        "update failure",
-                                        symbol,
+                                    emergency_order = state.exchange_interface.place_order(
+                                        symbol=symbol,
+                                        side=close_side,
+                                        order_type=OrderType.MARKET,
+                                        quantity=close_quantity,
+                                        side_effect_type=SideEffectType.AUTO_REPAY,
                                     )
+                                    if emergency_order is None:
+                                        # None is an ambiguous/failed placement, NOT a
+                                        # confirmed close: the position may still be open
+                                        # and unprotected on the exchange. Escalate to
+                                        # close-only instead of logging a false success;
+                                        # the reconciler resolves it on restart.
+                                        logger.critical(
+                                            "CRITICAL: Emergency close for %s UNCONFIRMED "
+                                            "(place_order returned None) after balance update "
+                                            "failure — position may remain open on the exchange. "
+                                            "Entering close-only mode until restart reconciles. "
+                                            "MANUAL INTERVENTION REQUIRED.",
+                                            symbol,
+                                        )
+                                        state._enter_close_only_mode(
+                                            f"emergency close for {symbol} UNCONFIRMED after a "
+                                            "balance-update failure"
+                                        )
+                                    else:
+                                        logger.warning(
+                                            "Emergency close placed for %s due to balance "
+                                            "update failure",
+                                            symbol,
+                                        )
+                        except ValueError as close_err:
+                            # place_order raises ValueError for a DEFINITIVE_REJECT_CODES
+                            # rejection (e.g. -1003/-1015 rate-limit ban) instead of
+                            # returning None -- at least as dangerous as the ambiguous
+                            # None case above (the position may still be open and
+                            # unprotected), so it must not fall through to a weaker,
+                            # log-only handler (#738).
+                            logger.critical(
+                                "CRITICAL: Emergency close for %s DEFINITIVELY REJECTED "
+                                "after balance update failure — position may remain open "
+                                "on the exchange. Entering close-only mode until restart "
+                                "reconciles. MANUAL INTERVENTION REQUIRED. Error: %s",
+                                symbol,
+                                close_err,
+                            )
+                            state._enter_close_only_mode(
+                                f"emergency close for {symbol} rejected after a "
+                                f"balance-update failure: {close_err}"
+                            )
                         except Exception as close_err:
                             logger.critical(
                                 "CRITICAL: Emergency close FAILED after balance update failure for %s. "
@@ -850,20 +909,44 @@ class LiveEntryCoordinator:
 
                         # Use quantity from position - LiveEntryResult.position.quantity
                         # No need to recalculate from entry_price which could introduce errors.
-                        # Live executed entries always carry the filled quantity.
-                        if cast(float, result.position.quantity) <= 0:
+                        # Live executed entries always carry the filled quantity. A closing
+                        # SELL is capped to free base + floored lot snap (#989): the entry
+                        # BUY's commission can be deducted from the base fill, so the raw
+                        # executedQty can exceed real holdings and an uncapped SELL risks a
+                        # -2010 reject here, leaving this orphaned position open and
+                        # unprotected. A short-cover BUY repays the full base borrow, so it
+                        # is left uncapped and unrounded.
+                        close_quantity = cast(float, result.position.quantity)
+                        if close_side == OrderSide.SELL and close_quantity > 0:
+                            close_quantity = cap_closing_sell_quantity(
+                                state.exchange_interface,
+                                symbol=symbol,
+                                quantity=close_quantity,
+                            )
+                        if close_quantity <= 0:
                             logger.critical(
                                 "CRITICAL: Cannot place emergency close for %s - "
-                                "invalid quantity %.8f. MANUAL INTERVENTION REQUIRED.",
+                                "invalid or unsellable quantity %.8f (intended %.8f). "
+                                "MANUAL INTERVENTION REQUIRED.",
                                 symbol,
+                                close_quantity,
                                 result.position.quantity,
+                            )
+                            # Untracked position, possibly still open and
+                            # unprotected on the exchange (tracking already
+                            # failed above) -- match the escalation both
+                            # sibling emergency-close paths use on an aborted
+                            # or unconfirmed close (#989).
+                            state._enter_close_only_mode(
+                                f"emergency close for orphaned position {symbol} aborted "
+                                "— inventory not honestly sellable"
                             )
                         else:
                             emergency_order = state.exchange_interface.place_order(
                                 symbol=symbol,
                                 side=close_side,
                                 order_type=OrderType.MARKET,
-                                quantity=result.position.quantity,
+                                quantity=close_quantity,
                                 side_effect_type=SideEffectType.AUTO_REPAY,
                             )
                             if emergency_order is None:
@@ -887,6 +970,24 @@ class LiveEntryCoordinator:
                                     "Emergency close order placed for orphaned position %s",
                                     symbol,
                                 )
+                    except ValueError as close_err:
+                        # place_order raises ValueError for a DEFINITIVE_REJECT_CODES
+                        # rejection (e.g. -1003/-1015 rate-limit ban) instead of
+                        # returning None -- at least as dangerous as the ambiguous
+                        # None case above (the orphaned position may still be open
+                        # and unprotected), so it must not fall through to a weaker,
+                        # log-only handler (#738).
+                        logger.critical(
+                            "CRITICAL: Emergency close for orphaned position %s "
+                            "DEFINITIVELY REJECTED — position may remain open on the "
+                            "exchange. Entering close-only mode until restart "
+                            "reconciles. MANUAL INTERVENTION REQUIRED. Error: %s",
+                            symbol,
+                            close_err,
+                        )
+                        state._enter_close_only_mode(
+                            f"emergency close for orphaned position {symbol} rejected: {close_err}"
+                        )
                     except Exception as close_err:
                         logger.critical(
                             "CRITICAL: Emergency close FAILED for %s. "
@@ -1028,15 +1129,79 @@ class LiveEntryCoordinator:
                         else 0.0
                     )
 
-                sl_order_id = state.stop_loss_manager.place_protection(
+                placement = state.stop_loss_manager.place_protection(
                     position=position,
                     symbol=symbol,
                     side=side,
                     quantity=quantity,
                     stop_price=stop_loss,
                 )
+                sl_order_id = placement.order_id
 
                 if not sl_order_id:
+                    reconciler = state._periodic_reconciler
+                    reconciler_alive = reconciler is not None and reconciler.is_running
+
+                    if (
+                        reconciler is not None
+                        and reconciler_alive
+                        and placement.is_unconfirmed_refusal
+                    ):
+                        # #1218: mirrors #1160's startup-recovery defer, but the
+                        # safety argument is weaker here. A recovered position's
+                        # entry_time predates the crash, so #1160's in-memory
+                        # stop check is live immediately; a FRESH position is
+                        # skipped by exit_coordinator's same-bar-entry guard for
+                        # the rest of this bar, so until the next bar there is
+                        # no exchange-side stop AND no in-memory check either.
+                        # The real backstop for this window is the periodic
+                        # reconciler (confirmed alive above) re-placing the stop
+                        # on its next pass. Deferring still beats emergency-
+                        # closing a seconds-old position on a lookup that may
+                        # clear on that very next pass -- the open-then-
+                        # emergency-close churn this repo's capital-erosion
+                        # postmortem flagged. `place_protection` already wrote
+                        # the UNPROTECTED audit row above.
+                        logger.critical(
+                            "Stop-loss placement for %s could not be confirmed after "
+                            "%s attempts (guard lookup unconfirmed) — leaving the "
+                            "freshly-opened position tracked and UNPROTECTED on the "
+                            "exchange, with no in-memory stop check either until the "
+                            "next bar (same-bar-entry guard). Deferring to the "
+                            "periodic reconciler (~%ss cadence) instead of "
+                            "emergency-closing on a transient lookup failure.",
+                            symbol,
+                            DEFAULT_STOP_LOSS_MAX_RETRIES,
+                            reconciler.interval,
+                        )
+                        state._record_event(
+                            EventType.ALERT,
+                            f"{symbol} entry stop-loss placement UNCONFIRMED after "
+                            f"retries — position left open with NO exchange-side "
+                            f"stop and NO in-memory stop check until the next bar; "
+                            f"the periodic reconciler (~{reconciler.interval}s "
+                            f"cadence) is the live backstop for this window.",
+                            severity="critical",
+                            component="execution",
+                            error_code="ENTRY_SL_UNCONFIRMED",
+                            alert=True,
+                        )
+                        return
+
+                    if placement.is_unconfirmed_refusal and not reconciler_alive:
+                        # The defer branch above only holds because the periodic
+                        # reconciler is there to re-place the stop; without it
+                        # an UNCONFIRMED refusal would leave the position naked
+                        # indefinitely (past the next bar, only in-memory-
+                        # protected, forever). Fall through to the same
+                        # emergency-close path a genuine conflict takes.
+                        logger.warning(
+                            "%s stop-loss placement UNCONFIRMED but the periodic "
+                            "reconciler is not running — emergency-closing instead "
+                            "of deferring (no backstop available).",
+                            symbol,
+                        )
+
                     logger.critical(
                         "CRITICAL: Failed to place stop-loss after %s attempts for %s - "
                         "closing position on exchange to prevent unprotected exposure",

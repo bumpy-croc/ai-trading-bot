@@ -410,6 +410,24 @@ DEFAULT_STOP_LOSS_MAX_RETRIES = 3  # Maximum retry attempts for stop-loss placem
 DEFAULT_STOP_LOSS_RETRY_DELAY = 1.0  # Initial delay between retries (seconds)
 DEFAULT_RETRY_BACKOFF_MULTIPLIER = 2  # Exponential backoff multiplier
 
+# Max TOTAL attempts (not additional retries) to read account equity during the
+# cold-boot startup account sync (a transient None/exception/non-positive read
+# here can mean the exchange client isn't fully ready yet). Unlike the
+# neighbouring DEFAULT_STARTUP_BAN_MAX_RETRIES (retries AFTER the first
+# attempt, N+1 reads total), this constant IS the full read count: N=3 means
+# 3 reads total, not 3 retries plus an initial read.
+DEFAULT_STARTUP_EQUITY_MAX_RETRIES = 3
+# Base delay between startup equity-read retries (seconds); backs off by
+# DEFAULT_RETRY_BACKOFF_MULTIPLIER between attempts (1s, 2s, ...).
+DEFAULT_STARTUP_EQUITY_RETRY_DELAY = 1.0
+
+# Bounds how many additional loop-driven attempts the live trading loop itself
+# will make (via LiveTradingEngine._check_pending_startup_equity_retry) to
+# resolve a cold-boot margin-equity skip before giving up until the next
+# scheduled periodic sync. Keeps a permanently-broken equity endpoint from
+# retrying forever.
+DEFAULT_STARTUP_EQUITY_LOOP_MAX_ATTEMPTS = 5
+
 # Regime Multiplier Fallback
 DEFAULT_REGIME_UNKNOWN_MULTIPLIER = 0.5  # Conservative multiplier for unknown regimes
 
@@ -537,6 +555,15 @@ DEFAULT_WS_KLINE_RECONNECT_CIRCUIT_LIMIT = 3
 DEFAULT_WS_KLINE_DEGRADED_PROBE_EVERY = 10
 DEFAULT_STARTUP_BAN_MAX_WAIT = 600  # Max seconds to wait for an IP ban to lift during startup
 DEFAULT_STARTUP_BAN_MAX_RETRIES = 3  # Max retry attempts for ban-related startup failures
+
+# Binance error code for an exchange-wide (IP) rate-limit ban: every REST call
+# fails identically for its duration, including an open-orders lookup used by
+# a safety guard that has nothing else to do with Binance specifically (#738).
+# Named here rather than inlined so reconciliation.py's stop-placement guard
+# (deliberately exchange-agnostic, `exchange: Any`) doesn't couple to a bare
+# magic number; binance_provider.py's own RATE_LIMIT_ERROR_CODES set is the
+# source of truth for retry/reject classification and includes this code.
+EXCHANGE_IP_RATE_LIMIT_BAN_CODE = -1003
 
 # TFT (Temporal Fusion Transformer) Model Defaults
 DEFAULT_TFT_N_HEADS = 4  # Number of attention heads in the temporal decoder

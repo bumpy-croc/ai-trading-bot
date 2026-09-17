@@ -829,6 +829,7 @@ class DatabaseManager:
         mae_time: datetime | None = None,
         margin_interest_cost: float | None = None,
         position_id: int | None = None,
+        balance_delta: float | None = None,
     ) -> int:
         """Logs a completed trade to the database.
 
@@ -870,9 +871,25 @@ class DatabaseManager:
                 caller backward-compatible while letting the live/paper exit path
                 close the position atomically (fixes #657: positions left OPEN in
                 paper mode, causing phantom duplicate trades on restart).
+            balance_delta: When provided, the session balance is adjusted by this
+                amount in the SAME transaction as the Trade insert and (if
+                ``position_id`` is set) the Position CLOSED flip — balance, trade,
+                and position-close commit atomically or not at all. Requires
+                ``position_id`` and an active/explicit session id. This is what
+                closes #736 (crash between a separate balance commit and the
+                trade/position commit used to leave the ledger able to
+                double-apply or drop the same PnL on recovery). Serialized against
+                every other balance writer the same way ``atomic_balance_update``
+                is (see ``_lock_balance_ledger``). When None (the default),
+                behaviour is unchanged: no balance write happens here, matching
+                every existing caller that owns its own balance update.
 
         Returns:
             Trade ID
+
+        Raises:
+            ValueError: Invalid financial inputs, or (with ``balance_delta``) no
+                resolvable session id or the resulting balance would be negative.
         """
         # Validate financial inputs at API boundary
         if not math.isfinite(entry_price) or entry_price <= 0:
@@ -881,9 +898,32 @@ class DatabaseManager:
             raise ValueError(f"exit_price must be positive and finite, got {exit_price}")
         if not math.isfinite(size) or size <= 0:
             raise ValueError(f"size must be positive and finite, got {size}")
+        if balance_delta is not None and position_id is None:
+            raise ValueError("balance_delta requires position_id (atomic close-with-balance)")
+
+        effective_session_id = session_id or self._current_session_id
+        if balance_delta is not None and not effective_session_id:
+            raise ValueError("balance_delta requires an active or explicit trading session_id")
 
         # Use WRITE timeout - trade logging requires durability guarantees
         with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
+            balance_result: dict[str, float] | None = None
+            if balance_delta is not None:
+                # Serialize against every other ledger writer and apply the
+                # balance change BEFORE the trade/position writes below, all in
+                # this same session/transaction — see _lock_balance_ledger and
+                # _apply_balance_delta. A negative-balance ValueError here aborts
+                # before any Trade/Position write is even added to the session.
+                locked_session_id = cast(int, effective_session_id)  # validated above
+                self._lock_balance_ledger(session, locked_session_id)
+                balance_result = self._apply_balance_delta(
+                    session,
+                    locked_session_id,
+                    balance_delta,
+                    f"realized_pnl_{symbol}_{exit_reason}",
+                    "live_engine",
+                )
+
             # Normalize sides/sources to the DATABASE enums (fresh locals, no
             # argument reassignment). Engines pass their own PositionSide
             # (engines/shared), and cross-enum equality is always False — that
@@ -919,7 +959,7 @@ class DatabaseManager:
                 order_id=exit_order_id,
                 confidence_score=confidence_score,
                 strategy_config=strategy_config,
-                session_id=session_id or self._current_session_id,
+                session_id=effective_session_id,
                 position_id=position_id,
                 mfe=mfe,
                 mae=mae,
@@ -935,14 +975,17 @@ class DatabaseManager:
             session.add(trade)
             try:
                 # When closing a tracked position, flip its status to CLOSED in
-                # the SAME transaction as the Trade insert so the two coupled
-                # writes commit together or not at all (CODE.md "Database &
-                # Transactions": coupled fields in a single transaction). This
-                # mirrors the atomic Trade-insert + Position-close block in
-                # atomic_position_reconciliation, minus the balance update (the
-                # caller owns balance via atomic_balance_update). Runs in BOTH
-                # paper and live mode — the #657 bug was that closing was
-                # paper-blind, so positions accumulated as permanently OPEN.
+                # the SAME transaction as the Trade insert (and, when
+                # balance_delta was given, the balance write applied above) so
+                # all coupled writes commit together or not at all (CODE.md
+                # "Database & Transactions": coupled fields in a single
+                # transaction). Without balance_delta the caller owns balance
+                # separately via atomic_balance_update — that split is exactly
+                # what let a crash between the two commits double-apply or drop
+                # PnL on recovery (#736); pass balance_delta to close that gap.
+                # Runs in BOTH paper and live mode — the #657 bug was that
+                # closing was paper-blind, so positions accumulated as
+                # permanently OPEN.
                 if position_id is not None:
                     position = session.query(Position).filter(Position.id == position_id).first()
                     if position is not None:
@@ -985,9 +1028,16 @@ class DatabaseManager:
             logger.info(
                 f"Logged trade #{trade.id}: {symbol} {db_side.value} P&L: ${pnl:.2f} ({pnl_percent:.2f}%)"
             )
+            if balance_result is not None:
+                logger.info(
+                    "Atomic exit: balance $%.2f -> $%.2f | Trade #%s | Position %s closed",
+                    balance_result["old_balance"],
+                    balance_result["new_balance"],
+                    trade.id,
+                    position_id,
+                )
 
             # Update performance metrics - handle None session_id
-            effective_session_id = session_id or self._current_session_id
             if effective_session_id:
                 self._update_performance_metrics(effective_session_id)
 
@@ -2745,6 +2795,110 @@ class DatabaseManager:
 
         return success
 
+    # Fixed 32-bit namespace for the account-balance advisory lock (see
+    # ``_lock_balance_ledger``). Advisory locks share one keyspace per backend;
+    # this constant just keeps this lock's (namespace, session_id) pairs from
+    # ever colliding with an unrelated advisory lock added elsewhere later.
+    # The value itself is arbitrary — it only needs to be stable.
+    _BALANCE_LOCK_NAMESPACE = 0x42414C4E  # 'BALN'
+
+    def _lock_balance_ledger(self, session: Session, session_id: int) -> None:
+        """Serialize every writer of the append-only ``account_balances`` ledger.
+
+        ``account_balances`` never UPDATEs an existing row — every change INSERTs a
+        new one — so a row-level ``SELECT ... FOR UPDATE`` on "the current latest
+        row" does not serialize concurrent writers the way it would on a normal
+        mutable row: two writers can each lock the same (about-to-be-stale) row
+        before either commits, and under READ COMMITTED the one that unblocks
+        second still observes the row it locked — not the new latest row its
+        rival just inserted — and silently overwrites that rival's delta (#735).
+        A Postgres transaction-scoped advisory lock keyed by session_id closes
+        this: every writer acquires it BEFORE reading "current balance" and holds
+        it until its transaction ends, so the read is always the true latest.
+
+        No-op on SQLite (unit tests only): ``pg_advisory_xact_lock`` doesn't
+        exist there, and tests don't exercise real concurrent DB writers against
+        it. Callers must still call this before every balance read+write.
+        """
+        if not self._is_postgres:
+            return
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:namespace, :session_id)"),
+            {"namespace": self._BALANCE_LOCK_NAMESPACE, "session_id": session_id},
+        )
+
+    def _apply_balance_delta(
+        self,
+        session: Session,
+        session_id: int,
+        delta: float,
+        reason: str,
+        updated_by: str,
+    ) -> dict[str, float]:
+        """Insert the next ``account_balances``/``account_history`` row pair for
+        ``delta``.
+
+        Assumes the caller already holds ``_lock_balance_ledger`` for this
+        transaction — this method only reads-and-appends, it does not lock.
+        Shared by every balance-mutating atomic path (``atomic_balance_update``,
+        ``atomic_position_reconciliation``, ``atomic_balance_correction``, and
+        ``log_trade``'s ``balance_delta``) so the row shape and the
+        negative-balance invariant live in exactly one place (CODE.md: never
+        duplicate financial logic).
+
+        Raises:
+            ValueError: ``delta`` is non-finite, or the resulting balance would
+                be negative.
+        """
+        if not math.isfinite(delta):
+            raise ValueError(f"balance delta must be finite, got {delta}")
+
+        current_balance = AccountBalance.get_current_balance(session_id, session, for_update=False)
+        new_balance = current_balance + delta
+
+        if new_balance < 0:
+            raise ValueError(
+                f"Balance update would result in negative balance: "
+                f"${current_balance:.2f} + ${delta:.2f} = ${new_balance:.2f}"
+            )
+
+        balance_entry = AccountBalance(
+            session_id=session_id,
+            total_balance=new_balance,
+            available_balance=new_balance,  # Simplified - could subtract reserved
+            reserved_balance=0.0,
+            base_currency="USD",
+            last_updated=datetime.now(UTC),
+            updated_by=updated_by,
+            update_reason=reason,
+        )
+        session.add(balance_entry)
+
+        history_entry = AccountHistory(
+            timestamp=datetime.now(UTC),
+            balance=Decimal(str(new_balance)),
+            equity=Decimal(str(new_balance)),
+            margin_used=Decimal("0.0"),
+            margin_available=Decimal(str(new_balance)),
+            total_pnl=Decimal("0.0"),
+            daily_pnl=Decimal(str(delta)) if delta != 0 else Decimal("0.0"),
+            drawdown=Decimal("0.0"),
+            session_id=session_id,
+        )
+        session.add(history_entry)
+
+        logger.info(
+            "💰 BALANCE UPDATE [%s]: $%.2f -> $%.2f (change: %+.2f) | Reason: %s | By: %s",
+            session_id,
+            current_balance,
+            new_balance,
+            delta,
+            reason,
+            updated_by,
+        )
+
+        return {"old_balance": current_balance, "new_balance": new_balance, "change": delta}
+
     @contextmanager
     def atomic_balance_update(
         self,
@@ -2798,68 +2952,18 @@ class DatabaseManager:
 
                 # Begin nested transaction (SAVEPOINT) for atomicity
                 with session.begin_nested():
-                    # Get current balance with row-level lock to prevent concurrent updates
-                    current_balance = AccountBalance.get_current_balance(
-                        session_id, session, for_update=True
+                    # Serialize against every other ledger writer BEFORE reading
+                    # "current balance" (#735) — see _lock_balance_ledger.
+                    self._lock_balance_ledger(session, session_id)
+                    result = self._apply_balance_delta(
+                        session, session_id, balance_change, reason, updated_by
                     )
-
-                    new_balance = current_balance + balance_change
-
-                    # Validate balance won't go negative
-                    if new_balance < 0:
-                        raise ValueError(
-                            f"Balance update would result in negative balance: "
-                            f"${current_balance:.2f} + ${balance_change:.2f} = ${new_balance:.2f}"
+                    if correlation_id:
+                        logger.info(
+                            "Balance update correlation: %s | session=%s",
+                            correlation_id,
+                            session_id,
                         )
-
-                    # Create new AccountBalance entry
-                    balance_entry = AccountBalance(
-                        session_id=session_id,
-                        total_balance=new_balance,
-                        available_balance=new_balance,  # Simplified - could subtract reserved
-                        reserved_balance=0.0,
-                        base_currency="USD",
-                        last_updated=datetime.now(UTC),
-                        updated_by=updated_by,
-                        update_reason=reason,
-                    )
-                    session.add(balance_entry)
-
-                    # Create AccountHistory entry for audit trail
-                    # Get latest equity (balance + unrealized P&L) - simplified as balance for now
-                    history_entry = AccountHistory(
-                        timestamp=datetime.now(UTC),
-                        balance=Decimal(str(new_balance)),
-                        equity=Decimal(str(new_balance)),
-                        margin_used=Decimal("0.0"),
-                        margin_available=Decimal(str(new_balance)),
-                        total_pnl=Decimal("0.0"),  # Would be calculated from session
-                        daily_pnl=(
-                            Decimal(str(balance_change)) if balance_change != 0 else Decimal("0.0")
-                        ),
-                        drawdown=Decimal("0.0"),
-                        session_id=session_id,  # Link to trading session for audit trail
-                    )
-                    session.add(history_entry)
-
-                    # Log with comprehensive details for audit
-                    logger.info(
-                        "💰 BALANCE UPDATE [%s]: $%.2f -> $%.2f (change: %+.2f) | Reason: %s | By: %s%s",
-                        session_id,
-                        current_balance,
-                        new_balance,
-                        balance_change,
-                        reason,
-                        updated_by,
-                        f" | Correlation: {correlation_id}" if correlation_id else "",
-                    )
-
-                    # Prepare result dict
-                    result = {
-                        "old_balance": current_balance,
-                        "new_balance": new_balance,
-                        "change": balance_change,
-                    }
 
                     # Yield control back to caller with result
                     # Transaction is still open - caller can perform additional operations
@@ -2968,31 +3072,19 @@ class DatabaseManager:
 
                 # Begin nested transaction (SAVEPOINT) for atomicity
                 with db_session.begin_nested():
-                    # 1. Atomic balance update with row-level lock to prevent race conditions
-                    current_balance = AccountBalance.get_current_balance(
-                        session_id, db_session, for_update=True
+                    # 1. Atomic balance update, serialized against every other
+                    # ledger writer BEFORE reading "current balance" (#735) —
+                    # see _lock_balance_ledger.
+                    self._lock_balance_ledger(db_session, session_id)
+                    balance_result = self._apply_balance_delta(
+                        db_session,
+                        session_id,
+                        realized_pnl,
+                        f"reconciliation_{trade_data.get('symbol', 'unknown')}",
+                        "live_engine_reconciliation",
                     )
-                    new_balance = current_balance + realized_pnl
-
-                    # Validate balance won't go negative
-                    if new_balance < 0:
-                        raise ValueError(
-                            f"Position reconciliation would result in negative balance: "
-                            f"${current_balance:.2f} + ${realized_pnl:.2f} = ${new_balance:.2f}"
-                        )
-
-                    # Create balance entry
-                    balance_entry = AccountBalance(
-                        session_id=session_id,
-                        total_balance=new_balance,
-                        available_balance=new_balance,
-                        reserved_balance=0.0,
-                        base_currency="USD",
-                        last_updated=datetime.now(UTC),
-                        updated_by="live_engine_reconciliation",
-                        update_reason=f"reconciliation_{trade_data.get('symbol', 'unknown')}",
-                    )
-                    db_session.add(balance_entry)
+                    current_balance = balance_result["old_balance"]
+                    new_balance = balance_result["new_balance"]
 
                     # 2. Log trade
                     side = trade_data["side"]
@@ -3097,6 +3189,138 @@ class DatabaseManager:
                     exc_info=True,
                 )
                 raise
+
+    @contextmanager
+    def atomic_balance_correction(
+        self,
+        new_absolute_balance: float,
+        reason: str,
+        updated_by: str = "system",
+        session_id: int | None = None,
+        *,
+        caller_snapshot: float | None = None,
+    ) -> Generator[dict[str, float], None, None]:
+        """Correct the session balance to an authoritative absolute value (e.g.
+        exchange equity/balance), serialized against every other ledger writer.
+
+        Unlike ``atomic_balance_update`` (a caller-supplied delta), callers here
+        already know the TRUE target value from an external source of truth and
+        want to set the ledger to it. The target is applied as a delta computed
+        against ``caller_snapshot`` — the balance the caller read BEFORE
+        acquiring the ledger lock, i.e. the value it used to decide a correction
+        was warranted — not the fresh value read after the lock. That means a
+        concurrent delta writer that commits between the caller's DB read and
+        lock acquisition (e.g. a trade closing mid-sync) is preserved instead
+        of being silently clobbered, PROVIDED the concurrent write's underlying
+        event (e.g. the fill it books) is not already reflected in whatever
+        external reading (exchange balance/equity) the caller used to derive
+        ``new_absolute_balance`` -- the two sub-millisecond windows where that
+        isn't true (the external reading already includes the concurrent
+        event, or the concurrent commit races the external reading itself)
+        both self-heal on the next correction pass. With
+        ``locked_current = caller_snapshot + concurrent_delta``, the result is
+        ``locked_current + (new_absolute_balance - caller_snapshot)
+        == new_absolute_balance + concurrent_delta`` (#735b). When no concurrent
+        write occurred, ``locked_current == caller_snapshot`` and this reduces
+        to the plain absolute correction ``new_absolute_balance``.
+
+        ``caller_snapshot`` is optional only for backward compatibility with
+        callers that have no pre-lock reading to offer (e.g. a target computed
+        without first reading the ledger) — omitting it falls back to computing
+        the delta from the lock-fresh read, which is a plain absolute overwrite
+        with no concurrent-delta protection. Every production call site has a
+        pre-lock balance already in scope and must pass it.
+
+        Replaces the former pattern of ``get_current_balance()`` followed by a
+        bare ``update_balance(new_balance)`` used by ``account_sync``'s
+        correction sites.
+
+        Yields:
+            dict with 'old_balance', 'new_balance', 'change' keys
+
+        Raises:
+            ValueError: If session not found, target is invalid, or the
+                resulting balance would be negative.
+            SQLAlchemyError: If the database operation fails.
+        """
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            raise ValueError("No active trading session for balance correction")
+        if not math.isfinite(new_absolute_balance) or new_absolute_balance < 0:
+            raise ValueError(
+                f"new_absolute_balance must be non-negative and finite, "
+                f"got {new_absolute_balance}"
+            )
+
+        with ExitStack() as stack:
+            session = None
+            try:
+                session = stack.enter_context(self.get_session_with_timeout(QueryTimeout.WRITE))
+
+                with session.begin_nested():
+                    self._lock_balance_ledger(session, session_id)
+                    if caller_snapshot is None:
+                        # No pre-lock reading was offered -- fall back to a
+                        # fresh read under the lock, which makes this a plain
+                        # absolute overwrite (no concurrent-delta protection).
+                        baseline = AccountBalance.get_current_balance(
+                            session_id, session, for_update=False
+                        )
+                    else:
+                        baseline = caller_snapshot
+                    delta = new_absolute_balance - baseline
+                    result = self._apply_balance_delta(
+                        session, session_id, delta, reason, updated_by
+                    )
+                    yield result
+
+                session.commit()
+
+            except ValueError as ve:
+                if session is not None:
+                    session.rollback()
+                logger.error("Balance correction validation failed: %s", ve)
+                raise
+            except SQLAlchemyError as se:
+                if session is not None:
+                    session.rollback()
+                logger.error(
+                    "Balance correction failed for session %s: %s | Target: %.2f | Reason: %s",
+                    session_id,
+                    se,
+                    new_absolute_balance,
+                    reason,
+                )
+                raise
+            except Exception as e:
+                if session is not None:
+                    session.rollback()
+                logger.critical(
+                    "Unexpected error during balance correction for session %s: %s",
+                    session_id,
+                    e,
+                    exc_info=True,
+                )
+                raise
+
+    def has_terminal_trade_for_position(self, position_id: int) -> bool:
+        """Return True if a ``trades`` row already references this position.
+
+        A Trade only exists for a completed exit (``log_trade`` is only ever
+        called from a close path), so its presence is proof this position was
+        already fully processed — balance realized and trade recorded — in some
+        earlier pass. Callers use this to guard against re-realizing PnL for a
+        position whose DB row is still OPEN only because an earlier attempt
+        crashed after committing the trade/balance but before flipping the
+        position's status (#736): closing it again here must NOT re-apply PnL,
+        just fix the stale status.
+        """
+        if position_id is None:
+            return False
+        with self.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
+            return (
+                session.query(Trade.id).filter(Trade.position_id == position_id).first() is not None
+            )
 
     # ========== CONNECTION MANAGEMENT ==========
 

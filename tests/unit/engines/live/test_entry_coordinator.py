@@ -22,6 +22,8 @@ from src.engines.live.execution.entry_coordinator import (
     LiveEntryCoordinator,
     LiveEntryEngineState,
 )
+from src.engines.live.execution.stop_loss_manager import StopLossPlacementResult
+from src.engines.live.reconciliation import StopPlacementRefuseReason
 from src.engines.shared.models import PositionSide
 from src.strategies.components import SignalDirection
 
@@ -75,12 +77,20 @@ def _make_state(position: MagicMock, result: MagicMock, **overrides) -> MagicMoc
     state.live_entry_handler = MagicMock()
     state.stop_loss_manager = MagicMock()
     state.db_manager = MagicMock()
+    # Alive by default so the UNCONFIRMED-defer tests exercise the deferral
+    # itself; test_stop_loss_placement_unconfirmed_refusal_*_no_reconciler
+    # below overrides this to pin the P2 gate (#1218 review follow-up).
+    state._periodic_reconciler = MagicMock()
+    state._periodic_reconciler.is_running = True
+    state._periodic_reconciler.interval = 120
 
     state.live_position_tracker.has_position_for_symbol.return_value = False
     state.live_position_tracker.position_count = 0
     state.risk_manager.get_max_concurrent_positions.return_value = 1
     state.live_entry_handler.execute_entry.return_value = result
-    state.stop_loss_manager.place_protection.return_value = "sl-order-1"
+    state.stop_loss_manager.place_protection.return_value = StopLossPlacementResult(
+        order_id="sl-order-1"
+    )
     state._strategy_name.return_value = "test_strategy"
 
     for k, v in overrides.items():
@@ -234,14 +244,96 @@ def test_ambiguous_submission_enters_close_only_mode_without_stop_loss():
 
 
 def test_stop_loss_placement_failure_triggers_emergency_exit():
+    """A confirmed conflict (not UNCONFIRMED) still emergency-closes exactly
+    as before #1218 -- only a terminal UNCONFIRMED refusal defers."""
     position = _make_position()
     state = _make_state(position, _make_result(position))
     state.enable_live_trading = True
-    state.stop_loss_manager.place_protection.return_value = None  # placement failed
+    state.stop_loss_manager.place_protection.return_value = StopLossPlacementResult(
+        order_id=None, refuse_reason_code=StopPlacementRefuseReason.WRONG_SIDE
+    )
 
     _call(state)
 
     state._record_event.assert_called_once()
+    assert state._record_event.call_args.kwargs["error_code"] == "EMERGENCY_CLOSE"
+    state._execute_exit.assert_called_once()
+
+
+def test_stop_loss_placement_failure_with_no_reason_code_triggers_emergency_exit():
+    """Retries exhausted purely on place_stop_loss_order returning falsy (guard
+    never refused) also has no reason_code -- must still emergency-close, not
+    silently defer just because the field is None."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.stop_loss_manager.place_protection.return_value = StopLossPlacementResult(
+        order_id=None, refuse_reason_code=None
+    )
+
+    _call(state)
+
+    state._record_event.assert_called_once()
+    assert state._record_event.call_args.kwargs["error_code"] == "EMERGENCY_CLOSE"
+    state._execute_exit.assert_called_once()
+
+
+def test_stop_loss_placement_unconfirmed_refusal_defers_instead_of_closing():
+    """#1218: a terminal UNCONFIRMED refusal (the guard's own open-orders
+    lookup couldn't be confirmed after all retries) defers to the next
+    reconciler pass instead of emergency-closing the freshly-opened position --
+    mirroring #1160's startup-recovery site. The position stays tracked and
+    the in-memory stop_loss it was created with is left untouched. Deferral
+    is only safe (and only taken) while the periodic reconciler is actually
+    running (_make_state's default) -- see the *_no_reconciler tests below
+    for the fallback when it is not."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.stop_loss_manager.place_protection.return_value = StopLossPlacementResult(
+        order_id=None, refuse_reason_code=StopPlacementRefuseReason.UNCONFIRMED
+    )
+
+    _call(state)
+
+    state._record_event.assert_called_once()
+    assert state._record_event.call_args.kwargs["error_code"] == "ENTRY_SL_UNCONFIRMED"
+    state._execute_exit.assert_not_called()
+    # The position was already tracked via open_position() earlier in the
+    # flow and must NOT be closed/removed on defer.
+    state.live_position_tracker.open_position.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "reconciler",
+    [
+        None,
+        MagicMock(is_running=False),
+    ],
+    ids=["reconciler_never_started", "reconciler_started_but_dead"],
+)
+def test_stop_loss_placement_unconfirmed_refusal_emergency_closes_without_live_reconciler(
+    reconciler,
+):
+    """#1218 review follow-up (P2): the UNCONFIRMED-defer safety argument
+    depends entirely on the periodic reconciler being alive to re-place the
+    stop. If it was never started (start_runtime_services swallowed an
+    exception, #startup.py) or its thread has died, deferring would leave the
+    position naked indefinitely rather than for one bounded reconciler pass --
+    so this must fall through to the same emergency-close path a confirmed
+    conflict takes, not defer."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state._periodic_reconciler = reconciler
+    state.stop_loss_manager.place_protection.return_value = StopLossPlacementResult(
+        order_id=None, refuse_reason_code=StopPlacementRefuseReason.UNCONFIRMED
+    )
+
+    _call(state)
+
+    state._record_event.assert_called_once()
+    assert state._record_event.call_args.kwargs["error_code"] == "EMERGENCY_CLOSE"
     state._execute_exit.assert_called_once()
 
 
@@ -298,6 +390,181 @@ def test_tracking_failure_confirmed_emergency_close_refunds_fee():
     state.exchange_interface.place_order.assert_called_once()
     state._enter_close_only_mode.assert_not_called()
     assert state.current_balance == pytest.approx(1000.0)  # -1.0 fee then +1.0 refund
+
+
+def test_balance_update_failure_rate_limited_emergency_close_enters_close_only():
+    """Site 1, #738 review follow-up: place_order now raises ValueError for a
+    DEFINITIVE_REJECT_CODES rejection (e.g. -1003/-1015 rate-limit ban)
+    instead of returning None. A rate-limited emergency close is at least as
+    dangerous as an ambiguous one -- the position may remain open and
+    unprotected -- so it must escalate to close-only exactly like the
+    None-return branch, not fall through to the weaker generic-exception
+    handler that only logs."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.trading_session_id = 42
+    state.db_manager.atomic_balance_update.side_effect = RuntimeError("db down")
+    state.exchange_interface.place_order.side_effect = ValueError(
+        "Order rejected by exchange (code=-1003): Too many requests"
+    )
+
+    _call(state)
+
+    state.exchange_interface.place_order.assert_called_once()
+    state._enter_close_only_mode.assert_called_once()
+
+
+def test_tracking_failure_rate_limited_emergency_close_enters_close_only_no_refund():
+    """Site 2, #738 review follow-up: same ValueError-escalation gap as Site 1
+    above, on the orphaned-position emergency-close path."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True  # no trading_session_id → direct balance math
+    state.live_position_tracker.open_position.side_effect = RuntimeError("tracker down")
+    state.exchange_interface.place_order.side_effect = ValueError(
+        "Order rejected by exchange (code=-1003): Too many requests"
+    )
+
+    _call(state)
+
+    state.exchange_interface.place_order.assert_called_once()
+    state._enter_close_only_mode.assert_called_once()
+    # Unconfirmed close → entry fee stays charged (deducted, not refunded).
+    assert state.current_balance == pytest.approx(999.0)
+
+
+# ---------------------------------------------------------------------------
+# #989: emergency-close SELLs must cap to free base holdings (commission haircut)
+# ---------------------------------------------------------------------------
+
+
+def _configure_exchange_balance(state, *, free_base, step_size: float = 0.00001):
+    """Give the mocked exchange a real base-balance + symbol-info response.
+
+    Site 1/2 emergency closes use ``state.exchange_interface`` directly, whose
+    ``get_balance``/``get_symbol_info`` are bare MagicMocks by default (fail-open
+    no-ops for the #989 guard) -- tests that want to exercise the cap must wire
+    real responses.
+    """
+    state.exchange_interface.get_symbol_info.return_value = {
+        "step_size": step_size,
+        "min_qty": step_size,
+        "min_notional": 1.0,
+    }
+    balance = MagicMock()
+    balance.free = free_base
+    state.exchange_interface.get_balance.return_value = balance
+
+
+def test_balance_update_failure_emergency_close_caps_to_free_base():
+    """Site 1: the entry BUY's commission can be deducted from the base fill, so
+    the raw executedQty (position.quantity=0.01) can exceed real holdings. The
+    balance-update-failure emergency close must cap the SELL to what's actually
+    held instead of sending the gross amount."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.trading_session_id = 42
+    state.db_manager.atomic_balance_update.side_effect = RuntimeError("db down")
+    # 0.0099 / 0.01 = 0.99 clears HOLDINGS_CAP_MIN_RATIO (0.98) -- capped, not aborted.
+    _configure_exchange_balance(state, free_base=0.0099)
+
+    _call(state)
+
+    state.exchange_interface.place_order.assert_called_once()
+    sent_qty = state.exchange_interface.place_order.call_args.kwargs["quantity"]
+    assert sent_qty <= 0.0099
+    assert sent_qty < position.quantity
+
+
+def test_balance_update_failure_holdings_locked_aborts_without_order():
+    """Site 1: when free base covers far less than the intended close, the
+    emergency close must refuse to submit a doomed-to-reject SELL and escalate
+    to close-only rather than send a partial that books a full close."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.trading_session_id = 42
+    state.db_manager.atomic_balance_update.side_effect = RuntimeError("db down")
+    _configure_exchange_balance(state, free_base=0.001)  # far below position.quantity=0.01
+
+    _call(state)
+
+    state.exchange_interface.place_order.assert_not_called()
+    state._enter_close_only_mode.assert_called_once()
+
+
+def test_balance_update_failure_short_cover_buy_ignores_holdings_cap():
+    """Site 1: a short-cover BUY repays the full margin borrow -- it must not be
+    capped to free base balance (that guard applies only to closing SELLs)."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.trading_session_id = 42
+    state.db_manager.atomic_balance_update.side_effect = RuntimeError("db down")
+    _configure_exchange_balance(state, free_base=0.0)  # would zero a wrongly-capped BUY
+
+    _call(state, side=PositionSide.SHORT)
+
+    state.exchange_interface.place_order.assert_called_once()
+    sent_qty = state.exchange_interface.place_order.call_args.kwargs["quantity"]
+    assert sent_qty == pytest.approx(position.quantity)
+
+
+def test_tracking_failure_emergency_close_caps_to_free_base():
+    """Site 2: same #989 hazard as Site 1 -- the tracking-failure emergency close
+    must cap its SELL to actual free base holdings."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.live_position_tracker.open_position.side_effect = RuntimeError("tracker down")
+    _configure_exchange_balance(state, free_base=0.0099)
+
+    _call(state)
+
+    state.exchange_interface.place_order.assert_called_once()
+    sent_qty = state.exchange_interface.place_order.call_args.kwargs["quantity"]
+    assert sent_qty <= 0.0099
+    assert sent_qty < position.quantity
+
+
+def test_tracking_failure_holdings_locked_aborts_without_order():
+    """Site 2: inventory locked well below the intended close -- abort instead of
+    sending a partial SELL. No refund (mirrors the unconfirmed-close case). The
+    position is untracked (tracking already failed above) and possibly still open
+    and unprotected on the exchange, so this must escalate to close-only exactly
+    like the sibling abort/unconfirmed paths -- an abort that only logs would
+    silently keep opening new entries on top of an orphaned position (#989)."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True  # no trading_session_id -> direct balance math
+    state.live_position_tracker.open_position.side_effect = RuntimeError("tracker down")
+    _configure_exchange_balance(state, free_base=0.001)
+
+    _call(state)
+
+    state.exchange_interface.place_order.assert_not_called()
+    state._enter_close_only_mode.assert_called_once()
+    # Aborted (not confirmed) close -> entry fee stays charged, same as the
+    # unconfirmed-close case.
+    assert state.current_balance == pytest.approx(999.0)
+
+
+def test_tracking_failure_short_cover_buy_ignores_holdings_cap():
+    """Site 2: a short-cover BUY must not be capped to free base -- it's funded
+    from quote and repays a borrow, unaffected by the #989 SELL-only guard."""
+    position = _make_position()
+    state = _make_state(position, _make_result(position))
+    state.enable_live_trading = True
+    state.live_position_tracker.open_position.side_effect = RuntimeError("tracker down")
+    _configure_exchange_balance(state, free_base=0.0)
+
+    _call(state, side=PositionSide.SHORT)
+
+    state.exchange_interface.place_order.assert_called_once()
+    sent_qty = state.exchange_interface.place_order.call_args.kwargs["quantity"]
+    assert sent_qty == pytest.approx(position.quantity)
 
 
 # ---------------------------------------------------------------------------

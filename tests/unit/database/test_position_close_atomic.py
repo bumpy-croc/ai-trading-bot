@@ -331,3 +331,154 @@ class TestStartupHeal:
         assert all(p["id"] != position_id for p in recovered)
         # And only the single, legitimate trade exists.
         assert _count_trades(db, session_id) == 1
+
+
+def _balance(db: DatabaseManager, session_id: int) -> float:
+    return db.get_current_balance(session_id)
+
+
+class TestLogTradeBalanceDelta:
+    """log_trade(balance_delta=...) commits the balance change, the Trade insert,
+    and the Position CLOSED flip in ONE transaction (#736, #735).
+
+    A separate balance commit followed by a separate trade/position commit is
+    exactly the split that let a crash between them double-apply or drop the
+    same PnL on recovery. These tests pin the all-or-nothing contract directly
+    against a real (in-memory) SQLAlchemy transaction, not a mock, so a
+    regression in the atomicity actually fails the test.
+    """
+
+    def test_balance_moves_atomically_with_trade_and_close(self):
+        db = _make_db()
+        session_id = _new_session(db)
+        position_id = _open_position(db, session_id)
+        db.update_balance(1000.0, "seed", "test", session_id)
+
+        trade_id = db.log_trade(
+            symbol="BTCUSDT",
+            side="long",
+            entry_price=100.0,
+            exit_price=110.0,
+            size=0.1,
+            entry_time=datetime.now(UTC) - timedelta(hours=1),
+            exit_time=datetime.now(UTC),
+            pnl=10.0,
+            exit_reason="take_profit",
+            strategy_name="TestStrategy",
+            source=TradeSource.PAPER,
+            session_id=session_id,
+            position_id=position_id,
+            balance_delta=-5.0,  # e.g. net of fees, independent of gross pnl
+        )
+
+        assert isinstance(trade_id, int)
+        assert _position_status(db, position_id) == PositionStatus.CLOSED
+        assert _balance(db, session_id) == pytest.approx(995.0)
+
+    def test_balance_delta_requires_position_id(self):
+        db = _make_db()
+        session_id = _new_session(db)
+
+        with pytest.raises(ValueError, match="position_id"):
+            db.log_trade(
+                symbol="BTCUSDT",
+                side="long",
+                entry_price=100.0,
+                exit_price=110.0,
+                size=0.1,
+                entry_time=datetime.now(UTC) - timedelta(hours=1),
+                exit_time=datetime.now(UTC),
+                pnl=10.0,
+                exit_reason="take_profit",
+                strategy_name="TestStrategy",
+                source=TradeSource.PAPER,
+                session_id=session_id,
+                balance_delta=-5.0,  # no position_id
+            )
+
+    def test_negative_balance_rolls_back_trade_and_position_too(self):
+        """The discriminating case: a delta that would take the balance negative
+        must abort the WHOLE write — no trade row, no status flip, no balance
+        change — not just skip the balance leg while still logging the trade
+        (the exact inverse-direction #736 symptom: 'trade recorded + position
+        closed + balance never adjusted')."""
+        db = _make_db()
+        session_id = _new_session(db)
+        position_id = _open_position(db, session_id)
+        db.update_balance(10.0, "seed", "test", session_id)
+        trades_before = _count_trades(db, session_id)
+
+        with pytest.raises(ValueError, match="negative balance"):
+            db.log_trade(
+                symbol="BTCUSDT",
+                side="long",
+                entry_price=100.0,
+                exit_price=50.0,
+                size=0.1,
+                entry_time=datetime.now(UTC) - timedelta(hours=1),
+                exit_time=datetime.now(UTC),
+                pnl=-500.0,
+                exit_reason="stop_loss",
+                strategy_name="TestStrategy",
+                source=TradeSource.PAPER,
+                session_id=session_id,
+                position_id=position_id,
+                balance_delta=-500.0,  # 10.0 - 500.0 < 0
+            )
+
+        # Nothing committed: no trade, position still OPEN, balance untouched.
+        assert _count_trades(db, session_id) == trades_before
+        assert _position_status(db, position_id) == PositionStatus.OPEN
+        assert _balance(db, session_id) == pytest.approx(10.0)
+
+    def test_dedup_failure_rolls_back_balance_too(self):
+        """Extends TestAtomicRollback's existing dedup-collision coverage: the
+        SAME uq_trade_order_session violation must ALSO roll back a balance
+        write that was folded into the same transaction via balance_delta —
+        not just the trade/status flip."""
+        db = _make_db()
+        session_id = _new_session(db)
+        position_id = _open_position(db, session_id)
+        db.update_balance(1000.0, "seed", "test", session_id)
+
+        db.log_trade(
+            symbol="BTCUSDT",
+            side="long",
+            entry_price=100.0,
+            exit_price=110.0,
+            size=0.1,
+            entry_time=datetime.now(UTC) - timedelta(hours=1),
+            exit_time=datetime.now(UTC),
+            pnl=10.0,
+            exit_reason="take_profit",
+            strategy_name="TestStrategy",
+            source=TradeSource.PAPER,
+            session_id=session_id,
+            exit_order_id="dup-exit-bd",
+        )
+        balance_before = _balance(db, session_id)
+        trades_before = _count_trades(db, session_id)
+
+        with pytest.raises(IntegrityError):
+            db.log_trade(
+                symbol="BTCUSDT",
+                side="long",
+                entry_price=100.0,
+                exit_price=120.0,
+                size=0.1,
+                entry_time=datetime.now(UTC) - timedelta(hours=1),
+                exit_time=datetime.now(UTC),
+                pnl=20.0,
+                exit_reason="take_profit",
+                strategy_name="TestStrategy",
+                source=TradeSource.PAPER,
+                session_id=session_id,
+                exit_order_id="dup-exit-bd",  # duplicate -> commit fails
+                position_id=position_id,
+                balance_delta=20.0,
+            )
+
+        # Balance untouched too — not just the trade/position.
+        assert _balance(db, session_id) == pytest.approx(balance_before)
+        assert _count_trades(db, session_id) == trades_before
+        assert _position_status(db, position_id) == PositionStatus.OPEN
