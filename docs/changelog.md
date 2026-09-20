@@ -53,6 +53,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Live engine logs the resolved time-exit policy at boot** (#1083). A strategy with
   no `time_exits` config has no time-based exit (same in backtest); the log makes
   that explicit. Behavior is unchanged.
+- **Backtest trade records now carry the whole position's P&L when partial exits were taken** (#837).
+  A position fully consumed by partial exits was recorded as a zero-P&L trade, and a
+  winner stopped out after partials as a loser, so `win_rate`/`profit_factor` disagreed with
+  `total_return`. `PositionTracker` accumulates banked partial P&L on the trade and
+  `close_position` adds it to the recorded `Trade.pnl`/`pnl_percent`; the balance is still credited
+  per leg, so `final_balance` is unchanged. `Trade.pnl` stays gross of exit fees/interest (banked
+  partials are net of slippage, gross of fee), so `sum(trade.pnl)` differs from
+  `final_balance - initial_balance` when fees > 0; partial-exit fees/slippage are added to the
+  reported fee totals and DB `commission`. Positions fully consumed by partials persist at their
+  original size (the final-leg size is zero and `log_trade` rejects it). Live still records the
+  final leg only (#1234); DB `trades.pnl_percent` ignores banked partials (#1249).
+- **`Backtester` early-stop drawdown threshold always comes from the hydrated risk manager** (#1089).
+  A bare `Backtester` used a hardcoded 0.5 instead of the ratified 20% cap.
 - **`BinanceProvider.get_symbol_info` now reads the `NOTIONAL` filter** (falling back to
   legacy `MIN_NOTIONAL`) — Binance no longer returns `MIN_NOTIONAL`, so `min_notional` was
   always 0 and the execution engine's pre-trade minimum-notional guard was dead (#1062).
