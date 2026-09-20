@@ -629,7 +629,9 @@ class TestAccountSynchronizerIntegration:
         result = real_synchronizer.sync_account_data()
         assert result.success is True
         assert result.data["balance_sync"]["corrected"] is False
-        assert result.data["balance_sync"]["deferred_to_reconciler"] is True
+        # 2% drift is below the reconciler's 5% threshold: reported, not flagged.
+        assert "deferred_to_reconciler" not in result.data["balance_sync"]
+        assert result.data["balance_sync"]["difference_percent"] == pytest.approx(2.0)
         assert result.data["position_sync"]["new_positions"] == 1
         assert result.data["order_sync"]["new_orders"] == 1
 
