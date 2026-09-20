@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from src.config.constants import DEFAULT_ORDER_POLL_INTERVAL, DEFAULT_ORDER_TRACKER_TIMEOUT
+from src.data_providers.binance_order_types import map_binance_order_type
 from src.data_providers.exchange_interface import (
     ExchangeInterface,
     Order,
@@ -845,15 +846,7 @@ class OrderTracker:
         Returns:
             Mapped OrderType, defaulting to MARKET for unknown types.
         """
-        mapping = {
-            "MARKET": OrderType.MARKET,
-            "LIMIT": OrderType.LIMIT,
-            "STOP_LOSS": OrderType.STOP_LOSS,
-            "STOP_LOSS_LIMIT": OrderType.STOP_LOSS,
-            "TAKE_PROFIT": OrderType.TAKE_PROFIT,
-            "TAKE_PROFIT_LIMIT": OrderType.TAKE_PROFIT,
-        }
-        return mapping.get(ws_type, OrderType.MARKET)
+        return map_binance_order_type(ws_type)
 
     def poll_once(self) -> None:
         """Execute a single poll cycle. Used during WS to REST transitions."""

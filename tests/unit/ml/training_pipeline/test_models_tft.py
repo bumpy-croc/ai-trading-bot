@@ -1,7 +1,5 @@
 """Tests for Temporal Fusion Transformer (TFT) model architecture."""
 
-import sys
-
 import numpy as np
 import pytest
 
@@ -356,19 +354,29 @@ class TestModelFactoryIntegration:
 
         assert "tft_ternary" in AVAILABLE_MODELS
 
-    def test_create_model_lightgbm_dispatches_to_directional_classifier(
-        self, input_shape, monkeypatch
-    ):
-        """lightgbm is reachable from create_model() but raises ImportError
-        at construction time since lightgbm isn't a declared dependency in
-        this repo (documented follow-up, Phase 2b item 3). Blocking the
-        import keeps the test independent of what the venv happens to hold."""
+    def test_create_model_lightgbm_dispatches_to_directional_classifier(self, input_shape):
+        """create_model("lightgbm") routes to create_directional_classifier."""
+        from unittest.mock import patch
+
         from src.ml.training_pipeline.models import create_model
 
-        monkeypatch.setitem(sys.modules, "lightgbm", None)
+        with patch(
+            "src.ml.training_pipeline.models_lightgbm.create_directional_classifier"
+        ) as factory:
+            result = create_model("lightgbm", input_shape, has_sentiment=False)
 
-        with pytest.raises(ImportError, match="lightgbm"):
-            create_model("lightgbm", input_shape, has_sentiment=False)
+        factory.assert_called_once_with()
+        assert result is factory.return_value
+
+    def test_create_model_lightgbm_raises_import_error_when_not_installed(self, input_shape):
+        """The ImportError path is forced, so it holds whether or not lightgbm is installed."""
+        from unittest.mock import patch
+
+        from src.ml.training_pipeline.models import create_model
+
+        with patch("src.ml.training_pipeline.models_lightgbm._LIGHTGBM_AVAILABLE", False):
+            with pytest.raises(ImportError, match="lightgbm"):
+                create_model("lightgbm", input_shape, has_sentiment=False)
 
     def test_available_models_includes_lightgbm(self):
         from src.ml.training_pipeline.models import AVAILABLE_MODELS

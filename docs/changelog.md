@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cwd, and `PredictionModelRegistry` raises when the directory is missing, so an exam run from
   another directory can no longer report an all-HOLD/0-trade result. Cloud artifact sync no
   longer moves any `latest` symlink unless `atb train cloud --set-latest` is passed (the
-  registry loads every `latest` as production). New `src/ml/promotion_gate.py`
+  registry loads every `latest` as production), and a `{symbol}/{type}` directory without `latest` is
+  no longer served by `select_bundle` (explicit version pinning still works). New `src/ml/promotion_gate.py`
   scores the weekly-retrain 2-of-3 gate with NO_RESULT legs (profit factor with fewer than 3
   losing trades, return differences below 0.5pp/$1) and an INCONCLUSIVE verdict that retains the
   incumbent. `uses_rolling_minmax_features` derives price-scale targets from
@@ -25,6 +26,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fire-generation checkpoint fingerprint now includes the resolved primary-model bundle key
   (`MLBasicSignalGenerator.resolved_model_identity()`), so a retrained primary never resumes
   stale fires.
+- **Restart recovery keeps trailing-stop state, remaining exposure and MFE/MAE peaks**
+  (#742, #993). `LiveSessionRecoverer.recover_active_positions` now restores
+  `trailing_stop_activated`/`trailing_stop_price`/`breakeven_triggered`, registers the risk
+  manager at `current_size` (not the original size), and both recovery paths seed the
+  `MFEMAETracker` from the persisted `mfe`/`mae` columns so the first post-restart persist no
+  longer overwrites the stored peaks.
+- **Data downloads no longer silently fall back to CoinGecko, and the cache validates on
+  load** (#982). `atb data download|prefill-cache|preload-offline` pin the Binance provider
+  and fail loudly on Binance errors. `CachedDataProvider` sorts and de-duplicates (keep last)
+  cached candles on load, persists the repair, and warns; `atb data cache-manager audit`
+  scans existing parquet files for duplicate/unsorted timestamps.
+- **Direct-`ComponentStrategy` live entry path now enforces the `enter_short` opt-in**
+  (#1031). It routes through the shared `extract_entry_plan` chokepoint, so a SELL
+  without `enter_short` metadata can no longer open a short on that path.
+- **Live engine logs the resolved time-exit policy at boot** (#1083). A strategy with
+  no `time_exits` config has no time-based exit (same in backtest); the log makes
+  that explicit. Behavior is unchanged.
+- **`BinanceProvider.get_symbol_info` now reads the `NOTIONAL` filter** (falling back to
+  legacy `MIN_NOTIONAL`) — Binance no longer returns `MIN_NOTIONAL`, so `min_notional` was
+  always 0 and the execution engine's pre-trade minimum-notional guard was dead (#1062).
+- **One Binance order-type mapping table** (`src/data_providers/binance_order_types.py`)
+  shared by the REST and WebSocket parsing paths; unknown types now log a warning instead of
+  silently becoming MARKET (#1158).
 
 ### Changed
 - **Entry-path stop-loss placement now threads `reason_code` through and defers on a

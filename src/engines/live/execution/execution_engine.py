@@ -951,6 +951,7 @@ class LiveExecutionEngine:
                     order_id=order_id,
                     position_db_id=position_db_id,
                     stop_just_cancelled=stop_just_cancelled,
+                    reference_price=base_price,
                 )
                 if not close_order_id:
                     return ExitExecutionResult(
@@ -1335,6 +1336,7 @@ class LiveExecutionEngine:
         order_id: str | None = None,
         position_db_id: int | None = None,
         stop_just_cancelled: bool = False,
+        reference_price: float | None = None,
     ) -> str | None:
         """Close a real market order via exchange.
 
@@ -1405,13 +1407,17 @@ class LiveExecutionEngine:
                         free_base,
                     )
                     quantity = free_base
-                quantity = self._normalize_quantity(symbol, quantity, position_notional, floor=True)
+                quantity = self._normalize_quantity(
+                    symbol, quantity, position_notional, floor=True, price=reference_price
+                )
             else:
-                quantity = self._normalize_quantity(symbol, quantity, position_notional)
+                quantity = self._normalize_quantity(
+                    symbol, quantity, position_notional, price=reference_price
+                )
             if quantity <= 0:
                 logger.error(
-                    "Close quantity for %s is not sellable after holdings cap and lot "
-                    "sizing — aborting close attempt",
+                    "Close quantity for %s is not sellable after holdings cap, lot "
+                    "sizing and min-notional checks — aborting close attempt",
                     symbol,
                 )
                 return None
@@ -1624,7 +1630,13 @@ class LiveExecutionEngine:
         return float(step_size)
 
     def _normalize_quantity(
-        self, symbol: str, quantity: float, value: float, *, floor: bool = False
+        self,
+        symbol: str,
+        quantity: float,
+        value: float,
+        *,
+        floor: bool = False,
+        price: float | None = None,
     ) -> float:
         """Normalize quantity based on exchange symbol info with robust error handling.
 
@@ -1634,6 +1646,7 @@ class LiveExecutionEngine:
         """
         if quantity <= 0 or self.exchange_interface is None:
             return 0.0
+        original_quantity = quantity
 
         try:
             symbol_info = self.exchange_interface.get_symbol_info(symbol)
@@ -1695,12 +1708,24 @@ class LiveExecutionEngine:
                 return 0.0
 
         # Validate min_notional constraint
+        # Every order this engine places is MARKET, which Binance exempts when
+        # applyMinToMarket is false. The notional is re-derived from the final
+        # (capped and lot-snapped) quantity at the caller's implied unit price.
         min_notional = symbol_info.get("min_notional")
-        if min_notional and isinstance(min_notional, int | float) and min_notional > 0:
-            if value < min_notional:
+        applies_to_market = symbol_info.get("apply_min_to_market", True)
+        if (
+            applies_to_market
+            and min_notional
+            and isinstance(min_notional, int | float)
+            and min_notional > 0
+        ):
+            # Callers whose ``value`` is not quantity*price (closes) pass ``price``.
+            unit_price = price if price and price > 0 else value / original_quantity
+            final_notional = quantity * unit_price
+            if final_notional < min_notional:
                 logger.error(
                     "Order value %.2f below minimum notional %.2f for %s",
-                    value,
+                    final_notional,
                     min_notional,
                     symbol,
                 )
