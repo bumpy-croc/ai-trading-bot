@@ -67,6 +67,11 @@ logger = logging.getLogger(__name__)
 # cycle in flight, never from a previous one (#1094).
 _EXCHANGE_ERROR_ATTRIBUTION_WINDOW_S = 90.0
 
+# Minimum spacing between reads of the session's OPEN DB positions for the
+# untracked-position check (#1245); ``get_active_positions`` also loads every
+# position's orders, so it is not run on every cycle.
+_UNTRACKED_OPEN_CHECK_INTERVAL_S = 300.0
+
 
 def _emit_event(
     on_event: Any,
@@ -4868,6 +4873,12 @@ class PeriodicReconciler:
         # re-pages on a cadence instead of going silent after the first rising edge.
         self._last_cycle_emit_ts = 0.0
         self._symbols = symbols or []
+        # Untracked-OPEN-position check state (#1245): DB ids seen untracked once
+        # (awaiting confirmation on a second read), ids confirmed untracked, and when
+        # the DB was last read.
+        self._untracked_open_suspects: set[int] = set()
+        self._untracked_open_confirmed: dict[int, str] = {}
+        self._last_untracked_open_check = float("-inf")
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -5170,6 +5181,9 @@ class PeriodicReconciler:
             # sweep above, which runs before the flat return for the same reason.
             sweep_findings: list[str] = []
             sweep_severity = self._sweep_orphaned_orders(sweep_findings)
+            sweep_severity = self._merge_severity(
+                sweep_severity, self._check_untracked_open_positions(sweep_findings)
+            )
             if sweep_severity is not None:
                 if sweep_severity == Severity.CRITICAL:
                     self._trigger_close_only(sweep_findings)
@@ -5586,6 +5600,15 @@ class PeriodicReconciler:
             if sweep_severity > max_severity:
                 max_severity = sweep_severity
 
+        # 3b. An OPEN DB position the tracker does not hold, whether or not a stop
+        # rests for it (#1245).
+        untracked_findings: list[str] = []
+        untracked_severity = self._check_untracked_open_positions(untracked_findings)
+        if untracked_severity is not None:
+            findings.extend(untracked_findings)
+            if untracked_severity > max_severity:
+                max_severity = untracked_severity
+
         # 4. Verify balance — delegates to the shared, self-contained reconcile that
         # values a FRESH position snapshot (a position closed earlier this cycle is
         # excluded, so no stale-snapshot over-correction) and no-ops in margin mode
@@ -5929,8 +5952,73 @@ class PeriodicReconciler:
         try:
             return list(self.db_manager.get_active_positions(self.session_id))
         except Exception as e:
-            logger.warning("Could not read open DB positions while sweeping orphaned orders: %s", e)
+            logger.warning("Could not read open DB positions: %s", e)
             return None
+
+    @staticmethod
+    def _merge_severity(a: Severity | None, b: Severity | None) -> Severity | None:
+        """The higher of two optional severities."""
+        if a is None or b is None:
+            return a if b is None else b
+        return max(a, b)
+
+    def _check_untracked_open_positions(self, findings: list[str]) -> Severity | None:
+        """CRITICAL when the DB shows an OPEN position the tracker does not hold (#1245).
+
+        Such a position is live exposure the bot does not manage. The orphan sweep
+        only notices it when an ``atbsl_`` stop happens to rest for it, so this
+        compares ids directly. The caller latches close-only, as it does for the
+        sweep's equivalent finding.
+
+        The DB read is throttled. A position is reported only once it has been
+        seen untracked on two consecutive reads: an entry writes its DB row a
+        moment before the tracker holds the id, and a one-off sighting is
+        that window, not a lost position. A suspect forces the next cycle to
+        re-read instead of waiting out the throttle. Between reads, confirmed ids
+        keep being reported until the tracker holds them again, so the alert
+        persists instead of flapping. An unreadable DB reports nothing: unknown is
+        not evidence.
+        """
+        tracked_ids = {
+            getattr(pos, "db_position_id", None) for pos in self.position_tracker.positions.values()
+        }
+        now = time.monotonic()
+        due = (
+            bool(self._untracked_open_suspects)
+            or now - self._last_untracked_open_check >= _UNTRACKED_OPEN_CHECK_INTERVAL_S
+        )
+        if due:
+            rows = self._read_open_db_positions()
+            if rows is not None:
+                self._last_untracked_open_check = now
+                untracked = {
+                    row["id"]: str(row.get("symbol"))
+                    for row in rows
+                    if row.get("id") is not None and row["id"] not in tracked_ids
+                }
+                self._untracked_open_confirmed = {
+                    pid: sym
+                    for pid, sym in untracked.items()
+                    if pid in self._untracked_open_suspects or pid in self._untracked_open_confirmed
+                }
+                self._untracked_open_suspects = set(untracked) - set(self._untracked_open_confirmed)
+
+        still_untracked = {
+            pid: sym
+            for pid, sym in self._untracked_open_confirmed.items()
+            if pid not in tracked_ids
+        }
+        self._untracked_open_confirmed = still_untracked
+        if not still_untracked:
+            return None
+        detail = ", ".join(f"{sym} (id={pid})" for pid, sym in sorted(still_untracked.items()))
+        logger.critical(
+            "OPEN DB position(s) not held by the tracker: %s — untracked live exposure; "
+            "needs re-adoption (restart) or manual close.",
+            detail,
+        )
+        findings.append(f"open DB position not tracked: {detail}")
+        return Severity.CRITICAL
 
     def _sweep_orphaned_orders(self, findings: list[str] | None = None) -> Severity | None:
         """Cancel resting exchange orders that belong to no tracked position (#740).
