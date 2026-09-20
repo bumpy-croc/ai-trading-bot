@@ -120,6 +120,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the ungated path still diverges.
 
 ### Fixed
+- **Periodic reconciler stop-loss coherence** (#739, #714, #1194, #1217, #1214, #1201).
+  The per-position stop verify/re-place step now runs under the per-base-asset lock the
+  close/entry paths use and re-checks the tracker once it holds it, so it can neither
+  race an active close (orphan/double stop) nor re-arm a stop for a position removed
+  earlier in the same cycle (a naked BUY stop for a short). Every reconciler path that
+  removes a position (entry ghost, spot/margin external close) now cancels and forgets
+  its resting stop. Reconciler-issued cancels mark the order self-cancelled first, so a
+  deliberate cancel no longer pages a false `STOP_LOSS_CANCELLED`. The orphan-order sweep
+  no longer cancels the stop-loss of a position the DB still shows OPEN but the tracker
+  doesn't hold: it leaves the stop in place, escalates CRITICAL (close-only) and names
+  the condition. An adopted stop resting looser than intended (which no later pass can
+  correct, since the drift check shares the adopt tolerance) now pages an operator
+  instead of logging a misleading "next pass will fix it" line. The drift-correction
+  re-placement passes `just_cancelled=True`.
 - **A -1003 exchange-wide rate-limit ban hitting the stop-placement guard's own
   open-orders lookup — rather than the placement call itself — never reached the
   `on_rate_limit_ban` close-only escalation** (#738 review follow-up). The prior fix
