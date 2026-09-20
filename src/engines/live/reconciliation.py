@@ -541,10 +541,8 @@ def _achieved_price_is_safe_to_ratify(
     return achieved_price <= intended_price
 
 
-def _report_unratified_looser_stop(
-    on_event: Any, symbol: str, achieved_price: float, intended_price: float
-) -> None:
-    """Page an operator that an adopted stop rests looser than intended and stays so.
+def _log_unratified_looser_stop(symbol: str, achieved_price: float, intended_price: float) -> None:
+    """Log that an adopted stop rests looser than intended and will stay so.
 
     Both reconcilers' drift checks share ``_ADOPT_PRICE_TOLERANCE_FRACTION`` with
     the adoption guard, so an adopted price is by construction within tolerance
@@ -564,6 +562,16 @@ def _report_unratified_looser_stop(
         achieved_price,
         intended_price,
     )
+
+
+def _page_unratified_looser_stop(
+    on_event: Any, symbol: str, achieved_price: float, intended_price: float
+) -> None:
+    """Page an operator about a latched looser-than-intended adopted stop (#1214).
+
+    ``alert=True`` POSTs to the alert webhook, so callers holding the
+    base-asset lock must defer this until it is released.
+    """
     _emit_event(
         on_event,
         EventType.ALERT,
@@ -574,6 +582,14 @@ def _report_unratified_looser_stop(
         error_code="STOP_LOSS_LOOSER_THAN_INTENDED",
         alert=True,
     )
+
+
+def _report_unratified_looser_stop(
+    on_event: Any, symbol: str, achieved_price: float, intended_price: float
+) -> None:
+    """Log and page a looser-than-intended adopted stop in one step."""
+    _log_unratified_looser_stop(symbol, achieved_price, intended_price)
+    _page_unratified_looser_stop(on_event, symbol, achieved_price, intended_price)
 
 
 def place_or_adopt_stop_loss(
@@ -4703,6 +4719,9 @@ class PeriodicReconciler:
         # for standalone/test construction but must not go unnoticed if it
         # ever happens with a real engine, without spamming every cycle.
         self._warned_no_stop_loss_lock_registry = False
+        # Looser-than-intended adopted-stop findings noted while the base-asset lock
+        # is held; paged once the cycle has released it (webhook POSTs block).
+        self._pending_looser_stop_pages: list[tuple[str, float, float]] = []
         # Reuses the startup reconciler's P&L realization (balance + audit) so a
         # stop-loss fill detected by the periodic cycle books money identically
         # to one detected at startup. Construction is side-effect-free.
@@ -4796,8 +4815,9 @@ class PeriodicReconciler:
 
         Skips when the position is no longer tracked — the engine's
         deferred SL-exit drain already processed this fill — so the P&L is
-        not double-booked. A residual race with an engine exit already in
-        flight remains until the reconciler is base-lock-aware (#714).
+        not double-booked. The step-2 caller holds the base-asset lock (#714), so an
+        engine exit cannot be in flight; the step-1b callers do not, so a residual race
+        with one remains there.
 
         Returns True when this call closed the position.
         """
@@ -4930,7 +4950,31 @@ class PeriodicReconciler:
         return False
 
     def _reconcile_cycle(self) -> None:
-        """Execute one reconciliation cycle."""
+        """Execute one reconciliation cycle, then page findings deferred past the locks."""
+        try:
+            self._run_reconcile_cycle()
+        finally:
+            self._flush_looser_stop_pages()
+
+    def _note_unratified_looser_stop(
+        self, symbol: str, achieved_price: float, intended_price: float
+    ) -> None:
+        """Log a looser-than-intended adopted stop now and defer its page.
+
+        Called with the base-asset lock held, where a blocking webhook POST
+        would stall a concurrent close; ``_flush_looser_stop_pages`` sends it.
+        """
+        _log_unratified_looser_stop(symbol, achieved_price, intended_price)
+        self._pending_looser_stop_pages.append((symbol, achieved_price, intended_price))
+
+    def _flush_looser_stop_pages(self) -> None:
+        """Page the deferred looser-stop findings (no lock may be held)."""
+        pending, self._pending_looser_stop_pages = self._pending_looser_stop_pages, []
+        for symbol, achieved_price, intended_price in pending:
+            _page_unratified_looser_stop(self.on_event, symbol, achieved_price, intended_price)
+
+    def _run_reconcile_cycle(self) -> None:
+        """Body of one reconciliation cycle."""
         # Orphaned-borrow sweep runs every cycle — INCLUDING when flat — because an
         # orphaned borrow exists precisely when there is no tracked position. Must
         # run before the flat early-return below. No-op unless margin + flag enabled.
@@ -5369,9 +5413,10 @@ class PeriodicReconciler:
         # is caught THIS cycle instead of waiting for the next one.
         sweep_findings = []
         sweep_severity = self._sweep_orphaned_orders(sweep_findings)
-        if sweep_severity is not None and sweep_severity > max_severity:
-            max_severity = sweep_severity
+        if sweep_severity is not None:
             findings.extend(sweep_findings)
+            if sweep_severity > max_severity:
+                max_severity = sweep_severity
 
         # 4. Verify balance — delegates to the shared, self-contained reconcile that
         # values a FRESH position snapshot (a position closed earlier this cycle is
@@ -5599,8 +5644,7 @@ class PeriodicReconciler:
                                         position.stop_loss = achieved.price
                                         ratified_stop_loss = True
                                     else:
-                                        _report_unratified_looser_stop(
-                                            self.on_event,
+                                        self._note_unratified_looser_stop(
                                             position.symbol,
                                             achieved.price,
                                             stop_price,
@@ -5711,25 +5755,13 @@ class PeriodicReconciler:
         except Exception as e:
             logger.error("on_critical callback failed: %s", e)
 
-    def _has_untracked_open_db_position(self, symbol: str, tracked_db_ids: set[Any]) -> bool:
-        """Whether the DB shows an OPEN position on ``symbol`` the tracker does not hold.
-
-        Fail-closed: a DB read failure reports True, because the caller uses this
-        to decide NOT to cancel a stop-loss, and leaving one resting is the safe
-        side of an unknown.
-        """
+    def _read_open_db_positions(self) -> list[dict[str, Any]] | None:
+        """The session's OPEN DB positions, or None when they cannot be read."""
         try:
-            rows = self.db_manager.get_active_positions(self.session_id)
-            return any(
-                row.get("symbol") == symbol and row.get("id") not in tracked_db_ids for row in rows
-            )
+            return list(self.db_manager.get_active_positions(self.session_id))
         except Exception as e:
-            logger.warning(
-                "Could not read open DB positions for %s while sweeping orphaned orders: %s",
-                symbol,
-                e,
-            )
-            return True
+            logger.warning("Could not read open DB positions while sweeping orphaned orders: %s", e)
+            return None
 
     def _sweep_orphaned_orders(self, findings: list[str] | None = None) -> Severity | None:
         """Cancel resting exchange orders that belong to no tracked position (#740).
@@ -5751,10 +5783,20 @@ class PeriodicReconciler:
         never cancelled even if untracked-looking by prefix, which is what keeps a
         currently-protecting stop-loss for a live position safe here.
 
-        Returns ``Severity.HIGH`` if anything was cancelled this call, else
-        ``None`` (nothing found, or the sweep itself failed -- fail-open by
-        design, matching ``get_open_orders``'s own fail-open contract, since a
-        lookup failure here must not block the rest of the reconciliation cycle).
+        An ``atbsl_`` stop is NOT cancelled when the DB shows an OPEN position on
+        its symbol that the tracker does not hold (#1217): "orphaned" here means
+        absent from the in-memory tracker, which is also true of a live position
+        that failed to load, whose stop is then its only protection. That is
+        CRITICAL (untracked live exposure; the caller latches close-only). A DB
+        that cannot be read keeps the stop too but is only HIGH -- unknown is not
+        evidence of an untracked position. ``findings`` receives short
+        operator-facing descriptions of what was found.
+
+        Returns the peak severity, or ``None`` when nothing was found (or the sweep
+        itself failed -- fail-open by design, matching ``get_open_orders``'s own
+        fail-open contract, since a lookup failure here must not block the rest of
+        the reconciliation cycle). An orphan whose cancel the exchange refuses is
+        HIGH, not silent.
 
         Runs each symbol's query+cancel under ``_stop_loss_placement_lock``
         (#740 follow-up): before this order class carried the ``atb`` prefix a
@@ -5767,8 +5809,12 @@ class PeriodicReconciler:
         The per-symbol snapshot is re-read fresh inside the lock so an id
         recorded while this sweep was waiting on it is honoured.
         """
-        found_orphan = False
-        protected_untracked = False
+        cancelled = False
+        cancel_failed = False
+        untracked_open = False
+        unverified = False
+        open_db_rows: list[dict[str, Any]] | None = None
+        db_rows_loaded = False
         try:
             fresh_snapshot = self.position_tracker.positions
             # Every configured symbol, plus (defensively) any symbol with a
@@ -5797,22 +5843,37 @@ class PeriodicReconciler:
                         client_id = getattr(order, "client_order_id", "") or ""
                         if not client_id.startswith("atb"):  # atb_/atbx_/atbsl_
                             continue
-                        if client_id.startswith(
-                            _STOP_LOSS_CLIENT_ID_PREFIX
-                        ) and self._has_untracked_open_db_position(symbol, tracked_db_ids):
+                        if client_id.startswith(_STOP_LOSS_CLIENT_ID_PREFIX):
                             # "Untracked" only means absent from the in-memory tracker.
                             # A stop resting for a position the DB still shows OPEN is
                             # that position's only protection, not an orphan (#1217).
-                            logger.critical(
-                                "Stop-loss %s (%s) on %s belongs to an OPEN DB position "
-                                "the tracker does not hold — NOT cancelling it; the "
-                                "position is untracked and needs re-adoption.",
-                                order.order_id,
-                                client_id,
-                                symbol,
-                            )
-                            protected_untracked = True
-                            continue
+                            if not db_rows_loaded:
+                                open_db_rows = self._read_open_db_positions()
+                                db_rows_loaded = True
+                            if open_db_rows is None:
+                                logger.warning(
+                                    "Stop-loss %s (%s) on %s looks orphaned but the open DB "
+                                    "positions could not be read — NOT cancelling it.",
+                                    order.order_id,
+                                    client_id,
+                                    symbol,
+                                )
+                                unverified = True
+                                continue
+                            if any(
+                                row.get("symbol") == symbol and row.get("id") not in tracked_db_ids
+                                for row in open_db_rows
+                            ):
+                                logger.critical(
+                                    "Stop-loss %s (%s) on %s belongs to an OPEN DB position "
+                                    "the tracker does not hold — NOT cancelling it; the "
+                                    "position is untracked and needs re-adoption.",
+                                    order.order_id,
+                                    client_id,
+                                    symbol,
+                                )
+                                untracked_open = True
+                                continue
                         logger.warning(
                             "Orphaned order found: %s (%s) on %s — cancelling",
                             order.order_id,
@@ -5825,30 +5886,47 @@ class PeriodicReconciler:
                                 order.order_id,
                                 symbol,
                             )
-                            found_orphan = True
-            return self._sweep_result(found_orphan, protected_untracked, findings)
+                            cancelled = True
+                        else:
+                            cancel_failed = True
+            return self._sweep_result(
+                cancelled, cancel_failed, untracked_open, unverified, findings
+            )
         except Exception as e:
             logger.warning("Orphaned order check failed: %s", e)
-            return self._sweep_result(found_orphan, protected_untracked, findings)
+            return self._sweep_result(
+                cancelled, cancel_failed, untracked_open, unverified, findings
+            )
 
     @staticmethod
     def _sweep_result(
-        found_orphan: bool, protected_untracked: bool, findings: list[str] | None
+        cancelled: bool,
+        cancel_failed: bool,
+        untracked_open: bool,
+        unverified: bool,
+        findings: list[str] | None,
     ) -> Severity | None:
         """Severity of one orphan sweep, naming what it found in ``findings``.
 
         An untracked OPEN position is CRITICAL: it is live exposure the bot does
         not manage, so the caller latches close-only until an operator or a
-        restart re-adopts it.
+        restart re-adopts it. Everything else the sweep acted on or declined to
+        act on is HIGH.
         """
         if findings is not None:
-            if protected_untracked:
+            if untracked_open:
                 findings.append("open DB position not tracked; its stop-loss left in place")
-            if found_orphan:
+            if unverified:
+                findings.append("could not verify open DB positions; stop-loss left in place")
+            if cancelled:
                 findings.append("orphaned order(s) cancelled")
-        if protected_untracked:
+            if cancel_failed:
+                findings.append("orphaned order(s) could not be cancelled")
+        if untracked_open:
             return Severity.CRITICAL
-        return Severity.HIGH if found_orphan else None
+        if cancelled or cancel_failed or unverified:
+            return Severity.HIGH
+        return None
 
     def _emit_cycle_severity(
         self, max_severity: Severity, findings: list[str] | None = None
@@ -5970,8 +6048,10 @@ class PeriodicReconciler:
         price crosses it), and a stale ``stop_loss_order_id`` on the removed
         object lets a cycle that iterates an older snapshot re-arm it (#739).
         A failed cancel is logged; the id is still cleared because the position
-        is going away and the orphan sweep cancels any ``atb``-prefixed
-        survivor.
+        is going away. The orphan sweep then cancels the surviving ``atbsl_`` stop
+        on a later cycle, unless the DB row is still OPEN (a failed DB close,
+        already paged by ``_escalate_failed_db_close``), in which case the sweep
+        deliberately leaves it and reports the untracked position.
         """
         sl_id = getattr(position, "stop_loss_order_id", None)
         if not sl_id:
@@ -6220,8 +6300,7 @@ class PeriodicReconciler:
                             position.stop_loss = achieved.price
                             ratified_stop_loss = True
                         else:
-                            _report_unratified_looser_stop(
-                                self.on_event,
+                            self._note_unratified_looser_stop(
                                 symbol,
                                 achieved.price,
                                 tracked_price,
@@ -6367,8 +6446,7 @@ class PeriodicReconciler:
                             position.stop_loss = achieved.price
                             ratified_stop_loss = True
                         else:
-                            _report_unratified_looser_stop(
-                                self.on_event,
+                            self._note_unratified_looser_stop(
                                 position.symbol,
                                 achieved.price,
                                 stop_price,

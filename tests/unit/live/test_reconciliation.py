@@ -8513,16 +8513,90 @@ class TestSweepKeepsStopOfUntrackedOpenPosition:
         assert "open DB position not tracked" in on_critical.call_args.args[0]
         assert on_event.call_args.kwargs["error_code"] == "RECONCILE_CRITICAL"
 
-    def test_db_read_failure_fails_closed(self, mock_exchange, mock_position_tracker, mock_db):
+    def test_db_read_failure_keeps_the_stop_but_is_only_high(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Unknown is not evidence of an untracked position: fail closed on the cancel,
+        but do not latch close-only for a DB blip."""
         mock_position_tracker.positions = {}
         mock_db.get_active_positions.side_effect = RuntimeError("db down")
         mock_exchange.get_open_orders.return_value = [self._stop()]
+        on_critical = MagicMock()
+        reconciler = self._reconciler(
+            mock_exchange, mock_position_tracker, mock_db, on_critical=on_critical
+        )
+        findings: list[str] = []
+
+        severity = reconciler._sweep_orphaned_orders(findings)
+        reconciler._reconcile_cycle()
+
+        assert severity == Severity.HIGH
+        assert findings == ["could not verify open DB positions; stop-loss left in place"]
+        mock_exchange.cancel_order.assert_not_called()
+        on_critical.assert_not_called()
+
+    def test_a_refused_cancel_is_reported_not_silent(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        mock_position_tracker.positions = {}
+        mock_exchange.get_open_orders.return_value = [self._stop("sl_stuck")]
+        mock_exchange.cancel_order.return_value = False
+        findings: list[str] = []
         reconciler = self._reconciler(mock_exchange, mock_position_tracker, mock_db)
 
-        severity = reconciler._sweep_orphaned_orders()
+        severity = reconciler._sweep_orphaned_orders(findings)
 
-        assert severity == Severity.CRITICAL
-        mock_exchange.cancel_order.assert_not_called()
+        assert severity == Severity.HIGH
+        assert findings == ["orphaned order(s) could not be cancelled"]
+
+    def test_reads_the_open_db_positions_once_per_sweep(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        mock_position_tracker.positions = {}
+        mock_db.get_active_positions.return_value = []
+        mock_exchange.get_open_orders.return_value = [
+            self._stop("sl_a", "atbsl_1_aaaa"),
+            self._stop("sl_b", "atbsl_2_bbbb"),
+        ]
+        reconciler = self._reconciler(mock_exchange, mock_position_tracker, mock_db)
+
+        reconciler._sweep_orphaned_orders()
+
+        assert mock_db.get_active_positions.call_count == 1
+        assert mock_exchange.cancel_order.call_count == 2
+
+    def test_cycle_keeps_the_untracked_finding_when_already_critical(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Step 2 already raised the cycle to CRITICAL; the sweep's untracked-position
+        finding must still reach the close-only latch reason."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        tracked = MockPosition(
+            order_id="entry_t",
+            exchange_order_id=None,
+            stop_loss_order_id="sl_t",
+            stop_loss=45000.0,
+            db_position_id=5,
+        )
+        _live_tracker(mock_position_tracker, {"entry_t": tracked})
+        # The tracked stop is gone and cannot be re-placed -> CRITICAL in step 2.
+        mock_exchange.get_order.return_value = MockExchangeOrder(
+            order_id="sl_t", status=ExOS.CANCELLED
+        )
+        mock_exchange.get_open_orders_checked.return_value = None
+        mock_db.get_active_positions.return_value = [
+            {"id": 5, "symbol": "BTCUSDT"},
+            {"id": 9, "symbol": "BTCUSDT"},
+        ]
+        mock_exchange.get_open_orders.return_value = [self._stop()]
+        on_critical = MagicMock()
+
+        self._reconciler(
+            mock_exchange, mock_position_tracker, mock_db, on_critical=on_critical
+        )._reconcile_cycle()
+
+        assert "open DB position not tracked" in on_critical.call_args.args[0]
 
     def test_still_cancels_a_genuine_orphan_when_db_has_no_open_position(
         self, mock_exchange, mock_position_tracker, mock_db
@@ -8565,3 +8639,55 @@ class TestSweepKeepsStopOfUntrackedOpenPosition:
 
         assert severity == Severity.HIGH
         mock_exchange.cancel_order.assert_called_once_with("entry_x", "BTCUSDT")
+
+
+class TestLooserStopPageIsDeferredPastTheLock:
+    """The alert webhook POST must not run while the base-asset lock is held."""
+
+    def test_page_fires_after_the_base_lock_is_released(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderSide
+
+        pos = MockPosition(
+            order_id="entry_loose",
+            exchange_order_id=None,
+            stop_loss_order_id=None,
+            stop_loss=47000.0,
+            quantity=1.0,
+            current_size=1.0,
+            original_size=1.0,
+        )
+        _live_tracker(mock_position_tracker, {"entry_loose": pos})
+        adopted = MockExchangeOrder(order_id="loose_sl", status="NEW")
+        adopted.side = OrderSide.SELL
+        adopted.stop_price = 46200.0  # within tolerance of 47000 but looser for a long
+        mock_exchange.get_open_orders_checked.return_value = [adopted]
+        registry = BaseAssetLockRegistry()
+        lock = registry.lock_for("BTC")
+        lock_free_at_page: list[bool] = []
+
+        def on_event(event_type, message, **kwargs):
+            if kwargs.get("error_code") != "STOP_LOSS_LOOSER_THAN_INTENDED":
+                return
+
+            def probe():
+                got = lock.acquire(blocking=False)
+                lock_free_at_page.append(got)
+                if got:
+                    lock.release()
+
+            t = threading.Thread(target=probe)
+            t.start()
+            t.join()
+
+        PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            lock_registry=registry,
+            on_event=on_event,
+        )._reconcile_cycle()
+
+        assert lock_free_at_page == [True]
