@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cwd, and `PredictionModelRegistry` raises when the directory is missing, so an exam run from
   another directory can no longer report an all-HOLD/0-trade result. Cloud artifact sync no
   longer moves any `latest` symlink unless `atb train cloud --set-latest` is passed (the
-  registry loads every `latest` as production). New `src/ml/validation/promotion_gate.py`
+  registry loads every `latest` as production). New `src/ml/promotion_gate.py`
   scores the weekly-retrain 2-of-3 gate with NO_RESULT legs (profit factor with fewer than 3
   losing trades, return differences below 0.5pp/$1) and an INCONCLUSIVE verdict that retains the
   incumbent. `uses_rolling_minmax_features` derives price-scale targets from

@@ -6,8 +6,10 @@ the two models apart scores NO_RESULT instead of a win, so a tie on a degenerate
 metric never buys a gate point. When the remaining legs cannot reach the
 required number of wins the verdict is INCONCLUSIVE and the incumbent stays.
 
-Usage from the weekly retrain: ``python -m src.ml.validation.promotion_gate
-comparison.json`` where the file holds the two ``ModelEvidence`` records.
+Usage from the weekly retrain: ``atb models gate comparison.json`` (or
+``python -m src.ml.promotion_gate comparison.json``) where the file holds the
+two ``ModelEvidence`` records and the backtest ``initial_balance``. Exit code 0
+means PASS; anything else retains the incumbent.
 
 Caveat carried in every result: while HyperGrowth sizes flat (#938), the two
 backtest legs mostly measure the strategy rather than the model, so RMSE is
@@ -17,6 +19,7 @@ the only leg with real discriminating power.
 from __future__ import annotations
 
 import json
+import math
 import sys
 from dataclasses import dataclass, field
 from enum import Enum
@@ -25,6 +28,7 @@ from pathlib import Path
 from src.performance.metrics import MAX_FINITE_RATIO
 
 MIN_LOSING_TRADES_FOR_PF = 3
+MIN_MATERIAL_RMSE_DIFF_PCT = 0.5  # relative to the incumbent's RMSE
 MIN_MATERIAL_RETURN_DIFF_PCT = 0.5
 MIN_MATERIAL_RETURN_DIFF_USD = 1.0
 REQUIRED_WINS = 2
@@ -59,6 +63,17 @@ class ModelEvidence:
     profit_factor: float
     return_pct: float
     losing_trades: int | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("test_rmse", "profit_factor", "return_pct"):
+            if not math.isfinite(getattr(self, name)):
+                raise ValueError(
+                    f"ModelEvidence.{name} must be finite, got {getattr(self, name)!r}"
+                )
+        if self.test_rmse < 0:
+            raise ValueError(f"ModelEvidence.test_rmse must be >= 0, got {self.test_rmse!r}")
+        if self.losing_trades is not None and self.losing_trades < 0:
+            raise ValueError("ModelEvidence.losing_trades must be >= 0")
 
 
 @dataclass(frozen=True)
@@ -99,13 +114,24 @@ def _has_no_losers(evidence: ModelEvidence, min_losing_trades: int) -> bool:
     return evidence.profit_factor >= MAX_FINITE_RATIO
 
 
-def _rmse_leg(challenger: ModelEvidence, incumbent: ModelEvidence) -> LegResult:
-    outcome = LegOutcome.WIN if challenger.test_rmse <= incumbent.test_rmse else LegOutcome.LOSS
-    return LegResult(
-        "test_rmse",
-        outcome,
-        f"challenger {challenger.test_rmse:.6g} vs incumbent {incumbent.test_rmse:.6g} (lower wins)",
+def _rmse_leg(
+    challenger: ModelEvidence, incumbent: ModelEvidence, min_diff_pct: float
+) -> LegResult:
+    rel_diff_pct = (
+        (incumbent.test_rmse - challenger.test_rmse) / incumbent.test_rmse * 100.0
+        if incumbent.test_rmse > 0
+        else 0.0
     )
+    reason = (
+        f"challenger {challenger.test_rmse:.6g} vs incumbent {incumbent.test_rmse:.6g} "
+        f"({rel_diff_pct:+.3f}% better, lower RMSE wins)"
+    )
+    if abs(rel_diff_pct) < min_diff_pct:
+        return LegResult(
+            "test_rmse", LegOutcome.NO_RESULT, f"below {min_diff_pct}% materiality: {reason}"
+        )
+    outcome = LegOutcome.WIN if rel_diff_pct > 0 else LegOutcome.LOSS
+    return LegResult("test_rmse", outcome, reason)
 
 
 def _profit_factor_leg(
@@ -120,8 +146,10 @@ def _profit_factor_leg(
             f"fewer than {min_losing_trades} losing trades on at least one side; "
             "profit factor is a sentinel or too noisy to compare",
         )
+    if challenger.profit_factor == incumbent.profit_factor:
+        return LegResult("profit_factor", LegOutcome.NO_RESULT, "exact tie")
     outcome = (
-        LegOutcome.WIN if challenger.profit_factor >= incumbent.profit_factor else LegOutcome.LOSS
+        LegOutcome.WIN if challenger.profit_factor > incumbent.profit_factor else LegOutcome.LOSS
     )
     return LegResult(
         "profit_factor",
@@ -156,17 +184,23 @@ def evaluate_promotion_gate(
     *,
     initial_balance: float,
     min_losing_trades: int = MIN_LOSING_TRADES_FOR_PF,
+    min_rmse_diff_pct: float = MIN_MATERIAL_RMSE_DIFF_PCT,
     min_return_diff_pct: float = MIN_MATERIAL_RETURN_DIFF_PCT,
     min_return_diff_usd: float = MIN_MATERIAL_RETURN_DIFF_USD,
 ) -> GateResult:
     """Score the challenger against the incumbent.
 
-    PASS needs ``REQUIRED_WINS`` wins. Without them, INCONCLUSIVE when the
+    Every leg needs a strict, material edge to win; ties score NO_RESULT or LOSS,
+    never a win. PASS needs ``REQUIRED_WINS`` wins. Without them, INCONCLUSIVE when the
     NO_RESULT legs could still have supplied the missing wins, otherwise FAIL.
     Only PASS promotes; INCONCLUSIVE retains the incumbent.
     """
+    if not math.isfinite(initial_balance) or initial_balance <= 0:
+        raise ValueError(
+            f"initial_balance must be a positive finite number, got {initial_balance!r}"
+        )
     legs = [
-        _rmse_leg(challenger, incumbent),
+        _rmse_leg(challenger, incumbent, min_rmse_diff_pct),
         _profit_factor_leg(challenger, incumbent, min_losing_trades),
         _return_leg(
             challenger, incumbent, initial_balance, min_return_diff_pct, min_return_diff_usd
@@ -187,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     """Read ``{"challenger": {...}, "incumbent": {...}, "initial_balance": N}`` and print the result."""
     args = sys.argv[1:] if argv is None else argv
     if len(args) != 1:
-        print("usage: python -m src.ml.validation.promotion_gate comparison.json", file=sys.stderr)
+        print("usage: python -m src.ml.promotion_gate comparison.json", file=sys.stderr)
         return 2
     payload = json.loads(Path(args[0]).read_text(encoding="utf-8"))
     result = evaluate_promotion_gate(

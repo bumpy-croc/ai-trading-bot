@@ -410,6 +410,7 @@ class TestRunMetaLabelPipeline:
         mock_download.return_value = self._synthetic_price_df()
         always_hold = MagicMock()
         always_hold.warmup_period = 5
+        always_hold.resolved_model_identity.return_value = "ETHUSDT:1h:basic:v1"
         always_hold.generate_signal.return_value = Signal(
             direction=SignalDirection.HOLD, strength=0.0, confidence=0.0, metadata={}
         )

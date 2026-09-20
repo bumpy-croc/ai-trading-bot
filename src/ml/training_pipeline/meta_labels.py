@@ -100,16 +100,25 @@ def fire_generation_corpus_fingerprint(
     resume another model's fires from a checkpoint a failed run left behind.
 
     Raises:
-        ValueError: df is empty (nothing to fingerprint or checkpoint).
+        ValueError: df is empty (nothing to fingerprint or checkpoint), or the
+            generator exposes ``resolved_model_identity()`` but cannot resolve it.
     """
     if len(df) == 0:
         raise ValueError("cannot fingerprint an empty corpus")
     start = start_index if start_index is not None else signal_generator.warmup_period
     generator_identity = getattr(signal_generator, "name", type(signal_generator).__name__)
     resolve_model = getattr(signal_generator, "resolved_model_identity", None)
-    model_identity = resolve_model() if callable(resolve_model) else None
-    if not isinstance(model_identity, str):
-        model_identity = ""
+    model_identity = ""
+    if callable(resolve_model):
+        resolved = resolve_model()
+        if not isinstance(resolved, str) or not resolved:
+            # Fail closed: an unresolved identity must not fingerprint the
+            # same as "no identity", or checkpoints splice across weights.
+            raise ValueError(
+                f"{type(signal_generator).__name__}.resolved_model_identity() returned "
+                f"{resolved!r}; cannot fingerprint a checkpoint without the primary model"
+            )
+        model_identity = resolved
     close_digest = hashlib.sha256(df["close"].to_numpy(dtype=np.float64).tobytes()).hexdigest()
     payload = "|".join(
         [

@@ -286,6 +286,10 @@ class MLSignalGenerator(SignalGenerator):
 
             self.prediction_engine = engine
 
+        except FileNotFoundError:
+            # A missing model registry must stop the run: degrading to a
+            # HOLD-only engine reads as a genuine zero-trade result (#1023).
+            raise
         except Exception:
             if not self._engine_warning_emitted:
                 logger.exception("MLSignalGenerator: Prediction engine initialization failed")
@@ -787,6 +791,10 @@ class MLBasicSignalGenerator(SignalGenerator):
                 # Engine doesn't have model_registry attribute
                 self._registry = None
 
+        except FileNotFoundError:
+            # A missing model registry must stop the run: degrading to a
+            # HOLD-only engine reads as a genuine zero-trade result (#1023).
+            raise
         except Exception:
             if not self._engine_warning_emitted:
                 logger.exception("MLBasicSignalGenerator: Prediction engine initialization failed")

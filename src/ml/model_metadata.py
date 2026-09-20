@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from src.ml.training_pipeline.task_types import PRICE_SCALE_TARGET_TYPES, TARGET_TASK_TYPES
+from src.ml.target_types import PRICE_SCALE_TARGET_TYPES, TARGET_TASK_TYPES
 
 logger = logging.getLogger(__name__)
 

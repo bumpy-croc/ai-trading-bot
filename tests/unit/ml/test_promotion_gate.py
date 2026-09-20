@@ -1,8 +1,11 @@
 """Promotion gate: degenerate legs must not score free points (GH #1146)."""
 
 import json
+import math
 
-from src.ml.validation.promotion_gate import (
+import pytest
+
+from src.ml.promotion_gate import (
     LegOutcome,
     ModelEvidence,
     Verdict,
@@ -94,3 +97,42 @@ def test_cli_exit_code_reflects_promotion(tmp_path, capsys):
 
     assert main([str(path)]) == 0
     assert json.loads(capsys.readouterr().out)["verdict"] == "pass"
+
+
+def test_identical_evidence_is_not_a_pass():
+    same = ModelEvidence(0.01, 1.5, 3.0, losing_trades=5)
+
+    result = evaluate_promotion_gate(same, same, initial_balance=1000.0)
+
+    assert result.wins == 0
+    assert not result.promote
+
+
+def test_immaterial_rmse_edge_is_no_result():
+    challenger = ModelEvidence(0.009999, 1.8, 6.0, losing_trades=5)
+    incumbent = ModelEvidence(0.010000, 1.2, 1.0, losing_trades=6)
+
+    result = evaluate_promotion_gate(challenger, incumbent, initial_balance=1000.0)
+
+    assert _leg(result, "test_rmse").outcome is LegOutcome.NO_RESULT
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf])
+def test_evidence_rejects_non_finite(bad):
+    with pytest.raises(ValueError):
+        ModelEvidence(test_rmse=bad, profit_factor=1.0, return_pct=0.0)
+
+
+@pytest.mark.parametrize("balance", [0.0, -5.0, math.nan])
+def test_gate_rejects_bad_balance(balance):
+    e = ModelEvidence(0.01, 1.5, 3.0, losing_trades=5)
+    with pytest.raises(ValueError):
+        evaluate_promotion_gate(e, e, initial_balance=balance)
+
+
+def test_module_imports_without_validation_package():
+    import subprocess
+    import sys
+
+    code = "import sys; import src.ml.promotion_gate; assert 'src.ml.validation' not in sys.modules"
+    assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0

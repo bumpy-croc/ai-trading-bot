@@ -346,6 +346,10 @@ class TestFireGenerationFingerprintTracksPrimaryModel:
             fire_generation_corpus_fingerprint(b, self._df())
         )
 
+    def test_unresolved_identity_fails_closed(self):
+        with pytest.raises(ValueError, match="resolved_model_identity"):
+            fire_generation_corpus_fingerprint(self._VersionedGenerator(None), self._df())
+
     def test_generator_without_identity_still_fingerprints(self):
         assert fire_generation_corpus_fingerprint(_StubSignalGenerator({}), self._df())
 
