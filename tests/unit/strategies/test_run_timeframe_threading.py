@@ -233,3 +233,33 @@ class TestRunnersThreadTimeframe:
         manager.load_strategy("s")
 
         assert seen == {"symbol": "ETHUSDT", "timeframe": "4h"}
+
+    def test_strategy_manager_hot_swap_with_config_symbol_still_gets_timeframe(self):
+        from src.engines.live.strategy_manager import StrategyManager
+
+        seen = {}
+
+        def factory(symbol=None, timeframe="1h"):
+            seen.update(symbol=symbol, timeframe=timeframe)
+            return SimpleNamespace(name="s")
+
+        manager = StrategyManager(symbol="ETHUSDT", timeframe="4h")
+        manager.strategy_registry = {"s": factory}
+        manager.load_strategy("s", config={"symbol": "SOLUSDT"})
+
+        assert seen == {"symbol": "SOLUSDT", "timeframe": "4h"}
+
+    def test_strategy_manager_config_timeframe_wins(self):
+        from src.engines.live.strategy_manager import StrategyManager
+
+        seen = {}
+
+        def factory(timeframe="1h"):
+            seen["timeframe"] = timeframe
+            return SimpleNamespace(name="s")
+
+        manager = StrategyManager(timeframe="4h")
+        manager.strategy_registry = {"s": factory}
+        manager.load_strategy("s", config={"timeframe": "1h"})
+
+        assert seen == {"timeframe": "1h"}

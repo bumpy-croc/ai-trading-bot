@@ -147,15 +147,17 @@ class StrategyManager:
 
         # Call factory function with config, threading the engine's trading
         # symbol so ML model selection matches the traded pair (#867). An
-        # explicit symbol in config wins over the engine-level symbol.
+        # explicit symbol in config wins over the engine-level symbol; the same
+        # holds for timeframe.
         config_kwargs = dict(config) if config else {}
-        if "symbol" in config_kwargs:
-            strategy = factory_function(**config_kwargs)
-        else:
-            factory: Callable[..., Strategy] = factory_function
-            if config_kwargs:
-                factory = partial(factory_function, **config_kwargs)
-            strategy = call_strategy_factory(factory, symbol=self.symbol, timeframe=self.timeframe)
+        factory: Callable[..., Strategy] = factory_function
+        if config_kwargs:
+            factory = partial(factory_function, **config_kwargs)
+        strategy = call_strategy_factory(
+            factory,
+            symbol=None if "symbol" in config_kwargs else self.symbol,
+            timeframe=None if "timeframe" in config_kwargs else self.timeframe,
+        )
 
         version_id = f"{strategy_name}_{version}"
         strategy_version = StrategyVersionRecord(

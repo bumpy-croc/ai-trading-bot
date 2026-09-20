@@ -47,8 +47,9 @@ def test_begin_session_runtime_threads_symbol_to_strategy_manager():
     """Hot-swapped strategies must select models for the traded pair (#867)."""
     state = _make_state()
     state.strategy_manager = MagicMock()
-    LiveStartupSequencer(engine_state=state).begin_session_runtime("ETHUSDT", "1h")
+    LiveStartupSequencer(engine_state=state).begin_session_runtime("ETHUSDT", "4h")
     assert state.strategy_manager.symbol == "ETHUSDT"
+    assert state.strategy_manager.timeframe == "4h"
 
 
 def test_begin_session_runtime_tolerates_missing_strategy_manager():
