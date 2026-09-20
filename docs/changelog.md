@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Direct-`ComponentStrategy` live entry path now enforces the `enter_short` opt-in**
+  (#1031). It routes through the shared `extract_entry_plan` chokepoint, so a SELL
+  without `enter_short` metadata can no longer open a short on that path.
+- **Live engine logs the resolved time-exit policy at boot** (#1083). A strategy with
+  no `time_exits` config has no time-based exit (same in backtest); the log makes
+  that explicit. Behavior is unchanged.
+
 ### Changed
 - **Entry-path stop-loss placement now threads `reason_code` through and defers on a
   terminal UNCONFIRMED refusal instead of always emergency-closing, but only when the

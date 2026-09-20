@@ -969,6 +969,32 @@ def test_component_path_entry_size_below_cap_unclamped():
     assert coordinator.execute_entry.call_args.kwargs["size"] == pytest.approx(0.15)
 
 
+def test_component_path_sell_without_enter_short_opens_no_short():
+    """A SELL lacking the enter_short opt-in must not open a short (#1031)."""
+    state = _make_component_entry_state(max_position_size=0.2, notional=150.0)
+    decision = state.strategy.process_candle.return_value
+    decision.signal.direction = SignalDirection.SELL
+    decision.metadata = {}
+
+    coordinator = _run_component_entry(state)
+
+    coordinator.execute_entry.assert_not_called()
+
+
+def test_component_path_sell_with_enter_short_opens_short():
+    """The explicit enter_short opt-in still opens a short on the direct path."""
+    state = _make_component_entry_state(max_position_size=0.2, notional=150.0)
+    decision = state.strategy.process_candle.return_value
+    decision.signal.direction = SignalDirection.SELL
+    decision.metadata = {"enter_short": True}
+
+    coordinator = _run_component_entry(state)
+
+    coordinator.execute_entry.assert_called_once()
+    assert coordinator.execute_entry.call_args.kwargs["side"] == PositionSide.SHORT
+    assert coordinator.execute_entry.call_args.kwargs["size"] == pytest.approx(0.15)
+
+
 # ---------------------------------------------------------------------------
 # ml_predictions logging (#914): signal-metadata prediction context must reach
 # the strategy_executions row instead of the historical always-null value.
