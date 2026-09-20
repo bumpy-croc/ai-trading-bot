@@ -298,6 +298,7 @@ class StrategyFactory:
         name: str = "MLAdaptive",
         sequence_length: int = 120,
         model_name: str | None = None,
+        symbol: str | None = None,
     ) -> Strategy:
         """
         Create ML Adaptive strategy with component-based architecture
@@ -306,6 +307,8 @@ class StrategyFactory:
             name: Strategy name
             sequence_length: Sequence length for LSTM
             model_name: Model name for registry
+            symbol: Trading symbol for model registry selection (None keeps
+                the generator default BTCUSDT)
 
         Returns:
             Configured ML Adaptive strategy
@@ -314,6 +317,7 @@ class StrategyFactory:
             name=f"{name}_signals",
             sequence_length=sequence_length,
             model_name=model_name,
+            symbol=symbol,
         )
 
         risk_manager = RegimeAdaptiveRiskManager(
@@ -340,6 +344,7 @@ class StrategyFactory:
         model_name: str | None = None,
         model_type: str = "sentiment",
         timeframe: str = "1h",
+        symbol: str | None = None,
     ) -> Strategy:
         """
         Create ML Sentiment strategy with component-based architecture
@@ -348,8 +353,10 @@ class StrategyFactory:
             name: Strategy name
             sequence_length: Sequence length for LSTM
             model_name: Model name for registry
-            model_type: Model type for future sentiment-specific model selection
-            timeframe: Model timeframe for future sentiment-specific model selection
+            model_type: Model type for registry selection
+            timeframe: Model timeframe for registry selection
+            symbol: Trading symbol for model registry selection (None keeps
+                the generator default BTCUSDT)
 
         Returns:
             Configured ML Sentiment strategy
@@ -358,10 +365,10 @@ class StrategyFactory:
             name=f"{name}_signals",
             sequence_length=sequence_length,
             model_name=model_name,
+            symbol=symbol,
+            model_type=model_type,
+            timeframe=timeframe,
         )
-        # Store model_type/timeframe for potential future use in sentiment model selection
-        signal_generator.model_type = model_type
-        signal_generator.model_timeframe = timeframe
 
         risk_manager = FixedRiskManager(
             risk_per_trade=0.02,
@@ -447,9 +454,9 @@ class StrategyFactory:
         if use_ml_basic:
             generators[MLBasicSignalGenerator(name="ml_basic_signals", symbol=symbol)] = 0.30
         if use_ml_adaptive:
-            generators[MLSignalGenerator(name="ml_adaptive_signals")] = 0.30
+            generators[MLSignalGenerator(name="ml_adaptive_signals", symbol=symbol)] = 0.30
         if use_ml_sentiment:
-            generators[MLSignalGenerator(name="ml_sentiment_signals")] = 0.15
+            generators[MLSignalGenerator(name="ml_sentiment_signals", symbol=symbol)] = 0.15
 
         signal_generator = WeightedVotingSignalGenerator(
             generators=generators,
