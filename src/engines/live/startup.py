@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from src.database.models import EventType, TradeSource
 from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import log_engine_event
+from src.prediction.inference_context import spawn_live_thread
 
 if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
@@ -484,10 +485,9 @@ class LiveStartupSequencer:
         """Launch the trading-loop thread and block until it stops, then tear down."""
         state = self._state
         # Start main trading loop in separate thread
-        state.main_thread = threading.Thread(
-            target=state._run_trading_loop, args=(symbol, timeframe, max_steps)
+        state.main_thread = spawn_live_thread(
+            state._run_trading_loop, args=(symbol, timeframe, max_steps)
         )
-        state.main_thread.daemon = True
         state.main_thread.start()
 
         try:

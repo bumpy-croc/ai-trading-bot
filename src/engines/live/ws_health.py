@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from src.data_providers.binance_provider import WebSocketState
 from src.database.models import EventType
+from src.prediction.inference_context import spawn_live_thread
 from src.trading.exit_reason import ExitReason, classify_stop_exit
 
 if TYPE_CHECKING:
@@ -194,9 +195,7 @@ class WebSocketHealthMonitor:
     def start_ws_health_monitor(self) -> None:
         """Start daemon thread to monitor WebSocket stream health."""
         state = self._state
-        state._ws_health_thread = threading.Thread(
-            target=self.ws_health_loop, daemon=True, name="WSHealthMonitor"
-        )
+        state._ws_health_thread = spawn_live_thread(self.ws_health_loop, name="WSHealthMonitor")
         state._ws_health_thread.start()
         logger.info("WebSocket health monitor started")
 

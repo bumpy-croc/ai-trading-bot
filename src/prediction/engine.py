@@ -53,7 +53,11 @@ from .exceptions import (
 )
 from .features.pipeline import FeaturePipeline
 from .features.selector import FeatureSelector
-from .inference_context import InferenceContext, get_inference_context
+from .inference_context import (
+    InferenceContext,
+    get_inference_context,
+    warn_if_unscoped_in_live_process,
+)
 from .models.onnx_runner import ModelPrediction
 from .models.registry import PredictionModelRegistry, StrategyModel
 from .utils.caching import PredictionCacheManager
@@ -941,6 +945,7 @@ class PredictionEngine:
         """
         if get_inference_context() is InferenceContext.LIVE:
             return self.config.live_inference_timeout
+        warn_if_unscoped_in_live_process()
         return None
 
     def _run_inference(self, func: Callable[..., Any], args: tuple, operation_name: str) -> Any:
