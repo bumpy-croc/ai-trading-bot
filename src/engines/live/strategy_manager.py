@@ -40,6 +40,7 @@ class StrategyManager:
         models_dir: str = "src/ml/models",
         staging_dir: str | None = None,
         symbol: str | None = None,
+        timeframe: str | None = None,
     ):
         self.strategies_dir = Path(strategies_dir)
         self.models_dir = Path(models_dir)
@@ -47,6 +48,8 @@ class StrategyManager:
         # factories on load/hot-swap so ML model registry selection matches
         # the traded pair; the engine assigns it at session start.
         self.symbol = symbol
+        # Run timeframe, threaded alongside the symbol for the same reason.
+        self.timeframe = timeframe
         default_staging = Path(
             os.environ.get(
                 "ATB_STAGING_DIR", os.path.join(tempfile.gettempdir(), "ai-trading-bot-staging")
@@ -152,7 +155,7 @@ class StrategyManager:
             factory: Callable[..., Strategy] = factory_function
             if config_kwargs:
                 factory = partial(factory_function, **config_kwargs)
-            strategy = call_strategy_factory(factory, symbol=self.symbol)
+            strategy = call_strategy_factory(factory, symbol=self.symbol, timeframe=self.timeframe)
 
         version_id = f"{strategy_name}_{version}"
         strategy_version = StrategyVersionRecord(

@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Run timeframe now reaches ML strategy presets** (#1253). `call_strategy_factory` takes a
+  `timeframe` (threaded only to factories that declare it), and `atb backtest`, `atb live`, the
+  live `StrategyManager` and the experiment runners pass it. `ml_adaptive`, `hyper_growth` and
+  `ensemble_weighted` gained a `timeframe` parameter, so a 4h run selects a 4h model bundle and
+  fails at startup when none exists instead of scoring with the 1h default.
 - **ML pipeline / evaluation integrity fixes** (#1023, #1135, #1146, #1154, #1003).
   `PredictionConfig.model_registry_path` is anchored to the repo root instead of the process
   cwd, and `PredictionModelRegistry` raises when the directory is missing, so an exam run from

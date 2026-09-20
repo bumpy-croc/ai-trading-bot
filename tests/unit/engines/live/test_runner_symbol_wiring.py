@@ -60,7 +60,7 @@ class TestMainSymbolWiring:
         strategy.name = "HyperGrowth"
         recorded = {}
 
-        def fake_load(name, symbol=None):
+        def fake_load(name, symbol=None, timeframe=None):
             recorded["call"] = (name, symbol)
             return strategy
 

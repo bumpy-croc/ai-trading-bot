@@ -254,7 +254,7 @@ class TestHandleBacktest:
             # Assert
             assert result == 0
             mock_load_strategy.assert_called_once_with(
-                "ml_basic", symbol="BTCUSDT", model_version=None
+                "ml_basic", symbol="BTCUSDT", model_version=None, timeframe=default_args.timeframe
             )
             mock_backtester.run.assert_called_once()
 

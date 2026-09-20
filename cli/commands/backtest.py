@@ -67,7 +67,12 @@ _EXAM_STRATEGY_NAMES = frozenset(
 )
 
 
-def _load_strategy(strategy_name: str, symbol: str | None = None, model_version: str | None = None):
+def _load_strategy(
+    strategy_name: str,
+    symbol: str | None = None,
+    model_version: str | None = None,
+    timeframe: str | None = None,
+):
     """Load a strategy by name, threading the trading symbol when supported.
 
     Mirrors the live runner (backtest-live parity): the symbol must reach ML
@@ -107,8 +112,10 @@ def _load_strategy(strategy_name: str, symbol: str | None = None, model_version:
         builder = available_strategies.get(strategy_name)
         if builder is not None:
             if model_version is not None and strategy_name in _EXAM_STRATEGY_NAMES:
-                return _call_exam_factory_pinned(builder, symbol, model_version)
-            return call_strategy_factory(builder, symbol=symbol, model_version=model_version)
+                return _call_exam_factory_pinned(builder, symbol, model_version, timeframe)
+            return call_strategy_factory(
+                builder, symbol=symbol, model_version=model_version, timeframe=timeframe
+            )
 
         print(f"Unknown strategy: {strategy_name}")
         print(f"Available strategies: {', '.join(available_strategies.keys())}")
@@ -119,7 +126,10 @@ def _load_strategy(strategy_name: str, symbol: str | None = None, model_version:
 
 
 def _call_exam_factory_pinned(
-    builder: Callable[..., Strategy], symbol: str | None, model_version: str
+    builder: Callable[..., Strategy],
+    symbol: str | None,
+    model_version: str,
+    timeframe: str | None = None,
 ) -> Strategy:
     """Construct an exam strategy with the version pin set in its env var.
 
@@ -131,7 +141,7 @@ def _call_exam_factory_pinned(
     prior = os.environ.get(MODEL_VERSION_OVERRIDE_ENV_VAR)
     os.environ[MODEL_VERSION_OVERRIDE_ENV_VAR] = model_version
     try:
-        return call_strategy_factory(builder, symbol=symbol)
+        return call_strategy_factory(builder, symbol=symbol, timeframe=timeframe)
     finally:
         if prior is None:
             os.environ.pop(MODEL_VERSION_OVERRIDE_ENV_VAR, None)
@@ -265,7 +275,12 @@ def _handle(ns: argparse.Namespace) -> int:
         start_date, end_date = _get_date_range(ns)
 
         model_version = _resolve_model_pin(ns, start_date, end_date)
-        strategy = _load_strategy(ns.strategy, symbol=ns.symbol, model_version=model_version)
+        strategy = _load_strategy(
+            ns.strategy,
+            symbol=ns.symbol,
+            model_version=model_version,
+            timeframe=ns.timeframe,
+        )
         logger.info(f"Loaded strategy: {strategy.name}")
         if model_version is not None:
             logger.info(f"Model version pinned for this backtest: {model_version}")
