@@ -140,9 +140,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for fill/cancel routing, and its deliberate cancels (partial-exit resize, price-drift
   correction, phantom removal) are marked self-cancelled. An unconfirmed cancel in the
   resize path now keeps the old stop instead of placing a second one. Post-cancel
-  re-placements pass `just_cancelled=True`. A NaN/inf/non-positive adopted `stop_price`
-  is ignored by the shared capture (`adopted_stop_price`, also used by
-  `LiveStopLossManager`) so it can no longer poison `last_placed_stop_price`. The entry-fill
+  re-placements pass `just_cancelled=True`. A resting stop with a NaN/inf/non-positive
+  `stop_price` is now refused by the placement guard (unverifiable, retryable) instead of
+  adopted, and the shared capture (`adopted_stop_price`, also used by
+  `LiveStopLossManager`) ignores and logs such a price, so it can no longer poison
+  `last_placed_stop_price`. Reconcilers untrack a dead stop id they replace, an
+  unconfirmed phantom-stop cancel and a failed post-resize re-placement now page, and the
+  failed-DB-close page names its context (external close vs margin phantom). The entry-fill
   quantity correction keeps a scaled-in position's >1 current/original fraction, and the
   startup failed-DB-close twins now page (`RECONCILE_DB_CLOSE_FAILED`) like the periodic path.
 - **A -1003 exchange-wide rate-limit ban hitting the stop-placement guard's own

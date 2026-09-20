@@ -384,6 +384,19 @@ def _classify_stop_placement(
         )
     if stop_price is not None and stop_price > 0:
         resting_price = getattr(only, "stop_price", None)
+        if _usable_stop_price(resting_price) is None:
+            # NaN compares False against everything, so it would slip through the
+            # tolerance test below and be ADOPTed as if it rested at intent.
+            return StopPlacementDecision(
+                StopPlacementCheck.REFUSE,
+                reason=(
+                    f"a resting stop {only.order_id} exists for {symbol} but its "
+                    f"stop_price ({resting_price!r}) is not a finite positive number — "
+                    "cannot verify where it protects, will not adopt or duplicate"
+                ),
+                unconfirmed=True,
+                reason_code=StopPlacementRefuseReason.UNCONFIRMED,
+            )
         if (
             resting_price is None
             or abs(resting_price - stop_price) > stop_price * _ADOPT_PRICE_TOLERANCE_FRACTION
@@ -491,15 +504,8 @@ def _generate_stop_loss_client_order_id() -> str:
     return f"{_STOP_LOSS_CLIENT_ID_PREFIX}{timestamp_ms:x}_{unique_suffix}"
 
 
-def adopted_stop_price(decision: StopPlacementDecision) -> float | None:
-    """The resting price of an ADOPTed order, or None when it is unusable.
-
-    An exchange response with a NaN/inf/non-positive ``stop_price`` must never
-    become the "achieved" price: it flows unconditionally into the
-    min-trailing-stop-move floor's baseline and would break every later
-    trailing-stop comparison for the position (#1219).
-    """
-    price = getattr(decision.existing_order, "stop_price", None)
+def _usable_stop_price(price: Any) -> float | None:
+    """``price`` as a finite positive float, or None when it is not one."""
     if price is None:
         return None
     try:
@@ -507,6 +513,30 @@ def adopted_stop_price(decision: StopPlacementDecision) -> float | None:
     except (TypeError, ValueError):
         return None
     return price_f if math.isfinite(price_f) and price_f > 0 else None
+
+
+def adopted_stop_price(decision: StopPlacementDecision) -> float | None:
+    """The resting price of an ADOPTed order, or None when it is unusable.
+
+    An exchange response with a NaN/inf/non-positive ``stop_price`` must never
+    become the "achieved" price: it flows unconditionally into the
+    min-trailing-stop-move floor's baseline and would break every later
+    trailing-stop comparison for the position (#1219). ``_classify_stop_placement``
+    already refuses such an order when a price is being checked; this is the
+    backstop for callers that adopt without one. A missing price is the normal
+    "nothing to capture" case and stays silent; a present-but-unusable one is
+    logged, since the engine will then record an unverified baseline.
+    """
+    price = getattr(decision.existing_order, "stop_price", None)
+    usable = _usable_stop_price(price)
+    if usable is None and price is not None:
+        logger.warning(
+            "Adopted stop %s has an unusable stop_price %r -- falling back to the intended "
+            "price for the min-move baseline; the resting order's actual level is unverified.",
+            decision.existing_order_id,
+            price,
+        )
+    return usable
 
 
 class _AchievedStopPriceCapture:
@@ -586,25 +616,44 @@ def _cancel_order_marking_self(
     return cancelled
 
 
-def _escalate_failed_db_close(on_event: Any, position: Any, db_pos_id: Any) -> None:
-    """Page an external close that popped the tracker but left the DB row OPEN.
+def _stop_tracking_order(order_tracker: Any, order_id: str) -> None:
+    """Drop a dead order id from the OrderTracker (None-safe, fault-isolated).
+
+    A reconciler that discovers a tracked stop is gone (missing or already
+    terminal on the exchange) and replaces it must untrack the old id, or the
+    tracker keeps polling it and eventually pages a false ORDER_TRACKING_LOST.
+    """
+    if not order_tracker:
+        return
+    try:
+        order_tracker.stop_tracking(order_id)
+    except Exception as e:
+        logger.warning("Failed to stop tracking order %s: %s", order_id, e)
+
+
+def _page_failed_db_close(
+    on_event: Any, position: Any, db_pos_id: Any, context: str = "External close"
+) -> None:
+    """Page a removal that popped the tracker but left the DB row OPEN.
 
     Shared by the startup and periodic reconcilers so both surface the same
     CRITICAL, paged ``system_events`` row (``RECONCILE_DB_CLOSE_FAILED``) for the
     same memory/DB divergence, instead of the startup path logging alone.
+    ``context`` names what removed the position (external close, margin phantom).
     """
     symbol = getattr(position, "symbol", "?")
     logger.critical(
-        "External close for %s: removed from tracker but DB position %s close "
+        "%s for %s: removed from tracker but DB position %s close "
         "FAILED (still OPEN) — memory/DB divergence; manual reconciliation may "
         "be needed.",
+        context,
         symbol,
         db_pos_id,
     )
     _emit_event(
         on_event,
         EventType.ALERT,
-        f"External close for {symbol}: position removed from tracker but DB "
+        f"{context} for {symbol}: position removed from tracker but DB "
         f"position {db_pos_id} is still OPEN (close failed) — memory/DB "
         "divergence until the next restart re-adoption",
         severity="critical",
@@ -2476,16 +2525,33 @@ class PositionReconciler:
                             e,
                         )
             else:
-                logger.warning(
-                    "Failed to place resized stop-loss for %s — no order ID " "returned",
-                    symbol,
-                )
+                self._escalate_unprotected_resize(position, symbol, "no order id returned")
         except Exception as e:
-            logger.warning(
-                "Failed to place resized stop-loss for %s: %s",
-                symbol,
-                e,
-            )
+            self._escalate_unprotected_resize(position, symbol, f"placement raised: {e}")
+
+    def _escalate_unprotected_resize(self, position: Any, symbol: str, cause: str) -> None:
+        """Escalate a resize whose old stop is cancelled but whose replacement failed.
+
+        The position is left with no resting stop, the same state every other
+        placement-failure path audits and pages.
+        """
+        detail = write_unprotected_audit(
+            self.db_manager,
+            self.session_id,
+            position,
+            f"partial-exit stop resize: replacement failed ({cause})",
+        )
+        logger.critical(
+            "Failed to place resized stop-loss for %s (%s) — position is UNPROTECTED", symbol, cause
+        )
+        _emit_event(
+            self.on_event,
+            EventType.ALERT,
+            detail,
+            severity="critical",
+            error_code="RESIZE_STOP_UNPROTECTED",
+            alert=True,
+        )
 
     def _handle_not_found_order(
         self, order_data: dict, status: str, result: ReconciliationResult
@@ -3054,6 +3120,7 @@ class PositionReconciler:
                 result.corrections.append(audit)
                 if result.severity < Severity.MEDIUM:
                     result.severity = Severity.MEDIUM
+                _stop_tracking_order(self.order_tracker, sl_order_id)
                 position.stop_loss_order_id = None
 
                 # Attempt to re-place the stop-loss so the position is protected — unless the
@@ -3245,6 +3312,7 @@ class PositionReconciler:
                 result.corrections.append(audit)
                 if result.severity < Severity.MEDIUM:
                     result.severity = Severity.MEDIUM
+                _stop_tracking_order(self.order_tracker, sl_order_id)
                 position.stop_loss_order_id = None
                 logger.warning(
                     "Stop-loss %s for %s was %s — cleared stale reference",
@@ -3924,7 +3992,7 @@ class PositionReconciler:
                     # (tracker says gone, DB says OPEN). Escalate (CODE.md: no silent divergence) —
                     # the OPEN row is re-recovered on the next restart; manual reconciliation may be
                     # needed meanwhile.
-                    _escalate_failed_db_close(self.on_event, position, db_pos_id)
+                    _page_failed_db_close(self.on_event, position, db_pos_id)
         except Exception as e:
             logger.warning("Asset holdings check failed for %s: %s", base_asset, e)
 
@@ -4035,6 +4103,24 @@ class PositionReconciler:
                     sl_order_id,
                     position.symbol,
                 )
+            else:
+                logger.critical(
+                    "Could not confirm cancel of stop-loss %s for removed phantom %s — it "
+                    "may still rest on the exchange and, with AUTO_REPAY, open a naked "
+                    "position when triggered. Manual verification required.",
+                    sl_order_id,
+                    position.symbol,
+                )
+                _emit_event(
+                    self.on_event,
+                    EventType.ALERT,
+                    f"Stop-loss {sl_order_id} for removed phantom {position.symbol} could not "
+                    "be cancelled and may still rest on the exchange — manual verification "
+                    "required",
+                    severity="critical",
+                    error_code="PHANTOM_STOP_CANCEL_UNCONFIRMED",
+                    alert=True,
+                )
 
         removed = self.position_tracker.pop_position(position.order_id)
         db_pos_id = getattr(position, "db_position_id", None)
@@ -4055,7 +4141,7 @@ class PositionReconciler:
             # Popped from the in-memory tracker but the DB row did NOT close — memory/DB divergence
             # (CODE.md: no silent divergence). The phantom is gone on the exchange, so do not
             # re-track; the OPEN DB row is re-recovered on the next restart.
-            _escalate_failed_db_close(self.on_event, position, db_pos_id)
+            _page_failed_db_close(self.on_event, position, db_pos_id, "Margin phantom")
         # Audit the phantom removal (it sets HIGH severity but previously wrote no
         # reconciliation_audit_events row, unlike the spot external-close path). #853
         audit = AuditEvent(
@@ -5625,6 +5711,7 @@ class PeriodicReconciler:
                 # idempotent no-op.
                 with self._stop_loss_placement_lock(position.symbol):
                     position.stop_loss_order_id = None
+                _stop_tracking_order(self.order_tracker, sl_order_id)
 
                 # Account for partial SL fills before re-placement.
                 # If the SL partially executed, reduce current_size
@@ -6080,7 +6167,7 @@ class PeriodicReconciler:
         the OPEN row is never re-examined — it heals only on restart re-adoption.
         Safe to POST here — the cycle iterates a snapshot, no tracker lock is held.
         """
-        _escalate_failed_db_close(self.on_event, position, db_pos_id)
+        _page_failed_db_close(self.on_event, position, db_pos_id)
 
     def _cancel_order_deliberately(self, symbol: str, order_id: str) -> bool:
         """Cancel an order this reconciler is retiring; True only when confirmed."""
