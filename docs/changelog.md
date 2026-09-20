@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Data downloads no longer silently fall back to CoinGecko, and the cache validates on
+  load** (#982). `atb data download|prefill-cache|preload-offline` pin the Binance provider
+  and fail loudly on Binance errors. `CachedDataProvider` sorts and de-duplicates (keep last)
+  cached candles on load, persists the repair, and warns; `atb data cache-manager audit`
+  scans existing parquet files for duplicate/unsorted timestamps.
 - **Direct-`ComponentStrategy` live entry path now enforces the `enter_short` opt-in**
   (#1031). It routes through the shared `extract_entry_plan` chokepoint, so a SELL
   without `enter_short` metadata can no longer open a short on that path.
