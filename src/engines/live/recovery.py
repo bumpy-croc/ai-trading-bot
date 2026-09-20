@@ -517,35 +517,15 @@ class LiveSessionRecoverer:
                         position.symbol,
                     )
 
-                # Update risk manager tracking for recovered positions
-                if state.risk_manager:
-                    try:
-                        state.risk_manager.update_position(
-                            symbol=position.symbol,
-                            # __post_init__ guarantees side is a PositionSide enum.
-                            side=cast(PositionSide, position.side).value,
-                            # Remaining exposure, not the original size, so a
-                            # partially-exited position doesn't re-inflate risk.
-                            size=(
-                                position.current_size
-                                if position.current_size is not None
-                                else position.size
-                            ),
-                            entry_price=position.entry_price,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to update risk manager for recovered position %s: %s",
-                            position.symbol,
-                            e,
-                        )
-
                 logger.info(
                     "✅ Recovered position: %s %s @ $%.2f",
                     pos_data["symbol"],
                     pos_data["side"],
                     pos_data["entry_price"],
                 )
+
+            # Single registration path (handles fully-drained current_size == 0).
+            self.ensure_positions_registered_with_risk_manager()
 
             logger.info("🎯 Successfully recovered %s positions", len(db_positions))
 

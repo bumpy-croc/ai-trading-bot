@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from unittest.mock import Mock
 
@@ -9,6 +10,7 @@ import pytest
 
 from src.engines.live.trading_engine import LiveTradingEngine
 from src.position_management.mfe_mae_tracker import MFEMAETracker, MFEMetrics
+from src.risk.risk_manager import RiskManager
 
 
 def _make_engine() -> LiveTradingEngine:
@@ -116,3 +118,39 @@ def test_seed_metrics_keeps_larger_in_memory_peaks():
     metrics = tracker.get_position_metrics("k")
     assert metrics.mfe == pytest.approx(0.20)
     assert metrics.mae == pytest.approx(-0.04)
+
+
+def test_recovery_with_real_risk_manager_registers_remaining_and_skips_drained():
+    engine = _make_engine()
+    engine.risk_manager = RiskManager()
+    _recover(engine, _row())
+    assert engine.risk_manager.positions["ETHUSDT"]["size"] == pytest.approx(0.10)
+
+    drained = _make_engine()
+    drained.risk_manager = RiskManager()
+    _recover(drained, _row(current_size=0.0))
+    # Fully partial-exited row: tracked, but not registered (size>0 validator) and no crash.
+    assert "ETHUSDT" not in drained.risk_manager.positions
+    assert drained.live_position_tracker.positions
+
+
+def test_seed_metrics_ignores_non_finite_and_does_not_mutate_argument():
+    tracker = MFEMAETracker()
+    seed = MFEMetrics(mfe=float("nan"), mae=float("inf"))
+    tracker.seed_metrics("k", seed)
+
+    assert math.isnan(seed.mfe)
+    metrics = tracker.get_position_metrics("k")
+    assert metrics is not seed
+    assert metrics.mfe == 0.0 and metrics.mae == 0.0
+    tracker.update_position_metrics("k", 100.0, 105.0, "long", datetime(2025, 1, 1, tzinfo=UTC))
+    assert tracker.get_position_metrics("k").mfe == pytest.approx(0.05)
+
+
+def test_seeded_peak_times_are_utc_aware():
+    engine = _make_engine()
+    _recover(engine, _row(mfe_time=datetime(2025, 1, 2), mae_time=datetime(2025, 1, 3)))
+
+    metrics = engine.live_position_tracker.mfe_mae_tracker.get_position_metrics("order-7")
+    assert metrics.mfe_time.tzinfo is UTC
+    assert metrics.mae_time.tzinfo is UTC

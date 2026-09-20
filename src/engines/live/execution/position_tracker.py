@@ -287,6 +287,17 @@ class LivePositionTracker:
             self._positions[order_id] = position
             self._position_db_ids[order_id] = db_id
 
+    @staticmethod
+    def _optional_float(value: Any) -> float | None:
+        return float(value) if value is not None else None
+
+    @staticmethod
+    def _as_utc(value: datetime | None) -> datetime | None:
+        """DB DateTime columns are naive; the live tracker writes aware UTC."""
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
+
     def seed_mfe_mae(self, order_id: str, pos_data: dict[str, Any]) -> None:
         """Seed the MFE/MAE tracker with the peaks persisted on a recovered row.
 
@@ -299,10 +310,10 @@ class LivePositionTracker:
                 MFEMetrics(
                     mfe=float(pos_data.get("mfe") or 0.0),
                     mae=float(pos_data.get("mae") or 0.0),
-                    mfe_price=pos_data.get("mfe_price"),
-                    mae_price=pos_data.get("mae_price"),
-                    mfe_time=pos_data.get("mfe_time"),
-                    mae_time=pos_data.get("mae_time"),
+                    mfe_price=self._optional_float(pos_data.get("mfe_price")),
+                    mae_price=self._optional_float(pos_data.get("mae_price")),
+                    mfe_time=self._as_utc(pos_data.get("mfe_time")),
+                    mae_time=self._as_utc(pos_data.get("mae_time")),
                 ),
             )
         except (TypeError, ValueError) as e:
