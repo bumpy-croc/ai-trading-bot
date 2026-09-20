@@ -76,9 +76,9 @@ def create_ensemble_weighted_strategy(
     if use_ml_basic:
         generators[MLBasicSignalGenerator(symbol=symbol)] = 0.30
     if use_ml_adaptive:
-        generators[MLSignalGenerator()] = 0.30
+        generators[MLSignalGenerator(symbol=symbol)] = 0.30
     if use_ml_sentiment:
-        generators[MLSignalGenerator()] = 0.15
+        generators[MLSignalGenerator(symbol=symbol)] = 0.15
 
     # Create weighted voting signal generator
     signal_generator = WeightedVotingSignalGenerator(
