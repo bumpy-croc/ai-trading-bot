@@ -71,6 +71,14 @@ SHORT_GUARD_EPISODE_GAP_SECONDS = 2 * 3600.0
 # trading cycle.
 SHORT_GUARD_EMIT_EVERY_N = 10
 
+# Why ``_normalize_quantity_checked`` returned 0.0.
+CLOSE_UNSELLABLE_REANNOUNCE_SECONDS = 3600.0
+NORMALIZE_INVALID_QUANTITY = "invalid_quantity"
+NORMALIZE_HOLDINGS_CAP = "holdings_cap"
+NORMALIZE_LOT_SIZING = "lot_sizing"
+NORMALIZE_MIN_QTY = "min_qty"
+NORMALIZE_MIN_NOTIONAL = "min_notional"
+
 
 @dataclass
 class _ShortGuardEpisode:
@@ -192,6 +200,12 @@ class LiveExecutionEngine:
         # triggers a close re-fires every trading-loop iteration, so an un-latched
         # abort would page once per ~66s — the very alert-storm shape #1104 was.
         self._close_abort_streaks: dict[str, int] = {}
+        # Last recorded unsellable-quantity abort reason per symbol. A stuck dust close
+        # re-fires every candle; recording only on a new (symbol, reason) keeps it to
+        # one durable event + page until the close clears or the cause changes.
+        # Re-announced after CLOSE_UNSELLABLE_REANNOUNCE_SECONDS so a latch left stale by
+        # a resolution outside this path cannot silence a later position's abort.
+        self._close_unsellable_reasons: dict[str, tuple[str, float]] = {}
         # Injectable clock for deterministic episode-gap tests.
         self._monotonic: Callable[[], float] = time.monotonic
 
@@ -297,6 +311,78 @@ class LiveExecutionEngine:
                 )
             except Exception as e:  # pragma: no cover - defensive
                 logger.warning("Failed to escalate repeated close abort for %s: %s", symbol, e)
+
+    def _record_close_unsellable(
+        self,
+        *,
+        symbol: str,
+        reason: str,
+        intended_quantity: float,
+        position_notional: float,
+        reference_price: float | None,
+        free_base: float | None,
+    ) -> None:
+        """Persist and page a close whose quantity normalizes to zero, once per cause.
+
+        Before exchange min-notional was known locally, Binance rejected these with
+        -1013 and ``_record_exchange_order_error`` wrote the durable row. The local
+        guard now aborts first, so this restores that record. Fault-isolated like
+        ``_record_close_inventory_locked``.
+        """
+        with self._short_guard_lock:
+            now = self._monotonic()
+            last = self._close_unsellable_reasons.get(symbol)
+            if (
+                last is not None
+                and last[0] == reason
+                and now - last[1] < CLOSE_UNSELLABLE_REANNOUNCE_SECONDS
+            ):
+                return
+            self._close_unsellable_reasons[symbol] = (reason, now)
+        symbol_info = self._symbol_info_or_none(symbol)
+        min_notional = symbol_info.get("min_notional") if symbol_info else None
+        min_qty = symbol_info.get("min_qty") if symbol_info else None
+        notional = (
+            intended_quantity * reference_price
+            if reference_price and reference_price > 0
+            else position_notional
+        )
+        message = (
+            f"Close of {symbol} ABORTED ({reason}): intended quantity {intended_quantity:.8f} "
+            f"(~${notional:.2f}) is not sellable — min_notional={min_notional}, "
+            f"min_qty={min_qty}. Position remains OPEN."
+        )
+        self._log_execution_event(
+            EventType.ERROR,
+            message,
+            "CLOSE_QUANTITY_UNSELLABLE",
+            severity="critical",
+            details={
+                "symbol": symbol,
+                "abort_reason": reason,
+                "intended_quantity": float(intended_quantity),
+                "notional": float(notional),
+                "min_notional": min_notional,
+                "min_qty": min_qty,
+                "free_base_balance": float(free_base) if free_base is not None else None,
+            },
+        )
+        if self.alert_dispatcher is not None:
+            try:
+                self.alert_dispatcher(f"\U0001f6a8 {message}")
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("Failed to dispatch unsellable-close alert for %s: %s", symbol, e)
+
+    def _symbol_info_or_none(self, symbol: str) -> dict[str, Any] | None:
+        """Symbol filters for event enrichment; ``None`` on any failure (observability only)."""
+        if self.exchange_interface is None:
+            return None
+        try:
+            info = self.exchange_interface.get_symbol_info(symbol)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("Could not fetch symbol info for %s abort event: %s", symbol, e)
+            return None
+        return info if isinstance(info, dict) else None
 
     def attach_exchange_error_sink(self, exchange: Any) -> None:
         """Route exchange-layer order failures into ``system_events``.
@@ -1407,19 +1493,45 @@ class LiveExecutionEngine:
                         free_base,
                     )
                     quantity = free_base
-                quantity = self._normalize_quantity(
+                capped_quantity = quantity
+                quantity, abort_reason = self._normalize_quantity_checked(
                     symbol, quantity, position_notional, floor=True, price=reference_price
                 )
+                # A sliver of free base (locked inventory) fails min-notional only because
+                # it was capped, so attribute it to the cap, not the normalizer's verdict.
+                if abort_reason and capped_quantity < intended_quantity * HOLDINGS_CAP_MIN_RATIO:
+                    abort_reason = NORMALIZE_HOLDINGS_CAP
             else:
-                quantity = self._normalize_quantity(
+                quantity, abort_reason = self._normalize_quantity_checked(
                     symbol, quantity, position_notional, price=reference_price
                 )
             if quantity <= 0:
+                reason = abort_reason or NORMALIZE_INVALID_QUANTITY
                 logger.error(
-                    "Close quantity for %s is not sellable after holdings cap, lot "
+                    "Close quantity for %s is not sellable (%s) after holdings cap, lot "
                     "sizing and min-notional checks — aborting close attempt",
                     symbol,
+                    reason,
                 )
+                if reason == NORMALIZE_HOLDINGS_CAP:
+                    # Locked inventory: same condition, page and close-only latch as the
+                    # ratio gate below, which a zero quantity would otherwise skip.
+                    self._record_close_inventory_locked(
+                        symbol=symbol,
+                        intended_quantity=intended_quantity,
+                        sellable_quantity=capped_quantity,
+                        free_base=free_base,
+                        stop_just_cancelled=stop_just_cancelled,
+                    )
+                else:
+                    self._record_close_unsellable(
+                        symbol=symbol,
+                        reason=reason,
+                        intended_quantity=intended_quantity,
+                        position_notional=position_notional,
+                        reference_price=reference_price,
+                        free_base=free_base,
+                    )
                 return None
             # Gate on the SUBMITTED quantity, after both the holdings cap and the lot
             # snap. Gating on free_base alone would miss the lot-floor case, where a
@@ -1451,6 +1563,7 @@ class LiveExecutionEngine:
             # Gate passed: the condition cleared, so a later abort starts a fresh streak.
             with self._short_guard_lock:
                 self._close_abort_streaks.pop(symbol, None)
+                self._close_unsellable_reasons.pop(symbol, None)
 
             # Generate deterministic client order ID for exit order idempotency
             # Format: atbx_{timestamp_hex}_{uuid8} (~25 chars, within Binance 36-char limit)
@@ -1644,15 +1757,29 @@ class LiveExecutionEngine:
         never exceed holdings); the default nearest snap suits entries and
         short-cover BUYs.
         """
+        return self._normalize_quantity_checked(symbol, quantity, value, floor=floor, price=price)[
+            0
+        ]
+
+    def _normalize_quantity_checked(
+        self,
+        symbol: str,
+        quantity: float,
+        value: float,
+        *,
+        floor: bool = False,
+        price: float | None = None,
+    ) -> tuple[float, str | None]:
+        """``_normalize_quantity`` plus the reason it returned 0.0 (``None`` if it did not)."""
         if quantity <= 0 or self.exchange_interface is None:
-            return 0.0
+            return 0.0, NORMALIZE_INVALID_QUANTITY
         original_quantity = quantity
 
         try:
             symbol_info = self.exchange_interface.get_symbol_info(symbol)
         except (ConnectionError, TimeoutError) as e:
             logger.error("Failed to fetch symbol info for %s: %s - using raw quantity", symbol, e)
-            return quantity
+            return quantity, None
 
         if not symbol_info or not isinstance(symbol_info, dict):
             logger.warning(
@@ -1660,7 +1787,7 @@ class LiveExecutionEngine:
                 symbol,
                 type(symbol_info).__name__ if symbol_info else "None",
             )
-            return quantity
+            return quantity, None
 
         # Validate and apply step_size
         step_size = symbol_info.get("step_size")
@@ -1705,7 +1832,7 @@ class LiveExecutionEngine:
                     min_qty,
                     symbol,
                 )
-                return 0.0
+                return 0.0, NORMALIZE_LOT_SIZING if quantity <= 0 else NORMALIZE_MIN_QTY
 
         # Validate min_notional constraint
         # Every order this engine places is MARKET, which Binance exempts when
@@ -1729,9 +1856,9 @@ class LiveExecutionEngine:
                     min_notional,
                     symbol,
                 )
-                return 0.0
+                return 0.0, NORMALIZE_LOT_SIZING if quantity <= 0 else NORMALIZE_MIN_NOTIONAL
 
-        return quantity
+        return (quantity, None) if quantity > 0 else (0.0, NORMALIZE_LOT_SIZING)
 
     def get_execution_stats(self) -> dict:
         """Get execution statistics.
