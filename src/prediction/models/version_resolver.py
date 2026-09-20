@@ -140,9 +140,7 @@ def list_version_records(
             )
             continue
         records.append(
-            VersionRecord(
-                version_id=version_dir.name, effective_at=effective_at, source=source
-            )
+            VersionRecord(version_id=version_dir.name, effective_at=effective_at, source=source)
         )
 
     records.sort(key=lambda record: (record.effective_at, record.version_id))
@@ -208,11 +206,7 @@ def promotion_segments(
     # Deduplicated: two versions sharing one effective_at must not create a
     # zero-length segment (the later-sorted version wins the whole segment).
     boundaries = sorted(
-        {
-            record.effective_at
-            for record in records
-            if start_utc < record.effective_at < end_utc
-        }
+        {record.effective_at for record in records if start_utc < record.effective_at < end_utc}
     )
 
     segments: list[PromotionSegment] = []

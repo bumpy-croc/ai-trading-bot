@@ -298,7 +298,54 @@ class TestRegimeHandlerThreadsRunContext:
         monkeypatch.delenv("FEATURE_ALLOW_CROSS_SYMBOL_MODEL", raising=False)
         engine_cls.return_value = _engine(_registry_with(_bundle("ETHUSDT", "1h", "basic")))
 
-        assert self._handler()._load_strategy("ml_basic", symbol="ETHUSDT", timeframe="4h") is None
+        with patch("src.engines.backtest.regime.regime_handler.logger") as log:
+            result = self._handler()._load_strategy("ml_basic", symbol="ETHUSDT", timeframe="4h")
+
+        assert result is None
+        assert "ModelNotAvailableError" in str(log.error.call_args)
+
+    def test_failed_load_records_no_switch_and_is_not_retried(self):
+        import pandas as pd
+
+        handler = self._handler()
+        handler.regime_switcher = SimpleNamespace(
+            analyze_market_regime=lambda _d: {
+                "consensus_regime": {
+                    "regime_label": "bull",
+                    "confidence": 0.9,
+                    "agreement_score": 1,
+                }
+            },
+            should_switch_strategy=lambda _a, current_candle_index: {
+                "should_switch": True,
+                "optimal_strategy": "ml_basic",
+                "new_regime": "bull",
+                "confidence": 0.9,
+                "reason": "test",
+            },
+            strategy_manager=None,
+        )
+        df = pd.DataFrame({"close": [1.0] * 10})
+        kwargs = dict(
+            df=df,
+            candle_index=5,
+            current_time=MagicMock(),
+            timeframe="4h",
+            balance=1000.0,
+            current_strategy=SimpleNamespace(name="old"),
+            symbol="ETHUSDT",
+        )
+
+        with patch(
+            "src.engines.backtest.regime.regime_handler.call_strategy_factory",
+            side_effect=ModelNotAvailableError("no 4h"),
+        ) as factory:
+            first = handler.analyze_and_switch_if_needed(**kwargs)
+            second = handler.analyze_and_switch_if_needed(**kwargs)
+
+        assert first == (None, False, None) and second == (None, False, None)
+        assert handler.strategy_switches == []
+        assert factory.call_count == 1
 
     @patch(ENGINE_PATH)
     @patch(CONFIG_PATH)

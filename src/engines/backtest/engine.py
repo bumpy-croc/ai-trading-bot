@@ -991,6 +991,7 @@ class Backtester:
             self.regime_handler.regime_history.clear()
             self.regime_handler.strategy_switches.clear()
             self.regime_handler._current_strategy_name = self.initial_strategy_name
+            self.regime_handler._failed_loads.clear()
 
     def run(
         self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None

@@ -103,6 +103,8 @@ class RegimeHandler:
         self.regime_history: list[dict] = []
         self.strategy_switches: list[dict] = []
         self._current_strategy_name = initial_strategy_name
+        # Loads that failed for a (name, symbol, timeframe); not retried every check.
+        self._failed_loads: set[tuple[str, str | None, str | None]] = set()
 
     @property
     def current_strategy_name(self) -> str:
@@ -184,15 +186,15 @@ class RegimeHandler:
                 "reason": switch_decision["reason"],
                 "balance_at_switch": balance,
             }
-            self.strategy_switches.append(switch_info)
-
             # Load new strategy
             new_strategy = self._load_strategy(
                 new_strategy_name, symbol=symbol, timeframe=timeframe
             )
             if new_strategy is None:
                 logger.warning("Failed to load strategy %s", new_strategy_name)
-                return None, False, switch_info
+                return None, False, None
+
+            self.strategy_switches.append(switch_info)
 
             logger.info(
                 "Strategy switch at %s (candle %d): %s -> %s (regime: %s)",
@@ -308,6 +310,10 @@ class RegimeHandler:
             ),
         }
 
+        load_key = (strategy_name, symbol, timeframe)
+        if load_key in self._failed_loads:
+            return None
+
         if strategy_name not in strategy_factories:
             logger.warning("Unknown strategy for switching: %s", strategy_name)
             return None
@@ -319,6 +325,7 @@ class RegimeHandler:
             return call_strategy_factory(factory_function, symbol=symbol, timeframe=timeframe)
         except Exception as e:
             logger.error("Failed to load strategy %s: %s", strategy_name, e)
+            self._failed_loads.add(load_key)
             return None
 
     def _execute_switch(
