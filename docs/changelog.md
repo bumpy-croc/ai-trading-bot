@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manager at `current_size` (not the original size), and both recovery paths seed the
   `MFEMAETracker` from the persisted `mfe`/`mae` columns so the first post-restart persist no
   longer overwrites the stored peaks.
+- **Direct-`ComponentStrategy` live entry path now enforces the `enter_short` opt-in**
+  (#1031). It routes through the shared `extract_entry_plan` chokepoint, so a SELL
+  without `enter_short` metadata can no longer open a short on that path.
+- **Live engine logs the resolved time-exit policy at boot** (#1083). A strategy with
+  no `time_exits` config has no time-based exit (same in backtest); the log makes
+  that explicit. Behavior is unchanged.
 
 ### Changed
 - **Entry-path stop-loss placement now threads `reason_code` through and defers on a
