@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -67,6 +68,7 @@ class ExperimentRunner:
         strategy_name: str,
         factory_kwargs: dict[str, object] | None = None,
         symbol: str | None = None,
+        timeframe: str | None = None,
     ) -> Strategy:
         """Construct a strategy, optionally passing kwargs to the factory.
 
@@ -85,6 +87,11 @@ class ExperimentRunner:
         ``MLBasicSignalGenerator.DEFAULT_SYMBOL`` ("BTCUSDT"), scoring
         whatever symbol the backtest runs on with the wrong model (GH #997).
         An explicit ``symbol`` key in ``factory_kwargs`` always wins.
+
+        ``timeframe`` (``config.timeframe``) is injected the same way when the
+        factory declares a ``timeframe`` parameter, so ML strategies select a
+        model of the run's timeframe instead of the 1h default. An explicit
+        ``timeframe`` key in ``factory_kwargs`` always wins.
         """
         strategies: dict[str, Callable[..., Strategy]] = {
             "ml_basic": create_ml_basic_strategy,
@@ -98,6 +105,12 @@ class ExperimentRunner:
         kwargs = dict(factory_kwargs or {})
         if symbol is not None and "symbol" not in kwargs and factory_accepts_symbol(builder):
             kwargs["symbol"] = symbol
+        if (
+            timeframe is not None
+            and "timeframe" not in kwargs
+            and "timeframe" in inspect.signature(builder).parameters
+        ):
+            kwargs["timeframe"] = timeframe
         if not kwargs:
             return builder()
         try:
@@ -470,6 +483,7 @@ class ExperimentRunner:
             config.strategy_name,
             factory_kwargs=config.factory_kwargs or None,
             symbol=config.symbol,
+            timeframe=config.timeframe,
         )
         # Apply any parameter overrides for strategy-level tuning
         self._apply_parameter_overrides(strategy, config)

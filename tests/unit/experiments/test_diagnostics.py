@@ -163,6 +163,7 @@ class _StubRunner:
         strategy_name: str,
         factory_kwargs: dict[str, Any] | None = None,  # noqa: ARG002
         symbol: str | None = None,  # noqa: ARG002
+        timeframe: str | None = None,  # noqa: ARG002
     ) -> _StubStrategy:
         return self._strategy
 
@@ -321,6 +322,7 @@ def test_strategy_without_signal_generator_raises() -> None:
             _name: str,
             factory_kwargs: dict[str, Any] | None = None,  # noqa: ARG002
             symbol: str | None = None,  # noqa: ARG002
+            timeframe: str | None = None,  # noqa: ARG002
         ) -> _NoGenStrategy:
             return _NoGenStrategy()
 

@@ -60,8 +60,8 @@ class TestMainSymbolWiring:
         strategy.name = "HyperGrowth"
         recorded = {}
 
-        def fake_load(name, symbol=None):
-            recorded["call"] = (name, symbol)
+        def fake_load(name, symbol=None, timeframe=None):
+            recorded["call"] = (name, symbol, timeframe)
             return strategy
 
         engine = MagicMock()
@@ -78,5 +78,5 @@ class TestMainSymbolWiring:
 
         runner.main()
 
-        assert recorded["call"] == ("hyper_growth", "ETHUSDT")
+        assert recorded["call"] == ("hyper_growth", "ETHUSDT", "1h")
         engine.start.assert_called_once_with("ETHUSDT", "1h", exit_on_crash=True)

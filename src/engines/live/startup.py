@@ -160,6 +160,7 @@ class LiveStartupSequencer:
         # strategies select models for this pair, not the default (#867).
         if state.strategy_manager is not None:
             state.strategy_manager.symbol = symbol
+            state.strategy_manager.timeframe = timeframe
         # Set base logging context for this engine run
         set_context(
             component="live_engine",
