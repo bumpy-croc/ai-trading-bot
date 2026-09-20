@@ -181,6 +181,10 @@ class Backtester:
       first symbol that signals; live can hold N. If your strategy depends
       on simultaneous positions, validate live behaviour separately rather
       than inferring it from backtest.
+    - **Partial-exit trade outcomes.** ``win_rate``/``profit_factor`` report
+      whole-position outcomes (partial slices banked into the trade's P&L);
+      live records only the final leg, so they are not comparable to live for
+      partial-exit strategies until #1234 lands.
     - ExitHandler: Processes exit signals and execution
     - CorrelationHandler: Applies correlation-based sizing
     - RegimeHandler: Manages regime-based strategy switching
@@ -1424,6 +1428,13 @@ class Backtester:
             )
         elif partial_result.scale_in_fees > 0:
             self.balance -= partial_result.scale_in_fees
+            # Scale-ins are entry legs: fold their fees into entry_fee so the
+            # reported fee totals and DB commission match what the balance paid.
+            open_trade = self.position_tracker.current_trade
+            if open_trade is not None:
+                open_trade.metadata["entry_fee"] = (
+                    float(open_trade.metadata.get("entry_fee", 0.0)) + partial_result.scale_in_fees
+                )
 
         # Update MFE/MAE
         self.position_tracker.update_metrics(current_price, current_time)
