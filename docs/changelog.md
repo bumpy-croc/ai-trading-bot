@@ -12,6 +12,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **ML pipeline / evaluation integrity fixes** (#1023, #1135, #1146, #1154, #1003).
+  `PredictionConfig.model_registry_path` is anchored to the repo root instead of the process
+  cwd, and `PredictionModelRegistry` raises when the directory is missing, so an exam run from
+  another directory can no longer report an all-HOLD/0-trade result. Cloud artifact sync no
+  longer moves any `latest` symlink unless `atb train cloud --set-latest` is passed (the
+  registry loads every `latest` as production), and a `{symbol}/{type}` directory without `latest` is
+  no longer served by `select_bundle` (explicit version pinning still works). New `src/ml/promotion_gate.py`
+  scores the weekly-retrain 2-of-3 gate with NO_RESULT legs (profit factor with fewer than 3
+  losing trades, return differences below 0.5pp/$1) and an INCONCLUSIVE verdict that retains the
+  incumbent. `uses_rolling_minmax_features` derives price-scale targets from
+  `task_types.PRICE_SCALE_TARGET_TYPES` and warns on unknown target types. The meta-label
+  fire-generation checkpoint fingerprint now includes the resolved primary-model bundle key
+  (`MLBasicSignalGenerator.resolved_model_identity()`), so a retrained primary never resumes
+  stale fires.
+- **Restart recovery keeps trailing-stop state, remaining exposure and MFE/MAE peaks**
+  (#742, #993). `LiveSessionRecoverer.recover_active_positions` now restores
+  `trailing_stop_activated`/`trailing_stop_price`/`breakeven_triggered`, registers the risk
+  manager at `current_size` (not the original size), and both recovery paths seed the
+  `MFEMAETracker` from the persisted `mfe`/`mae` columns so the first post-restart persist no
+  longer overwrites the stored peaks.
+- **A close aborted because its quantity is unsellable now records a durable, paged event**
+  (#1240). Once `min_notional` was known locally, a sub-minimum close stopped reaching Binance
+  (no more -1013 `system_events` row) and only logged. `_close_live_order` now writes one
+  `CLOSE_QUANTITY_UNSELLABLE` event (critical) plus an alert per (symbol, cause), carrying the
+  reason (`min_notional`, `min_qty`, `lot_sizing`), re-announced hourly. A zero quantity caused
+  by the holdings cap now records `CLOSE_INVENTORY_LOCKED` and feeds the close-only latch.
+- **Data downloads no longer silently fall back to CoinGecko, and the cache validates on
+  load** (#982). `atb data download|prefill-cache|preload-offline` pin the Binance provider
+  and fail loudly on Binance errors. `CachedDataProvider` sorts and de-duplicates (keep last)
+  cached candles on load, persists the repair, and warns; `atb data cache-manager audit`
+  scans existing parquet files for duplicate/unsorted timestamps.
 - **Direct-`ComponentStrategy` live entry path now enforces the `enter_short` opt-in**
   (#1031). It routes through the shared `extract_entry_plan` chokepoint, so a SELL
   without `enter_short` metadata can no longer open a short on that path.
@@ -31,6 +62,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   final leg only (#1234); DB `trades.pnl_percent` ignores banked partials (#1249).
 - **`Backtester` early-stop drawdown threshold always comes from the hydrated risk manager** (#1089).
   A bare `Backtester` used a hardcoded 0.5 instead of the ratified 20% cap.
+- **`BinanceProvider.get_symbol_info` now reads the `NOTIONAL` filter** (falling back to
+  legacy `MIN_NOTIONAL`) — Binance no longer returns `MIN_NOTIONAL`, so `min_notional` was
+  always 0 and the execution engine's pre-trade minimum-notional guard was dead (#1062).
+- **One Binance order-type mapping table** (`src/data_providers/binance_order_types.py`)
+  shared by the REST and WebSocket parsing paths; unknown types now log a warning instead of
+  silently becoming MARKET (#1158).
 
 ### Changed
 - **Entry-path stop-loss placement now threads `reason_code` through and defers on a
@@ -116,6 +153,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the ungated path still diverges.
 
 ### Fixed
+- **Periodic reconciler stop-loss coherence** (#739, #714, #1194, #1217, #1214, #1201).
+  The per-position stop verify/re-place step now runs under the per-base-asset lock the
+  close/entry paths use and re-checks the tracker once it holds it, so it can neither
+  race an active close (orphan/double stop) nor re-arm a stop for a position removed
+  earlier in the same cycle (a naked BUY stop for a short). Every reconciler path that
+  removes a position (entry ghost, spot/margin external close) now cancels and forgets
+  its resting stop. Reconciler-issued cancels mark the order self-cancelled first, so a
+  deliberate cancel no longer pages a false `STOP_LOSS_CANCELLED`. The orphan-order sweep
+  no longer cancels the stop-loss of a position the DB still shows OPEN but the tracker
+  doesn't hold: it leaves the stop in place, escalates CRITICAL (close-only) and names
+  the condition. An adopted stop resting looser than intended (which no later pass can
+  correct, since the drift check shares the adopt tolerance) now pages an operator
+  instead of logging a misleading "next pass will fix it" line. The drift-correction
+  re-placement passes `just_cancelled=True`.
+- **Startup reconciler stop-loss robustness** (#1193, #1201, #1219, #1005, #1194).
+  `PositionReconciler` now receives the engine's `OrderTracker` (wired in `recovery.py`,
+  and via `PeriodicReconciler`'s delegate): every stop it places or adopts is registered
+  for fill/cancel routing, and its deliberate cancels (partial-exit resize, price-drift
+  correction, phantom removal) are marked self-cancelled. An unconfirmed cancel in the
+  resize path now keeps the old stop instead of placing a second one. Post-cancel
+  re-placements pass `just_cancelled=True`. A resting stop with a NaN/inf/non-positive
+  `stop_price` is now refused by the placement guard (unverifiable, retryable) instead of
+  adopted, and the shared capture (`adopted_stop_price`, also used by
+  `LiveStopLossManager`) ignores and logs such a price, so it can no longer poison
+  `last_placed_stop_price`. Reconcilers untrack a dead stop id they replace, an
+  unconfirmed phantom-stop cancel and a failed post-resize re-placement now page, and the
+  failed-DB-close page names its context (external close vs margin phantom). The entry-fill
+  quantity correction keeps a scaled-in position's >1 current/original fraction, and the
+  startup failed-DB-close twins now page (`RECONCILE_DB_CLOSE_FAILED`) like the periodic path.
 - **A -1003 exchange-wide rate-limit ban hitting the stop-placement guard's own
   open-orders lookup — rather than the placement call itself — never reached the
   `on_rate_limit_ban` close-only escalation** (#738 review follow-up). The prior fix

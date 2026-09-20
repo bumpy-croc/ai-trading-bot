@@ -55,6 +55,34 @@ def _sync_result(
     )
 
 
+class TestSpotBalanceRefresh:
+    def test_in_memory_balance_follows_db_after_reconciler_correction(self):
+        engine = _make_engine()
+        engine.trading_session_id = 5
+        engine.db_manager = MagicMock()
+        engine.db_manager.get_current_balance.return_value = 1_234.5
+        result = _sync_result(
+            success=True,
+            balance_sync={"synced": True, "corrected": False, "exchange_cash": 600.0},
+        )
+
+        engine._apply_corrected_balance(result, "test")
+
+        engine.db_manager.get_current_balance.assert_called_once_with(5)
+        assert engine.current_balance == pytest.approx(1_234.5)
+
+    def test_margin_style_result_without_exchange_cash_does_not_touch_db(self):
+        engine = _make_engine()
+        engine.db_manager = MagicMock()
+
+        engine._apply_corrected_balance(
+            _sync_result(success=True, balance_sync={"synced": True, "corrected": False}), "test"
+        )
+
+        engine.db_manager.get_current_balance.assert_not_called()
+        assert engine.current_balance == pytest.approx(99.89)
+
+
 class TestNoOpConditions:
     def test_noop_when_no_synchronizer(self):
         engine = _make_engine(account_synchronizer=None)

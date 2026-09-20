@@ -43,6 +43,7 @@ from src.trading.balance_retry import read_free_balance_with_retry
 from src.trading.precision import format_quantity, quantize_to_step
 from src.trading.symbols.factory import SymbolFactory, base_asset_from_symbol
 
+from .binance_order_types import map_binance_order_type
 from .data_provider import DataProvider
 from .exchange_interface import (
     AccountBalance,
@@ -1631,7 +1632,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                         price=float(trade_data["price"]),
                         commission=float(trade_data["commission"]),
                         commission_asset=trade_data["commissionAsset"],
-                        time=datetime.fromtimestamp(trade_time_ms / 1000),
+                        time=datetime.fromtimestamp(trade_time_ms / 1000, tz=UTC),
                     )
                     trades.append(trade)
                 except (KeyError, ValueError, TypeError) as e:
@@ -2479,6 +2480,8 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 if symbol_info["symbol"] == cache_key:
                     # Extract relevant information
                     filters = {f["filterType"]: f for f in symbol_info["filters"]}
+                    # Binance renamed MIN_NOTIONAL to NOTIONAL; some legacy markets keep the old key.
+                    notional_filter = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL", {})
 
                     info = {
                         "symbol": symbol,
@@ -2493,8 +2496,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                             filters.get("PRICE_FILTER", {}).get("maxPrice", float("inf"))
                         ),
                         "tick_size": float(filters.get("PRICE_FILTER", {}).get("tickSize", 0)),
-                        "min_notional": float(
-                            filters.get("MIN_NOTIONAL", {}).get("minNotional", 0)
+                        "min_notional": float(notional_filter.get("minNotional", 0)),
+                        # When false, MARKET orders are exempt from min_notional.
+                        "apply_min_to_market": bool(
+                            notional_filter.get(
+                                "applyMinToMarket", notional_filter.get("applyToMarket", True)
+                            )
                         ),
                     }
                     with self._symbol_info_cache_lock:
@@ -2527,15 +2534,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
     def _convert_order_type(self, binance_type: str) -> OrderType:
         """Convert Binance order type to our enum"""
-        mapping = {
-            "MARKET": OrderType.MARKET,
-            "LIMIT": OrderType.LIMIT,
-            "STOP_LOSS": OrderType.STOP_LOSS,
-            "STOP_LOSS_LIMIT": OrderType.STOP_LOSS,
-            "TAKE_PROFIT": OrderType.TAKE_PROFIT,
-            "TAKE_PROFIT_LIMIT": OrderType.TAKE_PROFIT,
-        }
-        return mapping.get(binance_type, OrderType.MARKET)
+        return map_binance_order_type(binance_type)
 
     def _convert_to_binance_order_type(self, order_type: OrderType) -> str:
         """Convert our order type enum to Binance format"""

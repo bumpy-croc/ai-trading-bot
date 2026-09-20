@@ -573,6 +573,7 @@ class TestRealRegistryLoadedOnnxRunnerConsumesMetadata:
         bundle_dir.mkdir(parents=True)
         (bundle_dir / "model.onnx").write_bytes(b"placeholder -- InferenceSession is mocked below")
         (bundle_dir / "metadata.json").write_text(json.dumps(metadata))
+        (bundle_dir.parent / "latest").symlink_to(version)
         return bundle_dir
 
     def test_binary_classifier_bundle_predicts_without_raising(self, tmp_path):

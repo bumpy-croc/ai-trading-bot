@@ -485,6 +485,7 @@ class CloudTrainingOrchestrator:
                 symbol=symbol,
                 model_type=model_type,
                 version_id=version_id,
+                set_latest=self.config.set_latest,
             )
 
             # The in-container trainer does not write the keys the prediction
@@ -539,6 +540,7 @@ class CloudTrainingOrchestrator:
         symbol: str,
         model_type: str,
         version_id: str,
+        set_latest: bool = False,
     ) -> Path:
         """Sync downloaded artifacts to model registry.
 
@@ -551,6 +553,7 @@ class CloudTrainingOrchestrator:
             symbol: Trading symbol
             model_type: Model type (basic, sentiment, etc.)
             version_id: Version identifier
+            set_latest: Also move ``{symbol}/{model_type}/latest`` to this bundle
 
         Returns:
             Path to synced model directory
@@ -564,7 +567,7 @@ class CloudTrainingOrchestrator:
         if not version_dir.resolve().is_relative_to(registry_root):
             raise ArtifactSyncError(f"Computed model path escapes registry root: {version_dir}")
 
-        # If artifact is already in the registry at the correct location, just update the symlink
+        # If artifact is already in the registry at the correct location, skip the copy
         if artifact_path.resolve() == version_dir.resolve():
             logger.info(f"Artifacts already at correct registry location: {version_dir}")
         else:
@@ -583,10 +586,11 @@ class CloudTrainingOrchestrator:
             shutil.copytree(artifact_path, version_dir)
             logger.info(f"Copied artifacts to {version_dir}")
 
-        # Update 'latest' symlink atomically so readers never see it missing
-        type_dir = local_registry / symbol / model_type
-        update_latest_symlink(type_dir, version_id)
-        logger.info(f"Updated latest symlink: {type_dir / 'latest'} -> {version_id}")
+        if set_latest:
+            # Atomic so readers never see the symlink missing
+            type_dir = local_registry / symbol / model_type
+            update_latest_symlink(type_dir, version_id)
+            logger.info(f"Updated latest symlink: {type_dir / 'latest'} -> {version_id}")
 
         return version_dir
 

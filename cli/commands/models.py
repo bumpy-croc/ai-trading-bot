@@ -8,13 +8,24 @@ from src.prediction.config import PredictionConfig
 from src.prediction.models.registry import PredictionModelRegistry
 
 
+def _open_registry(cfg: PredictionConfig) -> PredictionModelRegistry | None:
+    """Build the registry, or print why not (a missing directory raises)."""
+    try:
+        return PredictionModelRegistry(cfg)
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return None
+
+
 def _handle_list(ns: argparse.Namespace) -> int:
     cfg = PredictionConfig.from_config_manager()
-    reg = PredictionModelRegistry(cfg)
     base = Path(cfg.model_registry_path)
     if not base.exists():
         print("No models directory found")
         return 0
+    reg = _open_registry(cfg)
+    if reg is None:
+        return 1
     print("Strategy models:")
     for b in reg.list_bundles():
         print(f"- {b.symbol} {b.timeframe} {b.model_type} -> {b.version_id}")
@@ -23,7 +34,9 @@ def _handle_list(ns: argparse.Namespace) -> int:
 
 def _handle_compare(ns: argparse.Namespace) -> int:
     cfg = PredictionConfig.from_config_manager()
-    reg = PredictionModelRegistry(cfg)
+    reg = _open_registry(cfg)
+    if reg is None:
+        return 1
 
     # Basic comparison: print metrics.json if present
     symbol = ns.symbol
@@ -41,7 +54,9 @@ def _handle_compare(ns: argparse.Namespace) -> int:
 
 def _handle_validate(ns: argparse.Namespace) -> int:
     cfg = PredictionConfig.from_config_manager()
-    reg = PredictionModelRegistry(cfg)
+    reg = _open_registry(cfg)
+    if reg is None:
+        return 1
     # Attempt reload to surface errors
     try:
         reg.reload_models()
@@ -80,6 +95,12 @@ def _handle_promote(ns: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_gate(ns: argparse.Namespace) -> int:
+    from src.ml.promotion_gate import main as gate_main
+
+    return gate_main([ns.comparison_json])
+
+
 def register(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("models", help="Manage ML models")
     sp = p.add_subparsers(dest="models_cmd", required=True)
@@ -101,3 +122,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_promote.add_argument("model_type")
     p_promote.add_argument("version")
     p_promote.set_defaults(func=_handle_promote)
+
+    p_gate = sp.add_parser(
+        "gate",
+        help="Score a challenger vs incumbent (exit 0 only on PASS); see src/ml/promotion_gate.py",
+    )
+    p_gate.add_argument("comparison_json")
+    p_gate.set_defaults(func=_handle_gate)

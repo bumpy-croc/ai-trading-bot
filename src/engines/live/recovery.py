@@ -474,6 +474,11 @@ class LiveSessionRecoverer:
                     scale_ins_taken=pos_data.get("scale_ins_taken", 0) or 0,
                     last_partial_exit_price=pos_data.get("last_partial_exit_price"),
                     last_scale_in_price=pos_data.get("last_scale_in_price"),
+                    # Trailing/breakeven state: losing it on restart re-arms the
+                    # activation logic and can loosen an already-ratcheted stop.
+                    trailing_stop_activated=bool(pos_data.get("trailing_stop_activated", False)),
+                    trailing_stop_price=pos_data.get("trailing_stop_price"),
+                    breakeven_triggered=bool(pos_data.get("breakeven_triggered", False)),
                     order_id=tracker_key,  # Backward compat: used as _positions dict key
                     tracker_key=tracker_key,
                     exchange_order_id=entry_order_id,
@@ -499,6 +504,9 @@ class LiveSessionRecoverer:
                     state.live_position_tracker.track_recovered_position(
                         position, db_id=pos_data.get("id")
                     )
+                    # Keep the persisted excursion peaks: an empty in-memory
+                    # tracker would otherwise overwrite them on the next persist.
+                    state.live_position_tracker.seed_mfe_mae(position.order_id, pos_data)
 
                 # Register recovered stop-loss order with OrderTracker for monitoring
                 if position.stop_loss_order_id and state.order_tracker:
@@ -509,29 +517,15 @@ class LiveSessionRecoverer:
                         position.symbol,
                     )
 
-                # Update risk manager tracking for recovered positions
-                if state.risk_manager:
-                    try:
-                        state.risk_manager.update_position(
-                            symbol=position.symbol,
-                            # __post_init__ guarantees side is a PositionSide enum.
-                            side=cast(PositionSide, position.side).value,
-                            size=position.size,
-                            entry_price=position.entry_price,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to update risk manager for recovered position %s: %s",
-                            position.symbol,
-                            e,
-                        )
-
                 logger.info(
                     "✅ Recovered position: %s %s @ $%.2f",
                     pos_data["symbol"],
                     pos_data["side"],
                     pos_data["entry_price"],
                 )
+
+            # Single registration path (handles fully-drained current_size == 0).
+            self.ensure_positions_registered_with_risk_manager()
 
             logger.info("🎯 Successfully recovered %s positions", len(db_positions))
 
@@ -599,6 +593,7 @@ class LiveSessionRecoverer:
                     fee_rate=state.live_execution_engine.fee_rate,
                     data_provider=state.data_provider,
                     on_event=state._record_event,
+                    order_tracker=state.order_tracker,
                 )
 
                 if not positions_snapshot:

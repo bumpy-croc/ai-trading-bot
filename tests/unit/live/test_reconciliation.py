@@ -9,7 +9,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, call, create_autospec, patch
+from unittest.mock import MagicMock, PropertyMock, call, create_autospec, patch
 
 import pytest
 
@@ -2477,9 +2477,10 @@ class TestPeriodicReconcilerSLVerification:
         )
         mock_exchange.get_order.side_effect = [entry_order, sl_order]
         mock_exchange.get_open_orders.return_value = []
-        # Wrapper pre-check sees the position; after the delegated close the
-        # tracker no longer has it (the handler removed it on success).
-        mock_position_tracker.get_position.side_effect = [pos, None]
+        # The step-2 recheck and the wrapper pre-check see the position; after
+        # the delegated close the tracker no longer has it (the handler removed
+        # it on success).
+        mock_position_tracker.get_position.side_effect = [pos, pos, None]
         mock_db.get_current_balance.return_value = 1000.0
         mock_db.close_position.return_value = True
 
@@ -2921,16 +2922,18 @@ class TestPeriodicReconcilerStopLossIdMutationInsideLock:
         with patch.object(reconciler, "_stop_loss_placement_lock", return_value=_ObservingLock()):
             reconciler._reconcile_cycle()
 
-        # Four lock scopes: the early None-reset (on confirming the order
+        # Five lock scopes: the early None-reset (on confirming the order
         # dead) releases first, then the placement block re-acquires the lock
         # and releases with the new id set, then the pre-persist re-check
         # (#1199 P1 -- guards against a concurrent move() clobber between
         # releasing the placement lock and persisting to the DB) re-acquires
-        # it once more, then the orphan sweep (#740) acquires the same
-        # per-symbol lock once more at the end of the cycle. All four
+        # it once more, then the per-position verification scope that wraps
+        # all of those (#714) releases, then the orphan sweep (#740) acquires
+        # the same per-symbol lock once more at the end of the cycle. All
         # transitions must be visible AT release, never patched in afterwards.
         assert observed_at_release == [
             None,
+            "new_sl_scope",
             "new_sl_scope",
             "new_sl_scope",
             "new_sl_scope",
@@ -2938,7 +2941,8 @@ class TestPeriodicReconcilerStopLossIdMutationInsideLock:
             "stop_loss_order_id must be None at the first lock release (the "
             "dead-order reset), the NEW id at the second (the placement), "
             "and the NEW id again at the third (the pre-persist re-check, "
-            "#1199) and fourth (the orphan sweep, #740) -- a write outside "
+            "#1199), fourth (the enclosing verification scope, #714) and "
+            "fifth (the orphan sweep, #740) -- a write outside "
             "any lock's scope races LiveStopLossManager.move()'s fresh "
             "re-read once it acquires this same lock (#1179)"
         )
@@ -2987,12 +2991,14 @@ class TestPeriodicReconcilerStopLossIdMutationInsideLock:
         with patch.object(reconciler, "_stop_loss_placement_lock", return_value=_ObservingLock()):
             reconciler._reconcile_cycle()
 
-        # Three lock scopes: the placement itself, then the pre-persist
+        # Four lock scopes: the placement itself, then the pre-persist
         # re-check (#1199 P1) that guards against a concurrent move()
         # clobbering the DB between releasing the placement lock and
-        # persisting to it, then the orphan sweep (#740) acquiring the same
+        # persisting to it, then the per-position verification scope that
+        # wraps both (#714), then the orphan sweep (#740) acquiring the same
         # per-symbol lock once more at cycle end.
         assert observed_at_release == [
+            "new_sl_missing_scope",
             "new_sl_missing_scope",
             "new_sl_missing_scope",
             "new_sl_missing_scope",
@@ -3413,8 +3419,9 @@ class TestPeriodicReconcilerSLPriceDrift:
         looser achieved price into ``position.stop_loss`` -- the engine's own
         software exit trigger, independent of the resting exchange order --
         would tolerate extra notional risk before that trigger fires. Only a
-        tighter-or-equal achieved price may be ratified; a looser one must be
-        left as an unresolved divergence for the next pass instead."""
+        tighter-or-equal achieved price may be ratified; a looser one is left
+        unratified and paged as a latched divergence (#1214) -- no later pass
+        corrects it, because the drift check shares the adopt tolerance."""
         from src.data_providers.exchange_interface import OrderSide
         from src.data_providers.exchange_interface import OrderStatus as ExOS
 
@@ -3443,16 +3450,27 @@ class TestPeriodicReconcilerSLPriceDrift:
         adopted_order.side = OrderSide.SELL
         adopted_order.stop_price = 46200.0
         mock_exchange.get_open_orders_checked.return_value = [adopted_order]
+        on_event = MagicMock()
 
         reconciler = PeriodicReconciler(
             exchange_interface=mock_exchange,
             position_tracker=mock_position_tracker,
             db_manager=mock_db,
             session_id=1,
+            on_event=on_event,
         )
         reconciler._reconcile_cycle()
 
         assert pos.stop_loss_order_id == "untracked_loose_sl"
+        looser_pages = [
+            c
+            for c in on_event.call_args_list
+            if c.kwargs.get("error_code") == "STOP_LOSS_LOOSER_THAN_INTENDED"
+        ]
+        assert len(looser_pages) == 1
+        assert looser_pages[0].args[0] == EventType.ALERT
+        assert looser_pages[0].kwargs["alert"] is True
+        assert "will not self-correct" in looser_pages[0].args[1]
         # last_placed_stop_price (the min-trailing-stop-move floor's baseline,
         # #1179) is unconditional -- it must always reflect exchange reality.
         assert pos.last_placed_stop_price == 46200.0
@@ -3505,9 +3523,10 @@ class TestPeriodicReconcilerSLPriceDrift:
 
         class _RaceSimulatingLock:
             """A no-op lock (matches the un-registried fallback) that, on the
-            SECOND scope's exit -- the placement -- mutates stop_loss_order_id
-            as a concurrent move() would, right before the third scope (the
-            pre-persist still_ours re-check) observes it."""
+            THIRD scope's exit -- the placement, after the enclosing #714
+            verification scope and the dead-order reset -- mutates
+            stop_loss_order_id as a concurrent move() would, right before the
+            fourth scope (the pre-persist still_ours re-check) observes it."""
 
             def __init__(self):
                 self.call_count = 0
@@ -3517,7 +3536,7 @@ class TestPeriodicReconcilerSLPriceDrift:
                 return self
 
             def __exit__(self, *exc_info):
-                if self.call_count == 2:
+                if self.call_count == 3:
                     pos.stop_loss_order_id = "concurrent_move_new_id"
                 return False
 
@@ -8100,3 +8119,1194 @@ class TestCrashRecoveryIdempotencyGuard:
         mock_db.log_trade.assert_called_once()
         assert mock_db.log_trade.call_args.kwargs["balance_delta"] is not None
         assert mock_db.log_trade.call_args.kwargs["position_id"] == 87
+
+
+# ---------- Periodic reconciler: stop-loss coherence (#739, #714, #1194, #1217) ----------
+
+
+def _live_tracker(mock_position_tracker, positions: dict):
+    """Make the mock tracker's lookups/removals act on a live dict, like the real one."""
+    # The real tracker's ``positions`` returns a copy, so removal mid-cycle does not
+    # mutate the snapshot the cycle is iterating.
+    type(mock_position_tracker).positions = PropertyMock(side_effect=lambda: dict(positions))
+    mock_position_tracker.get_position.side_effect = lambda key: positions.get(key)
+    mock_position_tracker.remove_position.side_effect = lambda key: positions.pop(key, None)
+    mock_position_tracker.pop_position.side_effect = lambda key: positions.pop(key, None)
+
+
+class TestPeriodicStopVerificationSeesCurrentTracker:
+    """#739: steps 1/1b remove positions but step 2 iterated the same stale snapshot."""
+
+    def test_step2_does_not_replace_the_stop_of_a_position_removed_in_step1(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            order_id="entry_ghost",
+            exchange_order_id="entry_ghost",
+            stop_loss_order_id="sl_ghost",
+            stop_loss=45000.0,
+            quantity=0.5,
+            current_size=0.5,
+            original_size=0.5,
+        )
+        _live_tracker(mock_position_tracker, {"entry_ghost": pos})
+        entry_order = MockExchangeOrder(order_id="entry_ghost", status=ExOS.CANCELLED)
+        sl_order = MockExchangeOrder(order_id="sl_ghost", status=ExOS.CANCELLED)
+        mock_exchange.get_order.side_effect = lambda oid, sym: (
+            entry_order if oid == "entry_ghost" else sl_order
+        )
+        mock_exchange.cancel_order.return_value = True
+        mock_exchange.get_open_orders.return_value = []
+
+        PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )._reconcile_cycle()
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        mock_exchange.get_open_orders_checked.assert_not_called()
+
+    def test_ghost_removal_cancels_the_resting_stop_and_clears_its_id(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            order_id="entry_ghost",
+            exchange_order_id="entry_ghost",
+            stop_loss_order_id="sl_ghost",
+            stop_loss=45000.0,
+        )
+        _live_tracker(mock_position_tracker, {"entry_ghost": pos})
+        mock_exchange.get_order.return_value = MockExchangeOrder(
+            order_id="entry_ghost", status=ExOS.REJECTED
+        )
+        mock_exchange.cancel_order.return_value = True
+
+        PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )._reconcile_cycle()
+
+        mock_exchange.cancel_order.assert_any_call("sl_ghost", "BTCUSDT")
+        assert pos.stop_loss_order_id is None
+        mock_position_tracker.remove_position.assert_called_once_with("entry_ghost")
+
+    def test_spot_external_close_cancels_the_resting_stop(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            order_id="entry_spot",
+            exchange_order_id="entry_spot",
+            stop_loss_order_id="sl_spot",
+            stop_loss=45000.0,
+            quantity=0.5,
+            current_size=0.5,
+            original_size=0.5,
+        )
+        _live_tracker(mock_position_tracker, {"entry_spot": pos})
+        mock_exchange.get_order.side_effect = lambda oid, sym: MockExchangeOrder(
+            order_id=oid, status=ExOS.FILLED if oid == "entry_spot" else ExOS.PENDING
+        )
+        mock_exchange.get_balance.side_effect = lambda asset: MockBalance(
+            asset=asset, total=1000.0 if asset == "USDT" else 0.0
+        )
+        mock_exchange.cancel_order.return_value = True
+        mock_db.close_position.return_value = True
+
+        PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )._reconcile_cycle()
+
+        mock_exchange.cancel_order.assert_any_call("sl_spot", "BTCUSDT")
+        assert pos.stop_loss_order_id is None
+        mock_exchange.place_stop_loss_order.assert_not_called()
+
+    def test_step2_skips_a_position_that_is_no_longer_tracked(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """A concurrent close removes the position between the snapshot and step 2."""
+        pos = MockPosition(order_id="entry_gone", exchange_order_id=None, stop_loss_order_id=None)
+        mock_position_tracker.positions = {"entry_gone": pos}
+        mock_position_tracker.get_position.return_value = None
+
+        PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )._reconcile_cycle()
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        mock_exchange.get_order.assert_not_called()
+
+
+class TestPeriodicStopVerificationHoldsBaseLock:
+    """#714: the verify/re-place loop must serialise with an active close."""
+
+    def test_stop_lookup_runs_under_the_base_asset_lock(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            order_id="entry_lock",
+            exchange_order_id=None,
+            stop_loss_order_id="sl_lock",
+            stop_loss=45000.0,
+        )
+        _live_tracker(mock_position_tracker, {"entry_lock": pos})
+        registry = BaseAssetLockRegistry()
+        lock = registry.lock_for("BTC")
+        acquired_elsewhere: list[bool] = []
+
+        def get_order(oid, sym):
+            def probe():
+                got = lock.acquire(blocking=False)
+                acquired_elsewhere.append(got)
+                if got:
+                    lock.release()
+
+            t = threading.Thread(target=probe)
+            t.start()
+            t.join()
+            return MockExchangeOrder(order_id=oid, status=ExOS.FILLED)
+
+        mock_exchange.get_order.side_effect = get_order
+        mock_exchange.get_open_orders.return_value = []
+
+        PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            lock_registry=registry,
+        )._reconcile_cycle()
+
+        assert acquired_elsewhere, "stop lookup never ran"
+        assert acquired_elsewhere[0] is False
+
+    def test_a_close_that_removed_the_position_while_waiting_for_the_lock_wins(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """The reconciler blocks on the base lock while a close holds it; when it gets
+        the lock the position is gone, so it must not re-arm a stop for it."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            order_id="entry_race",
+            exchange_order_id=None,
+            stop_loss_order_id="sl_race",
+            stop_loss=45000.0,
+            quantity=0.5,
+            current_size=0.5,
+            original_size=0.5,
+        )
+        tracked = {"entry_race": pos}
+        _live_tracker(mock_position_tracker, tracked)
+        mock_exchange.get_order.return_value = MockExchangeOrder(
+            order_id="sl_race", status=ExOS.CANCELLED
+        )
+        mock_exchange.get_open_orders.return_value = []
+        registry = BaseAssetLockRegistry()
+        lock = registry.lock_for("BTC")
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            lock_registry=registry,
+        )
+
+        lock.acquire()  # the engine's close path holds the base lock
+        worker = threading.Thread(target=reconciler._reconcile_cycle)
+        worker.start()
+        try:
+            worker.join(timeout=0.3)
+            assert worker.is_alive(), "reconciler did not wait for the base-asset lock"
+            tracked.pop("entry_race")  # the close finishes and removes the position
+        finally:
+            lock.release()
+        worker.join(timeout=5)
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+
+
+class TestReconcilerCancelsMarkSelfCancelled:
+    """#1194: a deliberate reconciler cancel must not page a false STOP_LOSS_CANCELLED."""
+
+    def _drift_setup(self, mock_exchange, mock_position_tracker):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            order_id="entry_drift",
+            exchange_order_id=None,
+            stop_loss_order_id="sl_drift",
+            stop_loss=47000.0,
+            quantity=1.0,
+            current_size=1.0,
+            original_size=1.0,
+        )
+        _live_tracker(mock_position_tracker, {"entry_drift": pos})
+        sl_order = MockExchangeOrder(order_id="sl_drift", status=ExOS.PENDING)
+        sl_order.stop_price = 40000.0
+        mock_exchange.get_order.return_value = sl_order
+        mock_exchange.get_open_orders_checked.return_value = []
+        mock_exchange.place_stop_loss_order.return_value = "sl_drift_new"
+        return pos
+
+    def test_drift_correction_marks_before_cancelling(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        self._drift_setup(mock_exchange, mock_position_tracker)
+        mock_exchange.cancel_order.return_value = True
+        order_tracker = MagicMock()
+        parent = MagicMock()
+        parent.attach_mock(order_tracker.mark_self_cancelled, "mark")
+        parent.attach_mock(mock_exchange.cancel_order, "cancel")
+
+        PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            order_tracker=order_tracker,
+        )._reconcile_cycle()
+
+        assert [c[0] for c in parent.mock_calls][:2] == ["mark", "cancel"]
+        order_tracker.mark_self_cancelled.assert_called_once_with("sl_drift")
+        order_tracker.stop_tracking.assert_called_once_with("sl_drift")
+        order_tracker.clear_self_cancelled.assert_not_called()
+        # The re-placement follows our own confirmed cancel, so the provider
+        # is told to retry its post-cancel free-balance read (#1201).
+        assert mock_exchange.place_stop_loss_order.call_args.kwargs["just_cancelled"] is True
+
+    def test_unconfirmed_cancel_drops_the_mark(self, mock_exchange, mock_position_tracker, mock_db):
+        self._drift_setup(mock_exchange, mock_position_tracker)
+        mock_exchange.cancel_order.return_value = False
+        order_tracker = MagicMock()
+
+        PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            order_tracker=order_tracker,
+        )._reconcile_cycle()
+
+        order_tracker.mark_self_cancelled.assert_called_once_with("sl_drift")
+        order_tracker.clear_self_cancelled.assert_called_once_with("sl_drift")
+        order_tracker.stop_tracking.assert_not_called()
+
+    def test_orphan_sweep_cancel_is_marked(self, mock_exchange, mock_position_tracker, mock_db):
+        mock_position_tracker.positions = {}
+        orphan = MagicMock()
+        orphan.order_id = "sl_orphan"
+        orphan.client_order_id = "atbsl_1_abcd"
+        mock_exchange.get_open_orders.return_value = [orphan]
+        mock_exchange.cancel_order.return_value = True
+        order_tracker = MagicMock()
+
+        severity = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            symbols=["BTCUSDT"],
+            order_tracker=order_tracker,
+        )._sweep_orphaned_orders()
+
+        assert severity == Severity.HIGH
+        order_tracker.mark_self_cancelled.assert_called_once_with("sl_orphan")
+
+    def test_removed_position_stop_cancel_is_marked(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            order_id="entry_ghost", exchange_order_id="entry_ghost", stop_loss_order_id="sl_g"
+        )
+        _live_tracker(mock_position_tracker, {"entry_ghost": pos})
+        mock_exchange.get_order.return_value = MockExchangeOrder(status=ExOS.CANCELLED)
+        mock_exchange.cancel_order.return_value = True
+        order_tracker = MagicMock()
+
+        PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            order_tracker=order_tracker,
+        )._reconcile_cycle()
+
+        order_tracker.mark_self_cancelled.assert_called_once_with("sl_g")
+
+
+class TestSweepKeepsStopOfUntrackedOpenPosition:
+    """#1217: 'absent from the tracker' is not proof a stop-loss is an orphan."""
+
+    @staticmethod
+    def _stop(order_id="sl_open", client_id="atbsl_19d360981ab_3a4b0d5a"):
+        order = MagicMock()
+        order.order_id = order_id
+        order.client_order_id = client_id
+        return order
+
+    @staticmethod
+    def _reconciler(mock_exchange, mock_position_tracker, mock_db, **kwargs):
+        return PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            symbols=["BTCUSDT"],
+            **kwargs,
+        )
+
+    def test_keeps_the_stop_and_escalates_critical(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        mock_position_tracker.positions = {}
+        mock_db.get_active_positions.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
+        mock_exchange.get_open_orders.return_value = [self._stop()]
+        findings: list[str] = []
+        reconciler = self._reconciler(mock_exchange, mock_position_tracker, mock_db)
+
+        severity = reconciler._sweep_orphaned_orders(findings)
+
+        assert severity == Severity.CRITICAL
+        mock_exchange.cancel_order.assert_not_called()
+        assert findings == ["open DB position not tracked; its stop-loss left in place"]
+
+    def test_flat_cycle_latches_close_only_and_pages(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        mock_position_tracker.positions = {}
+        mock_db.get_active_positions.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
+        mock_exchange.get_open_orders.return_value = [self._stop()]
+        on_critical = MagicMock()
+        on_event = MagicMock()
+        reconciler = self._reconciler(
+            mock_exchange,
+            mock_position_tracker,
+            mock_db,
+            on_critical=on_critical,
+            on_event=on_event,
+        )
+
+        reconciler._reconcile_cycle()
+
+        mock_exchange.cancel_order.assert_not_called()
+        on_critical.assert_called_once()
+        assert "open DB position not tracked" in on_critical.call_args.args[0]
+        assert on_event.call_args.kwargs["error_code"] == "RECONCILE_CRITICAL"
+
+    def test_db_read_failure_keeps_the_stop_but_is_only_high(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Unknown is not evidence of an untracked position: fail closed on the cancel,
+        but do not latch close-only for a DB blip."""
+        mock_position_tracker.positions = {}
+        mock_db.get_active_positions.side_effect = RuntimeError("db down")
+        mock_exchange.get_open_orders.return_value = [self._stop()]
+        on_critical = MagicMock()
+        reconciler = self._reconciler(
+            mock_exchange, mock_position_tracker, mock_db, on_critical=on_critical
+        )
+        findings: list[str] = []
+
+        severity = reconciler._sweep_orphaned_orders(findings)
+        reconciler._reconcile_cycle()
+
+        assert severity == Severity.HIGH
+        assert findings == ["could not verify open DB positions; stop-loss left in place"]
+        mock_exchange.cancel_order.assert_not_called()
+        on_critical.assert_not_called()
+
+    def test_a_refused_cancel_is_reported_not_silent(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        mock_position_tracker.positions = {}
+        mock_exchange.get_open_orders.return_value = [self._stop("sl_stuck")]
+        mock_exchange.cancel_order.return_value = False
+        findings: list[str] = []
+        reconciler = self._reconciler(mock_exchange, mock_position_tracker, mock_db)
+
+        severity = reconciler._sweep_orphaned_orders(findings)
+
+        assert severity == Severity.HIGH
+        assert findings == ["orphaned order(s) could not be cancelled"]
+
+    def test_reads_the_open_db_positions_once_per_sweep(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        mock_position_tracker.positions = {}
+        mock_db.get_active_positions.return_value = []
+        mock_exchange.get_open_orders.return_value = [
+            self._stop("sl_a", "atbsl_1_aaaa"),
+            self._stop("sl_b", "atbsl_2_bbbb"),
+        ]
+        reconciler = self._reconciler(mock_exchange, mock_position_tracker, mock_db)
+
+        reconciler._sweep_orphaned_orders()
+
+        assert mock_db.get_active_positions.call_count == 1
+        assert mock_exchange.cancel_order.call_count == 2
+
+    def test_cycle_keeps_the_untracked_finding_when_already_critical(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """Step 2 already raised the cycle to CRITICAL; the sweep's untracked-position
+        finding must still reach the close-only latch reason."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        tracked = MockPosition(
+            order_id="entry_t",
+            exchange_order_id=None,
+            stop_loss_order_id="sl_t",
+            stop_loss=45000.0,
+            db_position_id=5,
+        )
+        _live_tracker(mock_position_tracker, {"entry_t": tracked})
+        # The tracked stop is gone and cannot be re-placed -> CRITICAL in step 2.
+        mock_exchange.get_order.return_value = MockExchangeOrder(
+            order_id="sl_t", status=ExOS.CANCELLED
+        )
+        mock_exchange.get_open_orders_checked.return_value = None
+        mock_db.get_active_positions.return_value = [
+            {"id": 5, "symbol": "BTCUSDT"},
+            {"id": 9, "symbol": "BTCUSDT"},
+        ]
+        mock_exchange.get_open_orders.return_value = [self._stop()]
+        on_critical = MagicMock()
+
+        self._reconciler(
+            mock_exchange, mock_position_tracker, mock_db, on_critical=on_critical
+        )._reconcile_cycle()
+
+        assert "open DB position not tracked" in on_critical.call_args.args[0]
+
+    def test_still_cancels_a_genuine_orphan_when_db_has_no_open_position(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        mock_position_tracker.positions = {}
+        mock_db.get_active_positions.return_value = [{"id": 3, "symbol": "ETHUSDT"}]
+        mock_exchange.get_open_orders.return_value = [self._stop("sl_stray")]
+        reconciler = self._reconciler(mock_exchange, mock_position_tracker, mock_db)
+
+        severity = reconciler._sweep_orphaned_orders()
+
+        assert severity == Severity.HIGH
+        mock_exchange.cancel_order.assert_called_once_with("sl_stray", "BTCUSDT")
+
+    def test_a_tracked_positions_db_row_does_not_count_as_untracked(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """The DB row belongs to the tracked position, so a stray stop is still an orphan."""
+        mock_position_tracker.positions = {
+            "k": MockPosition(db_position_id=9, stop_loss_order_id="sl_real")
+        }
+        mock_db.get_active_positions.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
+        mock_exchange.get_open_orders.return_value = [self._stop("sl_stray")]
+        reconciler = self._reconciler(mock_exchange, mock_position_tracker, mock_db)
+
+        severity = reconciler._sweep_orphaned_orders()
+
+        assert severity == Severity.HIGH
+        mock_exchange.cancel_order.assert_called_once_with("sl_stray", "BTCUSDT")
+
+    def test_entry_orders_are_not_protected_by_the_db_check(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        mock_position_tracker.positions = {}
+        mock_db.get_active_positions.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
+        mock_exchange.get_open_orders.return_value = [self._stop("entry_x", "atb_1_abcd")]
+        reconciler = self._reconciler(mock_exchange, mock_position_tracker, mock_db)
+
+        severity = reconciler._sweep_orphaned_orders()
+
+        assert severity == Severity.HIGH
+        mock_exchange.cancel_order.assert_called_once_with("entry_x", "BTCUSDT")
+
+
+class TestLooserStopPageIsDeferredPastTheLock:
+    """The alert webhook POST must not run while the base-asset lock is held."""
+
+    def test_page_fires_after_the_base_lock_is_released(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderSide
+
+        pos = MockPosition(
+            order_id="entry_loose",
+            exchange_order_id=None,
+            stop_loss_order_id=None,
+            stop_loss=47000.0,
+            quantity=1.0,
+            current_size=1.0,
+            original_size=1.0,
+        )
+        _live_tracker(mock_position_tracker, {"entry_loose": pos})
+        adopted = MockExchangeOrder(order_id="loose_sl", status="NEW")
+        adopted.side = OrderSide.SELL
+        adopted.stop_price = 46200.0  # within tolerance of 47000 but looser for a long
+        mock_exchange.get_open_orders_checked.return_value = [adopted]
+        registry = BaseAssetLockRegistry()
+        lock = registry.lock_for("BTC")
+        lock_free_at_page: list[bool] = []
+
+        def on_event(event_type, message, **kwargs):
+            if kwargs.get("error_code") != "STOP_LOSS_LOOSER_THAN_INTENDED":
+                return
+
+            def probe():
+                got = lock.acquire(blocking=False)
+                lock_free_at_page.append(got)
+                if got:
+                    lock.release()
+
+            t = threading.Thread(target=probe)
+            t.start()
+            t.join()
+
+        PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            lock_registry=registry,
+            on_event=on_event,
+        )._reconcile_cycle()
+
+        assert lock_free_at_page == [True]
+
+
+# ---------- Startup reconciler: OrderTracker wiring (#1193, #1194, #1201) ----------
+
+
+def _startup_reconciler(mock_exchange, mock_position_tracker, mock_db, order_tracker):
+    return PositionReconciler(
+        exchange_interface=mock_exchange,
+        position_tracker=mock_position_tracker,
+        db_manager=mock_db,
+        session_id=1,
+        order_tracker=order_tracker,
+    )
+
+
+class TestStartupReconcilerTracksStops:
+    """#1193: stops the startup reconciler places or adopts must reach the OrderTracker."""
+
+    def test_replaced_missing_stop_is_tracked(self, mock_exchange, mock_position_tracker, mock_db):
+        order_tracker = MagicMock()
+        rec = _startup_reconciler(mock_exchange, mock_position_tracker, mock_db, order_tracker)
+        pos = MockPosition(stop_loss_order_id="sl_real", db_position_id=62, quantity=0.1)
+        pos.stop_loss = 45000.0
+        mock_exchange.get_order.return_value = None
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.1)
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_real"
+
+        rec._verify_stop_loss(
+            pos, "sl_real", ReconciliationResult(entity_type="position", entity_id=62, status="x")
+        )
+
+        order_tracker.track_order.assert_called_once_with("new_sl_real", "BTCUSDT")
+
+    def test_step3_missing_stop_adopted_order_is_tracked(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        order_tracker = MagicMock()
+        rec = _startup_reconciler(mock_exchange, mock_position_tracker, mock_db, order_tracker)
+        pos = MockPosition(
+            stop_loss_order_id=None,
+            stop_loss=45000.0,
+            db_position_id=64,
+            quantity=0.1,
+            exchange_order_id="entry_64",
+        )
+        mock_exchange.get_order.return_value = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.1
+        )
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.1)
+        adopted = MockExchangeOrder(order_id="untracked_step3_sl", status="NEW")
+        adopted.side = OrderSide.SELL
+        adopted.stop_price = 45400.0
+        mock_exchange.get_open_orders_checked.return_value = [adopted]
+
+        rec.reconcile_position(pos)
+
+        order_tracker.track_order.assert_called_once_with("untracked_step3_sl", "BTCUSDT")
+
+    def test_price_drift_correction_marks_cancel_tracks_new_and_flags_just_cancelled(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        order_tracker = MagicMock()
+        rec = _startup_reconciler(mock_exchange, mock_position_tracker, mock_db, order_tracker)
+        pos = MockPosition(stop_loss_order_id="sl_price_stale", db_position_id=71, quantity=0.1)
+        pos.stop_loss = 47000.0
+        sl_order = MockExchangeOrder(order_id="sl_price_stale", status=ExOS.PENDING)
+        sl_order.stop_price = 45000.0
+        mock_exchange.get_order.return_value = sl_order
+        mock_exchange.cancel_order.return_value = True
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_startup"
+
+        rec._verify_stop_loss(
+            pos,
+            "sl_price_stale",
+            ReconciliationResult(entity_type="position", entity_id=71, status="x"),
+        )
+
+        order_tracker.mark_self_cancelled.assert_called_once_with("sl_price_stale")
+        order_tracker.stop_tracking.assert_called_once_with("sl_price_stale")
+        order_tracker.track_order.assert_called_once_with("new_sl_startup", "BTCUSDT")
+        assert mock_exchange.place_stop_loss_order.call_args.kwargs["just_cancelled"] is True
+
+    def test_partial_exit_resize_marks_cancel_tracks_new_and_flags_just_cancelled(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        order_tracker = MagicMock()
+        rec = _startup_reconciler(mock_exchange, mock_position_tracker, mock_db, order_tracker)
+        pos = MockPosition(
+            db_position_id=15,
+            current_size=0.07,
+            original_size=0.1,
+            quantity=0.002,
+            stop_loss=48000.0,
+            stop_loss_order_id="old_sl_123",
+        )
+        mock_exchange.cancel_order.return_value = True
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_456"
+
+        rec._resize_stop_loss_after_partial_exit(pos)
+
+        order_tracker.mark_self_cancelled.assert_called_once_with("old_sl_123")
+        order_tracker.track_order.assert_called_once_with("new_sl_456", "BTCUSDT")
+        assert mock_exchange.place_stop_loss_order.call_args.kwargs["just_cancelled"] is True
+        assert pos.stop_loss_order_id == "new_sl_456"
+
+    def test_partial_exit_resize_keeps_the_old_stop_when_cancel_is_unconfirmed(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        order_tracker = MagicMock()
+        rec = _startup_reconciler(mock_exchange, mock_position_tracker, mock_db, order_tracker)
+        pos = MockPosition(
+            db_position_id=15,
+            current_size=0.07,
+            original_size=0.1,
+            quantity=0.002,
+            stop_loss=48000.0,
+            stop_loss_order_id="old_sl_123",
+        )
+        mock_exchange.cancel_order.return_value = False
+
+        rec._resize_stop_loss_after_partial_exit(pos)
+
+        mock_exchange.place_stop_loss_order.assert_not_called()
+        assert pos.stop_loss_order_id == "old_sl_123"
+        order_tracker.clear_self_cancelled.assert_called_once_with("old_sl_123")
+        order_tracker.track_order.assert_not_called()
+
+    def test_a_tracker_failure_does_not_undo_a_resting_stop(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        order_tracker = MagicMock()
+        order_tracker.track_order.side_effect = RuntimeError("tracker down")
+        rec = _startup_reconciler(mock_exchange, mock_position_tracker, mock_db, order_tracker)
+        pos = MockPosition(stop_loss_order_id="sl_real", db_position_id=62, quantity=0.1)
+        pos.stop_loss = 45000.0
+        mock_exchange.get_order.return_value = None
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.1)
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_real"
+
+        rec._verify_stop_loss(
+            pos, "sl_real", ReconciliationResult(entity_type="position", entity_id=62, status="x")
+        )
+
+        assert pos.stop_loss_order_id == "new_sl_real"
+
+    def test_without_an_order_tracker_placement_still_works(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        rec = _startup_reconciler(mock_exchange, mock_position_tracker, mock_db, None)
+        pos = MockPosition(stop_loss_order_id="sl_real", db_position_id=62, quantity=0.1)
+        pos.stop_loss = 45000.0
+        mock_exchange.get_order.return_value = None
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.1)
+        mock_exchange.place_stop_loss_order.return_value = "new_sl_real"
+
+        rec._verify_stop_loss(
+            pos, "sl_real", ReconciliationResult(entity_type="position", entity_id=62, status="x")
+        )
+
+        assert pos.stop_loss_order_id == "new_sl_real"
+
+    def test_periodic_reconciler_hands_its_tracker_to_the_delegate(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        order_tracker = MagicMock()
+        periodic = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            order_tracker=order_tracker,
+        )
+
+        assert periodic._position_reconciler.order_tracker is order_tracker
+
+    def test_startup_recovery_wires_the_engines_order_tracker(self):
+        from src.engines.live.recovery import LiveSessionRecoverer
+
+        state = MagicMock()
+        state.enable_live_trading = True
+        state.trading_session_id = 5
+        state.exchange_interface.is_margin_mode = False
+        state.live_position_tracker.positions = {}
+        with patch("src.engines.live.reconciliation.PositionReconciler") as reconciler_cls:
+            reconciler_cls.return_value.resolve_pending_orders.return_value = []
+
+            LiveSessionRecoverer(state).reconcile_positions_with_exchange()
+
+        reconciler_cls.assert_called_once()
+        assert reconciler_cls.call_args.kwargs["order_tracker"] is state.order_tracker
+
+    def test_phantom_removal_cancel_is_marked_self_cancelled(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        order_tracker = MagicMock()
+        rec = _startup_reconciler(mock_exchange, mock_position_tracker, mock_db, order_tracker)
+        rec._use_margin = True
+        pos = MockPosition(stop_loss_order_id="sl_phantom", db_position_id=90)
+        mock_exchange.cancel_order.return_value = True
+        mock_exchange.get_margin_borrowed.return_value = 0.0
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.0)
+        mock_db.close_position.return_value = True
+        result = ReconciliationResult(entity_type="position", entity_id=90, status="x")
+
+        rec._remove_phantom_position(pos, result)
+
+        order_tracker.mark_self_cancelled.assert_called_once_with("sl_phantom")
+
+
+# ---------- Adopted stop price validation (#1219) ----------
+
+
+class TestAdoptedStopPriceCapture:
+    """A malformed adopted stop_price must never become the min-move floor's baseline."""
+
+    @staticmethod
+    def _adopt(stop_price):
+        from types import SimpleNamespace
+
+        from src.engines.live.reconciliation import StopPlacementCheck, StopPlacementDecision
+
+        return StopPlacementDecision(
+            StopPlacementCheck.ADOPT,
+            existing_order_id="x",
+            existing_order=SimpleNamespace(stop_price=stop_price),
+        )
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), 0.0, -5.0, None])
+    def test_unusable_price_falls_back_to_the_intent(self, bad):
+        from src.engines.live.reconciliation import _AchievedStopPriceCapture
+
+        capture = _AchievedStopPriceCapture(100.0)
+
+        capture(self._adopt(bad))
+
+        assert capture.price == 100.0
+
+    def test_usable_price_is_captured(self):
+        from src.engines.live.reconciliation import _AchievedStopPriceCapture
+
+        capture = _AchievedStopPriceCapture(100.0)
+
+        capture(self._adopt(99.5))
+
+        assert capture.price == 99.5
+
+    def test_non_finite_resting_price_is_refused_end_to_end(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderSide
+
+        pos = MockPosition(
+            order_id="entry_nan",
+            exchange_order_id=None,
+            stop_loss_order_id=None,
+            stop_loss=45000.0,
+            quantity=0.1,
+            current_size=0.1,
+            original_size=0.1,
+        )
+        mock_position_tracker.positions = {"entry_nan": pos}
+        adopted = MockExchangeOrder(order_id="nan_sl", status="NEW")
+        adopted.side = OrderSide.SELL
+        adopted.stop_price = float("nan")
+        mock_exchange.get_open_orders_checked.return_value = [adopted]
+        reconciler = PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+        )
+
+        reconciler._place_missing_stop_loss(pos, "entry_nan")
+
+        # The guard refuses to adopt an order whose resting level cannot be verified,
+        # so nothing is recorded (least of all a NaN baseline).
+        assert pos.stop_loss_order_id is None
+        assert pos.last_placed_stop_price is None
+        mock_exchange.place_stop_loss_order.assert_not_called()
+
+
+# ---------- Startup entry-fill correction with a scaled-in position (#1005 F3) ----------
+
+
+class TestQuantityCorrectionPreservesScaleIn:
+    def test_correction_keeps_the_scaled_in_fraction(self, reconciler, mock_exchange):
+        """current/original = 1.5 (scaled in). The corrected current_size must stay 1.5x the
+        corrected original, not collapse to 1.0x and undersize the final close."""
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        pos = MockPosition(
+            quantity=0.02,
+            size=0.1,
+            original_size=0.1,
+            current_size=0.15,
+            entry_balance=10000.0,
+        )
+        mock_exchange.get_order.return_value = MockExchangeOrder(
+            status=ExOS.FILLED, average_price=50000.0, filled_quantity=0.021
+        )
+
+        reconciler.reconcile_position(pos)
+
+        assert pos.original_size == pytest.approx(0.105)
+        assert pos.current_size == pytest.approx(0.1575)
+
+
+# ---------- Startup failed-DB-close twins page (#1005 F5) ----------
+
+
+class TestStartupFailedDbClosePages:
+    """The startup twins of the periodic _escalate_failed_db_close must page too."""
+
+    @staticmethod
+    def _events(on_event):
+        return [
+            c
+            for c in on_event.call_args_list
+            if c.kwargs.get("error_code") == "RECONCILE_DB_CLOSE_FAILED"
+        ]
+
+    def test_spot_external_close_with_failed_db_close_pages(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        on_event = MagicMock()
+        rec = PositionReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            on_event=on_event,
+        )
+        pos = MockPosition(order_id="entry_x", db_position_id=77, quantity=0.5)
+        mock_position_tracker.pop_position.return_value = pos
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.0)
+        mock_db.close_position.return_value = False
+        result = ReconciliationResult(entity_type="position", entity_id=77, status="x")
+
+        rec._verify_asset_holdings(pos, result)
+
+        events = self._events(on_event)
+        assert len(events) == 1
+        assert events[0].args[0] == EventType.ALERT
+        assert events[0].kwargs["alert"] is True
+
+    def test_margin_phantom_with_failed_db_close_pages(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        on_event = MagicMock()
+        rec = PositionReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            use_margin=True,
+            on_event=on_event,
+        )
+        pos = MockPosition(order_id="entry_y", db_position_id=78, stop_loss_order_id=None)
+        mock_position_tracker.pop_position.return_value = pos
+        mock_db.close_position.return_value = False
+        result = ReconciliationResult(entity_type="position", entity_id=78, status="x")
+
+        rec._remove_phantom_position(pos, result)
+
+        assert len(self._events(on_event)) == 1
+
+
+# ---------- Review follow-ups for the startup reconciler (#1193, #1219) ----------
+
+
+class TestGuardRefusesUnusableRestingPrice:
+    """A NaN/inf/non-positive resting stop_price compares False against everything, so it
+    would pass the tolerance test and be ADOPTed as if it rested at intent."""
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), 0.0, -3.0])
+    def test_refuses_unconfirmed_instead_of_adopting(self, bad):
+        from src.data_providers.exchange_interface import OrderSide
+        from src.engines.live.reconciliation import (
+            StopPlacementCheck,
+            StopPlacementRefuseReason,
+            guard_stop_placement,
+        )
+
+        exchange = MagicMock()
+        resting = MockExchangeOrder(order_id="odd_sl", status="NEW")
+        resting.side = OrderSide.SELL
+        resting.stop_price = bad
+        exchange.get_open_orders_checked.return_value = [resting]
+
+        decision = guard_stop_placement(exchange, "BTCUSDT", OrderSide.SELL, stop_price=45000.0)
+
+        assert decision.check == StopPlacementCheck.REFUSE
+        assert decision.unconfirmed is True
+        assert decision.reason_code == StopPlacementRefuseReason.UNCONFIRMED
+
+    def test_capture_logs_a_present_but_unusable_price(self, caplog):
+        import logging
+        from types import SimpleNamespace
+
+        from src.engines.live.reconciliation import (
+            StopPlacementCheck,
+            StopPlacementDecision,
+            adopted_stop_price,
+        )
+
+        decision = StopPlacementDecision(
+            StopPlacementCheck.ADOPT,
+            existing_order_id="odd_sl",
+            existing_order=SimpleNamespace(stop_price=float("nan")),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="src.engines.live.reconciliation"):
+            assert adopted_stop_price(decision) is None
+
+        assert any("unusable stop_price" in r.message for r in caplog.records)
+
+    def test_capture_is_silent_when_there_is_no_price(self, caplog):
+        import logging
+        from types import SimpleNamespace
+
+        from src.engines.live.reconciliation import (
+            StopPlacementCheck,
+            StopPlacementDecision,
+            adopted_stop_price,
+        )
+
+        decision = StopPlacementDecision(
+            StopPlacementCheck.ADOPT,
+            existing_order_id="x",
+            existing_order=SimpleNamespace(stop_price=None),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="src.engines.live.reconciliation"):
+            assert adopted_stop_price(decision) is None
+
+        assert not caplog.records
+
+
+class TestStartupReconcilerReviewFollowUps:
+    def test_recovered_entry_placement_is_tracked(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        order_tracker = MagicMock()
+        rec = _startup_reconciler(mock_exchange, mock_position_tracker, mock_db, order_tracker)
+        order_data = {
+            "client_order_id": "atb_BTCUSDT_long_2",
+            "exchange_order_id": "ex_recover_2",
+            "entry_balance": 1000.0,
+        }
+        exchange_order = MockExchangeOrder(
+            order_id="ex_recover_2", average_price=50000.0, filled_quantity=0.001
+        )
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.001)
+        mock_db.log_position.return_value = 100
+        mock_exchange.place_stop_loss_order.return_value = "recovery_sl"
+
+        rec._reconcile_filled_entry(order_data, exchange_order, "BTCUSDT", "long", 50000.0, 0.001)
+
+        order_tracker.track_order.assert_called_once_with("recovery_sl", "BTCUSDT")
+
+    def test_cancelled_stop_is_untracked_and_replacement_tracked(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        order_tracker = MagicMock()
+        rec = _startup_reconciler(mock_exchange, mock_position_tracker, mock_db, order_tracker)
+        pos = MockPosition(stop_loss_order_id="sl_dead", db_position_id=62, quantity=0.1)
+        pos.stop_loss = 45000.0
+        mock_exchange.get_order.return_value = MockExchangeOrder(
+            order_id="sl_dead", status=ExOS.CANCELLED
+        )
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.1)
+        mock_exchange.place_stop_loss_order.return_value = "sl_new"
+
+        rec._verify_stop_loss(
+            pos, "sl_dead", ReconciliationResult(entity_type="position", entity_id=62, status="x")
+        )
+
+        order_tracker.stop_tracking.assert_called_once_with("sl_dead")
+        order_tracker.track_order.assert_called_once_with("sl_new", "BTCUSDT")
+
+    def test_missing_stop_is_untracked(self, mock_exchange, mock_position_tracker, mock_db):
+        order_tracker = MagicMock()
+        rec = _startup_reconciler(mock_exchange, mock_position_tracker, mock_db, order_tracker)
+        pos = MockPosition(stop_loss_order_id="sl_gone", db_position_id=62, quantity=0.1)
+        pos.stop_loss = 45000.0
+        mock_exchange.get_order.return_value = None
+        mock_exchange.get_balance.return_value = MockBalance(asset="BTC", total=0.1)
+        mock_exchange.place_stop_loss_order.return_value = "sl_new"
+
+        rec._verify_stop_loss(
+            pos, "sl_gone", ReconciliationResult(entity_type="position", entity_id=62, status="x")
+        )
+
+        order_tracker.stop_tracking.assert_called_once_with("sl_gone")
+
+    def test_phantom_removal_with_unconfirmed_stop_cancel_pages(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        on_event = MagicMock()
+        rec = PositionReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            use_margin=True,
+            on_event=on_event,
+        )
+        pos = MockPosition(stop_loss_order_id="sl_phantom", db_position_id=90)
+        mock_exchange.cancel_order.return_value = False
+        mock_db.close_position.return_value = True
+        result = ReconciliationResult(entity_type="position", entity_id=90, status="x")
+
+        rec._remove_phantom_position(pos, result)
+
+        pages = [
+            c
+            for c in on_event.call_args_list
+            if c.kwargs.get("error_code") == "PHANTOM_STOP_CANCEL_UNCONFIRMED"
+        ]
+        assert len(pages) == 1
+        assert pages[0].kwargs["alert"] is True
+
+    def test_phantom_db_close_failure_names_the_phantom(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        on_event = MagicMock()
+        rec = PositionReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            use_margin=True,
+            on_event=on_event,
+        )
+        pos = MockPosition(order_id="entry_y", db_position_id=78, stop_loss_order_id=None)
+        mock_position_tracker.pop_position.return_value = pos
+        mock_db.close_position.return_value = False
+
+        rec._remove_phantom_position(
+            pos, ReconciliationResult(entity_type="position", entity_id=78, status="x")
+        )
+
+        page = [
+            c
+            for c in on_event.call_args_list
+            if c.kwargs.get("error_code") == "RECONCILE_DB_CLOSE_FAILED"
+        ][0]
+        assert page.args[1].startswith("Margin phantom for BTCUSDT")
+
+    def test_resize_replacement_failure_after_confirmed_cancel_pages_and_audits(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        on_event = MagicMock()
+        rec = PositionReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            on_event=on_event,
+        )
+        pos = MockPosition(
+            db_position_id=15,
+            current_size=0.07,
+            original_size=0.1,
+            quantity=0.002,
+            stop_loss=48000.0,
+            stop_loss_order_id="old_sl_123",
+        )
+        mock_exchange.cancel_order.return_value = True
+        mock_exchange.place_stop_loss_order.return_value = None
+
+        rec._resize_stop_loss_after_partial_exit(pos)
+
+        pages = [
+            c
+            for c in on_event.call_args_list
+            if c.kwargs.get("error_code") == "RESIZE_STOP_UNPROTECTED"
+        ]
+        assert len(pages) == 1
+        assert pages[0].kwargs["alert"] is True
+        assert mock_db.log_audit_event.called
+
+    def test_periodic_dead_stop_is_untracked(self, mock_exchange, mock_position_tracker, mock_db):
+        from src.data_providers.exchange_interface import OrderStatus as ExOS
+
+        order_tracker = MagicMock()
+        pos = MockPosition(
+            order_id="entry_dead",
+            exchange_order_id=None,
+            stop_loss_order_id="sl_dead",
+            stop_loss=45000.0,
+            quantity=0.5,
+            current_size=0.5,
+            original_size=0.5,
+        )
+        _live_tracker(mock_position_tracker, {"entry_dead": pos})
+        mock_exchange.get_order.return_value = MockExchangeOrder(
+            order_id="sl_dead", status=ExOS.CANCELLED
+        )
+        mock_exchange.place_stop_loss_order.return_value = "sl_new"
+        mock_exchange.get_open_orders.return_value = []
+
+        PeriodicReconciler(
+            exchange_interface=mock_exchange,
+            position_tracker=mock_position_tracker,
+            db_manager=mock_db,
+            session_id=1,
+            order_tracker=order_tracker,
+        )._reconcile_cycle()
+
+        order_tracker.stop_tracking.assert_any_call("sl_dead")
+        order_tracker.track_order.assert_any_call("sl_new", "BTCUSDT")

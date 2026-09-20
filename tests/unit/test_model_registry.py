@@ -6,11 +6,19 @@ from pathlib import Path
 import pytest
 
 from src.prediction.config import PredictionConfig
-from src.prediction.models.exceptions import ModelLoadError
+from src.prediction.models.exceptions import ModelLoadError, ModelNotAvailableError
 from src.prediction.models.registry import PredictionModelRegistry, StrategyModel
 
 
-def _make_bundle(tmpdir: Path, symbol: str, model_type: str, timeframe: str, version: str) -> Path:
+def _make_bundle(
+    tmpdir: Path,
+    symbol: str,
+    model_type: str,
+    timeframe: str,
+    version: str,
+    promote: bool = True,
+) -> Path:
+    """Write a bundle; ``promote`` points ``latest`` at it (unpromoted bundles are not served)."""
     base = tmpdir / symbol / model_type / version
     base.mkdir(parents=True, exist_ok=True)
     (base / "model.onnx").write_bytes(b"dummy")
@@ -24,7 +32,27 @@ def _make_bundle(tmpdir: Path, symbol: str, model_type: str, timeframe: str, ver
             }
         )
     )
+    if promote:
+        latest = base.parent / "latest"
+        if latest.is_symlink():
+            latest.unlink()
+        latest.symlink_to(version)
     return base
+
+
+def test_unpromoted_version_is_not_served_but_stays_pinnable(tmp_path: Path, monkeypatch):
+    """GH #1135: a candidate without a `latest` symlink must not be served by select_bundle."""
+    reg_root = tmp_path / "models"
+    _make_bundle(reg_root, "ETHUSDT", "price", "1h", "2026-09-06_1h_v1", promote=False)
+    cfg = PredictionConfig.from_config_manager()
+    monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))
+
+    reg = PredictionModelRegistry(cfg)
+
+    with pytest.raises(ModelNotAvailableError):
+        reg.select_bundle(symbol="ETHUSDT", model_type="price", timeframe="1h")
+    assert reg.list_bundles() == []
+    assert reg.get_bundle_by_key("ETHUSDT:1h:price:2026-09-06_1h_v1") is not None
 
 
 def test_select_bundle_and_many(tmp_path: Path, monkeypatch):
@@ -416,7 +444,7 @@ def test_non_latest_version_indexed_but_not_eagerly_loaded(tmp_path: Path, monke
     never called on the live trading path) triggers the lazy load."""
     reg_root = tmp_path / "models"
     _make_bundle_with_latest_symlink(reg_root, "BTCUSDT", "basic", "1h", "2025-02-01_1h_v2")
-    _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
+    _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2025-01-01_1h_v1", promote=False)
 
     cfg = PredictionConfig.from_config_manager()
     monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))

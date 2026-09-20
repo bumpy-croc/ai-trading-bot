@@ -83,6 +83,9 @@ def _build_price_only_prediction_engine(sequence_length: int) -> PredictionEngin
         if health.get("status") != "healthy":
             logger.warning("Exam signal generator: prediction engine health degraded: %s", health)
         return engine
+    except FileNotFoundError:
+        # Missing registry must not degrade to a silent all-HOLD exam (#1023).
+        raise
     except Exception:
         logger.exception("Exam signal generator: prediction engine initialization failed")
         return None
@@ -544,6 +547,9 @@ class MetaLabelExamSignalGenerator(SignalGenerator):
             return registry.select_bundle(
                 symbol=self.symbol, model_type="meta_label", timeframe=self.timeframe
             )
+        except FileNotFoundError:
+            # Missing registry must not degrade to per-bar HOLDs (#1023).
+            raise
         except Exception:
             logger.exception("MetaLabelExamSignalGenerator: failed to load meta_label bundle")
             return None
