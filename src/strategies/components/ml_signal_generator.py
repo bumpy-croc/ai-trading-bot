@@ -8,13 +8,12 @@ regime-aware threshold adjustments and confidence calculations.
 
 import logging
 import math
-import time
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 if TYPE_CHECKING:
-    from src.prediction.models.registry import PredictionModelRegistry, StrategyModel
+    from src.prediction.models.registry import PredictionModelRegistry
 
 from src.config.config_manager import get_config
 from src.prediction import PredictionConfig, PredictionEngine
