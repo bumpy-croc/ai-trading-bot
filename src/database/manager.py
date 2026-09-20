@@ -1949,6 +1949,21 @@ class DatabaseManager:
                 )
                 raise
 
+    def get_open_position_refs(self, session_id: int | None = None) -> list[dict]:
+        """Lightweight OPEN-position listing: ``id``, ``symbol`` and ``strategy`` only.
+
+        Unlike ``get_active_positions`` it loads no orders, so it is cheap enough
+        to run every reconciliation cycle.
+        """
+        with self.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
+            query = session.query(Position.id, Position.symbol, Position.strategy_name).filter(
+                Position.status == PositionStatus.OPEN
+            )
+            effective_session_id = session_id or self._current_session_id
+            if effective_session_id:
+                query = query.filter(Position.session_id == effective_session_id)
+            return [{"id": row[0], "symbol": row[1], "strategy": row[2]} for row in query.all()]
+
     def get_active_positions(self, session_id: int | None = None) -> list[dict]:
         """Get all active positions with their associated orders."""
         # Use CRITICAL_READ timeout - position queries are in trading loop critical path

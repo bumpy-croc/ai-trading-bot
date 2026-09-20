@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fire-generation checkpoint fingerprint now includes the resolved primary-model bundle key
   (`MLBasicSignalGenerator.resolved_model_identity()`), so a retrained primary never resumes
   stale fires.
+- **Periodic reconciler detects an OPEN DB position missing from the tracker even with no
+  stop resting** (#1245). A per-cycle, two-sighting id comparison against
+  the new lightweight `get_open_position_refs` (account-sync `exchange_sync` rows excluded) pages CRITICAL and latches close-only, like the orphan-sweep's
+  stop-based finding. Re-adoption remains a restart/operator action.
 - **Restart recovery keeps trailing-stop state, remaining exposure and MFE/MAE peaks**
   (#742, #993). `LiveSessionRecoverer.recover_active_positions` now restores
   `trailing_stop_activated`/`trailing_stop_price`/`breakeven_triggered`, registers the risk
