@@ -49,6 +49,7 @@ from src.engines.live.trade_close_accounting import held_base_quantity
 from src.engines.shared.commission import order_commission_usd, split_base_quote
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
+from src.infrastructure.live_threads import create_live_thread
 from src.trading.close_sizing import cap_closing_sell_quantity
 from src.trading.exit_reason import ExitReason, classify_stop_exit
 
@@ -4911,11 +4912,7 @@ class PeriodicReconciler:
         if self._running:
             return
         self._running = True
-        self._thread = threading.Thread(
-            target=self._run_loop,
-            name="PeriodicReconciler",
-            daemon=True,
-        )
+        self._thread = create_live_thread(self._run_loop, name="PeriodicReconciler")
         self._thread.start()
         logger.info("Periodic reconciler started (interval=%ds)", self.interval)
 

@@ -113,6 +113,7 @@ from src.engines.shared.risk_configuration import (
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
 )
+from src.infrastructure.live_threads import create_live_thread
 from src.infrastructure.logging.events import (
     log_data_event,
     log_engine_event,
@@ -127,6 +128,7 @@ from src.position_management.trailing_stops import TrailingStopPolicy
 from src.prediction.inference_context import (
     InferenceContext,
     inference_scope,
+    register_live_process,
     set_inference_context,
 )
 from src.regime.detector import RegimeDetector
@@ -281,6 +283,7 @@ class LiveTradingEngine:
         # This pins the constructing thread only (contextvar, #926); the
         # trading loop thread scopes itself LIVE in _run_trading_loop.
         set_inference_context(InferenceContext.LIVE)
+        register_live_process()
 
         self._validate_inputs(
             initial_balance=initial_balance,
@@ -2891,7 +2894,7 @@ class LiveTradingEngine:
             )
 
         try:
-            threading.Thread(target=_deliver, name="order-tracker-alert", daemon=True).start()
+            create_live_thread(_deliver, name="order-tracker-alert").start()
         except Exception as e:  # pragma: no cover - defensive; never break order handling
             logger.warning("order-tracker alert dispatch failed: %s", e)
 
