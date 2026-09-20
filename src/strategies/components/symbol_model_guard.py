@@ -175,8 +175,8 @@ class SymbolModelGuardMixin:
 
         Raises ModelNotAvailableError (after logging) when the bundle vanished
         since startup validation, so callers fail the prediction (HOLD) instead
-        of scoring another symbol's model. Returns ``(None, None)`` when the
-        registry is unavailable or errors, deferring to the engine default.
+        of scoring another symbol's model. Returns ``(None, None)`` only when
+        there is no registry at all (degraded engine).
         """
         if self._cross_symbol_bundle_key is not None:
             # Startup explicitly opted into substitution via
@@ -213,7 +213,13 @@ class SymbolModelGuardMixin:
             self._model_symbol = None
             raise
         except (KeyError, ValueError, AttributeError):
-            return None, None
+            # Deferring to the engine's default bundle could score another
+            # symbol's model — the exact failure this guard exists to stop.
+            self._model_symbol = None
+            raise ModelNotAvailableError(
+                f"Registry selection failed for {self.symbol} "
+                f"{self.model_type}/{self.model_timeframe}"
+            ) from None
         bundle_symbol = getattr(bundle, "symbol", None)
         return bundle.key, bundle_symbol if isinstance(bundle_symbol, str) else None
 

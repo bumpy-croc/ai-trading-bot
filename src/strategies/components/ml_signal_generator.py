@@ -126,6 +126,9 @@ class MLSignalGenerator(SymbolModelGuardMixin, SignalGenerator):
             symbol: Trading symbol for registry selection (optional,
                 defaults to BTCUSDT).
             model_type: Model type for registry selection (default "basic").
+                This generator feeds price-only features, so only ``basic``
+                bundles are compatible; a ``sentiment`` bundle would fail every
+                prediction and hold.
             timeframe: Timeframe for registry selection (default "1h").
             long_entry_threshold: Minimum predicted return to open a long.
             short_entry_threshold: Maximum predicted return to open a short
@@ -215,10 +218,14 @@ class MLSignalGenerator(SymbolModelGuardMixin, SignalGenerator):
 
         # Model name configuration
         cfg = get_config()
-        self._explicit_model_name = model_name is not None
         self.model_name = model_name
         if self.model_name is None:
             self.model_name = cfg.get("PREDICTION_ENGINE_MODEL_NAME", default=None)
+        # Any configured model name (argument or PREDICTION_ENGINE_MODEL_NAME)
+        # is an operator override that bypasses registry selection.
+        self._explicit_model_name = self.model_name is not None
+        # Model actually used for the latest prediction, for signal metadata.
+        self._last_engine_model_name: str | None = self.model_name
 
         self.prediction_engine: PredictionEngine | None = None
         self._registry: PredictionModelRegistry | None = None
@@ -385,7 +392,7 @@ class MLSignalGenerator(SymbolModelGuardMixin, SignalGenerator):
             "index": index,
             "sequence_length": self.sequence_length,
             "long_entry_threshold": self.long_entry_threshold,
-            "engine_model_name": self.model_name,
+            "engine_model_name": self._last_engine_model_name,
             "engine_batch": self.use_engine_batch,
             "symbol": self.symbol,
             **self._symbol_guard_stamps(),
@@ -472,6 +479,7 @@ class MLSignalGenerator(SymbolModelGuardMixin, SignalGenerator):
                     # than score another symbol's model.
                     return None
             engine_model_name = selected_bundle_key or self.model_name
+            self._last_engine_model_name = engine_model_name
             result = self.prediction_engine.predict(window_df, model_name=engine_model_name)
 
             # An errored result carries a placeholder price of 0.0 — treating

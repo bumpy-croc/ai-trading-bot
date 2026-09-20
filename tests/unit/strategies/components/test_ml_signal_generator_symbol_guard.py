@@ -240,3 +240,57 @@ class TestFactoryThreading:
         strategy = create_ml_sentiment_strategy(symbol="ETHUSDT", model_type="sentiment")
 
         assert strategy.signal_generator.model_type == "sentiment"
+
+
+class TestReviewRegressions:
+    @patch(ENGINE_PATH)
+    @patch(CONFIG_PATH)
+    def test_config_model_name_is_an_operator_override(self, _cfg, engine_cls, monkeypatch):
+        """PREDICTION_ENGINE_MODEL_NAME keeps selecting the model, as before."""
+        monkeypatch.setenv("PREDICTION_ENGINE_MODEL_NAME", "BTCUSDT:1h:basic:v1")
+        registry = _registry_with(_bundle("BTCUSDT"))
+        engine = _engine(registry)
+        engine_cls.return_value = engine
+
+        generator = MLSignalGenerator(symbol="BTCUSDT")
+        generator.generate_signal(_df(), 130)
+
+        assert generator.model_name == "BTCUSDT:1h:basic:v1"
+        assert generator._explicit_model_name is True
+        registry.select_bundle.assert_not_called()
+
+    @patch(ENGINE_PATH)
+    @patch(CONFIG_PATH)
+    def test_registry_lookup_error_holds_instead_of_engine_default(self, _cfg, engine_cls):
+        registry = _registry_with(_bundle("ETHUSDT"))
+        engine = _engine(registry, result_model_name="ETHUSDT:1h:basic:v1")
+        engine_cls.return_value = engine
+        generator = MLSignalGenerator(symbol="ETHUSDT")
+        registry.select_bundle.side_effect = KeyError("boom")
+
+        signal = generator.generate_signal(_df(), 130)
+
+        assert signal.metadata["reason"] == "prediction_failed"
+        engine.predict.assert_not_called()
+
+    @patch(ENGINE_PATH)
+    @patch(CONFIG_PATH)
+    def test_signal_metadata_records_the_bundle_that_scored(self, _cfg, engine_cls):
+        registry = _registry_with(_bundle("ETHUSDT"))
+        engine_cls.return_value = _engine(registry, result_model_name="ETHUSDT:1h:basic:v1")
+        generator = MLSignalGenerator(symbol="ETHUSDT")
+
+        signal = generator.generate_signal(_df(), 130)
+
+        assert signal.metadata["engine_model_name"] == "ETHUSDT:1h:basic:v1"
+
+    @patch(ENGINE_PATH)
+    @patch(CONFIG_PATH)
+    def test_sentiment_preset_defaults_to_the_basic_bundle(self, _cfg, engine_cls):
+        """The price-only pipeline cannot feed a sentiment bundle (would HOLD every bar)."""
+        engine_cls.return_value = _engine(_registry_with(_bundle("BTCUSDT")))
+        from src.strategies.components.strategy_factory import StrategyFactory
+
+        strategy = StrategyFactory.create_ml_sentiment_strategy(symbol="BTCUSDT")
+
+        assert strategy.signal_generator.model_type == "basic"

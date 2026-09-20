@@ -342,7 +342,7 @@ class StrategyFactory:
         name: str = "MLSentiment",
         sequence_length: int = 120,
         model_name: str | None = None,
-        model_type: str = "sentiment",
+        model_type: str | None = None,
         timeframe: str = "1h",
         symbol: str | None = None,
     ) -> Strategy:
@@ -353,7 +353,8 @@ class StrategyFactory:
             name: Strategy name
             sequence_length: Sequence length for LSTM
             model_name: Model name for registry
-            model_type: Model type for registry selection
+            model_type: Model type for registry selection (None selects "basic",
+                the only type the generator's price-only features can feed)
             timeframe: Model timeframe for registry selection
             symbol: Trading symbol for model registry selection (None keeps
                 the generator default BTCUSDT)
