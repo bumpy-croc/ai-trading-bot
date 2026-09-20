@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Restart recovery keeps trailing-stop state, remaining exposure and MFE/MAE peaks**
+  (#742, #993). `LiveSessionRecoverer.recover_active_positions` now restores
+  `trailing_stop_activated`/`trailing_stop_price`/`breakeven_triggered`, registers the risk
+  manager at `current_size` (not the original size), and both recovery paths seed the
+  `MFEMAETracker` from the persisted `mfe`/`mae` columns so the first post-restart persist no
+  longer overwrites the stored peaks.
 - **Data downloads no longer silently fall back to CoinGecko, and the cache validates on
   load** (#982). `atb data download|prefill-cache|preload-offline` pin the Binance provider
   and fail loudly on Binance errors. `CachedDataProvider` sorts and de-duplicates (keep last)
