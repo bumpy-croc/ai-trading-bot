@@ -1296,6 +1296,7 @@ class Backtester:
                     # cast: the handler only reads .name from current_strategy, which
                     # every engine strategy (SupportsRuntimeHooks) exposes.
                     current_strategy=cast(ComponentStrategy, self.strategy),
+                    symbol=symbol,
                 )
                 if switched and new_strategy:
                     self._switch_strategy(new_strategy, df)

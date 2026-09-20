@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
+  `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
+  a 4h run selects a 4h model bundle; a missing bundle aborts the switch instead of using 1h.
 - **Run timeframe now reaches ML strategy presets** (#1253). `call_strategy_factory` takes a
   `timeframe` (threaded only to factories that declare it), and `atb backtest`, `atb live`, the
   live `StrategyManager` and the experiment runners pass it. `ml_adaptive`, `hyper_growth` and
