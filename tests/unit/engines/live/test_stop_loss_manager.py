@@ -837,6 +837,24 @@ class TestMoveAdoptBranch:
             "entry-1", 48990.0
         )
 
+    def test_a_non_finite_adopted_price_falls_back_to_the_intent(self):
+        """#1219: a NaN stop_price on the adopted order must not become the
+        min-move floor's baseline -- it would break every later trailing move."""
+        exchange = TestMove._held_exchange()
+        exchange.get_open_orders_checked.return_value = [
+            self._resting_order(OrderSide.SELL, float("nan"))
+        ]
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        moved = manager.move(make_position(), 49000.0)
+
+        assert moved is True
+        state.live_position_tracker.set_stop_loss_price.assert_not_called()
+        state.live_position_tracker.set_last_placed_stop_price.assert_called_once_with(
+            "entry-1", 49000.0
+        )
+
     def test_adopting_at_exactly_the_intended_price_does_not_rewrite_it(self):
         exchange = TestMove._held_exchange()
         exchange.get_open_orders_checked.return_value = [

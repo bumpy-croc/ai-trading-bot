@@ -491,6 +491,24 @@ def _generate_stop_loss_client_order_id() -> str:
     return f"{_STOP_LOSS_CLIENT_ID_PREFIX}{timestamp_ms:x}_{unique_suffix}"
 
 
+def adopted_stop_price(decision: StopPlacementDecision) -> float | None:
+    """The resting price of an ADOPTed order, or None when it is unusable.
+
+    An exchange response with a NaN/inf/non-positive ``stop_price`` must never
+    become the "achieved" price: it flows unconditionally into the
+    min-trailing-stop-move floor's baseline and would break every later
+    trailing-stop comparison for the position (#1219).
+    """
+    price = getattr(decision.existing_order, "stop_price", None)
+    if price is None:
+        return None
+    try:
+        price_f = float(price)
+    except (TypeError, ValueError):
+        return None
+    return price_f if math.isfinite(price_f) and price_f > 0 else None
+
+
 class _AchievedStopPriceCapture:
     """``on_adopt`` callback that captures the ACHIEVED resting price, not the
     intended one, for callers that place or re-place a stop via
@@ -517,7 +535,7 @@ class _AchievedStopPriceCapture:
         self.price = intended_price
 
     def __call__(self, decision: StopPlacementDecision) -> None:
-        price = getattr(decision.existing_order, "stop_price", None)
+        price = adopted_stop_price(decision)
         if price is not None:
             self.price = price
 
@@ -539,6 +557,60 @@ def _achieved_price_is_safe_to_ratify(
     if side_is_long:
         return achieved_price >= intended_price
     return achieved_price <= intended_price
+
+
+def _cancel_order_marking_self(
+    exchange: Any, order_tracker: Any, symbol: str, order_id: str
+) -> bool:
+    """Cancel an order a reconciler is deliberately retiring; True only when confirmed.
+
+    Marks the order self-cancelled BEFORE the cancel so the OrderTracker's WS
+    listener does not treat the terminal CANCELED event as an unexpected
+    cancellation and page a false UNPROTECTED alert (#1194; mirrors
+    ``LiveStopLossManager.cancel``). An unconfirmed cancel drops the mark: the
+    order may still rest, so a later terminal status is genuine. ``order_tracker``
+    may be None (paper mode, standalone use).
+    """
+    if order_tracker:
+        order_tracker.mark_self_cancelled(order_id)
+    cancelled = False
+    try:
+        cancelled = bool(exchange.cancel_order(order_id, symbol))
+    except Exception as e:
+        logger.warning("Failed to cancel order %s for %s: %s", order_id, symbol, e)
+    if order_tracker:
+        if cancelled:
+            order_tracker.stop_tracking(order_id)
+        else:
+            order_tracker.clear_self_cancelled(order_id)
+    return cancelled
+
+
+def _escalate_failed_db_close(on_event: Any, position: Any, db_pos_id: Any) -> None:
+    """Page an external close that popped the tracker but left the DB row OPEN.
+
+    Shared by the startup and periodic reconcilers so both surface the same
+    CRITICAL, paged ``system_events`` row (``RECONCILE_DB_CLOSE_FAILED``) for the
+    same memory/DB divergence, instead of the startup path logging alone.
+    """
+    symbol = getattr(position, "symbol", "?")
+    logger.critical(
+        "External close for %s: removed from tracker but DB position %s close "
+        "FAILED (still OPEN) — memory/DB divergence; manual reconciliation may "
+        "be needed.",
+        symbol,
+        db_pos_id,
+    )
+    _emit_event(
+        on_event,
+        EventType.ALERT,
+        f"External close for {symbol}: position removed from tracker but DB "
+        f"position {db_pos_id} is still OPEN (close failed) — memory/DB "
+        "divergence until the next restart re-adoption",
+        severity="critical",
+        error_code="RECONCILE_DB_CLOSE_FAILED",
+        alert=True,
+    )
 
 
 def _log_unratified_looser_stop(symbol: str, achieved_price: float, intended_price: float) -> None:
@@ -1242,9 +1314,19 @@ class PositionReconciler:
         fee_rate: float = DEFAULT_FEE_RATE,
         data_provider: Any | None = None,
         on_event: Any = None,
+        order_tracker: Any = None,
     ) -> None:
+        """Initialize the startup reconciler.
+
+        ``order_tracker`` is the engine's OrderTracker: stops this reconciler
+        places or replaces are registered with it so they get fill/cancel
+        routing once polling and the WS streams start, and its own deliberate
+        cancels are marked self-cancelled (#1193). None in paper mode and
+        standalone use.
+        """
         self.exchange = exchange_interface
         self.position_tracker = position_tracker
+        self.order_tracker = order_tracker
         self.db_manager = db_manager
         self.session_id = session_id
         self.on_event = on_event
@@ -1260,6 +1342,20 @@ class PositionReconciler:
         # future min-fee/maker-taker change applies to reconciler-logged trades too.
         self._fee_rate = fee_rate
         self._cost_calc = CostCalculator(fee_rate=fee_rate)
+
+    def _track_stop_loss(self, order_id: str, symbol: str) -> None:
+        """Register a stop-loss this reconciler placed or adopted with the OrderTracker.
+
+        Without this the order is invisible to REST polling once it starts, so a
+        later fill or cancel is only found by the next periodic pass (#1193).
+        Fault-isolated: tracking must never undo a stop that is already resting.
+        """
+        if not self.order_tracker:
+            return
+        try:
+            self.order_tracker.track_order(order_id, symbol)
+        except Exception as e:
+            logger.warning("Failed to track stop-loss %s for %s: %s", order_id, symbol, e)
 
     def reconcile_startup(self, positions: dict[str, Any]) -> list[ReconciliationResult]:
         """Run full startup reconciliation.
@@ -1790,6 +1886,7 @@ class PositionReconciler:
                         on_refuse=_capture_refusal,
                     )
                     if sl_order_id:
+                        self._track_stop_loss(sl_order_id, symbol)
                         position.stop_loss_order_id = sl_order_id
                         # Baseline for the min-trailing-stop-move floor (#1179)
                         # -- must reflect where the exchange order actually
@@ -2282,23 +2379,21 @@ class PositionReconciler:
             )
             return
 
-        # Cancel the old stop-loss order
-        try:
-            self.exchange.cancel_order(sl_order_id, symbol)
-            logger.info(
-                "Cancelled stale stop-loss %s for %s after partial exit",
-                sl_order_id,
-                symbol,
-            )
-        except Exception as e:
+        # Cancel the old stop-loss order. An unconfirmed cancel keeps the old SL —
+        # better oversized than none, and placing another risks stacking a duplicate.
+        if not _cancel_order_marking_self(self.exchange, self.order_tracker, symbol, sl_order_id):
             logger.warning(
-                "Failed to cancel stale stop-loss %s for %s: %s",
+                "Could not confirm cancel of stale stop-loss %s for %s after partial exit "
+                "— keeping it",
                 sl_order_id,
                 symbol,
-                e,
             )
-            # If cancel fails, keep the old SL — better oversized than none
             return
+        logger.info(
+            "Cancelled stale stop-loss %s for %s after partial exit",
+            sl_order_id,
+            symbol,
+        )
 
         position.stop_loss_order_id = None  # type: ignore[attr-defined]
 
@@ -2333,9 +2428,11 @@ class PositionReconciler:
                 # open-orders view yet; without this the just-cancelled order
                 # could be re-adopted as if it were a genuine untracked stop.
                 exclude_order_id=sl_order_id,
+                just_cancelled=True,
                 on_adopt=achieved,
             )
             if new_sl_id:
+                self._track_stop_loss(new_sl_id, symbol)
                 position.stop_loss_order_id = new_sl_id  # type: ignore[attr-defined]
                 # Baseline for the min-trailing-stop-move floor (#1179) --
                 # must reflect where the exchange order actually landed, not
@@ -2653,6 +2750,7 @@ class PositionReconciler:
                         on_adopt=achieved,
                     )
                     if new_sl_id:
+                        self._track_stop_loss(new_sl_id, position.symbol)
                         position.stop_loss_order_id = new_sl_id
                         # Baseline for the min-trailing-stop-move floor
                         # (#1179) -- must reflect where the exchange order
@@ -2827,9 +2925,12 @@ class PositionReconciler:
                         denom = prev_original_size if prev_original_size is not None else prev_size
                         denom_f = float(denom) if denom is not None else 0.0
                         if prev_current_size is not None and denom_f > 0:
-                            remaining_fraction = min(
-                                max(float(prev_current_size) / denom_f, 0.0), 1.0
-                            )
+                            # No upper clamp: a scaled-in position (current > original) must
+                            # keep its >1 fraction or the final close undersizes the
+                            # scaled-in portion.
+                            fraction = float(prev_current_size) / denom_f
+                            if math.isfinite(fraction):
+                                remaining_fraction = max(fraction, 0.0)
                         if hasattr(position, "current_size"):
                             position.current_size = new_size * remaining_fraction
                         if hasattr(position, "original_size"):
@@ -2993,6 +3094,7 @@ class PositionReconciler:
                             on_adopt=achieved,
                         )
                         if new_sl_id:
+                            self._track_stop_loss(new_sl_id, position.symbol)
                             position.stop_loss_order_id = new_sl_id
                             # Baseline for the min-trailing-stop-move floor
                             # (#1179) -- must reflect where the exchange order
@@ -3197,6 +3299,7 @@ class PositionReconciler:
                             on_adopt=achieved,
                         )
                         if new_sl_id:
+                            self._track_stop_loss(new_sl_id, position.symbol)
                             position.stop_loss_order_id = new_sl_id
                             # Baseline for the min-trailing-stop-move floor
                             # (#1179) -- must reflect where the exchange order
@@ -3370,13 +3473,9 @@ class PositionReconciler:
             )
             return
 
-        cancelled = False
-        try:
-            cancelled = bool(self.exchange.cancel_order(sl_order_id, symbol))
-        except Exception as e:
-            logger.warning(
-                "Failed to cancel diverged stop-loss %s for %s: %s", sl_order_id, symbol, e
-            )
+        cancelled = _cancel_order_marking_self(
+            self.exchange, self.order_tracker, symbol, sl_order_id
+        )
         if not cancelled:
             logger.critical(
                 "Could not confirm cancel of diverged stop-loss %s for %s — leaving it "
@@ -3416,6 +3515,7 @@ class PositionReconciler:
                 stop_price=tracked_price,
                 side_effect_type=SideEffectType.AUTO_REPAY,
                 exclude_order_id=sl_order_id,
+                just_cancelled=True,
                 on_adopt=achieved,
             )
         except Exception as e:
@@ -3431,6 +3531,7 @@ class PositionReconciler:
         position.stop_loss_order_id = new_sl_id
         update_kwargs: dict[str, Any] = {"stop_loss_order_id": new_sl_id}
         if new_sl_id:
+            self._track_stop_loss(new_sl_id, symbol)
             # last_placed_stop_price is the min-trailing-stop-move floor's
             # baseline (#1179) -- it must reflect where the exchange order
             # actually landed, not what this correction intended (#1187).
@@ -3823,13 +3924,7 @@ class PositionReconciler:
                     # (tracker says gone, DB says OPEN). Escalate (CODE.md: no silent divergence) —
                     # the OPEN row is re-recovered on the next restart; manual reconciliation may be
                     # needed meanwhile.
-                    logger.critical(
-                        "External close for %s: removed from tracker but DB position %s close "
-                        "FAILED (still OPEN) — memory/DB divergence; manual reconciliation may be "
-                        "needed.",
-                        symbol,
-                        db_pos_id,
-                    )
+                    _escalate_failed_db_close(self.on_event, position, db_pos_id)
         except Exception as e:
             logger.warning("Asset holdings check failed for %s: %s", base_asset, e)
 
@@ -3932,19 +4027,13 @@ class PositionReconciler:
         # if it triggers with AUTO_REPAY, it opens a new naked position.
         sl_order_id = getattr(position, "stop_loss_order_id", None)
         if sl_order_id:
-            try:
-                self.exchange.cancel_order(sl_order_id, position.symbol)
+            if _cancel_order_marking_self(
+                self.exchange, self.order_tracker, position.symbol, sl_order_id
+            ):
                 logger.info(
                     "Cancelled orphaned SL %s for removed position %s",
                     sl_order_id,
                     position.symbol,
-                )
-            except Exception as e:
-                logger.warning(
-                    "Failed to cancel SL %s for removed position %s: %s",
-                    sl_order_id,
-                    position.symbol,
-                    e,
                 )
 
         removed = self.position_tracker.pop_position(position.order_id)
@@ -3966,12 +4055,7 @@ class PositionReconciler:
             # Popped from the in-memory tracker but the DB row did NOT close — memory/DB divergence
             # (CODE.md: no silent divergence). The phantom is gone on the exchange, so do not
             # re-track; the OPEN DB row is re-recovered on the next restart.
-            logger.critical(
-                "Margin phantom %s removed from tracker but DB position %s close FAILED (still "
-                "OPEN) — memory/DB divergence; manual reconciliation may be needed.",
-                getattr(position, "symbol", "?"),
-                db_pos_id,
-            )
+            _escalate_failed_db_close(self.on_event, position, db_pos_id)
         # Audit the phantom removal (it sets HIGH severity but previously wrote no
         # reconciliation_audit_events row, unlike the spot external-close path). #853
         audit = AuditEvent(
@@ -4733,6 +4817,7 @@ class PeriodicReconciler:
             use_margin=use_margin,
             data_provider=data_provider,
             on_event=on_event,
+            order_tracker=order_tracker,
         )
 
     def start(self) -> None:
@@ -5993,52 +6078,13 @@ class PeriodicReconciler:
 
         The periodic loop iterates the tracker, so once the position is popped
         the OPEN row is never re-examined — it heals only on restart re-adoption.
-        The startup twins (``_verify_asset_holdings`` / ``_remove_phantom_position``)
-        treat this identical condition as CRITICAL; mirror them here instead of
-        diverging silently. Emits an honest paged system_event (``alert=True``);
-        safe to POST here — the cycle iterates a snapshot, no tracker lock is held.
+        Safe to POST here — the cycle iterates a snapshot, no tracker lock is held.
         """
-        symbol = getattr(position, "symbol", "?")
-        logger.critical(
-            "External close for %s: removed from tracker but DB position %s close "
-            "FAILED (still OPEN) — memory/DB divergence; manual reconciliation may "
-            "be needed.",
-            symbol,
-            db_pos_id,
-        )
-        _emit_event(
-            self.on_event,
-            EventType.ALERT,
-            f"External close for {symbol}: position removed from tracker but DB "
-            f"position {db_pos_id} is still OPEN (close failed) — memory/DB "
-            "divergence until the next restart re-adoption",
-            severity="critical",
-            error_code="RECONCILE_DB_CLOSE_FAILED",
-            alert=True,
-        )
+        _escalate_failed_db_close(self.on_event, position, db_pos_id)
 
     def _cancel_order_deliberately(self, symbol: str, order_id: str) -> bool:
-        """Cancel an order this reconciler is retiring; True only when confirmed.
-
-        Marks the order self-cancelled BEFORE the cancel so the OrderTracker's
-        WS listener does not treat the terminal CANCELED event as an unexpected
-        cancellation and page a false UNPROTECTED alert (#1194; mirrors
-        ``LiveStopLossManager.cancel``). An unconfirmed cancel drops the mark:
-        the order may still rest, so a later terminal status is genuine.
-        """
-        if self.order_tracker:
-            self.order_tracker.mark_self_cancelled(order_id)
-        cancelled = False
-        try:
-            cancelled = bool(self.exchange.cancel_order(order_id, symbol))
-        except Exception as e:
-            logger.warning("Failed to cancel order %s for %s: %s", order_id, symbol, e)
-        if self.order_tracker:
-            if cancelled:
-                self.order_tracker.stop_tracking(order_id)
-            else:
-                self.order_tracker.clear_self_cancelled(order_id)
-        return cancelled
+        """Cancel an order this reconciler is retiring; True only when confirmed."""
+        return _cancel_order_marking_self(self.exchange, self.order_tracker, symbol, order_id)
 
     def _retire_stop_loss(self, position: Any) -> None:
         """Cancel and forget the resting stop of a position being removed.

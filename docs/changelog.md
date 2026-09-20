@@ -134,6 +134,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   correct, since the drift check shares the adopt tolerance) now pages an operator
   instead of logging a misleading "next pass will fix it" line. The drift-correction
   re-placement passes `just_cancelled=True`.
+- **Startup reconciler stop-loss robustness** (#1193, #1201, #1219, #1005, #1194).
+  `PositionReconciler` now receives the engine's `OrderTracker` (wired in `recovery.py`,
+  and via `PeriodicReconciler`'s delegate): every stop it places or adopts is registered
+  for fill/cancel routing, and its deliberate cancels (partial-exit resize, price-drift
+  correction, phantom removal) are marked self-cancelled. An unconfirmed cancel in the
+  resize path now keeps the old stop instead of placing a second one. Post-cancel
+  re-placements pass `just_cancelled=True`. A NaN/inf/non-positive adopted `stop_price`
+  is ignored by the shared capture (`adopted_stop_price`, also used by
+  `LiveStopLossManager`) so it can no longer poison `last_placed_stop_price`. The entry-fill
+  quantity correction keeps a scaled-in position's >1 current/original fraction, and the
+  startup failed-DB-close twins now page (`RECONCILE_DB_CLOSE_FAILED`) like the periodic path.
 - **A -1003 exchange-wide rate-limit ban hitting the stop-placement guard's own
   open-orders lookup — rather than the placement call itself — never reached the
   `on_rate_limit_ban` close-only escalation** (#738 review follow-up). The prior fix
