@@ -115,6 +115,21 @@ class MFEMAETracker:
             self._cache[position_key] = metrics
             return metrics
 
+    def seed_metrics(self, position_key: str | int, metrics: MFEMetrics) -> None:
+        """Install previously persisted peaks, keeping any larger in-memory ones."""
+        with self._lock:
+            existing = self._cache.get(position_key)
+            if existing is not None:
+                if existing.mfe > metrics.mfe:
+                    metrics.mfe = existing.mfe
+                    metrics.mfe_price = existing.mfe_price
+                    metrics.mfe_time = existing.mfe_time
+                if existing.mae < metrics.mae:
+                    metrics.mae = existing.mae
+                    metrics.mae_price = existing.mae_price
+                    metrics.mae_time = existing.mae_time
+            self._cache[position_key] = metrics
+
     def get_position_metrics(self, position_key: str | int) -> MFEMetrics | None:
         """Get metrics for a position without lock.
 

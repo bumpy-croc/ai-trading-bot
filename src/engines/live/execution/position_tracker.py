@@ -287,6 +287,27 @@ class LivePositionTracker:
             self._positions[order_id] = position
             self._position_db_ids[order_id] = db_id
 
+    def seed_mfe_mae(self, order_id: str, pos_data: dict[str, Any]) -> None:
+        """Seed the MFE/MAE tracker with the peaks persisted on a recovered row.
+
+        Without this the in-memory running max restarts from zero and the next
+        periodic persist overwrites the stored (higher) excursion history.
+        """
+        try:
+            self.mfe_mae_tracker.seed_metrics(
+                order_id,
+                MFEMetrics(
+                    mfe=float(pos_data.get("mfe") or 0.0),
+                    mae=float(pos_data.get("mae") or 0.0),
+                    mfe_price=pos_data.get("mfe_price"),
+                    mae_price=pos_data.get("mae_price"),
+                    mfe_time=pos_data.get("mfe_time"),
+                    mae_time=pos_data.get("mae_time"),
+                ),
+            )
+        except (TypeError, ValueError) as e:
+            logger.warning("Could not seed MFE/MAE for %s: %s", order_id, e)
+
     def set_stop_loss_order_id(self, order_id: str, stop_loss_order_id: str | None) -> None:
         """Update the stop-loss order ID for a tracked position.
 
@@ -1043,6 +1064,7 @@ class LivePositionTracker:
                     continue
 
                 self.track_recovered_position(position, db_id=pos_data.get("id"))
+                self.seed_mfe_mae(tracker_key, pos_data)
                 recovered.append(position)
                 logger.info(
                     "Recovered position: %s %s @ %.2f",

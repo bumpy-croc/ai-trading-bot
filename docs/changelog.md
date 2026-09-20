@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Restart recovery keeps trailing-stop state, remaining exposure and MFE/MAE peaks**
+  (#742, #993). `LiveSessionRecoverer.recover_active_positions` now restores
+  `trailing_stop_activated`/`trailing_stop_price`/`breakeven_triggered`, registers the risk
+  manager at `current_size` (not the original size), and both recovery paths seed the
+  `MFEMAETracker` from the persisted `mfe`/`mae` columns so the first post-restart persist no
+  longer overwrites the stored peaks.
+
 ### Changed
 - **Entry-path stop-loss placement now threads `reason_code` through and defers on a
   terminal UNCONFIRMED refusal instead of always emergency-closing, but only when the
