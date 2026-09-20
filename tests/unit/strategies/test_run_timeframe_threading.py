@@ -263,3 +263,134 @@ class TestRunnersThreadTimeframe:
         manager.load_strategy("s", config={"timeframe": "1h"})
 
         assert seen == {"timeframe": "1h"}
+
+
+class TestRegimeHandlerThreadsRunContext:
+    """GH #1256: a regime switch must build the new strategy for the run's timeframe."""
+
+    @staticmethod
+    def _handler():
+        from src.engines.backtest.regime.regime_handler import RegimeHandler
+
+        return RegimeHandler(
+            regime_switcher=MagicMock(),
+            strategy_manager=MagicMock(),
+            initial_strategy_name="ml_basic",
+        )
+
+    @pytest.mark.parametrize("name", ["ml_basic", "ml_adaptive"])
+    @patch(ENGINE_PATH)
+    @patch(CONFIG_PATH)
+    def test_switch_in_4h_run_selects_4h_bundle(self, _cfg, engine_cls, name):
+        engine_cls.return_value = _engine(
+            _registry_with(_bundle("ETHUSDT", "1h", "basic"), _bundle("ETHUSDT", "4h", "basic"))
+        )
+
+        strategy = self._handler()._load_strategy(name, symbol="ETHUSDT", timeframe="4h")
+
+        assert _signal_generator(strategy).model_timeframe == "4h"
+
+    @patch(ENGINE_PATH)
+    @patch(CONFIG_PATH)
+    def test_switch_without_4h_bundle_fails_instead_of_using_1h(
+        self, _cfg, engine_cls, monkeypatch
+    ):
+        monkeypatch.delenv("FEATURE_ALLOW_CROSS_SYMBOL_MODEL", raising=False)
+        engine_cls.return_value = _engine(_registry_with(_bundle("ETHUSDT", "1h", "basic")))
+
+        with patch("src.engines.backtest.regime.regime_handler.logger") as log:
+            result = self._handler()._load_strategy("ml_basic", symbol="ETHUSDT", timeframe="4h")
+
+        assert result is None
+        assert "ModelNotAvailableError" in str(log.error.call_args)
+
+    def test_failed_load_records_no_switch_and_is_not_retried(self):
+        import pandas as pd
+
+        handler = self._handler()
+        handler.regime_switcher = SimpleNamespace(
+            analyze_market_regime=lambda _d: {
+                "consensus_regime": {
+                    "regime_label": "bull",
+                    "confidence": 0.9,
+                    "agreement_score": 1,
+                }
+            },
+            should_switch_strategy=lambda _a, current_candle_index: {
+                "should_switch": True,
+                "optimal_strategy": "ml_basic",
+                "new_regime": "bull",
+                "confidence": 0.9,
+                "reason": "test",
+            },
+            strategy_manager=None,
+        )
+        df = pd.DataFrame({"close": [1.0] * 10})
+        kwargs = dict(
+            df=df,
+            candle_index=5,
+            current_time=MagicMock(),
+            timeframe="4h",
+            balance=1000.0,
+            current_strategy=SimpleNamespace(name="old"),
+            symbol="ETHUSDT",
+        )
+
+        with patch(
+            "src.engines.backtest.regime.regime_handler.call_strategy_factory",
+            side_effect=ModelNotAvailableError("no 4h"),
+        ) as factory:
+            first = handler.analyze_and_switch_if_needed(**kwargs)
+            second = handler.analyze_and_switch_if_needed(**kwargs)
+
+        assert first == (None, False, None) and second == (None, False, None)
+        assert handler.strategy_switches == []
+        assert factory.call_count == 1
+
+    @patch(ENGINE_PATH)
+    @patch(CONFIG_PATH)
+    def test_default_remains_1h(self, _cfg, engine_cls):
+        engine_cls.return_value = _engine(_registry_with(_bundle("BTCUSDT", "1h", "basic")))
+
+        strategy = self._handler()._load_strategy("ml_basic")
+
+        assert _signal_generator(strategy).model_timeframe == "1h"
+
+    def test_analyze_and_switch_passes_symbol_and_timeframe(self):
+        import pandas as pd
+
+        handler = self._handler()
+        handler.regime_switcher = SimpleNamespace(
+            analyze_market_regime=lambda _price_data: {
+                "consensus_regime": {
+                    "regime_label": "bull",
+                    "confidence": 0.9,
+                    "agreement_score": 1.0,
+                }
+            },
+            should_switch_strategy=lambda _analysis, current_candle_index: {
+                "should_switch": True,
+                "optimal_strategy": "ml_adaptive",
+                "new_regime": "bull",
+                "confidence": 0.9,
+                "reason": "test",
+            },
+            strategy_manager=None,
+        )
+        sentinel = SimpleNamespace(name="new")
+        current = SimpleNamespace(name="old")
+        df = pd.DataFrame({"close": [1.0] * 10})
+
+        with patch.object(handler, "_load_strategy", return_value=sentinel) as load:
+            new, switched, _ = handler.analyze_and_switch_if_needed(
+                df=df,
+                candle_index=5,
+                current_time=MagicMock(),
+                timeframe="4h",
+                balance=1000.0,
+                current_strategy=current,
+                symbol="ETHUSDT",
+            )
+
+        assert switched and new is sentinel
+        load.assert_called_once_with("ml_adaptive", symbol="ETHUSDT", timeframe="4h")
