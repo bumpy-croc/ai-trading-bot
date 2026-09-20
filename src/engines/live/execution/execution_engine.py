@@ -72,6 +72,7 @@ SHORT_GUARD_EPISODE_GAP_SECONDS = 2 * 3600.0
 SHORT_GUARD_EMIT_EVERY_N = 10
 
 # Why ``_normalize_quantity_checked`` returned 0.0.
+CLOSE_UNSELLABLE_REANNOUNCE_SECONDS = 3600.0
 NORMALIZE_INVALID_QUANTITY = "invalid_quantity"
 NORMALIZE_HOLDINGS_CAP = "holdings_cap"
 NORMALIZE_LOT_SIZING = "lot_sizing"
@@ -202,7 +203,9 @@ class LiveExecutionEngine:
         # Last recorded unsellable-quantity abort reason per symbol. A stuck dust close
         # re-fires every candle; recording only on a new (symbol, reason) keeps it to
         # one durable event + page until the close clears or the cause changes.
-        self._close_unsellable_reasons: dict[str, str] = {}
+        # Re-announced after CLOSE_UNSELLABLE_REANNOUNCE_SECONDS so a latch left stale by
+        # a resolution outside this path cannot silence a later position's abort.
+        self._close_unsellable_reasons: dict[str, tuple[str, float]] = {}
         # Injectable clock for deterministic episode-gap tests.
         self._monotonic: Callable[[], float] = time.monotonic
 
@@ -327,9 +330,15 @@ class LiveExecutionEngine:
         ``_record_close_inventory_locked``.
         """
         with self._short_guard_lock:
-            if self._close_unsellable_reasons.get(symbol) == reason:
+            now = self._monotonic()
+            last = self._close_unsellable_reasons.get(symbol)
+            if (
+                last is not None
+                and last[0] == reason
+                and now - last[1] < CLOSE_UNSELLABLE_REANNOUNCE_SECONDS
+            ):
                 return
-            self._close_unsellable_reasons[symbol] = reason
+            self._close_unsellable_reasons[symbol] = (reason, now)
         symbol_info = self._symbol_info_or_none(symbol)
         min_notional = symbol_info.get("min_notional") if symbol_info else None
         min_qty = symbol_info.get("min_qty") if symbol_info else None
@@ -365,11 +374,13 @@ class LiveExecutionEngine:
                 logger.warning("Failed to dispatch unsellable-close alert for %s: %s", symbol, e)
 
     def _symbol_info_or_none(self, symbol: str) -> dict[str, Any] | None:
+        """Symbol filters for event enrichment; ``None`` on any failure (observability only)."""
         if self.exchange_interface is None:
             return None
         try:
             info = self.exchange_interface.get_symbol_info(symbol)
-        except Exception:  # pragma: no cover - defensive; observability only
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("Could not fetch symbol info for %s abort event: %s", symbol, e)
             return None
         return info if isinstance(info, dict) else None
 
@@ -1482,11 +1493,13 @@ class LiveExecutionEngine:
                         free_base,
                     )
                     quantity = free_base
-                holdings_capped = quantity < intended_quantity
+                capped_quantity = quantity
                 quantity, abort_reason = self._normalize_quantity_checked(
                     symbol, quantity, position_notional, floor=True, price=reference_price
                 )
-                if holdings_capped and abort_reason == NORMALIZE_INVALID_QUANTITY:
+                # A sliver of free base (locked inventory) fails min-notional only because
+                # it was capped, so attribute it to the cap, not the normalizer's verdict.
+                if abort_reason and capped_quantity < intended_quantity * HOLDINGS_CAP_MIN_RATIO:
                     abort_reason = NORMALIZE_HOLDINGS_CAP
             else:
                 quantity, abort_reason = self._normalize_quantity_checked(
@@ -1500,14 +1513,25 @@ class LiveExecutionEngine:
                     symbol,
                     reason,
                 )
-                self._record_close_unsellable(
-                    symbol=symbol,
-                    reason=reason,
-                    intended_quantity=intended_quantity,
-                    position_notional=position_notional,
-                    reference_price=reference_price,
-                    free_base=free_base,
-                )
+                if reason == NORMALIZE_HOLDINGS_CAP:
+                    # Locked inventory: same condition, page and close-only latch as the
+                    # ratio gate below, which a zero quantity would otherwise skip.
+                    self._record_close_inventory_locked(
+                        symbol=symbol,
+                        intended_quantity=intended_quantity,
+                        sellable_quantity=capped_quantity,
+                        free_base=free_base,
+                        stop_just_cancelled=stop_just_cancelled,
+                    )
+                else:
+                    self._record_close_unsellable(
+                        symbol=symbol,
+                        reason=reason,
+                        intended_quantity=intended_quantity,
+                        position_notional=position_notional,
+                        reference_price=reference_price,
+                        free_base=free_base,
+                    )
                 return None
             # Gate on the SUBMITTED quantity, after both the holdings cap and the lot
             # snap. Gating on free_base alone would miss the lot-floor case, where a

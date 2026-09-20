@@ -6,7 +6,10 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.engines.live.execution.execution_engine import LiveExecutionEngine
+from src.engines.live.execution.execution_engine import (
+    CLOSE_UNSELLABLE_REANNOUNCE_SECONDS,
+    LiveExecutionEngine,
+)
 from src.engines.shared.models import PositionSide
 
 SYMBOL = "ETHUSDT"
@@ -88,9 +91,23 @@ def test_zero_free_balance_is_attributed_to_holdings_cap():
 
     assert h.close(0.5) is None
 
-    [event] = h.unsellable_events()
-    assert event["abort_reason"] == "holdings_cap"
+    [(code, event)] = h.events
+    assert code == "CLOSE_INVENTORY_LOCKED"
     assert event["free_base_balance"] == 0.0
+
+
+def test_sliver_of_free_base_is_a_holdings_cap_not_a_min_notional_abort():
+    """Locked inventory (#1104 shape): the capped sliver fails min-notional, the cause is the lock."""
+    h = _Harness(free_base=0.0001, symbol_info=_info())
+
+    assert h.close(0.5) is None
+
+    assert h.unsellable_events() == []
+    [(code, event)] = h.events
+    assert code == "CLOSE_INVENTORY_LOCKED"
+    assert event["intended_quantity"] == pytest.approx(0.5)
+    assert event["free_base_balance"] == pytest.approx(0.0001)
+    assert len(h.alerts) == 1
 
 
 def test_changed_reason_records_a_new_event():
@@ -120,3 +137,18 @@ def test_alert_failure_does_not_raise():
     h.engine.alert_dispatcher = Mock(side_effect=RuntimeError("boom"))
 
     assert h.close(0.001) is None
+
+
+def test_same_cause_is_reannounced_after_the_interval():
+    h = _Harness(free_base=0.001, symbol_info=_info())
+    now = [1000.0]
+    h.engine._monotonic = lambda: now[0]
+    h.close(0.001)
+    now[0] += CLOSE_UNSELLABLE_REANNOUNCE_SECONDS - 1
+    h.close(0.001)
+    assert len(h.unsellable_events()) == 1
+
+    now[0] += 2
+    h.close(0.001)
+
+    assert len(h.unsellable_events()) == 2
