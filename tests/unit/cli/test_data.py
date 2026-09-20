@@ -68,7 +68,7 @@ class TestDataDownload:
 
             # Assert
             assert result == 0
-            mock_create_provider.assert_called_once_with(provider_type="auto")
+            mock_create_provider.assert_called_once_with(provider_type="binance")
             mock_provider.get_historical_data.assert_called_once()
             mock_provider.close.assert_called_once()
 

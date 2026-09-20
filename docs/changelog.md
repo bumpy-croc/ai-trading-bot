@@ -18,12 +18,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manager at `current_size` (not the original size), and both recovery paths seed the
   `MFEMAETracker` from the persisted `mfe`/`mae` columns so the first post-restart persist no
   longer overwrites the stored peaks.
+- **Data downloads no longer silently fall back to CoinGecko, and the cache validates on
+  load** (#982). `atb data download|prefill-cache|preload-offline` pin the Binance provider
+  and fail loudly on Binance errors. `CachedDataProvider` sorts and de-duplicates (keep last)
+  cached candles on load, persists the repair, and warns; `atb data cache-manager audit`
+  scans existing parquet files for duplicate/unsorted timestamps.
 - **Direct-`ComponentStrategy` live entry path now enforces the `enter_short` opt-in**
   (#1031). It routes through the shared `extract_entry_plan` chokepoint, so a SELL
   without `enter_short` metadata can no longer open a short on that path.
 - **Live engine logs the resolved time-exit policy at boot** (#1083). A strategy with
   no `time_exits` config has no time-based exit (same in backtest); the log makes
   that explicit. Behavior is unchanged.
+- **`BinanceProvider.get_symbol_info` now reads the `NOTIONAL` filter** (falling back to
+  legacy `MIN_NOTIONAL`) — Binance no longer returns `MIN_NOTIONAL`, so `min_notional` was
+  always 0 and the execution engine's pre-trade minimum-notional guard was dead (#1062).
+- **One Binance order-type mapping table** (`src/data_providers/binance_order_types.py`)
+  shared by the REST and WebSocket parsing paths; unknown types now log a warning instead of
+  silently becoming MARKET (#1158).
 
 ### Changed
 - **Entry-path stop-loss placement now threads `reason_code` through and defers on a

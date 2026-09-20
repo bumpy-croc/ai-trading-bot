@@ -57,7 +57,7 @@ The `atb data` command family in `cli/commands/data.py` covers the most common w
 - `atb data preload-offline --symbols BTCUSDT --timeframes 1h --years-back 10 --test-offline` – ensures the cache contains enough
   history for air-gapped environments, optionally forcing refreshes with `--force-refresh`, and verifies offline reads when
   `--test-offline` is set.
-- `atb data cache-manager info|list|clear|clear-old` – inspect, reset, or prune cached files. The commands reuse
+- `atb data cache-manager info|list|clear|clear-old|audit` – (`audit` scans parquet files for duplicate/unsorted timestamps and exits 1 on defects) inspect, reset, or prune cached files. The commands reuse
   `CachedDataProvider` instrumentation and normalise output sizes/timestamps for easier monitoring. Note that `info` reflects the
   current `.parquet` cache format; `list`/`clear`/`clear-old` may not show `.parquet` files in all environments, so deleting
   `cache/market_data/*.parquet` (or passing `--cache-dir` and deleting that directory’s `.parquet` files) is the most reliable
