@@ -32,6 +32,7 @@ from src.data_providers.exchange_interface import OrderStatus as ExchangeOrderSt
 from src.database.manager import DatabaseManager
 from src.database.models import EventType, PositionSide, TradeSource
 from src.engines.live.reconciliation import Severity
+from src.engines.live.trade_close_accounting import held_base_quantity
 from src.trading.exit_reason import ExitReason
 
 logger = logging.getLogger(__name__)
@@ -162,7 +163,9 @@ class AccountSynchronizer:
             # netAsset doesn't reflect true equity when shorts are open.
             if not self._use_margin:
                 balance_sync_result = self._sync_balances(exchange_data.get("balances", []))
-                position_sync_result = self._sync_positions(exchange_data.get("positions", []))
+                position_sync_result = self._sync_positions(
+                    exchange_data.get("positions", []), symbol=symbol
+                )
             else:
                 # Margin: reconcile the tracked balance against true net equity
                 # (assets minus liabilities), not USDT alone. Position sync stays
@@ -568,18 +571,60 @@ class AccountSynchronizer:
                 exc_info=True,
             )
 
+    @staticmethod
+    def _as_utc(moment: datetime) -> datetime:
+        """Treat a naive datetime as UTC so it can be compared with aware ones."""
+        return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
+
+    @staticmethod
+    def _side_key(side: Any) -> str:
+        """Canonical side key: DB rows carry "LONG"/"SHORT", exchange objects "long"/"short"."""
+        return str(getattr(side, "value", side)).casefold()
+
+    @staticmethod
+    def _db_position_notional(db_positions: list[dict[str, Any]]) -> float:
+        """Entry-price notional of open DB positions, mirroring the periodic reconciler.
+
+        Uses asset ``quantity`` (not the ``size`` balance fraction), scaled by
+        ``current_size / original_size`` after partial exits.
+        """
+        total = 0.0
+        for row in db_positions:
+            qty = float(row.get("quantity") or 0.0)
+            price = float(row.get("entry_price") or 0.0)
+            if qty <= 0 or price <= 0:
+                continue
+            scaled = held_base_quantity(
+                qty, row.get("current_size"), row.get("original_size"), allow_scale_in=True
+            )
+            total += (qty if scaled is None else scaled) * price
+        return total
+
+    def _size_fraction(self, notional: float) -> float:
+        """Balance fraction (``size``) represented by an asset notional, capped at 1.0."""
+        capital = self.db_manager.get_current_balance(self.session_id)
+        denominator = max(capital, notional)
+        if denominator <= 0:
+            return 1.0
+        return min(1.0, notional / denominator)
+
     def _sync_balances(self, exchange_balances: list[AccountBalance]) -> dict[str, Any]:
-        """Synchronize account balances"""
+        """Compare the exchange USDT balance against the tracked balance (spot only).
+
+        The tracked balance is TOTAL capital (cash plus open-position notional)
+        while exchange USDT is cash only, so the comparison is made like-for-like
+        (``db_balance - open notional`` vs exchange cash). This method never
+        writes: the periodic reconciler owns the spot balance correction
+        (``_reconcile_spot_balance``), and a second writer with different
+        semantics made the two flip-flop the balance.
+        """
         try:
             logger.info("Syncing %d balances from exchange", len(exchange_balances))
 
-            # Get current balance from database
             current_db_balance = self.db_manager.get_current_balance(self.session_id)
 
-            # Find USDT balance (our primary currency)
             usdt_balance = None
             for balance in exchange_balances:
-                # Validate balance object before accessing attributes
                 if balance is None:
                     logger.warning("Skipping None balance object from exchange")
                     continue
@@ -590,115 +635,149 @@ class AccountSynchronizer:
                     usdt_balance = balance
                     break
 
-            if usdt_balance:
-                # Validate total is numeric
-                if usdt_balance.total is None or not isinstance(usdt_balance.total, int | float):
-                    logger.error(
-                        "Invalid USDT balance total: %s (type=%s) - skipping sync",
-                        usdt_balance.total,
-                        type(usdt_balance.total).__name__,
-                    )
-                    return SyncResult(
-                        success=False,
-                        message=f"Invalid balance data from exchange: total={usdt_balance.total}",
-                    )
-                exchange_balance = float(usdt_balance.total)
-
-                # Check for significant discrepancy
-                balance_diff = abs(exchange_balance - current_db_balance)
-                balance_diff_pct = (
-                    (balance_diff / current_db_balance * 100) if current_db_balance > 0 else 0
-                )
-
-                if balance_diff_pct > DEFAULT_BALANCE_DISCREPANCY_THRESHOLD_PCT:
-                    logger.warning(
-                        f"Balance discrepancy detected: DB=${current_db_balance:.2f} vs Exchange=${exchange_balance:.2f} (diff: {balance_diff_pct:.2f}%)"
-                    )
-
-                    # Update database with exchange balance. atomic_balance_correction
-                    # applies the correction as a delta from this function's pre-lock
-                    # current_db_balance snapshot, so a concurrent delta writer (e.g. a
-                    # trade closing) is preserved instead of being clobbered by this
-                    # absolute correction (#735b).
-                    with self.db_manager.atomic_balance_correction(
-                        exchange_balance,
-                        "exchange_sync_correction",
-                        "system",
-                        self.session_id,
-                        caller_snapshot=current_db_balance,
-                    ):
-                        pass
-
-                    return {
-                        "synced": True,
-                        "corrected": True,
-                        "old_balance": current_db_balance,
-                        "new_balance": exchange_balance,
-                        "difference": balance_diff,
-                        "difference_percent": balance_diff_pct,
-                    }
-                else:
-                    logger.info(
-                        f"Balance in sync: DB=${current_db_balance:.2f} vs Exchange=${exchange_balance:.2f}"
-                    )
-                    return {"synced": True, "corrected": False, "balance": exchange_balance}
-            else:
+            if not usdt_balance:
                 logger.warning("No USDT balance found in exchange data")
                 return {"synced": False, "error": "No USDT balance found"}
+
+            if (
+                usdt_balance.total is None
+                or not isinstance(usdt_balance.total, int | float)
+                or not math.isfinite(usdt_balance.total)
+            ):
+                logger.error(
+                    "Invalid USDT balance total: %s (type=%s) - skipping sync",
+                    usdt_balance.total,
+                    type(usdt_balance.total).__name__,
+                )
+                return {
+                    "synced": False,
+                    "error": f"Invalid balance data from exchange: total={usdt_balance.total}",
+                }
+            exchange_cash = float(usdt_balance.total)
+
+            position_notional = self._db_position_notional(
+                self.db_manager.get_active_positions(self.session_id)
+            )
+            expected_cash = current_db_balance - position_notional
+            # abs()/floor keep the ratio meaningful when notional exceeds the tracked
+            # balance (price appreciation) or the balance is ~0.
+            comparison_base = max(abs(expected_cash), current_db_balance * 0.01)
+            balance_diff = abs(exchange_cash - expected_cash)
+            balance_diff_pct = balance_diff / comparison_base * 100 if comparison_base > 0 else 0.0
+
+            result: dict[str, Any] = {
+                "synced": True,
+                "corrected": False,
+                "balance": current_db_balance,
+                "exchange_cash": exchange_cash,
+                "expected_cash": expected_cash,
+                "difference": balance_diff,
+                "difference_percent": balance_diff_pct,
+            }
+            # Same threshold the reconciler corrects at, so this message is accurate.
+            if balance_diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT * 100:
+                logger.warning(
+                    "Balance discrepancy detected: exchange cash $%.2f vs expected cash $%.2f "
+                    "(DB total $%.2f - open notional $%.2f), diff %.2f%% - "
+                    "left to the periodic reconciler to correct",
+                    exchange_cash,
+                    expected_cash,
+                    current_db_balance,
+                    position_notional,
+                    balance_diff_pct,
+                )
+                result["deferred_to_reconciler"] = True
+            else:
+                logger.info(
+                    "Balance in sync: exchange cash $%.2f vs expected cash $%.2f",
+                    exchange_cash,
+                    expected_cash,
+                )
+            return result
 
         except Exception as e:
             logger.error("Balance sync failed: %s", e)
             return {"synced": False, "error": str(e)}
 
-    def _sync_positions(self, exchange_positions: list[Position]) -> dict[str, Any]:
-        """Synchronize open positions"""
+    def _sync_positions(
+        self, exchange_positions: list[Position], symbol: str | None = None
+    ) -> dict[str, Any]:
+        """Synchronize open positions.
+
+        Args:
+            exchange_positions: Positions (spot holdings) reported by the exchange.
+            symbol: When the exchange data was fetched for a single symbol, only DB
+                positions for that symbol are compared; the rest are out of scope
+                and must not be judged "closed on exchange".
+        """
         try:
             logger.info("Syncing %d positions from exchange", len(exchange_positions))
 
             # Get current positions from database
             db_positions = self.db_manager.get_active_positions(self.session_id)
+            if symbol:
+                # Both sides are scoped: the provider returns every holding for quote
+                # assets it does not derive a base asset from (e.g. USDC).
+                db_positions = [row for row in db_positions if row["symbol"] == symbol]
+                exchange_positions = [pos for pos in exchange_positions if pos.symbol == symbol]
 
             synced_positions = []
             new_positions = []
-            closed_positions = []
+            missing_positions = []
 
             # Check for positions that exist in exchange but not in database
             for exchange_pos in exchange_positions:
                 # Find matching position in database
                 db_pos = None
                 for position_row in db_positions:
-                    if (
-                        position_row["symbol"] == exchange_pos.symbol
-                        and position_row["side"] == exchange_pos.side
-                    ):
+                    if position_row["symbol"] == exchange_pos.symbol and self._side_key(
+                        position_row["side"]
+                    ) == self._side_key(exchange_pos.side):
                         db_pos = position_row
                         break
 
                 if db_pos:
-                    # Position exists in both - check for updates
-                    # Validate sizes are numeric before comparison to prevent TypeError
+                    # Compare asset quantities like-for-like: exchange size is an asset
+                    # amount, DB ``size`` is a balance fraction, ``quantity`` is the amount.
                     exchange_size = exchange_pos.size
-                    db_size = db_pos["size"]
+                    db_quantity = db_pos.get("quantity")
+                    if db_quantity is not None:
+                        scaled = held_base_quantity(
+                            db_quantity,
+                            db_pos.get("current_size"),
+                            db_pos.get("original_size"),
+                            allow_scale_in=True,
+                        )
+                        if scaled is not None:
+                            db_quantity = scaled
 
                     if not isinstance(exchange_size, int | float) or not isinstance(
-                        db_size, int | float
+                        db_quantity, int | float
                     ):
-                        logger.warning(
-                            "Skipping position sync with non-numeric size: "
-                            "exchange_size=%s (type=%s), db_size=%s (type=%s)",
+                        logger.debug(
+                            "Skipping quantity comparison for %s %s: "
+                            "exchange_size=%s, db_quantity=%s",
+                            exchange_pos.symbol,
+                            exchange_pos.side,
                             exchange_size,
-                            type(exchange_size).__name__,
-                            db_size,
-                            type(db_size).__name__,
+                            db_quantity,
                         )
-                    elif abs(exchange_size - db_size) > DEFAULT_POSITION_SIZE_COMPARISON_TOLERANCE:
-                        logger.info(
-                            f"Position size updated: {exchange_pos.symbol} {exchange_pos.side} - {db_size} -> {exchange_size}"
+                    elif (
+                        abs(exchange_size - db_quantity)
+                        > DEFAULT_POSITION_SIZE_COMPARISON_TOLERANCE
+                    ):
+                        # Quantity is owned by the reconciler (it knows about partial
+                        # exits and stop-loss sizing); only refresh the mark here.
+                        logger.warning(
+                            "Position quantity mismatch: %s %s DB=%s vs exchange=%s - "
+                            "left to the reconciler",
+                            exchange_pos.symbol,
+                            exchange_pos.side,
+                            db_quantity,
+                            exchange_size,
                         )
-                        # Update position in database
                         self.db_manager.update_position(
                             db_pos["id"],
-                            size=exchange_pos.size,
                             current_price=exchange_pos.current_price,
                             unrealized_pnl=exchange_pos.unrealized_pnl,
                         )
@@ -716,14 +795,29 @@ class AccountSynchronizer:
                         f"New position found on exchange: {exchange_pos.symbol} {exchange_pos.side} {exchange_pos.size}"
                     )
 
-                    # Add to database
+                    notional = exchange_pos.size * exchange_pos.entry_price
+                    if not math.isfinite(notional) or notional <= 0:
+                        logger.warning(
+                            "Skipping exchange position with unusable notional: %s %s "
+                            "size=%s entry_price=%s",
+                            exchange_pos.symbol,
+                            exchange_pos.side,
+                            exchange_pos.size,
+                            exchange_pos.entry_price,
+                        )
+                        continue
+
+                    # Add to database (size = balance fraction, quantity = asset amount)
                     position_id = self.db_manager.log_position(
                         symbol=exchange_pos.symbol,
                         side=(
-                            PositionSide.LONG if exchange_pos.side == "long" else PositionSide.SHORT
+                            PositionSide.LONG
+                            if self._side_key(exchange_pos.side) == "long"
+                            else PositionSide.SHORT
                         ),
                         entry_price=exchange_pos.entry_price,
-                        size=exchange_pos.size,
+                        size=self._size_fraction(notional),
+                        quantity=exchange_pos.size,
                         strategy_name="exchange_sync",
                         entry_order_id=exchange_pos.order_id
                         or f"sync_{int(datetime.now(UTC).timestamp())}",
@@ -743,20 +837,25 @@ class AccountSynchronizer:
             for db_pos in db_positions:
                 matching_exchange_pos = None
                 for pos in exchange_positions:
-                    if pos.symbol == db_pos["symbol"] and pos.side == db_pos["side"]:
+                    if pos.symbol == db_pos["symbol"] and self._side_key(
+                        pos.side
+                    ) == self._side_key(db_pos["side"]):
                         matching_exchange_pos = pos
                         break
 
                 if not matching_exchange_pos:
-                    # Position exists in database but not on exchange
+                    # A bare status flip would skip the trade row, balance delta and
+                    # tracker removal, leaving an untracked live holding on a bad read.
+                    # The reconciler owns external closes (PnL, balance, stops).
                     logger.warning(
-                        f"Position closed on exchange: {db_pos['symbol']} {db_pos['side']}"
+                        "DB position %s %s (id=%s) not found on exchange - "
+                        "left to the reconciler to close",
+                        db_pos["symbol"],
+                        db_pos["side"],
+                        db_pos["id"],
                     )
-
-                    # Close position in database
-                    self.db_manager.close_position(db_pos["id"])
-
-                    closed_positions.append(
+                    self._log_missing_position_event(db_pos)
+                    missing_positions.append(
                         {"symbol": db_pos["symbol"], "side": db_pos["side"], "size": db_pos["size"]}
                     )
 
@@ -766,17 +865,38 @@ class AccountSynchronizer:
                 "total_db_positions": len(db_positions),
                 "synced_positions": len(synced_positions),
                 "new_positions": len(new_positions),
-                "closed_positions": len(closed_positions),
+                "missing_positions": len(missing_positions),
                 "details": {
                     "synced": synced_positions,
                     "new": new_positions,
-                    "closed": closed_positions,
+                    "missing": missing_positions,
                 },
             }
 
         except Exception as e:
             logger.error("Position sync failed: %s", e)
             return {"synced": False, "error": str(e)}
+
+    def _log_missing_position_event(self, db_pos: dict[str, Any]) -> None:
+        """Record a system event for a DB position the exchange does not hold.
+
+        Best-effort: observability must not break the sync loop.
+        """
+        try:
+            self.db_manager.log_event(
+                event_type=EventType.WARNING,
+                message=(
+                    f"Open DB position {db_pos['symbol']} {db_pos['side']} "
+                    f"(id={db_pos['id']}) not found on exchange during account sync"
+                ),
+                severity="warning",
+                component="account_sync.positions",
+                error_code="DB_POSITION_MISSING_ON_EXCHANGE",
+                details={"position_id": db_pos["id"], "symbol": db_pos["symbol"]},
+                session_id=self.session_id,
+            )
+        except Exception as e:
+            logger.error("Failed to record missing-position system event: %s", e, exc_info=True)
 
     def _sync_orders(self, exchange_orders: list[Order]) -> dict[str, Any]:
         """Synchronize open orders"""
@@ -913,81 +1033,91 @@ class AccountSynchronizer:
             # Filter by date
             cutoff_date = datetime.now(UTC) - timedelta(days=days_back)
             recent_exchange_trades = [
-                trade for trade in exchange_trades if trade.time >= cutoff_date
+                trade for trade in exchange_trades if self._as_utc(trade.time) >= cutoff_date
             ]
 
-            # Get trades from database for the same period
-            db_trades = self.db_manager.get_trades_by_symbol_and_date(
-                symbol, cutoff_date, self.session_id
-            )
+            # Dedup in the exchange's own ID space: order IDs, across all sessions
+            # (a restart opens a new session but the exchange fills are the same).
+            known_order_ids = self.db_manager.get_known_exchange_order_ids(symbol, cutoff_date)
 
-            # Find missing trades
-            missing_trades = []
-            db_trade_ids = {trade["trade_id"] for trade in db_trades if trade.get("trade_id")}
-
+            # One recovered row per exchange order: the (order_id, session_id) unique
+            # constraint allows a single trade per order, and an order can fill in
+            # several pieces.
+            fills_by_order: dict[str, list[Any]] = {}
             for trade in recent_exchange_trades:
-                if trade.trade_id not in db_trade_ids:
-                    missing_trades.append(trade)
+                if str(trade.order_id) in known_order_ids:
+                    continue
+                fills_by_order.setdefault(str(trade.order_id), []).append(trade)
 
-            if missing_trades:
-                logger.warning("Found %d missing trades", len(missing_trades))
-
-                # Add missing trades to database
-                recovered_trades = []
-                for trade in missing_trades:
-                    try:
-                        _trade_id = self.db_manager.log_trade(
-                            symbol=trade.symbol,
-                            side=(
-                                trade.side.value
-                                if hasattr(trade.side, "value")
-                                else str(trade.side)
-                            ),
-                            entry_price=trade.price,  # Simplified - we don't have entry/exit prices
-                            exit_price=trade.price,
-                            size=trade.quantity,
-                            entry_time=trade.time,  # Simplified - using same time for entry/exit
-                            exit_time=trade.time,
-                            pnl=0.0,  # Cannot calculate without entry price
-                            exit_reason="recovered_from_exchange",
-                            exit_category=ExitReason.RECOVERED,
-                            strategy_name="exchange_recovery",
-                            source=TradeSource.LIVE,
-                            exit_order_id=trade.order_id,
-                            session_id=self.session_id,
-                        )
-
-                        recovered_trades.append(
-                            {
-                                "trade_id": trade.trade_id,
-                                "symbol": trade.symbol,
-                                "side": trade.side.value,
-                                "quantity": trade.quantity,
-                                "price": trade.price,
-                                "time": trade.time.isoformat(),
-                            }
-                        )
-
-                    except Exception as e:
-                        logger.error("Failed to recover trade %s: %s", trade.trade_id, e)
-
-                return {
-                    "recovered": True,
-                    "total_exchange_trades": len(recent_exchange_trades),
-                    "total_db_trades": len(db_trades),
-                    "missing_trades": len(missing_trades),
-                    "recovered_trades": len(recovered_trades),
-                    "details": recovered_trades,
-                }
-            else:
+            missing_trades = [fill for fills in fills_by_order.values() for fill in fills]
+            if not fills_by_order:
                 logger.info("No missing trades found")
                 return {
                     "recovered": True,
                     "total_exchange_trades": len(recent_exchange_trades),
-                    "total_db_trades": len(db_trades),
                     "missing_trades": 0,
                     "recovered_trades": 0,
                 }
+
+            logger.warning(
+                "Found %d missing orders (%d fills)", len(fills_by_order), len(missing_trades)
+            )
+            recovered_trades = []
+            for order_id, fills in fills_by_order.items():
+                try:
+                    quantity = sum(fill.quantity for fill in fills)
+                    if quantity <= 0:
+                        continue
+                    # Volume-weighted average fill price for the order.
+                    price = sum(fill.price * fill.quantity for fill in fills) / quantity
+                    first_time = min(self._as_utc(fill.time) for fill in fills)
+                    last_time = max(self._as_utc(fill.time) for fill in fills)
+
+                    self.db_manager.log_trade(
+                        symbol=fills[0].symbol,
+                        # Spot is long-only; the exchange BUY/SELL is not a position side.
+                        side=PositionSide.LONG,
+                        entry_price=price,  # Simplified - entry price is unknown
+                        exit_price=price,
+                        size=self._size_fraction(price * quantity),
+                        quantity=quantity,
+                        entry_time=first_time,
+                        exit_time=last_time,
+                        pnl=0.0,  # Cannot calculate without entry price
+                        exit_reason="recovered_from_exchange",
+                        exit_category=ExitReason.RECOVERED,
+                        strategy_name="exchange_recovery",
+                        source=TradeSource.LIVE,
+                        exit_order_id=order_id,
+                        session_id=self.session_id,
+                    )
+
+                    recovered_trades.append(
+                        {
+                            "order_id": order_id,
+                            "trade_ids": [fill.trade_id for fill in fills],
+                            "symbol": fills[0].symbol,
+                            "side": (
+                                fills[0].side.value
+                                if hasattr(fills[0].side, "value")
+                                else str(fills[0].side)
+                            ),
+                            "quantity": quantity,
+                            "price": price,
+                            "time": last_time.isoformat(),
+                        }
+                    )
+
+                except Exception as e:
+                    logger.error("Failed to recover order %s: %s", order_id, e, exc_info=True)
+
+            return {
+                "recovered": True,
+                "total_exchange_trades": len(recent_exchange_trades),
+                "missing_trades": len(missing_trades),
+                "recovered_trades": len(recovered_trades),
+                "details": recovered_trades,
+            }
 
         except Exception as e:
             logger.error("Trade recovery failed: %s", e)

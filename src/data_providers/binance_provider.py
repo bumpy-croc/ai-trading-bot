@@ -1632,7 +1632,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                         price=float(trade_data["price"]),
                         commission=float(trade_data["commission"]),
                         commission_asset=trade_data["commissionAsset"],
-                        time=datetime.fromtimestamp(trade_time_ms / 1000),
+                        time=datetime.fromtimestamp(trade_time_ms / 1000, tz=UTC),
                     )
                     trades.append(trade)
                 except (KeyError, ValueError, TypeError) as e:
