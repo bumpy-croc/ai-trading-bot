@@ -53,9 +53,10 @@ ENTRY_TIME = datetime(2024, 1, 1, tzinfo=UTC)
 
 def _make_exit_handler(
     policy: PartialExitPolicy,
+    fee_rate: float = 0.0,
 ) -> tuple[ExitHandler, PositionTracker, MagicMock]:
     """Build an ExitHandler with zero-cost execution and a real policy."""
-    tracker = PositionTracker(fee_rate=0.0, slippage_rate=0.0)
+    tracker = PositionTracker(fee_rate=fee_rate, slippage_rate=0.0)
 
     risk_manager = MagicMock()
     risk_manager.params = SimpleNamespace(max_daily_risk=1.0)
@@ -167,8 +168,10 @@ class TestPartialExitUnits:
 
         # Remaining 7.5%-of-balance slice at +5%: 0.05 * 0.075 * 1000 = $3.75
         assert close_result.pnl_cash == pytest.approx(3.75)
-        assert close_result.trade.pnl == pytest.approx(3.75)
         assert close_result.trade.size == pytest.approx(0.075)
+        # The record carries the whole position: banked partial slice
+        # (0.05 * 0.025 * 1000 = $1.25) + final leg.
+        assert close_result.trade.pnl == pytest.approx(5.0)
 
     def test_risk_manager_adjustment_uses_balance_fraction_delta(self) -> None:
         """Risk manager exposure is tracked in balance-fraction units; the
@@ -402,7 +405,7 @@ class TestEngineLevelPartialAccounting:
         #         final    = 10% x 0.05  x 1000 = $5.00
         assert results["total_trades"] == 1
         trade_pnls = [t.pnl for t in backtester.trades]
-        assert trade_pnls == [pytest.approx(5.0)]
+        assert trade_pnls == [pytest.approx(1.0 + 1.75 + 5.0)]
         assert results["final_balance"] == pytest.approx(1000.0 + 1.0 + 1.75 + 5.0)
         # A profitable run with partial exits must not report a 0% win rate.
         assert results["win_rate"] == pytest.approx(100.0)
@@ -447,6 +450,29 @@ class TestEngineLevelPartialAccounting:
         assert backtester.current_trade is None
         assert results["total_trades"] == 1
         assert "Partial exits complete" in backtester.trades[-1].exit_reason
+        # The recorded trade carries the partials' P&L (not a zero-P&L record),
+        # so the run counts as a win.
+        assert backtester.trades[-1].pnl == pytest.approx(12.0)
+        assert results["win_rate"] == pytest.approx(100.0)
+
+    def test_winner_stopped_out_after_partials_is_recorded_as_win(self) -> None:
+        """Partials bank more than the remainder loses -> position is a win."""
+        policy = PartialExitPolicy(exit_targets=[0.10], exit_sizes=[0.50])
+        handler, tracker, _ = _make_exit_handler(policy)
+        _open_long(tracker, size=0.10, entry_price=100.0, entry_balance=1000.0)
+        handler.check_partial_operations(
+            current_price=110.0, df=_single_candle_df(110.0), index=0, balance=1000.0
+        )
+        result = tracker.close_position(
+            exit_price=98.0,
+            exit_time=datetime(2024, 1, 3, tzinfo=UTC),
+            exit_reason="Stop loss",
+            basis_balance=1000.0,
+        )
+        # Partial +$5.00, remainder -2% x 0.05 x 1000 = -$1.00
+        assert result.pnl_cash == pytest.approx(-1.0)
+        assert result.trade.pnl == pytest.approx(4.0)
+        assert result.trade.pnl_percent == pytest.approx(0.004)
 
 
 class TestMarkToMarketDrawdown:
@@ -520,3 +546,172 @@ class TestStrategyPartialConfigHydration:
 
         assert backtester.partial_manager is not None
         assert backtester.partial_manager.exit_targets == DEFAULT_PARTIAL_EXIT_TARGETS
+
+
+class TestPartialExitRecordingConventions:
+    """Trade.pnl is gross of exit fees; partial fees flow to the fee totals."""
+
+    def test_partial_pnl_gross_of_fee_and_costs_reported(self) -> None:
+        policy = PartialExitPolicy(exit_targets=[0.10], exit_sizes=[1.0])
+        handler, tracker, _ = _make_exit_handler(policy, fee_rate=0.001)
+        _open_long(tracker, size=0.10, entry_price=100.0, entry_balance=1000.0)
+        handler.check_partial_operations(
+            current_price=110.0, df=_single_candle_df(110.0), index=0, balance=1000.0
+        )
+        result = tracker.close_position(
+            exit_price=110.0,
+            exit_time=datetime(2024, 1, 3, tzinfo=UTC),
+            exit_reason="Partial exits complete",
+            basis_balance=1000.0,
+        )
+        # Gross slice: 10% x 0.10 x 1000 = $10.00; fee = 0.1% of $11 notional.
+        assert result.trade.pnl == pytest.approx(10.0)
+        assert result.trade.metadata["partial_exit_fees"] == pytest.approx(0.11)
+        assert result.trade.metadata["original_size"] == pytest.approx(0.10)
+
+    @pytest.mark.parametrize(
+        ("targets", "sizes"),
+        [
+            ([0.03, 0.06], [0.50, 0.50]),  # last slice clamps: size == 0.0 exactly
+            ([0.03, 0.06, 0.10], [0.25, 0.25, 0.50]),  # float residue ~1e-18
+        ],
+    )
+    def test_fully_partialled_trade_persists_with_original_size(
+        self, targets: list[float], sizes: list[float]
+    ) -> None:
+        from src.database.models import TradeSource
+        from src.engines.backtest.logging.event_logger import EventLogger
+
+        policy = PartialExitPolicy(exit_targets=targets, exit_sizes=sizes)
+        handler, tracker, _ = _make_exit_handler(policy)
+        _open_long(tracker, size=0.10, entry_price=100.0, entry_balance=1000.0)
+        handler.check_partial_operations(
+            current_price=110.0, df=_single_candle_df(110.0), index=0, balance=1000.0
+        )
+        trade = tracker.close_position(
+            exit_price=110.0,
+            exit_time=datetime(2024, 1, 3, tzinfo=UTC),
+            exit_reason="Partial exits complete",
+            basis_balance=1000.0,
+        ).trade
+        assert trade.size < 1e-9
+
+        persisted: list[dict] = []
+
+        def enforcing_log_trade(**kwargs: object) -> int:
+            # Mirrors DatabaseManager.log_trade's input validation.
+            if kwargs["size"] <= 0:  # type: ignore[operator]
+                raise ValueError("size must be positive and finite")
+            persisted.append(kwargs)
+            return 1
+
+        db_manager = MagicMock()
+        db_manager.log_trade.side_effect = enforcing_log_trade
+        EventLogger(db_manager=db_manager, log_to_database=True, session_id=1).log_completed_trade(
+            trade=trade, symbol="ETHUSDT", strategy_name="s", source=TradeSource.BACKTEST
+        )
+
+        assert len(persisted) == 1
+        assert persisted[0]["size"] == pytest.approx(0.10)
+        assert persisted[0]["pnl"] == pytest.approx(10.0)  # 10% x 0.10 x 1000
+
+
+class TestEngineLevelPartialAccountingWithFees:
+    """End-to-end reconciliation with fee_rate > 0 (Trade.pnl is gross of fees)."""
+
+    def _run(self) -> tuple[Backtester, dict, MagicMock]:
+        closes = [100.0, 100.0, 104.0, 107.0, 110.0, 110.0]
+        strategy = _build_scripted_strategy(
+            {0: "buy", 4: "sell"},
+            position_fraction=0.10,
+            risk_overrides={
+                "stop_loss_pct": 0.5,
+                "take_profit_pct": 0.9,
+                "partial_operations": {
+                    "exit_targets": [0.03, 0.06],
+                    "exit_sizes": [0.25, 0.25],
+                },
+            },
+        )
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=_StaticDataProvider(_flat_ohlcv(closes)),
+            initial_balance=1000.0,
+            log_to_database=False,
+            fee_rate=0.001,
+            slippage_rate=0.0,
+        )
+        # Enable the event logger against a stub so DB commission is observable.
+        db_manager = MagicMock()
+        backtester.event_logger.db_manager = db_manager
+        backtester.event_logger.log_to_database = True
+        results = backtester.run("ETHUSDT", "1h", datetime(2024, 1, 1))
+        return backtester, results, db_manager
+
+    def test_balance_reconciles_to_gross_pnl_minus_all_fees(self) -> None:
+        backtester, results, _ = self._run()
+
+        assert results["total_trades"] == 1
+        trade = backtester.trades[0]
+        # Whole-position gross P&L: partials 1.00 + 1.75, final 5.00.
+        assert trade.pnl == pytest.approx(7.75, abs=0.01)
+        partial_fees = trade.metadata["partial_exit_fees"]
+        assert partial_fees > 0
+        # Entry + partial exits + final exit fees, all included.
+        final_leg_fee = 0.05 * 1000.0 * (trade.exit_price / trade.entry_price) * 0.001
+        assert results["total_fees"] == pytest.approx(
+            trade.metadata["entry_fee"] + partial_fees + final_leg_fee, abs=1e-3
+        )
+        assert results["final_balance"] - 1000.0 == pytest.approx(
+            trade.pnl - results["total_fees"], abs=1e-6
+        )
+
+    def test_db_commission_includes_partial_fees(self) -> None:
+        backtester, results, db_manager = self._run()
+
+        assert db_manager.log_trade.call_count == 1
+        kwargs = db_manager.log_trade.call_args.kwargs
+        assert kwargs["commission"] == pytest.approx(results["total_fees"])
+        assert kwargs["pnl"] == pytest.approx(backtester.trades[0].pnl)
+
+    def test_scale_in_fees_and_size_reconcile(self) -> None:
+        closes = [100.0, 100.0, 103.0, 106.0, 110.0, 110.0, 110.0]
+        strategy = _build_scripted_strategy(
+            {0: "buy", 5: "sell"},
+            position_fraction=0.10,
+            risk_overrides={
+                "stop_loss_pct": 0.5,
+                "take_profit_pct": 0.9,
+                "partial_operations": {
+                    "exit_targets": [0.05, 0.09],
+                    "exit_sizes": [0.25, 0.25],
+                    "scale_in_thresholds": [0.02],
+                    "scale_in_sizes": [0.50],
+                    "max_scale_ins": 1,
+                },
+            },
+        )
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=_StaticDataProvider(_flat_ohlcv(closes)),
+            initial_balance=1000.0,
+            log_to_database=False,
+            fee_rate=0.001,
+            slippage_rate=0.0,
+        )
+        db_manager = MagicMock()
+        backtester.event_logger.db_manager = db_manager
+        backtester.event_logger.log_to_database = True
+
+        results = backtester.run("ETHUSDT", "1h", datetime(2024, 1, 1))
+
+        trade = backtester.trades[0]
+        assert trade.metadata["partial_exit_fees"] > 0
+        assert results["final_balance"] - 1000.0 == pytest.approx(
+            trade.pnl - results["total_fees"], abs=1e-6
+        )
+        kwargs = db_manager.log_trade.call_args.kwargs
+        assert kwargs["commission"] == pytest.approx(results["total_fees"])
+        # Persisted size covers the scaled-in exposure (risk caps trim the add), not just
+        # the original entry.
+        assert kwargs["size"] > 0.10 + 1e-9

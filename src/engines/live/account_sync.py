@@ -31,7 +31,7 @@ from src.data_providers.exchange_interface import (
 from src.data_providers.exchange_interface import OrderStatus as ExchangeOrderStatus
 from src.database.manager import DatabaseManager
 from src.database.models import EventType, PositionSide, TradeSource
-from src.engines.live.reconciliation import Severity
+from src.engines.live.reconciliation import EXCHANGE_SYNC_STRATEGY_NAME, Severity
 from src.engines.live.trade_close_accounting import held_base_quantity
 from src.trading.exit_reason import ExitReason
 
@@ -818,7 +818,7 @@ class AccountSynchronizer:
                         entry_price=exchange_pos.entry_price,
                         size=self._size_fraction(notional),
                         quantity=exchange_pos.size,
-                        strategy_name="exchange_sync",
+                        strategy_name=EXCHANGE_SYNC_STRATEGY_NAME,
                         entry_order_id=exchange_pos.order_id
                         or f"sync_{int(datetime.now(UTC).timestamp())}",
                         session_id=self.session_id,

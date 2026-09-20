@@ -45,6 +45,10 @@ from src.engines.backtest.execution import (
     PositionTracker,
 )
 from src.engines.backtest.execution.exit_handler import ExitCheckResult
+from src.engines.backtest.execution.position_tracker import (
+    PARTIAL_FEES_KEY,
+    PARTIAL_SLIPPAGE_KEY,
+)
 from src.engines.backtest.logging import EventLogger
 from src.engines.backtest.models import ActiveTrade, Trade
 from src.engines.backtest.regime import RegimeHandler
@@ -177,6 +181,10 @@ class Backtester:
       first symbol that signals; live can hold N. If your strategy depends
       on simultaneous positions, validate live behaviour separately rather
       than inferring it from backtest.
+    - **Partial-exit trade outcomes.** ``win_rate``/``profit_factor`` report
+      whole-position outcomes (partial slices banked into the trade's P&L);
+      live records only the final leg, so they are not comparable to live for
+      partial-exit strategies until #1234 lands.
     - ExitHandler: Processes exit signals and execution
     - CorrelationHandler: Applies correlation-based sizing
     - RegimeHandler: Manages regime-based strategy switching
@@ -393,9 +401,9 @@ class Backtester:
         self.drawdown_cap_breached: bool = False
         self.drawdown_cap_breach_date: datetime | None = None
         self.drawdown_cap_breach_candle_index: int | None = None
-        self._early_stop_max_drawdown = (
-            self.risk_manager.params.max_drawdown if risk_parameters is not None else 0.5
-        )
+        # Always the hydrated params (ratified limits when none supplied), so the
+        # threshold reported in results is the one enforced.
+        self._early_stop_max_drawdown = self.risk_manager.params.max_drawdown
 
         # Initialize handlers
         self.execution_engine = ExecutionEngine(
@@ -1420,6 +1428,13 @@ class Backtester:
             )
         elif partial_result.scale_in_fees > 0:
             self.balance -= partial_result.scale_in_fees
+            # Scale-ins are entry legs: fold their fees into entry_fee so the
+            # reported fee totals and DB commission match what the balance paid.
+            open_trade = self.position_tracker.current_trade
+            if open_trade is not None:
+                open_trade.metadata["entry_fee"] = (
+                    float(open_trade.metadata.get("entry_fee", 0.0)) + partial_result.scale_in_fees
+                )
 
         # Update MFE/MAE
         self.position_tracker.update_metrics(current_price, current_time)
@@ -1524,8 +1539,16 @@ class Backtester:
             entry_meta = getattr(completed_trade, "metadata", None) or {}
             entry_fee_logged = float(entry_meta.get("entry_fee", 0.0) or 0.0)
             entry_slippage_logged = float(entry_meta.get("entry_slippage_cost", 0.0) or 0.0)
-            total_fee = entry_fee_logged + float(exit_fee)
-            total_slippage = entry_slippage_logged + float(slippage)
+            total_fee = (
+                entry_fee_logged
+                + float(exit_fee)
+                + float(entry_meta.get(PARTIAL_FEES_KEY, 0.0) or 0.0)
+            )
+            total_slippage = (
+                entry_slippage_logged
+                + float(slippage)
+                + float(entry_meta.get(PARTIAL_SLIPPAGE_KEY, 0.0) or 0.0)
+            )
             # Update performance tracking.
             self.performance_tracker.record_trade(
                 trade=completed_trade, fee=total_fee, slippage=total_slippage
