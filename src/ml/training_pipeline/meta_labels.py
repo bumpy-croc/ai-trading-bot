@@ -94,10 +94,10 @@ def fire_generation_corpus_fingerprint(
     shifted window, another symbol) must never resume-splice into one
     training set, so the fingerprint hashes the frame's index endpoints,
     the full close column, the resolved start index, and the generator's
-    identity string. Best-effort on generator identity: the name does not
-    capture model WEIGHTS, so callers must not reuse a checkpoint across
-    primary-model retrains (the pipeline deletes its checkpoint after each
-    successful run for exactly this reason).
+    identity string. A generator exposing ``resolved_model_identity()`` (the
+    bundle key including its version) has that folded in too: the name alone
+    does not capture model WEIGHTS, and a retrained primary must never
+    resume another model's fires from a checkpoint a failed run left behind.
 
     Raises:
         ValueError: df is empty (nothing to fingerprint or checkpoint).
@@ -106,6 +106,10 @@ def fire_generation_corpus_fingerprint(
         raise ValueError("cannot fingerprint an empty corpus")
     start = start_index if start_index is not None else signal_generator.warmup_period
     generator_identity = getattr(signal_generator, "name", type(signal_generator).__name__)
+    resolve_model = getattr(signal_generator, "resolved_model_identity", None)
+    model_identity = resolve_model() if callable(resolve_model) else None
+    if not isinstance(model_identity, str):
+        model_identity = ""
     close_digest = hashlib.sha256(df["close"].to_numpy(dtype=np.float64).tobytes()).hexdigest()
     payload = "|".join(
         [
@@ -115,6 +119,7 @@ def fire_generation_corpus_fingerprint(
             str(start),
             close_digest,
             str(generator_identity),
+            model_identity,
         ]
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()

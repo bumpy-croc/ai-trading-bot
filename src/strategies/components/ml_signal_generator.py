@@ -873,6 +873,26 @@ class MLBasicSignalGenerator(SignalGenerator):
         """Full bundle key the generator is pinned to, or None when unpinned."""
         return self._pinned_bundle_key
 
+    def resolved_model_identity(self) -> str | None:
+        """Full key (incl. version) of the bundle currently scoring this generator.
+
+        ``name`` is a constant and ``latest`` is a moving symlink, so neither
+        identifies WHICH weights produced a set of signals. Returns None when
+        the registry is unavailable or holds no matching bundle.
+        """
+        if self._pinned_bundle_key is not None:
+            return self._pinned_bundle_key
+        if self._cross_symbol_bundle_key is not None:
+            return self._cross_symbol_bundle_key
+        if self._registry is None:
+            return None
+        try:
+            return self._registry.select_bundle(
+                symbol=self.symbol, model_type=self.model_type, timeframe=self.model_timeframe
+            ).key
+        except ModelNotAvailableError:
+            return None
+
     def _resolve_pinned_bundle(self, registry: "PredictionModelRegistry") -> None:
         """Resolve ``model_version`` to a full bundle key, failing fast.
 

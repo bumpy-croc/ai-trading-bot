@@ -67,6 +67,14 @@ TARGET_TASK_TYPES: dict[str, TaskType] = {
     "meta_label": TaskType.BINARY_CLASSIFICATION,
 }
 
+# Regression target_types whose label is the rolling-min-max-normalized PRICE
+# (output must be denormalized before comparing with a real price). Every
+# other REGRESSION target (e.g. smoothed_return) is small-scale and must not
+# be. Kept beside TARGET_TASK_TYPES so a new regression target forces an
+# explicit decision here.
+PRICE_SCALE_TARGET_TYPES: frozenset[str] = frozenset({"regression"})
+
+
 # Canonical class_labels ordering per classification target_type -- these
 # ARE the direction values (see onnx_runner.py's
 # _process_classification_output: argmax index -> class_labels[index] IS
@@ -157,6 +165,7 @@ def validate_target_head_compatibility(model_type: str, target_type: str) -> Non
 
 __all__ = [
     "MODEL_TASK_TYPES",
+    "PRICE_SCALE_TARGET_TYPES",
     "TARGET_CLASS_LABELS",
     "TARGET_TASK_TYPES",
     "TaskType",

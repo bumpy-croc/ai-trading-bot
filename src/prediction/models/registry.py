@@ -220,6 +220,12 @@ class PredictionModelRegistry:
 
     def _load(self) -> None:
         """Load structured bundles from the configured registry path."""
+        if not Path(self.config.model_registry_path).is_dir():
+            # An absent registry yields no bundles, which backtests and exams
+            # report as a genuine all-HOLD / 0-trade result.
+            raise FileNotFoundError(
+                f"Model registry directory does not exist: {self.config.model_registry_path}"
+            )
         self._bundles, self._production_index, self._versioned_bundle_paths = self._scan_registry()
         # Seed _versioned_bundles from the already-loaded "latest"/fallback
         # bundles only -- zero extra cost, no new sessions opened.

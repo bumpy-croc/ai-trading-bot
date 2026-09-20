@@ -9,7 +9,7 @@ from unittest.mock import Mock, mock_open, patch
 import numpy as np
 import pytest
 
-from src.prediction.config import PredictionConfig
+from src.prediction.config import _REPO_ROOT, PredictionConfig
 from src.prediction.models.execution_providers import get_preferred_providers
 from src.prediction.models.onnx_runner import ModelPrediction, OnnxRunner
 from src.prediction.models.registry import PredictionModelRegistry
@@ -45,7 +45,7 @@ class TestPredictionConfig:
         assert config.prediction_horizons == [1]
         assert config.min_confidence_threshold == 0.6
         assert config.max_prediction_latency == 0.1
-        assert config.model_registry_path == "src/ml/models"
+        assert config.model_registry_path == str(_REPO_ROOT / "src/ml/models")
         assert config.enable_sentiment is False
         assert config.enable_market_microstructure is False
         assert config.feature_cache_ttl == 3600
@@ -61,7 +61,7 @@ class TestPredictionConfig:
 
         assert config.prediction_horizons == [1, 5, 10]
         assert config.min_confidence_threshold == 0.8
-        assert config.model_registry_path == "custom/path"
+        assert config.model_registry_path == str(_REPO_ROOT / "custom/path")
 
 
 class TestModelCache:

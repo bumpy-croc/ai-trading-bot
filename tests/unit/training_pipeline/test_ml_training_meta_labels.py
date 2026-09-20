@@ -30,6 +30,7 @@ from src.ml.training_pipeline.meta_labels import (
     build_meta_label_features,
     encode_meta_label_feature_row,
     encode_meta_label_features_for_training,
+    fire_generation_corpus_fingerprint,
     resolution_ordered_hit_rate,
     resolve_fired_trade,
     run_primary_signal_forward,
@@ -310,6 +311,43 @@ class TestRunPrimarySignalForwardCheckpointing:
             run_primary_signal_forward(
                 self._ScriptedSignalGenerator(), self._make_df(), checkpoint_path=checkpoint
             )
+
+
+class TestFireGenerationFingerprintTracksPrimaryModel:
+    """GH #1003: the generator name is constant and `latest` moves, so the
+    fingerprint must include the resolved primary-model version or a retrained
+    primary resumes the OLD model's fires from a leftover checkpoint."""
+
+    class _VersionedGenerator(_StubSignalGenerator):
+        def __init__(self, identity: str | None):
+            super().__init__({})
+            self._identity = identity
+
+        def resolved_model_identity(self) -> str | None:
+            return self._identity
+
+    @staticmethod
+    def _df() -> pd.DataFrame:
+        return pd.DataFrame({"close": np.linspace(100.0, 110.0, 40)})
+
+    def test_bumped_primary_version_changes_fingerprint(self):
+        old = self._VersionedGenerator("ETHUSDT:1h:basic:2026-07-04_22h_v1")
+        new = self._VersionedGenerator("ETHUSDT:1h:basic:2026-09-06_07h_v1")
+
+        assert fire_generation_corpus_fingerprint(old, self._df()) != (
+            fire_generation_corpus_fingerprint(new, self._df())
+        )
+
+    def test_same_primary_version_keeps_fingerprint_stable(self):
+        a = self._VersionedGenerator("ETHUSDT:1h:basic:v1")
+        b = self._VersionedGenerator("ETHUSDT:1h:basic:v1")
+
+        assert fire_generation_corpus_fingerprint(a, self._df()) == (
+            fire_generation_corpus_fingerprint(b, self._df())
+        )
+
+    def test_generator_without_identity_still_fingerprints(self):
+        assert fire_generation_corpus_fingerprint(_StubSignalGenerator({}), self._df())
 
 
 class TestSimulateFiredTradeProfitability:
