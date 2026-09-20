@@ -872,3 +872,13 @@ class TestMetaLabelRegimeTrainServeParity:
         ]
         serving_X = np.stack(serving_rows)
         np.testing.assert_array_equal(serving_X[:, regime_slots], training_X[:, regime_slots])
+
+
+def test_meta_label_generator_raises_when_registry_dir_missing(tmp_path, monkeypatch):
+    """GH #1023: a missing registry must not degrade to per-bar no_meta_label_bundle HOLDs."""
+    monkeypatch.setenv("MODEL_REGISTRY_PATH", str(tmp_path / "absent"))
+    primary = MagicMock()
+    primary.warmup_period = 5
+
+    with pytest.raises(FileNotFoundError):
+        MetaLabelExamSignalGenerator(primary_signal_generator=primary)

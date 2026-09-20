@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **ML pipeline / evaluation integrity fixes** (#1023, #1135, #1146, #1154, #1003).
+  `PredictionConfig.model_registry_path` is anchored to the repo root instead of the process
+  cwd, and `PredictionModelRegistry` raises when the directory is missing, so an exam run from
+  another directory can no longer report an all-HOLD/0-trade result. Cloud artifact sync no
+  longer moves any `latest` symlink unless `atb train cloud --set-latest` is passed (the
+  registry loads every `latest` as production), and a `{symbol}/{type}` directory without `latest` is
+  no longer served by `select_bundle` (explicit version pinning still works). New `src/ml/promotion_gate.py`
+  scores the weekly-retrain 2-of-3 gate with NO_RESULT legs (profit factor with fewer than 3
+  losing trades, return differences below 0.5pp/$1) and an INCONCLUSIVE verdict that retains the
+  incumbent. `uses_rolling_minmax_features` derives price-scale targets from
+  `task_types.PRICE_SCALE_TARGET_TYPES` and warns on unknown target types. The meta-label
+  fire-generation checkpoint fingerprint now includes the resolved primary-model bundle key
+  (`MLBasicSignalGenerator.resolved_model_identity()`), so a retrained primary never resumes
+  stale fires.
 - **Restart recovery keeps trailing-stop state, remaining exposure and MFE/MAE peaks**
   (#742, #993). `LiveSessionRecoverer.recover_active_positions` now restores
   `trailing_stop_activated`/`trailing_stop_price`/`breakeven_triggered`, registers the risk

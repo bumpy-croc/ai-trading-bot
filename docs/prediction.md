@@ -150,8 +150,8 @@ ECR image is fresh (see the rebuild note below) — the container bakes in `src/
 
 ### Namespace and promotion flow
 
-Cloud bundles record `model_type: price`, so syncs land in `src/ml/models/{SYMBOL}/price/{VERSION}` and only move
-`price/latest`. Live strategies load `{SYMBOL}/basic/latest`, which cloud training **never** touches — promotion to live is
+Cloud bundles record `model_type: price`, so syncs land in `src/ml/models/{SYMBOL}/price/{VERSION}` and move no `latest`
+symlink unless `atb train cloud --set-latest` is passed (the registry loads every `latest` as a production model). Live strategies load `{SYMBOL}/basic/latest`, which cloud training **never** touches — promotion to live is
 always an explicit, separate step:
 
 ```bash

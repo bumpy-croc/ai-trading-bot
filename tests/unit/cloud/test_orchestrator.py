@@ -803,11 +803,32 @@ class TestSyncLocalArtifactsCollision:
             symbol="BTCUSDT",
             model_type="price",
             version_id="2026-07-05_10h_v1",
+            set_latest=True,
         )
 
         latest = registry / "BTCUSDT" / "price" / "latest"
         assert latest.is_symlink()
         assert latest.resolve() == result.resolve()
+
+    def test_sync_leaves_latest_untouched_by_default(self, tmp_path: Path) -> None:
+        """GH #1135: an unpromoted candidate must not get a `latest` the registry serves."""
+        orchestrator = _make_orchestrator()
+        registry = tmp_path / "registry"
+        artifact = tmp_path / "artifact"
+        artifact.mkdir()
+        (artifact / "model.onnx").write_text("model")
+
+        result = orchestrator._sync_local_artifacts(
+            artifact_path=artifact,
+            local_registry=registry,
+            symbol="BTCUSDT",
+            model_type="price",
+            version_id="2026-07-06_10h00m00s_v1",
+        )
+
+        assert result.is_dir()
+        assert not (registry / "BTCUSDT" / "price" / "latest").exists()
+        assert not (registry / "BTCUSDT" / "price" / "latest").is_symlink()
 
     def test_repeated_collisions_pick_next_free_suffix(self, tmp_path: Path) -> None:
         orchestrator = _make_orchestrator()
@@ -849,6 +870,7 @@ class TestSyncLocalArtifactsCollision:
                 symbol="BTCUSDT",
                 model_type="price",
                 version_id="2026-07-06_10h00m00s_v1",
+                set_latest=True,
             )
 
         mock_update.assert_called_once_with(

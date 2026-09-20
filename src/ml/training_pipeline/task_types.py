@@ -19,16 +19,11 @@ consult, so the two can never drift out of sync silently.
 
 from __future__ import annotations
 
-from enum import Enum
-
-
-class TaskType(Enum):
-    """What kind of target a model's compiled head expects."""
-
-    REGRESSION = "regression"
-    BINARY_CLASSIFICATION = "binary_classification"
-    TERNARY_CLASSIFICATION = "ternary_classification"
-
+from src.ml.target_types import (  # noqa: F401  (re-exported)
+    PRICE_SCALE_TARGET_TYPES,
+    TARGET_TASK_TYPES,
+    TaskType,
+)
 
 # Every model_type selectable via `create_model()` (models.py), by task type.
 # "adaptive"/"default" are cnn_lstm aliases (models.py:200).
@@ -52,19 +47,6 @@ MODEL_TASK_TYPES: dict[str, TaskType] = {
     # separate training path). Declared here so the #947 guard and metadata
     # conventions (task_type, class_labels) still apply uniformly.
     "meta_label_logistic": TaskType.BINARY_CLASSIFICATION,
-}
-
-# Every target_type the training pipeline can build a label for, by task
-# type. "regression" is the incumbent next-bar price-regression target
-# (pipeline.py's current unconditional behavior); "meta_label" is built by
-# meta_labels.py rather than labels.py but is listed here so the guard
-# covers it too.
-TARGET_TASK_TYPES: dict[str, TaskType] = {
-    "regression": TaskType.REGRESSION,
-    "binary_direction": TaskType.BINARY_CLASSIFICATION,
-    "triple_barrier": TaskType.TERNARY_CLASSIFICATION,
-    "smoothed_return": TaskType.REGRESSION,
-    "meta_label": TaskType.BINARY_CLASSIFICATION,
 }
 
 # Canonical class_labels ordering per classification target_type -- these
@@ -157,6 +139,7 @@ def validate_target_head_compatibility(model_type: str, target_type: str) -> Non
 
 __all__ = [
     "MODEL_TASK_TYPES",
+    "PRICE_SCALE_TARGET_TYPES",
     "TARGET_CLASS_LABELS",
     "TARGET_TASK_TYPES",
     "TaskType",

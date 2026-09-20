@@ -286,6 +286,10 @@ class MLSignalGenerator(SignalGenerator):
 
             self.prediction_engine = engine
 
+        except FileNotFoundError:
+            # A missing model registry must stop the run: degrading to a
+            # HOLD-only engine reads as a genuine zero-trade result (#1023).
+            raise
         except Exception:
             if not self._engine_warning_emitted:
                 logger.exception("MLSignalGenerator: Prediction engine initialization failed")
@@ -787,6 +791,10 @@ class MLBasicSignalGenerator(SignalGenerator):
                 # Engine doesn't have model_registry attribute
                 self._registry = None
 
+        except FileNotFoundError:
+            # A missing model registry must stop the run: degrading to a
+            # HOLD-only engine reads as a genuine zero-trade result (#1023).
+            raise
         except Exception:
             if not self._engine_warning_emitted:
                 logger.exception("MLBasicSignalGenerator: Prediction engine initialization failed")
@@ -872,6 +880,28 @@ class MLBasicSignalGenerator(SignalGenerator):
     def pinned_model_key(self) -> str | None:
         """Full bundle key the generator is pinned to, or None when unpinned."""
         return self._pinned_bundle_key
+
+    def resolved_model_identity(self) -> str | None:
+        """Full key (incl. version) of the bundle currently scoring this generator.
+
+        ``name`` is a constant and ``latest`` is a moving symlink, so neither
+        identifies WHICH weights produced a set of signals. Returns None when
+        the registry is unavailable or holds no matching bundle.
+        """
+        if self._pinned_bundle_key is not None:
+            return self._pinned_bundle_key
+        if self._cross_symbol_bundle_key is not None:
+            return self._cross_symbol_bundle_key
+        if self._registry is None:
+            return None
+        try:
+            return self._registry.select_bundle(
+                symbol=self.symbol, model_type=self.model_type, timeframe=self.model_timeframe
+            ).key
+        except Exception:
+            # Fail closed: an unresolvable identity is reported as None and
+            # rejected by the checkpoint fingerprint.
+            return None
 
     def _resolve_pinned_bundle(self, registry: "PredictionModelRegistry") -> None:
         """Resolve ``model_version`` to a full bundle key, failing fast.
