@@ -41,6 +41,7 @@ from src.engines.live.execution.entry_handler import LiveEntrySignal
 from src.engines.live.execution.entry_pause import EntryPauseGate
 from src.engines.live.execution.short_suppression_monitor import ShortSuppressionMonitor
 from src.engines.live.system_halt import SystemHaltState
+from src.engines.shared.entry_utils import extract_entry_plan
 from src.engines.shared.models import PositionSide
 from src.infrastructure.logging.events import log_order_event
 from src.strategies.components import Signal, SignalDirection
@@ -402,21 +403,14 @@ class LiveEntryCoordinator:
                 decision_signal = decision.signal
                 state._apply_policies_from_decision(decision)
 
-                notional_size = float(decision.position_size or 0.0)
-                balance = float(state.current_balance or 0.0)
-                size_fraction = 0.0 if balance <= 0 else max(0.0, notional_size / balance)
-                bounded_fraction = min(size_fraction, state.max_position_size)
-
-                if decision.signal.direction == SignalDirection.BUY and bounded_fraction > 0:
+                # Shared chokepoint: enforces the enter_short opt-in (long-only
+                # invariant, #1020) so this direct path cannot open a short the
+                # runtime path would suppress.
+                plan = extract_entry_plan(cast(Any, decision), float(state.current_balance or 0.0))
+                if plan is not None:
                     entry_signal = True
-                    entry_side = PositionSide.LONG
-                    position_size = bounded_fraction
-                    runtime_strength = decision.signal.strength
-                    runtime_confidence = decision.signal.confidence
-                elif decision.signal.direction == SignalDirection.SELL and bounded_fraction > 0:
-                    entry_signal = True
-                    entry_side = PositionSide.SHORT
-                    position_size = bounded_fraction
+                    entry_side = plan.side
+                    position_size = min(plan.size_fraction, state.max_position_size)
                     runtime_strength = decision.signal.strength
                     runtime_confidence = decision.signal.confidence
             except Exception as e:
