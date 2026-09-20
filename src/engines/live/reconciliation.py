@@ -5962,6 +5962,18 @@ class PeriodicReconciler:
             return a if b is None else b
         return max(a, b)
 
+    def _tracked_db_position_ids(self) -> set[Any]:
+        """DB ids the tracker holds, from the position attribute and the tracker's id map.
+
+        Recovered positions record their id only in the map
+        (``track_recovered_position``), so the attribute alone under-reports.
+        """
+        ids = {
+            getattr(pos, "db_position_id", None) for pos in self.position_tracker.positions.values()
+        }
+        ids.update(self.position_tracker.position_db_ids.values())
+        return ids
+
     def _check_untracked_open_positions(self, findings: list[str]) -> Severity | None:
         """CRITICAL when the DB shows an OPEN position the tracker does not hold (#1245).
 
@@ -5979,9 +5991,6 @@ class PeriodicReconciler:
         persists instead of flapping. An unreadable DB reports nothing: unknown is
         not evidence.
         """
-        tracked_ids = {
-            getattr(pos, "db_position_id", None) for pos in self.position_tracker.positions.values()
-        }
         now = time.monotonic()
         due = (
             bool(self._untracked_open_suspects)
@@ -5991,8 +6000,11 @@ class PeriodicReconciler:
             rows = self._read_open_db_positions()
             if rows is not None:
                 self._last_untracked_open_check = now
+                # Snapshot the tracker AFTER the DB read so a position added in
+                # between is not mistaken for an untracked one.
+                tracked_ids = self._tracked_db_position_ids()
                 untracked = {
-                    row["id"]: str(row.get("symbol"))
+                    row["id"]: str(row.get("symbol") or "unknown-symbol")
                     for row in rows
                     if row.get("id") is not None and row["id"] not in tracked_ids
                 }
@@ -6003,6 +6015,7 @@ class PeriodicReconciler:
                 }
                 self._untracked_open_suspects = set(untracked) - set(self._untracked_open_confirmed)
 
+        tracked_ids = self._tracked_db_position_ids()
         still_untracked = {
             pid: sym
             for pid, sym in self._untracked_open_confirmed.items()
@@ -6083,9 +6096,8 @@ class PeriodicReconciler:
             for symbol in symbols:
                 with self._stop_loss_placement_lock(symbol):
                     tracked_exchange_ids = set()
-                    tracked_db_ids = set()
+                    tracked_db_ids = self._tracked_db_position_ids()
                     for pos in self.position_tracker.positions.values():
-                        tracked_db_ids.add(getattr(pos, "db_position_id", None))
                         eid = getattr(pos, "exchange_order_id", None)
                         if eid:
                             tracked_exchange_ids.add(eid)

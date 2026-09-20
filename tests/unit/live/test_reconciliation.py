@@ -8745,6 +8745,20 @@ class TestUntrackedOpenPositionDetection:
         assert reconciler._check_untracked_open_positions([]) is None
         assert reconciler._check_untracked_open_positions([]) is None
 
+    def test_recovered_position_tracked_only_in_id_map_is_not_flagged(self, mock_exchange, mock_db):
+        """track_recovered_position records the DB id in the map, not on the position."""
+        from src.engines.live.execution.position_tracker import LivePositionTracker
+
+        tracker = LivePositionTracker()
+        pos = MockPosition(order_id="entry_1", db_position_id=None)
+        tracker.track_recovered_position(pos, 9)
+        assert tracker.position_db_ids == {"entry_1": 9}
+        mock_db.get_active_positions.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
+        reconciler = self._reconciler(mock_exchange, tracker, mock_db)
+
+        assert reconciler._check_untracked_open_positions([]) is None
+        assert reconciler._check_untracked_open_positions([]) is None
+
     def test_fully_tracked_db_is_quiet(self, mock_exchange, mock_position_tracker, mock_db):
         mock_position_tracker.positions = {"k": MockPosition(db_position_id=9)}
         mock_db.get_active_positions.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
