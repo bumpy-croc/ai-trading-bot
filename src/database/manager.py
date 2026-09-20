@@ -1652,7 +1652,9 @@ class DatabaseManager:
                 session.query(Order.exchange_order_id)
                 .filter(
                     Order.symbol == symbol,
-                    Order.created_at >= since,
+                    # Wider than the trade bound: an order placed before the window
+                    # can still fill inside it.
+                    Order.created_at >= since - timedelta(days=1),
                     Order.exchange_order_id.isnot(None),
                 )
                 .all()

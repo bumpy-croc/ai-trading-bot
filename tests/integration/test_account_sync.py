@@ -270,8 +270,8 @@ class TestAccountSynchronizer:
         # Test position closed
         result = synchronizer._sync_positions([])
         assert result["synced"] is True
-        assert result["closed_positions"] == 1
-        mock_db_manager.close_position.assert_called_once_with(1)
+        assert result["missing_positions"] == 1
+        mock_db_manager.close_position.assert_not_called()
 
     def test_sync_orders_comprehensive(self, synchronizer, mock_db_manager):
         """Test order synchronization with all scenarios"""

@@ -82,7 +82,7 @@ class TestSyncPositions:
 
         assert result["synced_positions"] == 1
         assert result["new_positions"] == 0
-        assert result["closed_positions"] == 0
+        assert result["missing_positions"] == 0
         db.close_position.assert_not_called()
         db.log_position.assert_not_called()
 
@@ -133,13 +133,20 @@ class TestSyncPositions:
 
         assert db.log_position.call_args.kwargs["size"] == pytest.approx(0.25)
 
-    def test_db_position_really_absent_on_exchange_is_closed(self, sync, db):
+    def test_db_position_absent_on_exchange_is_reported_not_closed(self, sync, db):
         db.get_active_positions.return_value = [_db_position()]
 
         result = sync._sync_positions([])
 
-        assert result["closed_positions"] == 1
-        db.close_position.assert_called_once_with(7)
+        assert result["missing_positions"] == 1
+        db.close_position.assert_not_called()
+        db.log_event.assert_called_once()
+        assert db.log_event.call_args.kwargs["error_code"] == "DB_POSITION_MISSING_ON_EXCHANGE"
+
+    def test_size_fraction_guards_zero_capital_and_notional(self, sync, db):
+        db.get_current_balance.return_value = 0.0
+
+        assert sync._size_fraction(0.0) == 1.0
 
     def test_symbol_scoped_sync_ignores_other_symbols(self, sync, db):
         db.get_active_positions.return_value = [
@@ -174,6 +181,13 @@ class TestSyncBalances:
         assert result["difference_percent"] == pytest.approx(30.0)
         db.atomic_balance_correction.assert_not_called()
         db.update_balance.assert_not_called()
+
+    def test_small_drift_below_reconciler_threshold_is_not_flagged(self, sync, db):
+        # 3% drift: above the old 1% sync threshold, below the reconciler's 5%.
+        result = sync._sync_balances([_usdt(1_030.0)])
+
+        assert result["difference_percent"] == pytest.approx(3.0)
+        assert "deferred_to_reconciler" not in result
 
     @pytest.mark.parametrize("bad_total", [None, "12", float("nan")])
     def test_invalid_usdt_total_returns_error_dict(self, sync, bad_total):
@@ -231,6 +245,17 @@ class TestRecoverMissingTrades:
         assert kwargs["exit_reason"] == "recovered_from_exchange"
         assert kwargs["pnl"] == 0.0
         assert result["details"][0]["trade_ids"] == ["1", "2"]
+
+    def test_naive_exchange_timestamps_are_treated_as_utc(self, sync, db):
+        naive_now = datetime.now(UTC).replace(tzinfo=None)
+        sync.exchange.get_recent_trades.return_value = [
+            self._fill("1", "O-naive", 0.1, 50_000.0, naive_now)
+        ]
+        db.get_known_exchange_order_ids.return_value = set()
+
+        result = sync.recover_missing_trades("BTCUSDT")
+
+        assert result["recovered_trades"] == 1
 
     def test_exchange_trades_older_than_the_window_are_ignored(self, sync, db):
         old = datetime.now(UTC) - timedelta(days=30)
@@ -290,6 +315,34 @@ class TestRecoverMissingTrades:
             "BTCUSDT", now - timedelta(days=1), new_session
         )
         assert [t["order_id"] for t in recovered] == ["9999"]
+
+
+class TestKnownOrderIds:
+    def test_order_placed_before_window_but_in_db_is_known(self):
+        real_db = DatabaseManager("sqlite:///:memory:")
+        session_id = real_db.create_trading_session(
+            strategy_name="S",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode=TradeSource.LIVE,
+            initial_balance=1_000.0,
+        )
+        position_id = real_db.log_position(
+            symbol="BTCUSDT",
+            side="long",
+            entry_price=100.0,
+            size=0.1,
+            strategy_name="S",
+            entry_order_id="ENTRY-1",
+            quantity=1.0,
+            session_id=session_id,
+        )
+        assert position_id
+        since = datetime.now(UTC) + timedelta(hours=6)  # order created "before the window"
+
+        known = real_db.get_known_exchange_order_ids("BTCUSDT", since)
+
+        assert "ENTRY-1" in known
 
 
 class TestBinanceRecentTradesTimezone:

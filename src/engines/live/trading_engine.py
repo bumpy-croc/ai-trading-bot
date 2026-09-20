@@ -2091,6 +2091,28 @@ class LiveTradingEngine:
                 with self._balance_lock:
                     self.current_balance = corrected
                 logger.info("💰 Balance corrected %s: $%.2f", source, corrected)
+        elif "exchange_cash" in balance_sync:
+            # Spot: the sync only reports; the periodic reconciler writes balance
+            # corrections to the DB only. Re-read so sizing follows the DB.
+            self._refresh_balance_from_db(source)
+
+    def _refresh_balance_from_db(self, source: str) -> None:
+        """Load the session balance from the DB into the in-memory sizing balance."""
+        try:
+            db_balance = self.db_manager.get_current_balance(self.trading_session_id)
+        except Exception as e:
+            logger.warning("Could not refresh in-memory balance %s: %s", source, e)
+            return
+        if db_balance is None or not math.isfinite(db_balance) or db_balance <= 0:
+            return
+        with self._balance_lock:
+            if abs(self.current_balance - db_balance) < 1e-9:
+                return
+            previous = self.current_balance
+            self.current_balance = db_balance
+        logger.info(
+            "💰 In-memory balance refreshed %s: $%.2f -> $%.2f", source, previous, db_balance
+        )
 
     def _check_pending_startup_equity_retry(self) -> None:
         """Drive #659's cold-boot margin-equity self-heal from the trading

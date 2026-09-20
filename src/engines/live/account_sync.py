@@ -572,6 +572,11 @@ class AccountSynchronizer:
             )
 
     @staticmethod
+    def _as_utc(moment: datetime) -> datetime:
+        """Treat a naive datetime as UTC so it can be compared with aware ones."""
+        return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
+
+    @staticmethod
     def _side_key(side: Any) -> str:
         """Canonical side key: DB rows carry "LONG"/"SHORT", exchange objects "long"/"short"."""
         return str(getattr(side, "value", side)).casefold()
@@ -598,7 +603,10 @@ class AccountSynchronizer:
     def _size_fraction(self, notional: float) -> float:
         """Balance fraction (``size``) represented by an asset notional, capped at 1.0."""
         capital = self.db_manager.get_current_balance(self.session_id)
-        return min(1.0, notional / max(capital, notional))
+        denominator = max(capital, notional)
+        if denominator <= 0:
+            return 1.0
+        return min(1.0, notional / denominator)
 
     def _sync_balances(self, exchange_balances: list[AccountBalance]) -> dict[str, Any]:
         """Compare the exchange USDT balance against the tracked balance (spot only).
@@ -666,7 +674,8 @@ class AccountSynchronizer:
                 "difference": balance_diff,
                 "difference_percent": balance_diff_pct,
             }
-            if balance_diff_pct > DEFAULT_BALANCE_DISCREPANCY_THRESHOLD_PCT:
+            # Same threshold the reconciler corrects at, so this message is accurate.
+            if balance_diff_pct > DEFAULT_RECONCILIATION_BALANCE_THRESHOLD_PCT * 100:
                 logger.warning(
                     "Balance discrepancy detected: exchange cash $%.2f vs expected cash $%.2f "
                     "(DB total $%.2f - open notional $%.2f), diff %.2f%% - "
@@ -711,7 +720,7 @@ class AccountSynchronizer:
 
             synced_positions = []
             new_positions = []
-            closed_positions = []
+            missing_positions = []
 
             # Check for positions that exist in exchange but not in database
             for exchange_pos in exchange_positions:
@@ -832,15 +841,18 @@ class AccountSynchronizer:
                         break
 
                 if not matching_exchange_pos:
-                    # Position exists in database but not on exchange
+                    # A bare status flip would skip the trade row, balance delta and
+                    # tracker removal, leaving an untracked live holding on a bad read.
+                    # The reconciler owns external closes (PnL, balance, stops).
                     logger.warning(
-                        f"Position closed on exchange: {db_pos['symbol']} {db_pos['side']}"
+                        "DB position %s %s (id=%s) not found on exchange - "
+                        "left to the reconciler to close",
+                        db_pos["symbol"],
+                        db_pos["side"],
+                        db_pos["id"],
                     )
-
-                    # Close position in database
-                    self.db_manager.close_position(db_pos["id"])
-
-                    closed_positions.append(
+                    self._log_missing_position_event(db_pos)
+                    missing_positions.append(
                         {"symbol": db_pos["symbol"], "side": db_pos["side"], "size": db_pos["size"]}
                     )
 
@@ -850,17 +862,38 @@ class AccountSynchronizer:
                 "total_db_positions": len(db_positions),
                 "synced_positions": len(synced_positions),
                 "new_positions": len(new_positions),
-                "closed_positions": len(closed_positions),
+                "missing_positions": len(missing_positions),
                 "details": {
                     "synced": synced_positions,
                     "new": new_positions,
-                    "closed": closed_positions,
+                    "missing": missing_positions,
                 },
             }
 
         except Exception as e:
             logger.error("Position sync failed: %s", e)
             return {"synced": False, "error": str(e)}
+
+    def _log_missing_position_event(self, db_pos: dict[str, Any]) -> None:
+        """Record a system event for a DB position the exchange does not hold.
+
+        Best-effort: observability must not break the sync loop.
+        """
+        try:
+            self.db_manager.log_event(
+                event_type=EventType.WARNING,
+                message=(
+                    f"Open DB position {db_pos['symbol']} {db_pos['side']} "
+                    f"(id={db_pos['id']}) not found on exchange during account sync"
+                ),
+                severity="warning",
+                component="account_sync.positions",
+                error_code="DB_POSITION_MISSING_ON_EXCHANGE",
+                details={"position_id": db_pos["id"], "symbol": db_pos["symbol"]},
+                session_id=self.session_id,
+            )
+        except Exception as e:
+            logger.error("Failed to record missing-position system event: %s", e, exc_info=True)
 
     def _sync_orders(self, exchange_orders: list[Order]) -> dict[str, Any]:
         """Synchronize open orders"""
@@ -997,7 +1030,7 @@ class AccountSynchronizer:
             # Filter by date
             cutoff_date = datetime.now(UTC) - timedelta(days=days_back)
             recent_exchange_trades = [
-                trade for trade in exchange_trades if trade.time >= cutoff_date
+                trade for trade in exchange_trades if self._as_utc(trade.time) >= cutoff_date
             ]
 
             # Dedup in the exchange's own ID space: order IDs, across all sessions
