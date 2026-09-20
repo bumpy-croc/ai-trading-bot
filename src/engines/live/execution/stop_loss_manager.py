@@ -190,6 +190,7 @@ class LiveStopLossManager:
         """
         from src.engines.live.reconciliation import (
             StopPlacementDecision,
+            adopted_stop_price,
             place_or_adopt_stop_loss,
             write_unprotected_audit,
         )
@@ -202,7 +203,7 @@ class LiveStopLossManager:
 
         def _capture_achieved_price(decision: StopPlacementDecision) -> None:
             nonlocal achieved_price
-            price = getattr(decision.existing_order, "stop_price", None)
+            price = adopted_stop_price(decision)
             if price is not None:
                 achieved_price = price
 
@@ -432,6 +433,7 @@ class LiveStopLossManager:
         """
         from src.engines.live.reconciliation import (
             StopPlacementDecision,
+            adopted_stop_price,
             place_or_adopt_stop_loss,
             write_unprotected_audit,
         )
@@ -478,7 +480,7 @@ class LiveStopLossManager:
 
         def _capture_achieved_price(decision: StopPlacementDecision) -> None:
             nonlocal achieved_price
-            price = getattr(decision.existing_order, "stop_price", None)
+            price = adopted_stop_price(decision)
             if price is not None:
                 achieved_price = price
 
@@ -682,6 +684,7 @@ class LiveStopLossManager:
         from src.engines.live.reconciliation import (
             StopPlacementDecision,
             _achieved_price_is_safe_to_ratify,
+            adopted_stop_price,
             place_or_adopt_stop_loss,
             write_unprotected_audit,
         )
@@ -701,7 +704,7 @@ class LiveStopLossManager:
 
         def _capture_achieved_price(decision: StopPlacementDecision) -> None:
             nonlocal achieved_price
-            price = getattr(decision.existing_order, "stop_price", None)
+            price = adopted_stop_price(decision)
             if price is not None:
                 achieved_price = price
 
