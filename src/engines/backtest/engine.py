@@ -393,9 +393,9 @@ class Backtester:
         self.drawdown_cap_breached: bool = False
         self.drawdown_cap_breach_date: datetime | None = None
         self.drawdown_cap_breach_candle_index: int | None = None
-        self._early_stop_max_drawdown = (
-            self.risk_manager.params.max_drawdown if risk_parameters is not None else 0.5
-        )
+        # Always the hydrated params (ratified limits when none supplied), so the
+        # threshold reported in results is the one enforced.
+        self._early_stop_max_drawdown = self.risk_manager.params.max_drawdown
 
         # Initialize handlers
         self.execution_engine = ExecutionEngine(

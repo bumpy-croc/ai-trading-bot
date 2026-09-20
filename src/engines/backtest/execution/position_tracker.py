@@ -28,6 +28,9 @@ from src.trading.exit_reason import ExitReason
 
 logger = logging.getLogger(__name__)
 
+# ActiveTrade.metadata key accumulating net P&L already banked by partial exits.
+REALIZED_PARTIAL_PNL_KEY = "realized_partial_pnl"
+
 
 @dataclass
 class PositionCloseResult:
@@ -209,6 +212,12 @@ class PositionTracker:
         current_size = cast(float, self.current_trade.current_size)
         self.current_trade.current_size = max(0.0, current_size - exit_fraction)
         self.current_trade.partial_exits_taken += 1
+        # Carried on the trade so the closing record reports the whole
+        # position's outcome, not just the last leg (see close_position).
+        meta = self.current_trade.metadata
+        meta[REALIZED_PARTIAL_PNL_KEY] = (
+            float(meta.get(REALIZED_PARTIAL_PNL_KEY, 0.0)) + result.realized_pnl
+        )
 
         logger.debug(
             "Partial exit: %.4f of position, gross_pnl=%.2f, fee=%.2f, slippage=%.2f, net_pnl=%.2f",
@@ -410,6 +419,15 @@ class PositionTracker:
 
         trade_pnl_cash = cash_pnl(trade_pnl_pct, actual_basis)
 
+        # Balance is credited from pnl_cash (final leg only; partial slices
+        # were credited when banked). The recorded Trade carries the whole
+        # position's P&L so win/loss stats reflect the position outcome: a
+        # position fully consumed by partials would otherwise be recorded as
+        # a zero-P&L trade, and a winner stopped out after partials as a loser.
+        banked_partial_pnl = float(trade.metadata.get(REALIZED_PARTIAL_PNL_KEY, 0.0))
+        position_pnl_cash = trade_pnl_cash + banked_partial_pnl
+        position_pnl_pct = position_pnl_cash / actual_basis if actual_basis > 0 else trade_pnl_pct
+
         # Get MFE/MAE metrics before clearing
         metrics = self.mfe_mae_tracker.get_position_metrics(self.POSITION_KEY)
 
@@ -426,8 +444,8 @@ class PositionTracker:
             entry_time=trade.entry_time,
             exit_time=exit_time,
             size=fraction,
-            pnl=trade_pnl_cash,
-            pnl_percent=trade_pnl_pct,
+            pnl=position_pnl_cash,
+            pnl_percent=position_pnl_pct,
             exit_reason=exit_reason,
             exit_category=exit_category,
             stop_loss=trade.stop_loss,

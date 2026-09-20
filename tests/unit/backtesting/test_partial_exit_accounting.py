@@ -167,8 +167,10 @@ class TestPartialExitUnits:
 
         # Remaining 7.5%-of-balance slice at +5%: 0.05 * 0.075 * 1000 = $3.75
         assert close_result.pnl_cash == pytest.approx(3.75)
-        assert close_result.trade.pnl == pytest.approx(3.75)
         assert close_result.trade.size == pytest.approx(0.075)
+        # The record carries the whole position: banked partial slice
+        # (0.05 * 0.025 * 1000 = $1.25) + final leg.
+        assert close_result.trade.pnl == pytest.approx(5.0)
 
     def test_risk_manager_adjustment_uses_balance_fraction_delta(self) -> None:
         """Risk manager exposure is tracked in balance-fraction units; the
@@ -402,7 +404,7 @@ class TestEngineLevelPartialAccounting:
         #         final    = 10% x 0.05  x 1000 = $5.00
         assert results["total_trades"] == 1
         trade_pnls = [t.pnl for t in backtester.trades]
-        assert trade_pnls == [pytest.approx(5.0)]
+        assert trade_pnls == [pytest.approx(1.0 + 1.75 + 5.0)]
         assert results["final_balance"] == pytest.approx(1000.0 + 1.0 + 1.75 + 5.0)
         # A profitable run with partial exits must not report a 0% win rate.
         assert results["win_rate"] == pytest.approx(100.0)
@@ -447,6 +449,29 @@ class TestEngineLevelPartialAccounting:
         assert backtester.current_trade is None
         assert results["total_trades"] == 1
         assert "Partial exits complete" in backtester.trades[-1].exit_reason
+        # The recorded trade carries the partials' P&L (not a zero-P&L record),
+        # so the run counts as a win.
+        assert backtester.trades[-1].pnl == pytest.approx(12.0)
+        assert results["win_rate"] == pytest.approx(100.0)
+
+    def test_winner_stopped_out_after_partials_is_recorded_as_win(self) -> None:
+        """Partials bank more than the remainder loses -> position is a win."""
+        policy = PartialExitPolicy(exit_targets=[0.10], exit_sizes=[0.50])
+        handler, tracker, _ = _make_exit_handler(policy)
+        _open_long(tracker, size=0.10, entry_price=100.0, entry_balance=1000.0)
+        handler.check_partial_operations(
+            current_price=110.0, df=_single_candle_df(110.0), index=0, balance=1000.0
+        )
+        result = tracker.close_position(
+            exit_price=98.0,
+            exit_time=datetime(2024, 1, 3, tzinfo=UTC),
+            exit_reason="Stop loss",
+            basis_balance=1000.0,
+        )
+        # Partial +$5.00, remainder -2% x 0.05 x 1000 = -$1.00
+        assert result.pnl_cash == pytest.approx(-1.0)
+        assert result.trade.pnl == pytest.approx(4.0)
+        assert result.trade.pnl_percent == pytest.approx(0.004)
 
 
 class TestMarkToMarketDrawdown:

@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Live engine logs the resolved time-exit policy at boot** (#1083). A strategy with
   no `time_exits` config has no time-based exit (same in backtest); the log makes
   that explicit. Behavior is unchanged.
+- **Backtest trade records now carry the whole position's P&L when partial exits were taken** (#837).
+  A position fully consumed by partial exits was recorded as a zero-P&L trade, and a
+  winner stopped out after partials as a loser, so `win_rate`/`profit_factor` disagreed with
+  `total_return`. `PositionTracker` accumulates banked partial P&L on the trade and
+  `close_position` adds it to the recorded `Trade.pnl`/`pnl_percent`; the balance is still credited
+  per leg, so `final_balance` is unchanged. Live still records the final leg only (#1234).
+- **`Backtester` early-stop drawdown threshold always comes from the hydrated risk manager** (#1089).
+  A bare `Backtester` used a hardcoded 0.5 instead of the ratified 20% cap.
 
 ### Changed
 - **Entry-path stop-loss placement now threads `reason_code` through and defers on a
