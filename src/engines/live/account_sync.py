@@ -718,11 +718,9 @@ class AccountSynchronizer:
                 # Find matching position in database
                 db_pos = None
                 for position_row in db_positions:
-                    if (
-                        position_row["symbol"] == exchange_pos.symbol
-                        and self._side_key(position_row["side"])
-                        == self._side_key(exchange_pos.side)
-                    ):
+                    if position_row["symbol"] == exchange_pos.symbol and self._side_key(
+                        position_row["side"]
+                    ) == self._side_key(exchange_pos.side):
                         db_pos = position_row
                         break
 
@@ -827,9 +825,9 @@ class AccountSynchronizer:
             for db_pos in db_positions:
                 matching_exchange_pos = None
                 for pos in exchange_positions:
-                    if pos.symbol == db_pos["symbol"] and self._side_key(pos.side) == self._side_key(
-                        db_pos["side"]
-                    ):
+                    if pos.symbol == db_pos["symbol"] and self._side_key(
+                        pos.side
+                    ) == self._side_key(db_pos["side"]):
                         matching_exchange_pos = pos
                         break
 

@@ -142,7 +142,10 @@ class TestSyncPositions:
         db.close_position.assert_called_once_with(7)
 
     def test_symbol_scoped_sync_ignores_other_symbols(self, sync, db):
-        db.get_active_positions.return_value = [_db_position(id=1), _db_position(id=2, symbol="ETHUSDT")]
+        db.get_active_positions.return_value = [
+            _db_position(id=1),
+            _db_position(id=2, symbol="ETHUSDT"),
+        ]
 
         result = sync._sync_positions([_exchange_position("BTCUSDT")], symbol="BTCUSDT")
 
