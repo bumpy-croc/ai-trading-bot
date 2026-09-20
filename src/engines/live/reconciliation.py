@@ -67,10 +67,12 @@ logger = logging.getLogger(__name__)
 # cycle in flight, never from a previous one (#1094).
 _EXCHANGE_ERROR_ATTRIBUTION_WINDOW_S = 90.0
 
-# Minimum spacing between reads of the session's OPEN DB positions for the
-# untracked-position check (#1245); ``get_active_positions`` also loads every
-# position's orders, so it is not run on every cycle.
-_UNTRACKED_OPEN_CHECK_INTERVAL_S = 300.0
+# ``strategy_name`` of the DB rows AccountSynchronizer writes for exchange positions
+# it finds at startup. It records them but never tracks them, so they are not
+# evidence of a lost position.
+EXCHANGE_SYNC_STRATEGY_NAME = "exchange_sync"
+
+_SWEEP_UNTRACKED_FINDING = "open DB position not tracked"
 
 
 def _emit_event(
@@ -4874,11 +4876,9 @@ class PeriodicReconciler:
         self._last_cycle_emit_ts = 0.0
         self._symbols = symbols or []
         # Untracked-OPEN-position check state (#1245): DB ids seen untracked once
-        # (awaiting confirmation on a second read), ids confirmed untracked, and when
-        # the DB was last read.
+        # (awaiting confirmation on a second cycle) and ids confirmed untracked.
         self._untracked_open_suspects: set[int] = set()
         self._untracked_open_confirmed: dict[int, str] = {}
-        self._last_untracked_open_check = float("-inf")
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -5595,19 +5595,15 @@ class PeriodicReconciler:
         # is caught THIS cycle instead of waiting for the next one.
         sweep_findings = []
         sweep_severity = self._sweep_orphaned_orders(sweep_findings)
+        # 3b. An OPEN DB position the tracker does not hold, whether or not a stop
+        # rests for it (#1245).
+        sweep_severity = self._merge_severity(
+            sweep_severity, self._check_untracked_open_positions(sweep_findings)
+        )
         if sweep_severity is not None:
             findings.extend(sweep_findings)
             if sweep_severity > max_severity:
                 max_severity = sweep_severity
-
-        # 3b. An OPEN DB position the tracker does not hold, whether or not a stop
-        # rests for it (#1245).
-        untracked_findings: list[str] = []
-        untracked_severity = self._check_untracked_open_positions(untracked_findings)
-        if untracked_severity is not None:
-            findings.extend(untracked_findings)
-            if untracked_severity > max_severity:
-                max_severity = untracked_severity
 
         # 4. Verify balance — delegates to the shared, self-contained reconcile that
         # values a FRESH position snapshot (a position closed earlier this cycle is
@@ -5982,56 +5978,54 @@ class PeriodicReconciler:
         compares ids directly. The caller latches close-only, as it does for the
         sweep's equivalent finding.
 
-        The DB read is throttled. A position is reported only once it has been
-        seen untracked on two consecutive reads: an entry writes its DB row a
-        moment before the tracker holds the id, and a one-off sighting is
-        that window, not a lost position. A suspect forces the next cycle to
-        re-read instead of waiting out the throttle. Between reads, confirmed ids
-        keep being reported until the tracker holds them again, so the alert
-        persists instead of flapping. An unreadable DB reports nothing: unknown is
-        not evidence.
+        A position is reported only once it has been seen untracked on two
+        consecutive cycles: an entry writes its DB row a moment before the
+        tracker holds the id, and a one-off sighting is that window, not a lost
+        position. Rows written by the account sync are skipped: it records
+        exchange positions without tracking them. An unreadable DB reports
+        nothing: unknown is not evidence.
         """
-        now = time.monotonic()
-        due = (
-            bool(self._untracked_open_suspects)
-            or now - self._last_untracked_open_check >= _UNTRACKED_OPEN_CHECK_INTERVAL_S
-        )
-        if due:
-            rows = self._read_open_db_positions()
-            if rows is not None:
-                self._last_untracked_open_check = now
-                # Snapshot the tracker AFTER the DB read so a position added in
-                # between is not mistaken for an untracked one.
-                tracked_ids = self._tracked_db_position_ids()
-                untracked = {
-                    row["id"]: str(row.get("symbol") or "unknown-symbol")
-                    for row in rows
-                    if row.get("id") is not None and row["id"] not in tracked_ids
-                }
-                self._untracked_open_confirmed = {
-                    pid: sym
-                    for pid, sym in untracked.items()
-                    if pid in self._untracked_open_suspects or pid in self._untracked_open_confirmed
-                }
-                self._untracked_open_suspects = set(untracked) - set(self._untracked_open_confirmed)
+        rows = self._read_open_db_position_refs()
+        if rows is not None:
+            # Snapshot the tracker AFTER the DB read so a position added in
+            # between is not mistaken for an untracked one.
+            tracked_ids = self._tracked_db_position_ids()
+            untracked = {
+                row["id"]: str(row.get("symbol") or "unknown-symbol")
+                for row in rows
+                if row.get("id") is not None
+                and row["id"] not in tracked_ids
+                and row.get("strategy") != EXCHANGE_SYNC_STRATEGY_NAME
+            }
+            self._untracked_open_confirmed = {
+                pid: sym
+                for pid, sym in untracked.items()
+                if pid in self._untracked_open_suspects or pid in self._untracked_open_confirmed
+            }
+            self._untracked_open_suspects = set(untracked) - set(self._untracked_open_confirmed)
 
-        tracked_ids = self._tracked_db_position_ids()
-        still_untracked = {
-            pid: sym
-            for pid, sym in self._untracked_open_confirmed.items()
-            if pid not in tracked_ids
-        }
-        self._untracked_open_confirmed = still_untracked
-        if not still_untracked:
+        if not self._untracked_open_confirmed:
             return None
-        detail = ", ".join(f"{sym} (id={pid})" for pid, sym in sorted(still_untracked.items()))
+        detail = ", ".join(
+            f"{sym} (id={pid})" for pid, sym in sorted(self._untracked_open_confirmed.items())
+        )
         logger.critical(
             "OPEN DB position(s) not held by the tracker: %s — untracked live exposure; "
             "needs re-adoption (restart) or manual close.",
             detail,
         )
+        # The orphan sweep reports the same position when a stop rests for it; name it once.
+        findings[:] = [f for f in findings if not f.startswith(_SWEEP_UNTRACKED_FINDING)]
         findings.append(f"open DB position not tracked: {detail}")
         return Severity.CRITICAL
+
+    def _read_open_db_position_refs(self) -> list[dict[str, Any]] | None:
+        """``id``/``symbol``/``strategy`` of the session's OPEN DB positions, or None."""
+        try:
+            return list(self.db_manager.get_open_position_refs(self.session_id))
+        except Exception as e:
+            logger.warning("Could not read open DB position refs: %s", e)
+            return None
 
     def _sweep_orphaned_orders(self, findings: list[str] | None = None) -> Severity | None:
         """Cancel resting exchange orders that belong to no tracked position (#740).
@@ -6184,7 +6178,7 @@ class PeriodicReconciler:
         """
         if findings is not None:
             if untracked_open:
-                findings.append("open DB position not tracked; its stop-loss left in place")
+                findings.append(_SWEEP_UNTRACKED_FINDING + "; its stop-loss left in place")
             if unverified:
                 findings.append("could not verify open DB positions; stop-loss left in place")
             if cancelled:

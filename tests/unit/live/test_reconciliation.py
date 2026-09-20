@@ -8656,11 +8656,11 @@ class TestUntrackedOpenPositionDetection:
             **kwargs,
         )
 
-    def test_flat_tracker_no_stop_confirms_on_second_read_and_latches(
+    def test_flat_tracker_no_stop_confirms_on_second_cycle_and_latches(
         self, mock_exchange, mock_position_tracker, mock_db
     ):
         mock_position_tracker.positions = {}
-        mock_db.get_active_positions.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
+        mock_db.get_open_position_refs.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
         on_critical = MagicMock()
         on_event = MagicMock()
         reconciler = self._reconciler(
@@ -8685,7 +8685,7 @@ class TestUntrackedOpenPositionDetection:
     ):
         tracked = MockPosition(order_id="entry_t", exchange_order_id=None, db_position_id=5)
         _live_tracker(mock_position_tracker, {"entry_t": tracked})
-        mock_db.get_active_positions.return_value = [
+        mock_db.get_open_position_refs.return_value = [
             {"id": 5, "symbol": "BTCUSDT"},
             {"id": 9, "symbol": "ETHUSDT"},
         ]
@@ -8701,7 +8701,7 @@ class TestUntrackedOpenPositionDetection:
     ):
         """DB row exists a moment before the tracker holds the id."""
         mock_position_tracker.positions = {}
-        mock_db.get_active_positions.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
+        mock_db.get_open_position_refs.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
         reconciler = self._reconciler(mock_exchange, mock_position_tracker, mock_db)
 
         assert reconciler._check_untracked_open_positions([]) is None
@@ -8709,37 +8709,23 @@ class TestUntrackedOpenPositionDetection:
         assert reconciler._check_untracked_open_positions([]) is None
         assert reconciler._check_untracked_open_positions([]) is None
 
-    def test_db_read_is_throttled_once_nothing_is_suspect(
+    def test_confirmed_finding_persists_and_clears_when_tracked(
         self, mock_exchange, mock_position_tracker, mock_db
     ):
         mock_position_tracker.positions = {}
-        mock_db.get_active_positions.return_value = []
-        reconciler = self._reconciler(mock_exchange, mock_position_tracker, mock_db)
-
-        for _ in range(3):
-            reconciler._check_untracked_open_positions([])
-
-        assert mock_db.get_active_positions.call_count == 1
-
-    def test_confirmed_finding_persists_between_reads_and_clears_when_tracked(
-        self, mock_exchange, mock_position_tracker, mock_db
-    ):
-        mock_position_tracker.positions = {}
-        mock_db.get_active_positions.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
+        mock_db.get_open_position_refs.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
         reconciler = self._reconciler(mock_exchange, mock_position_tracker, mock_db)
         reconciler._check_untracked_open_positions([])
         assert reconciler._check_untracked_open_positions([]) == Severity.CRITICAL
-        reads = mock_db.get_active_positions.call_count
 
         assert reconciler._check_untracked_open_positions([]) == Severity.CRITICAL
-        assert mock_db.get_active_positions.call_count == reads
 
         mock_position_tracker.positions = {"k": MockPosition(db_position_id=9)}
         assert reconciler._check_untracked_open_positions([]) is None
 
     def test_db_read_failure_reports_nothing(self, mock_exchange, mock_position_tracker, mock_db):
         mock_position_tracker.positions = {}
-        mock_db.get_active_positions.side_effect = RuntimeError("db down")
+        mock_db.get_open_position_refs.side_effect = RuntimeError("db down")
         reconciler = self._reconciler(mock_exchange, mock_position_tracker, mock_db)
 
         assert reconciler._check_untracked_open_positions([]) is None
@@ -8753,15 +8739,75 @@ class TestUntrackedOpenPositionDetection:
         pos = MockPosition(order_id="entry_1", db_position_id=None)
         tracker.track_recovered_position(pos, 9)
         assert tracker.position_db_ids == {"entry_1": 9}
-        mock_db.get_active_positions.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
+        mock_db.get_open_position_refs.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
         reconciler = self._reconciler(mock_exchange, tracker, mock_db)
 
         assert reconciler._check_untracked_open_positions([]) is None
         assert reconciler._check_untracked_open_positions([]) is None
 
+    def test_account_sync_rows_are_not_flagged_but_a_real_untracked_row_is(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        """AccountSynchronizer records exchange positions without ever tracking them."""
+        from src.engines.live.reconciliation import EXCHANGE_SYNC_STRATEGY_NAME
+
+        mock_position_tracker.positions = {}
+        mock_db.get_open_position_refs.return_value = [
+            {"id": 4, "symbol": "BTCUSDT", "strategy": EXCHANGE_SYNC_STRATEGY_NAME},
+            {"id": 9, "symbol": "ETHUSDT", "strategy": "ml_basic"},
+        ]
+        reconciler = self._reconciler(mock_exchange, mock_position_tracker, mock_db)
+        findings: list[str] = []
+
+        assert reconciler._check_untracked_open_positions(findings) is None
+        assert reconciler._check_untracked_open_positions(findings) == Severity.CRITICAL
+        assert findings == ["open DB position not tracked: ETHUSDT (id=9)"]
+
+    def test_account_sync_row_alone_never_latches(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        from src.engines.live.reconciliation import EXCHANGE_SYNC_STRATEGY_NAME
+
+        mock_position_tracker.positions = {}
+        mock_db.get_open_position_refs.return_value = [
+            {"id": 4, "symbol": "BTCUSDT", "strategy": EXCHANGE_SYNC_STRATEGY_NAME}
+        ]
+        on_critical = MagicMock()
+        reconciler = self._reconciler(
+            mock_exchange, mock_position_tracker, mock_db, on_critical=on_critical
+        )
+
+        for _ in range(3):
+            reconciler._reconcile_cycle()
+
+        on_critical.assert_not_called()
+
+    def test_resting_stop_and_untracked_row_are_reported_once(
+        self, mock_exchange, mock_position_tracker, mock_db
+    ):
+        mock_position_tracker.positions = {}
+        mock_db.get_open_position_refs.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
+        mock_db.get_active_positions.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
+        stop = MagicMock()
+        stop.order_id = "sl_open"
+        stop.client_order_id = "atbsl_1_aaaa"
+        on_critical = MagicMock()
+        reconciler = self._reconciler(
+            mock_exchange, mock_position_tracker, mock_db, on_critical=on_critical
+        )
+        mock_exchange.get_open_orders.return_value = [stop]
+
+        reconciler._reconcile_cycle()
+        reconciler._reconcile_cycle()
+
+        reason = on_critical.call_args.args[0]
+        assert reason.count("open DB position not tracked") == 1
+        assert "BTCUSDT (id=9)" in reason
+        mock_exchange.cancel_order.assert_not_called()
+
     def test_fully_tracked_db_is_quiet(self, mock_exchange, mock_position_tracker, mock_db):
         mock_position_tracker.positions = {"k": MockPosition(db_position_id=9)}
-        mock_db.get_active_positions.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
+        mock_db.get_open_position_refs.return_value = [{"id": 9, "symbol": "BTCUSDT"}]
         reconciler = self._reconciler(mock_exchange, mock_position_tracker, mock_db)
 
         assert reconciler._check_untracked_open_positions([]) is None
