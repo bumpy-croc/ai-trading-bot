@@ -1,5 +1,7 @@
 """Tests for Temporal Fusion Transformer (TFT) model architecture."""
 
+import sys
+
 import numpy as np
 import pytest
 
@@ -354,11 +356,16 @@ class TestModelFactoryIntegration:
 
         assert "tft_ternary" in AVAILABLE_MODELS
 
-    def test_create_model_lightgbm_dispatches_to_directional_classifier(self, input_shape):
+    def test_create_model_lightgbm_dispatches_to_directional_classifier(
+        self, input_shape, monkeypatch
+    ):
         """lightgbm is reachable from create_model() but raises ImportError
-        at construction time since lightgbm isn't an installed/declared
-        dependency in this repo (documented follow-up, Phase 2b item 3)."""
+        at construction time since lightgbm isn't a declared dependency in
+        this repo (documented follow-up, Phase 2b item 3). Blocking the
+        import keeps the test independent of what the venv happens to hold."""
         from src.ml.training_pipeline.models import create_model
+
+        monkeypatch.setitem(sys.modules, "lightgbm", None)
 
         with pytest.raises(ImportError, match="lightgbm"):
             create_model("lightgbm", input_shape, has_sentiment=False)
