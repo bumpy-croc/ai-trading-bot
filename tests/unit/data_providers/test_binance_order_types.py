@@ -40,12 +40,12 @@ class TestBinanceOrderTypeMap:
 
     def test_unknown_type_defaults_to_market_and_warns(self, caplog):
         with caplog.at_level(logging.WARNING):
-            assert map_binance_order_type("LIMIT_MAKER") == OrderType.MARKET
-        assert "LIMIT_MAKER" in caplog.text
+            assert map_binance_order_type("TRAILING_STOP") == OrderType.MARKET
+        assert "TRAILING_STOP" in caplog.text
 
     @pytest.mark.parametrize("binance_type", sorted(BINANCE_ORDER_TYPE_MAP))
     def test_rest_and_websocket_paths_agree(self, binance_type):
-        """Both call sites resolve through the one table, so they cannot drift (#1152)."""
+        """Both call sites resolve through the one table, so they cannot drift (#1158)."""
         rest = _make_provider()._convert_order_type(binance_type)
         assert rest == OrderTracker._map_ws_order_type(binance_type)
 
@@ -56,6 +56,10 @@ class TestSymbolInfoMinNotional:
 
     @staticmethod
     def _min_notional(extra_filters):
+        return TestSymbolInfoMinNotional._symbol_info(extra_filters)["min_notional"]
+
+    @staticmethod
+    def _symbol_info(extra_filters):
         client = Mock()
         client.get_exchange_info.return_value = {
             "symbols": [
@@ -72,7 +76,7 @@ class TestSymbolInfoMinNotional:
                 }
             ]
         }
-        return _make_provider(client).get_symbol_info("ETHUSDT")["min_notional"]
+        return _make_provider(client).get_symbol_info("ETHUSDT")
 
     def test_reads_notional_filter(self):
         assert self._min_notional([{"filterType": "NOTIONAL", "minNotional": "5.0"}]) == 5.0
@@ -82,3 +86,17 @@ class TestSymbolInfoMinNotional:
 
     def test_missing_filter_defaults_to_zero(self):
         assert self._min_notional([]) == 0.0
+
+    def test_notional_filter_wins_when_both_present(self):
+        both = [
+            {"filterType": "MIN_NOTIONAL", "minNotional": "10"},
+            {"filterType": "NOTIONAL", "minNotional": "5.0"},
+        ]
+        assert self._min_notional(both) == 5.0
+
+    @pytest.mark.parametrize(("flag", "expected"), [(False, False), (True, True), (None, True)])
+    def test_apply_min_to_market_flag(self, flag, expected):
+        notional = {"filterType": "NOTIONAL", "minNotional": "5.0"}
+        if flag is not None:
+            notional["applyMinToMarket"] = flag
+        assert self._symbol_info([notional])["apply_min_to_market"] is expected

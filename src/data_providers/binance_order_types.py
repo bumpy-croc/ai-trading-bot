@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 BINANCE_ORDER_TYPE_MAP: dict[str, OrderType] = {
     "MARKET": OrderType.MARKET,
     "LIMIT": OrderType.LIMIT,
+    "LIMIT_MAKER": OrderType.LIMIT,
     "STOP_LOSS": OrderType.STOP_LOSS,
     "STOP_LOSS_LIMIT": OrderType.STOP_LOSS,
     "TAKE_PROFIT": OrderType.TAKE_PROFIT,

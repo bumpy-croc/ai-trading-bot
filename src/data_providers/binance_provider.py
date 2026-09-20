@@ -2497,6 +2497,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                         ),
                         "tick_size": float(filters.get("PRICE_FILTER", {}).get("tickSize", 0)),
                         "min_notional": float(notional_filter.get("minNotional", 0)),
+                        # When false, MARKET orders are exempt from min_notional.
+                        "apply_min_to_market": bool(
+                            notional_filter.get(
+                                "applyMinToMarket", notional_filter.get("applyToMarket", True)
+                            )
+                        ),
                     }
                     with self._symbol_info_cache_lock:
                         self._symbol_info_cache[cache_key] = info
