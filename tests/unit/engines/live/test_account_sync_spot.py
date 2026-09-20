@@ -148,6 +148,16 @@ class TestSyncPositions:
 
         assert sync._size_fraction(0.0) == 1.0
 
+    def test_symbol_scoped_sync_ignores_other_exchange_holdings(self, sync, db):
+        db.get_active_positions.return_value = [_db_position()]
+        holdings = [_exchange_position("BTCUSDC"), _exchange_position("BTCUSDT")]
+
+        result = sync._sync_positions(holdings, symbol="BTCUSDT")
+
+        assert result["total_exchange_positions"] == 1
+        assert result["new_positions"] == 0
+        db.log_position.assert_not_called()
+
     def test_symbol_scoped_sync_ignores_other_symbols(self, sync, db):
         db.get_active_positions.return_value = [
             _db_position(id=1),
@@ -257,6 +267,19 @@ class TestRecoverMissingTrades:
 
         assert result["recovered_trades"] == 1
 
+    def test_mixed_naive_and_aware_fills_of_one_order(self, sync, db):
+        aware = datetime.now(UTC)
+        naive = (aware - timedelta(seconds=3)).replace(tzinfo=None)
+        sync.exchange.get_recent_trades.return_value = [
+            self._fill("1", "O-mix", 0.1, 50_000.0, naive),
+            self._fill("2", "O-mix", 0.1, 50_000.0, aware),
+        ]
+        db.get_known_exchange_order_ids.return_value = set()
+
+        result = sync.recover_missing_trades("BTCUSDT")
+
+        assert result["recovered_trades"] == 1
+
     def test_exchange_trades_older_than_the_window_are_ignored(self, sync, db):
         old = datetime.now(UTC) - timedelta(days=30)
         sync.exchange.get_recent_trades.return_value = [self._fill("1", "O-old", 0.1, 1.0, old)]
@@ -338,11 +361,18 @@ class TestKnownOrderIds:
             session_id=session_id,
         )
         assert position_id
-        since = datetime.now(UTC) + timedelta(hours=6)  # order created "before the window"
+        now = datetime.now(UTC)
 
-        known = real_db.get_known_exchange_order_ids("BTCUSDT", since)
-
-        assert "ENTRY-1" in known
+        # Order rows count within one day before the window start (fills can land late)...
+        assert "ENTRY-1" in real_db.get_known_exchange_order_ids(
+            "BTCUSDT", now + timedelta(hours=12)
+        )
+        # ...but not from further back than that.
+        assert "ENTRY-1" not in real_db.get_known_exchange_order_ids(
+            "BTCUSDT", now + timedelta(days=2)
+        )
+        # Other symbols never match.
+        assert real_db.get_known_exchange_order_ids("ETHUSDT", now - timedelta(days=1)) == set()
 
 
 class TestBinanceRecentTradesTimezone:

@@ -716,7 +716,10 @@ class AccountSynchronizer:
             # Get current positions from database
             db_positions = self.db_manager.get_active_positions(self.session_id)
             if symbol:
+                # Both sides are scoped: the provider returns every holding for quote
+                # assets it does not derive a base asset from (e.g. USDC).
                 db_positions = [row for row in db_positions if row["symbol"] == symbol]
+                exchange_positions = [pos for pos in exchange_positions if pos.symbol == symbol]
 
             synced_positions = []
             new_positions = []
@@ -1067,8 +1070,8 @@ class AccountSynchronizer:
                         continue
                     # Volume-weighted average fill price for the order.
                     price = sum(fill.price * fill.quantity for fill in fills) / quantity
-                    first_time = min(fill.time for fill in fills)
-                    last_time = max(fill.time for fill in fills)
+                    first_time = min(self._as_utc(fill.time) for fill in fills)
+                    last_time = max(self._as_utc(fill.time) for fill in fills)
 
                     self.db_manager.log_trade(
                         symbol=fills[0].symbol,

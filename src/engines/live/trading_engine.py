@@ -2098,18 +2098,20 @@ class LiveTradingEngine:
 
     def _refresh_balance_from_db(self, source: str) -> None:
         """Load the session balance from the DB into the in-memory sizing balance."""
+        # Read and assign under one lock hold so a concurrent balance write cannot
+        # be overwritten with a value read before it.
         try:
-            db_balance = self.db_manager.get_current_balance(self.trading_session_id)
+            with self._balance_lock:
+                db_balance = self.db_manager.get_current_balance(self.trading_session_id)
+                if db_balance is None or not math.isfinite(db_balance) or db_balance <= 0:
+                    return
+                if abs(self.current_balance - db_balance) < 1e-9:
+                    return
+                previous = self.current_balance
+                self.current_balance = db_balance
         except Exception as e:
             logger.warning("Could not refresh in-memory balance %s: %s", source, e)
             return
-        if db_balance is None or not math.isfinite(db_balance) or db_balance <= 0:
-            return
-        with self._balance_lock:
-            if abs(self.current_balance - db_balance) < 1e-9:
-                return
-            previous = self.current_balance
-            self.current_balance = db_balance
         logger.info(
             "💰 In-memory balance refreshed %s: $%.2f -> $%.2f", source, previous, db_balance
         )
