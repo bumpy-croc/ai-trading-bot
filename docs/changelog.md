@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Live engine logs the resolved time-exit policy at boot** (#1083). A strategy with
   no `time_exits` config has no time-based exit (same in backtest); the log makes
   that explicit. Behavior is unchanged.
+- **`BinanceProvider.get_symbol_info` now reads the `NOTIONAL` filter** (falling back to
+  legacy `MIN_NOTIONAL`) — Binance no longer returns `MIN_NOTIONAL`, so `min_notional` was
+  always 0 and the execution engine's pre-trade minimum-notional guard was dead (#1062).
+- **One Binance order-type mapping table** (`src/data_providers/binance_order_types.py`)
+  shared by the REST and WebSocket parsing paths; unknown types now log a warning instead of
+  silently becoming MARKET (#1158).
 
 ### Changed
 - **Entry-path stop-loss placement now threads `reason_code` through and defers on a

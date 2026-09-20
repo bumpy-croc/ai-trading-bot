@@ -53,7 +53,7 @@ def _binance_provider(mock_client_class, mock_config, client: Mock) -> BinancePr
                         "maxPrice": "1000000",
                         "tickSize": "0.01",
                     },
-                    {"filterType": "MIN_NOTIONAL", "minNotional": "5"},
+                    {"filterType": "NOTIONAL", "minNotional": "5"},
                 ],
             }
         ]
