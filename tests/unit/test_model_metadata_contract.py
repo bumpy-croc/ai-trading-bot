@@ -60,6 +60,7 @@ def _write_bundle(root: Path, symbol: str, model_type: str, version: str, metada
     base.mkdir(parents=True, exist_ok=True)
     (base / "model.onnx").write_bytes(b"dummy")
     (base / "metadata.json").write_text(json.dumps(metadata))
+    (base.parent / "latest").symlink_to(version)
     return base
 
 

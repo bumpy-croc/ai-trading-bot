@@ -1223,3 +1223,16 @@ class TestMLBasicSignalGeneratorModelVersionPin:
         params = generator.get_parameters()
         assert params["model_version"] == self.PINNED_VERSION
         assert params["pinned_model_key"] == self.PINNED_KEY
+
+
+def test_resolved_model_identity_fails_closed_on_registry_error():
+    generator = MLBasicSignalGenerator.__new__(MLBasicSignalGenerator)
+    generator._pinned_bundle_key = None
+    generator._cross_symbol_bundle_key = None
+    generator.symbol = "ETHUSDT"
+    generator.model_type = "basic"
+    generator.model_timeframe = "1h"
+    generator._registry = MagicMock()
+    generator._registry.select_bundle.side_effect = RuntimeError("boom")
+
+    assert generator.resolved_model_identity() is None

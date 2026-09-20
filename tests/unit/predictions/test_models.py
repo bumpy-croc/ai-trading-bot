@@ -494,6 +494,10 @@ class TestPredictionModelRegistry:
                 }
             )
         )
+        latest = base.parent / "latest"
+        if latest.is_symlink():
+            latest.unlink()
+        latest.symlink_to(version)
         return base
 
     def test_loading_structured_bundles(self, tmp_path):

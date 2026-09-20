@@ -155,18 +155,16 @@ class PredictionModelRegistry:
                     if key4 is not None:
                         versioned_paths[key4] = vdir
 
-                # Eagerly load a fallback bundle (the highest-sorted version)
-                # only when no `latest` symlink exists yet -- preserves prior
-                # behavior for a mid-training/symlink-missing model_type dir
-                # without eagerly loading every OTHER version too.
-                if not latest.exists() and version_dirs:
-                    fallback_dir = version_dirs[-1]
-                    try:
-                        bundle = self._load_bundle(symbol, model_type, fallback_dir)
-                        key = (bundle.symbol, bundle.timeframe, bundle.model_type)
-                        bundles[key] = bundle
-                    except Exception as e:  # pragma: no cover - aggregated logging
-                        logger.error("Failed to load bundle at %s: %s", fallback_dir, e)
+                # A model_type dir without `latest` holds unpromoted candidates:
+                # they stay reachable by explicit key (get_bundle_by_key, via
+                # versioned_paths above) but are never served by select_bundle.
+                if version_dirs and not latest.exists():
+                    logger.info(
+                        "No 'latest' for %s/%s; %d unpromoted version(s) not served for selection",
+                        symbol,
+                        model_type,
+                        len(version_dirs),
+                    )
                 if latest.exists():
                     try:
                         bundle = self._load_bundle(symbol, model_type, latest)

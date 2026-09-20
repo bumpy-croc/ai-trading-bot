@@ -55,14 +55,14 @@ class Verdict(str, Enum):
 class ModelEvidence:
     """Measured results for one model.
 
-    ``losing_trades`` is optional: when absent, a profit factor at the
-    ``MAX_FINITE_RATIO`` sentinel is read as "no losing trades".
+    ``losing_trades`` is required: a profit factor alone cannot distinguish a
+    real measurement from a sentinel or a zero-trade run.
     """
 
     test_rmse: float
     profit_factor: float
     return_pct: float
-    losing_trades: int | None = None
+    losing_trades: int
 
     def __post_init__(self) -> None:
         for name in ("test_rmse", "profit_factor", "return_pct"):
@@ -72,7 +72,7 @@ class ModelEvidence:
                 )
         if self.test_rmse < 0:
             raise ValueError(f"ModelEvidence.test_rmse must be >= 0, got {self.test_rmse!r}")
-        if self.losing_trades is not None and self.losing_trades < 0:
+        if self.losing_trades < 0:
             raise ValueError("ModelEvidence.losing_trades must be >= 0")
 
 
@@ -109,19 +109,24 @@ class GateResult:
 
 
 def _has_no_losers(evidence: ModelEvidence, min_losing_trades: int) -> bool:
-    if evidence.losing_trades is not None:
-        return evidence.losing_trades < min_losing_trades
-    return evidence.profit_factor >= MAX_FINITE_RATIO
+    return (
+        evidence.losing_trades < min_losing_trades
+        or evidence.profit_factor >= MAX_FINITE_RATIO
+        or evidence.profit_factor <= 0
+    )
 
 
 def _rmse_leg(
     challenger: ModelEvidence, incumbent: ModelEvidence, min_diff_pct: float
 ) -> LegResult:
-    rel_diff_pct = (
-        (incumbent.test_rmse - challenger.test_rmse) / incumbent.test_rmse * 100.0
-        if incumbent.test_rmse > 0
-        else 0.0
-    )
+    if incumbent.test_rmse <= 0:
+        return LegResult(
+            "test_rmse",
+            LegOutcome.NO_RESULT,
+            "incumbent RMSE is 0 (degenerate); relative comparison undefined, verdict cannot "
+            "pass on this leg",
+        )
+    rel_diff_pct = (incumbent.test_rmse - challenger.test_rmse) / incumbent.test_rmse * 100.0
     reason = (
         f"challenger {challenger.test_rmse:.6g} vs incumbent {incumbent.test_rmse:.6g} "
         f"({rel_diff_pct:+.3f}% better, lower RMSE wins)"

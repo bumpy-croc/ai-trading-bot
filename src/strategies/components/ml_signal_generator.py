@@ -898,7 +898,9 @@ class MLBasicSignalGenerator(SignalGenerator):
             return self._registry.select_bundle(
                 symbol=self.symbol, model_type=self.model_type, timeframe=self.model_timeframe
             ).key
-        except ModelNotAvailableError:
+        except Exception:
+            # Fail closed: an unresolvable identity is reported as None and
+            # rejected by the checkpoint fingerprint.
             return None
 
     def _resolve_pinned_bundle(self, registry: "PredictionModelRegistry") -> None:

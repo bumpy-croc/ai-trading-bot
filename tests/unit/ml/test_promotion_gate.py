@@ -22,8 +22,12 @@ def _leg(result, name):
 
 def test_sentinel_pf_tie_and_dust_return_do_not_pass():
     # 2026-09-06 week: PF 999 vs 999, +0.0052pp on an $85 book, RMSE lost.
-    challenger = ModelEvidence(test_rmse=0.0104, profit_factor=SENTINEL, return_pct=0.0052)
-    incumbent = ModelEvidence(test_rmse=0.0100, profit_factor=SENTINEL, return_pct=0.0)
+    challenger = ModelEvidence(
+        test_rmse=0.0104, profit_factor=SENTINEL, return_pct=0.0052, losing_trades=0
+    )
+    incumbent = ModelEvidence(
+        test_rmse=0.0100, profit_factor=SENTINEL, return_pct=0.0, losing_trades=0
+    )
 
     result = evaluate_promotion_gate(challenger, incumbent, initial_balance=85.0)
 
@@ -120,7 +124,7 @@ def test_immaterial_rmse_edge_is_no_result():
 @pytest.mark.parametrize("bad", [math.nan, math.inf])
 def test_evidence_rejects_non_finite(bad):
     with pytest.raises(ValueError):
-        ModelEvidence(test_rmse=bad, profit_factor=1.0, return_pct=0.0)
+        ModelEvidence(test_rmse=bad, profit_factor=1.0, return_pct=0.0, losing_trades=1)
 
 
 @pytest.mark.parametrize("balance", [0.0, -5.0, math.nan])
@@ -136,3 +140,27 @@ def test_module_imports_without_validation_package():
 
     code = "import sys; import src.ml.promotion_gate; assert 'src.ml.validation' not in sys.modules"
     assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0
+
+
+def test_zero_profit_factor_incumbent_is_not_a_free_win():
+    challenger = ModelEvidence(0.009, 1.5, 6.0, losing_trades=5)
+    incumbent = ModelEvidence(0.010, 0.0, 1.0, losing_trades=5)
+
+    result = evaluate_promotion_gate(challenger, incumbent, initial_balance=1000.0)
+
+    assert _leg(result, "profit_factor").outcome is LegOutcome.NO_RESULT
+
+
+def test_zero_rmse_incumbent_leg_has_no_result():
+    challenger = ModelEvidence(0.5, 1.5, 6.0, losing_trades=5)
+    incumbent = ModelEvidence(0.0, 1.2, 1.0, losing_trades=5)
+
+    result = evaluate_promotion_gate(challenger, incumbent, initial_balance=1000.0)
+
+    assert _leg(result, "test_rmse").outcome is LegOutcome.NO_RESULT
+    assert "degenerate" in _leg(result, "test_rmse").reason
+
+
+def test_losing_trades_is_required():
+    with pytest.raises(TypeError):
+        ModelEvidence(test_rmse=0.01, profit_factor=1.5, return_pct=1.0)

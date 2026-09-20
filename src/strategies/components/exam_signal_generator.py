@@ -547,6 +547,9 @@ class MetaLabelExamSignalGenerator(SignalGenerator):
             return registry.select_bundle(
                 symbol=self.symbol, model_type="meta_label", timeframe=self.timeframe
             )
+        except FileNotFoundError:
+            # Missing registry must not degrade to per-bar HOLDs (#1023).
+            raise
         except Exception:
             logger.exception("MetaLabelExamSignalGenerator: failed to load meta_label bundle")
             return None
