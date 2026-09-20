@@ -430,7 +430,7 @@ class TestFaultIsolation:
             return FakeThread(target)
 
         monkeypatch.setattr(
-            "src.engines.live.monitoring.latched_condition_monitor.spawn_live_thread", fake_spawn
+            "src.engines.live.monitoring.latched_condition_monitor.create_live_thread", fake_spawn
         )
         state._close_only_mode = True
         monitor.check()

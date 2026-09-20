@@ -24,7 +24,7 @@ from src.data_providers.exchange_interface import (
 )
 from src.engines.live.event_deduplicator import EventDeduplicator
 from src.infrastructure.circuit_breaker import CircuitBreaker
-from src.prediction.inference_context import spawn_live_thread
+from src.infrastructure.live_threads import create_live_thread
 
 logger = logging.getLogger(__name__)
 
@@ -255,7 +255,7 @@ class OrderTracker:
 
         self._running = True
         self._stop_event.clear()  # Clear stop signal for new run
-        self._thread = spawn_live_thread(self._poll_loop)
+        self._thread = create_live_thread(self._poll_loop, name="OrderTracker")
         self._thread.start()
         logger.info("OrderTracker started (poll interval: %ss)", self.poll_interval)
 

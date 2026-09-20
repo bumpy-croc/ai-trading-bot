@@ -22,11 +22,10 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from enum import Enum
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +48,8 @@ _context_var: ContextVar[InferenceContext] = ContextVar(
 _explicit_var: ContextVar[bool] = ContextVar("inference_context_explicit", default=False)
 
 _live_process_registered = False
-_unscoped_warned_threads: set[int] = set()
+# Per-thread so a reused thread ident cannot inherit another thread's "already warned".
+_warned_local = threading.local()
 
 
 def _validated(context: InferenceContext) -> InferenceContext:
@@ -105,59 +105,35 @@ def reset_inference_context() -> None:
     _context_var.set(InferenceContext.DETERMINISTIC)
     _explicit_var.set(False)
     _live_process_registered = False
-    _unscoped_warned_threads.clear()
+    _warned_local.warned = False
 
 
 def register_live_process() -> None:
     """Declare that this process runs live trading.
 
-    Enables :func:`warn_if_unscoped_in_live_process`. Called by
+    Enables :func:`is_unscoped_in_live_process`. Called by
     ``LiveTradingEngine`` at construction.
     """
     global _live_process_registered
     _live_process_registered = True
 
 
-def spawn_live_thread(
-    target: Callable[..., Any],
-    *,
-    name: str | None = None,
-    daemon: bool = True,
-    args: Iterable[Any] = (),
-    kwargs: Mapping[str, Any] | None = None,
-) -> threading.Thread:
-    """Build (not start) a thread whose body runs under the LIVE inference scope.
+def is_unscoped_in_live_process() -> bool:
+    """True when the calling thread never chose an inference policy in a live process.
 
-    New threads do not inherit the parent's context variables, so a bare
-    ``threading.Thread`` in a live process infers with no deadline — it fails
-    open. Every engine-started thread must be created through this helper.
-    """
-    call_args = tuple(args)
-    call_kwargs = dict(kwargs or {})
-
-    def _run() -> None:
-        with inference_scope(InferenceContext.LIVE):
-            target(*call_args, **call_kwargs)
-
-    return threading.Thread(target=_run, name=name, daemon=daemon)
-
-
-def warn_if_unscoped_in_live_process() -> None:
-    """Log once per thread when inference runs unscoped in a live process.
-
-    An unscoped thread silently gets the default DETERMINISTIC policy, i.e.
-    no inference deadline. Threads that chose a policy explicitly (a nested
-    backtest's DETERMINISTIC scope, or LIVE) are not flagged.
+    Such a thread silently gets the default DETERMINISTIC policy, i.e. no
+    deadline. Threads that chose a policy explicitly (a nested backtest's
+    DETERMINISTIC scope, or LIVE) are not unscoped. Logs an ERROR once per
+    thread so the misconfiguration is attributable.
     """
     if not _live_process_registered or _explicit_var.get():
-        return
-    ident = threading.get_ident()
-    if ident in _unscoped_warned_threads:
-        return
-    _unscoped_warned_threads.add(ident)
-    logger.error(
-        "Inference on thread %r has no inference scope in a live process, so it runs with "
-        "NO deadline. Start engine threads via spawn_live_thread() or wrap the work in "
-        "inference_scope(InferenceContext.LIVE).",
-        threading.current_thread().name,
-    )
+        return False
+    if not getattr(_warned_local, "warned", False):
+        _warned_local.warned = True
+        logger.error(
+            "Inference on thread %r has no inference scope in a live process; applying the "
+            "LIVE deadline. Create engine threads via create_live_thread() or wrap the work "
+            "in inference_scope(InferenceContext.LIVE).",
+            threading.current_thread().name,
+        )
+    return True

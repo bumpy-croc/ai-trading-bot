@@ -48,7 +48,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from src.config.feature_flags import is_enabled
 from src.database.models import EventType
 from src.engines.live.execution.entry_pause import EntryPauseGate
-from src.prediction.inference_context import spawn_live_thread
+from src.infrastructure.live_threads import create_live_thread
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -446,6 +446,6 @@ class LatchedConditionMonitor:
                 logger.warning("latched-condition event failed: %s", e)
             return
         try:
-            spawn_live_thread(_write, name="latched-condition-alert").start()
+            create_live_thread(_write, name="latched-condition-alert").start()
         except Exception as e:  # pragma: no cover - defensive
             logger.warning("latched-condition alert dispatch failed: %s", e)

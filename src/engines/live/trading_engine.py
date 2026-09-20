@@ -113,6 +113,7 @@ from src.engines.shared.risk_configuration import (
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
 )
+from src.infrastructure.live_threads import create_live_thread
 from src.infrastructure.logging.events import (
     log_data_event,
     log_engine_event,
@@ -129,7 +130,6 @@ from src.prediction.inference_context import (
     inference_scope,
     register_live_process,
     set_inference_context,
-    spawn_live_thread,
 )
 from src.regime.detector import RegimeDetector
 from src.risk.circuit_breaker import AccountCircuitBreaker
@@ -2870,7 +2870,7 @@ class LiveTradingEngine:
             )
 
         try:
-            spawn_live_thread(_deliver, name="order-tracker-alert").start()
+            create_live_thread(_deliver, name="order-tracker-alert").start()
         except Exception as e:  # pragma: no cover - defensive; never break order handling
             logger.warning("order-tracker alert dispatch failed: %s", e)
 

@@ -56,7 +56,7 @@ from .features.selector import FeatureSelector
 from .inference_context import (
     InferenceContext,
     get_inference_context,
-    warn_if_unscoped_in_live_process,
+    is_unscoped_in_live_process,
 )
 from .models.onnx_runner import ModelPrediction
 from .models.registry import PredictionModelRegistry, StrategyModel
@@ -945,7 +945,10 @@ class PredictionEngine:
         """
         if get_inference_context() is InferenceContext.LIVE:
             return self.config.live_inference_timeout
-        warn_if_unscoped_in_live_process()
+        # Fail closed: a live-process thread that never chose a policy must
+        # not infer without a deadline.
+        if is_unscoped_in_live_process():
+            return self.config.live_inference_timeout
         return None
 
     def _run_inference(self, func: Callable[..., Any], args: tuple, operation_name: str) -> Any:
