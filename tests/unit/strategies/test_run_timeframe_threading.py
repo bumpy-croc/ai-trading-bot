@@ -5,6 +5,7 @@ registry ``model_timeframe`` stayed at the "1h" default and a 4h run scored 4h
 bars with a 1h model (or failed at startup with the wrong error).
 """
 
+from functools import partial
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
@@ -14,6 +15,7 @@ from src.prediction.models.exceptions import ModelNotAvailableError
 from src.strategies import call_strategy_factory
 from src.strategies.ensemble_weighted import create_ensemble_weighted_strategy
 from src.strategies.hyper_growth import create_hyper_growth_strategy
+from src.strategies.leveraged_regime import create_leveraged_regime_strategy
 from src.strategies.ml_adaptive import create_ml_adaptive_strategy
 from src.strategies.ml_basic import create_ml_basic_strategy
 from src.strategies.ml_sentiment import create_ml_sentiment_strategy
@@ -134,7 +136,13 @@ class TestTimeframeReachesSignalGenerator:
             create_ensemble_weighted_strategy, symbol="ETHUSDT", timeframe="4h"
         )
 
+        leveraged = call_strategy_factory(
+            partial(create_leveraged_regime_strategy, signal_source="ml"),
+            symbol="ETHUSDT",
+            timeframe="4h",
+        )
         assert _signal_generator(hyper).model_timeframe == "4h"
+        assert _signal_generator(leveraged).model_timeframe == "4h"
         generators = list(ensemble.signal_generator.generators)
         assert generators
         assert {g.model_timeframe for g in generators} == {"4h"}
