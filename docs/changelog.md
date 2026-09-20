@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manager at `current_size` (not the original size), and both recovery paths seed the
   `MFEMAETracker` from the persisted `mfe`/`mae` columns so the first post-restart persist no
   longer overwrites the stored peaks.
+- **A close aborted because its quantity is unsellable now records a durable, paged event**
+  (#1240). Once `min_notional` was known locally, a sub-minimum close stopped reaching Binance
+  (no more -1013 `system_events` row) and only logged. `_close_live_order` now writes one
+  `CLOSE_QUANTITY_UNSELLABLE` event (critical) plus an alert per (symbol, cause), carrying the
+  reason (`min_notional`, `min_qty`, `lot_sizing`), re-announced hourly. A zero quantity caused
+  by the holdings cap now records `CLOSE_INVENTORY_LOCKED` and feeds the close-only latch.
 - **Data downloads no longer silently fall back to CoinGecko, and the cache validates on
   load** (#982). `atb data download|prefill-cache|preload-offline` pin the Binance provider
   and fail loudly on Binance errors. `CachedDataProvider` sorts and de-duplicates (keep last)
