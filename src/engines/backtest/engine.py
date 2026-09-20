@@ -45,6 +45,10 @@ from src.engines.backtest.execution import (
     PositionTracker,
 )
 from src.engines.backtest.execution.exit_handler import ExitCheckResult
+from src.engines.backtest.execution.position_tracker import (
+    PARTIAL_FEES_KEY,
+    PARTIAL_SLIPPAGE_KEY,
+)
 from src.engines.backtest.logging import EventLogger
 from src.engines.backtest.models import ActiveTrade, Trade
 from src.engines.backtest.regime import RegimeHandler
@@ -1524,8 +1528,16 @@ class Backtester:
             entry_meta = getattr(completed_trade, "metadata", None) or {}
             entry_fee_logged = float(entry_meta.get("entry_fee", 0.0) or 0.0)
             entry_slippage_logged = float(entry_meta.get("entry_slippage_cost", 0.0) or 0.0)
-            total_fee = entry_fee_logged + float(exit_fee)
-            total_slippage = entry_slippage_logged + float(slippage)
+            total_fee = (
+                entry_fee_logged
+                + float(exit_fee)
+                + float(entry_meta.get(PARTIAL_FEES_KEY, 0.0) or 0.0)
+            )
+            total_slippage = (
+                entry_slippage_logged
+                + float(slippage)
+                + float(entry_meta.get(PARTIAL_SLIPPAGE_KEY, 0.0) or 0.0)
+            )
             # Update performance tracking.
             self.performance_tracker.record_trade(
                 trade=completed_trade, fee=total_fee, slippage=total_slippage

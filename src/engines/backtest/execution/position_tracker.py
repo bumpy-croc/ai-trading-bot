@@ -28,8 +28,11 @@ from src.trading.exit_reason import ExitReason
 
 logger = logging.getLogger(__name__)
 
-# ActiveTrade.metadata key accumulating net P&L already banked by partial exits.
+# ActiveTrade.metadata keys accumulated across partial exits. The P&L is gross of
+# fees (like Trade.pnl); fees and slippage are tracked so callers can report them.
 REALIZED_PARTIAL_PNL_KEY = "realized_partial_pnl"
+PARTIAL_FEES_KEY = "partial_exit_fees"
+PARTIAL_SLIPPAGE_KEY = "partial_exit_slippage"
 
 
 @dataclass
@@ -214,9 +217,15 @@ class PositionTracker:
         self.current_trade.partial_exits_taken += 1
         # Carried on the trade so the closing record reports the whole
         # position's outcome, not just the last leg (see close_position).
+        # Banked net of slippage but gross of the exit fee, matching how the
+        # final leg's Trade.pnl is computed (slipped price, fee separate).
         meta = self.current_trade.metadata
         meta[REALIZED_PARTIAL_PNL_KEY] = (
-            float(meta.get(REALIZED_PARTIAL_PNL_KEY, 0.0)) + result.realized_pnl
+            float(meta.get(REALIZED_PARTIAL_PNL_KEY, 0.0)) + result.gross_pnl - result.slippage_cost
+        )
+        meta[PARTIAL_FEES_KEY] = float(meta.get(PARTIAL_FEES_KEY, 0.0)) + result.exit_fee
+        meta[PARTIAL_SLIPPAGE_KEY] = (
+            float(meta.get(PARTIAL_SLIPPAGE_KEY, 0.0)) + result.slippage_cost
         )
 
         logger.debug(
@@ -467,6 +476,15 @@ class PositionTracker:
                 )
         except (TypeError, ValueError) as exc:
             logger.debug("Failed to carry entry-fee metadata onto completed trade: %s", exc)
+
+        # Partial-exit costs are folded into the trade's fee/slippage totals by
+        # the engine; original_size lets persistence log a size for positions
+        # whose partials consumed the whole position (final-leg size is zero).
+        for key in (PARTIAL_FEES_KEY, PARTIAL_SLIPPAGE_KEY, REALIZED_PARTIAL_PNL_KEY):
+            if key in trade.metadata:
+                completed_trade.metadata[key] = float(trade.metadata[key])
+        if banked_partial_pnl or trade.partial_exits_taken:
+            completed_trade.metadata["original_size"] = float(cast(float, trade.original_size))
 
         # Clear tracker
         self.mfe_mae_tracker.clear(self.POSITION_KEY)

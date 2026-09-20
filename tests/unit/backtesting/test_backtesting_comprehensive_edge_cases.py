@@ -1184,5 +1184,5 @@ class TestEarlyStopThresholdSingleSource:
             log_to_database=False,
         )
 
+        assert backtester._early_stop_max_drawdown == pytest.approx(0.20)
         assert backtester._early_stop_max_drawdown == backtester.risk_manager.params.max_drawdown
-        assert backtester._early_stop_max_drawdown < 0.5

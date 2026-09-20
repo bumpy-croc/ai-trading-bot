@@ -53,9 +53,10 @@ ENTRY_TIME = datetime(2024, 1, 1, tzinfo=UTC)
 
 def _make_exit_handler(
     policy: PartialExitPolicy,
+    fee_rate: float = 0.0,
 ) -> tuple[ExitHandler, PositionTracker, MagicMock]:
     """Build an ExitHandler with zero-cost execution and a real policy."""
-    tracker = PositionTracker(fee_rate=0.0, slippage_rate=0.0)
+    tracker = PositionTracker(fee_rate=fee_rate, slippage_rate=0.0)
 
     risk_manager = MagicMock()
     risk_manager.params = SimpleNamespace(max_daily_risk=1.0)
@@ -545,3 +546,71 @@ class TestStrategyPartialConfigHydration:
 
         assert backtester.partial_manager is not None
         assert backtester.partial_manager.exit_targets == DEFAULT_PARTIAL_EXIT_TARGETS
+
+
+class TestPartialExitRecordingConventions:
+    """Trade.pnl is gross of exit fees; partial fees flow to the fee totals."""
+
+    def test_partial_pnl_gross_of_fee_and_costs_reported(self) -> None:
+        policy = PartialExitPolicy(exit_targets=[0.10], exit_sizes=[1.0])
+        handler, tracker, _ = _make_exit_handler(policy, fee_rate=0.001)
+        _open_long(tracker, size=0.10, entry_price=100.0, entry_balance=1000.0)
+        handler.check_partial_operations(
+            current_price=110.0, df=_single_candle_df(110.0), index=0, balance=1000.0
+        )
+        result = tracker.close_position(
+            exit_price=110.0,
+            exit_time=datetime(2024, 1, 3, tzinfo=UTC),
+            exit_reason="Partial exits complete",
+            basis_balance=1000.0,
+        )
+        # Gross slice: 10% x 0.10 x 1000 = $10.00; fee = 0.1% of $11 notional.
+        assert result.trade.pnl == pytest.approx(10.0)
+        assert result.trade.metadata["partial_exit_fees"] == pytest.approx(0.11)
+        assert result.trade.metadata["original_size"] == pytest.approx(0.10)
+
+    @pytest.mark.parametrize(
+        ("targets", "sizes"),
+        [
+            ([0.03, 0.06], [0.50, 0.50]),  # last slice clamps: size == 0.0 exactly
+            ([0.03, 0.06, 0.10], [0.25, 0.25, 0.50]),  # float residue ~1e-18
+        ],
+    )
+    def test_fully_partialled_trade_persists_with_original_size(
+        self, targets: list[float], sizes: list[float]
+    ) -> None:
+        from src.database.models import TradeSource
+        from src.engines.backtest.logging.event_logger import EventLogger
+
+        policy = PartialExitPolicy(exit_targets=targets, exit_sizes=sizes)
+        handler, tracker, _ = _make_exit_handler(policy)
+        _open_long(tracker, size=0.10, entry_price=100.0, entry_balance=1000.0)
+        handler.check_partial_operations(
+            current_price=110.0, df=_single_candle_df(110.0), index=0, balance=1000.0
+        )
+        trade = tracker.close_position(
+            exit_price=110.0,
+            exit_time=datetime(2024, 1, 3, tzinfo=UTC),
+            exit_reason="Partial exits complete",
+            basis_balance=1000.0,
+        ).trade
+        assert trade.size < 1e-9
+
+        persisted: list[dict] = []
+
+        def enforcing_log_trade(**kwargs: object) -> int:
+            # Mirrors DatabaseManager.log_trade's input validation.
+            if kwargs["size"] <= 0:  # type: ignore[operator]
+                raise ValueError("size must be positive and finite")
+            persisted.append(kwargs)
+            return 1
+
+        db_manager = MagicMock()
+        db_manager.log_trade.side_effect = enforcing_log_trade
+        EventLogger(db_manager=db_manager, log_to_database=True, session_id=1).log_completed_trade(
+            trade=trade, symbol="ETHUSDT", strategy_name="s", source=TradeSource.BACKTEST
+        )
+
+        assert len(persisted) == 1
+        assert persisted[0]["size"] == pytest.approx(0.10)
+        assert persisted[0]["pnl"] == pytest.approx(10.0)  # 10% x 0.10 x 1000
