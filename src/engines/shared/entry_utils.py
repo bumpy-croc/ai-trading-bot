@@ -6,6 +6,7 @@ stop-loss/take-profit percentages to keep entry logic consistent across engines.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
@@ -81,6 +82,11 @@ def extract_entry_plan(
         return None
 
     if decision.signal.direction == SignalDirection.HOLD or decision.position_size <= 0:
+        return None
+
+    # NaN passes the `<= 0` check and clamp_fraction(NaN) yields 1.0, which would
+    # open a full-cap position on garbage sizing.
+    if not math.isfinite(decision.position_size):
         return None
 
     metadata = getattr(decision, "metadata", None) or {}

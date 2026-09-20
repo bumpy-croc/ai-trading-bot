@@ -41,7 +41,7 @@ from src.engines.live.execution.entry_handler import LiveEntrySignal
 from src.engines.live.execution.entry_pause import EntryPauseGate
 from src.engines.live.execution.short_suppression_monitor import ShortSuppressionMonitor
 from src.engines.live.system_halt import SystemHaltState
-from src.engines.shared.entry_utils import extract_entry_plan
+from src.engines.shared.entry_utils import EntryDecisionLike, extract_entry_plan
 from src.engines.shared.models import PositionSide
 from src.infrastructure.logging.events import log_order_event
 from src.strategies.components import Signal, SignalDirection
@@ -406,13 +406,24 @@ class LiveEntryCoordinator:
                 # Shared chokepoint: enforces the enter_short opt-in (long-only
                 # invariant, #1020) so this direct path cannot open a short the
                 # runtime path would suppress.
-                plan = extract_entry_plan(cast(Any, decision), float(state.current_balance or 0.0))
+                plan = extract_entry_plan(
+                    cast(EntryDecisionLike, decision), float(state.current_balance or 0.0)
+                )
                 if plan is not None:
                     entry_signal = True
                     entry_side = plan.side
                     position_size = min(plan.size_fraction, state.max_position_size)
                     runtime_strength = decision.signal.strength
                     runtime_confidence = decision.signal.confidence
+                elif (
+                    decision.signal.direction == SignalDirection.SELL
+                    and (decision.position_size or 0) > 0
+                ):
+                    logger.info(
+                        "Short entry suppressed for %s: SELL without enter_short opt-in",
+                        symbol,
+                    )
+                    self._record_short_suppression_shadow(decision, symbol, float(current_price))
             except Exception as e:
                 logger.warning("Component strategy decision failed: %s", e)
                 entry_signal = False
