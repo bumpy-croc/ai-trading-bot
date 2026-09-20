@@ -206,12 +206,13 @@ class TestAccountSynchronizer:
 
         result = synchronizer._sync_balances(balances)
         assert result["synced"] is True
-        assert result["corrected"] is True
-        assert result["old_balance"] == 10000.0
-        assert result["new_balance"] == 11000.0
+        # The periodic reconciler owns the correction; sync only reports it.
+        assert result["corrected"] is False
+        assert result["deferred_to_reconciler"] is True
+        assert result["balance"] == 10000.0
         assert result["difference"] == 1000.0
         assert result["difference_percent"] == 10.0
-        mock_db_manager.atomic_balance_correction.assert_called_once()
+        mock_db_manager.atomic_balance_correction.assert_not_called()
 
         # Test no USDT balance
         balances = [
@@ -257,7 +258,7 @@ class TestAccountSynchronizer:
 
         # Test position update
         mock_db_manager.get_active_positions.return_value = [
-            {"id": 1, "symbol": "BTCUSDT", "side": "long", "size": 0.1}
+            {"id": 1, "symbol": "BTCUSDT", "side": "LONG", "size": 0.02, "quantity": 0.1}
         ]
         positions[0].size = 0.15
 
@@ -355,7 +356,7 @@ class TestAccountSynchronizer:
             )
         ]
 
-        mock_db_manager.get_trades_by_symbol_and_date.return_value = [{"trade_id": "trade_123"}]
+        mock_db_manager.get_known_exchange_order_ids.return_value = {"order_123"}
 
         result = synchronizer.recover_missing_trades("BTCUSDT", days_back=7)
         assert result["recovered"] is True
@@ -363,7 +364,7 @@ class TestAccountSynchronizer:
         assert result["recovered_trades"] == 0
 
         # Test missing trades
-        mock_db_manager.get_trades_by_symbol_and_date.return_value = []
+        mock_db_manager.get_known_exchange_order_ids.return_value = set()
 
         result = synchronizer.recover_missing_trades("BTCUSDT", days_back=7)
         assert result["recovered"] is True
@@ -627,7 +628,8 @@ class TestAccountSynchronizerIntegration:
         """Test a complete synchronization cycle for both providers"""
         result = real_synchronizer.sync_account_data()
         assert result.success is True
-        assert result.data["balance_sync"]["corrected"] is True
+        assert result.data["balance_sync"]["corrected"] is False
+        assert result.data["balance_sync"]["deferred_to_reconciler"] is True
         assert result.data["position_sync"]["new_positions"] == 1
         assert result.data["order_sync"]["new_orders"] == 1
 
