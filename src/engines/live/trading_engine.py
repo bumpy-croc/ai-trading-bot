@@ -901,6 +901,27 @@ class LiveTradingEngine:
                     exc_info=True,
                 )
                 self.time_exit_policy = None
+        self._log_resolved_time_exit_policy()
+
+    def _log_resolved_time_exit_policy(self) -> None:
+        """Log the resolved time-exit policy so its absence is visible at boot.
+
+        DEFAULT_MAX_HOLDING_HOURS only applies inside a strategy-supplied
+        ``time_exits`` config; with none supplied no time-based exit exists.
+        """
+        policy = self.time_exit_policy
+        if policy is None:
+            logger.info(
+                "Time-exit policy: NONE (strategy supplies no time_exits config; "
+                "positions have no maximum holding time)"
+            )
+        else:
+            logger.info(
+                "Time-exit policy: max_holding_hours=%s end_of_day_flat=%s weekend_flat=%s",
+                policy.max_holding_hours,
+                policy.end_of_day_flat,
+                policy.weekend_flat,
+            )
 
     def _install_signal_handlers(self) -> None:
         """Register SIGINT/SIGTERM handlers for graceful shutdown (main thread)."""
