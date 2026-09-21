@@ -47,6 +47,7 @@ def create_ml_adaptive_strategy(
     model_name: str | None = None,
     *,
     symbol: str | None = None,
+    timeframe: str | None = None,
     long_entry_threshold: float | None = None,
     short_entry_threshold: float | None = None,
     confidence_multiplier: float | None = None,
@@ -66,6 +67,8 @@ def create_ml_adaptive_strategy(
         model_name: Model name for prediction engine
         symbol: Trading symbol threaded to the ML signal generator (None
             keeps the generator default BTCUSDT).
+        timeframe: Run timeframe for model registry selection (None keeps
+            the generator default "1h").
         long_entry_threshold: Minimum predicted return for long entry.
         short_entry_threshold: Maximum predicted return for short entry.
         confidence_multiplier: Scales |predicted_return| → confidence.
@@ -83,6 +86,7 @@ def create_ml_adaptive_strategy(
         sequence_length=sequence_length,
         model_name=model_name,
         symbol=symbol,
+        timeframe=timeframe,
         long_entry_threshold=long_entry_threshold,
         short_entry_threshold=short_entry_threshold,
         confidence_multiplier=confidence_multiplier,

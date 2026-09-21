@@ -86,23 +86,17 @@ def create_ml_sentiment_strategy(
         Configured Strategy instance
     """
     # Create signal generator with ML Sentiment parameters (sentiment model)
-    # Note: model_type and timeframe are passed but MLSignalGenerator currently
-    # uses only model_name for registry selection. These parameters are retained
-    # for future sentiment-specific model selection.
     signal_generator = MLSignalGenerator(
         name=f"{name}_signals",
         sequence_length=sequence_length,
         model_name=model_name,
         symbol=symbol,
+        model_type=model_type,
+        timeframe=timeframe,
         long_entry_threshold=long_entry_threshold,
         short_entry_threshold=short_entry_threshold,
         confidence_multiplier=confidence_multiplier,
     )
-    # Store model_type/timeframe for potential future use in sentiment model selection
-    if model_type:
-        signal_generator.model_type = model_type
-    if timeframe:
-        signal_generator.model_timeframe = timeframe
 
     resolved_stop_loss = stop_loss_pct if stop_loss_pct is not None else DEFAULT_BASE_RISK_PER_TRADE
     resolved_take_profit = (

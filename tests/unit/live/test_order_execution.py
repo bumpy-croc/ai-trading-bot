@@ -430,6 +430,46 @@ class TestNormalizeQuantityPrecision:
         assert result == pytest.approx(0.0003, abs=1e-9)
 
 
+@pytest.mark.unit
+class TestNormalizeQuantityMinNotional:
+    """The min-notional guard uses the FINAL quantity and honours applyMinToMarket."""
+
+    @staticmethod
+    def _info(**overrides):
+        info = {"step_size": 0.01, "min_qty": 0.0, "min_notional": 5.0}
+        info.update(overrides)
+        return info
+
+    @pytest.mark.fast
+    def test_notional_uses_final_snapped_quantity_not_caller_value(
+        self, execution_engine_with_exchange, mock_exchange
+    ):
+        """Caller value $9.9 clears the $6 minimum, but the floor-snapped 0.05 units
+        ($5 at the implied $100/unit) does not."""
+        mock_exchange.get_symbol_info.return_value = self._info(step_size=0.05, min_notional=6.0)
+        result = execution_engine_with_exchange._normalize_quantity(
+            "BTCUSDT", 0.099, value=9.9, floor=True
+        )
+        assert result == 0.0
+
+    @pytest.mark.fast
+    def test_at_or_above_min_notional_passes(self, execution_engine_with_exchange, mock_exchange):
+        mock_exchange.get_symbol_info.return_value = self._info(step_size=0.05, min_notional=5.0)
+        result = execution_engine_with_exchange._normalize_quantity(
+            "BTCUSDT", 0.099, value=9.9, floor=True
+        )
+        assert result == pytest.approx(0.05)
+
+    @pytest.mark.fast
+    @pytest.mark.parametrize(("apply_to_market", "expected"), [(True, 0.0), (False, 0.04)])
+    def test_apply_min_to_market_flag(
+        self, execution_engine_with_exchange, mock_exchange, apply_to_market, expected
+    ):
+        mock_exchange.get_symbol_info.return_value = self._info(apply_min_to_market=apply_to_market)
+        result = execution_engine_with_exchange._normalize_quantity("BTCUSDT", 0.04, value=4.0)
+        assert result == pytest.approx(expected)
+
+
 # ============================================================================
 # Tests for LiveExecutionEngine exit execution
 # ============================================================================
@@ -851,6 +891,43 @@ class TestCloseQuantityFromStoredFill:
         sent = mock_exchange.place_order.call_args.kwargs["quantity"]
         assert sent == pytest.approx(5.0)
         assert sent <= 5.0
+
+    def test_sub_min_notional_close_aborts_without_booking_a_close(
+        self, live_exit_handler, live_position_tracker, mock_exchange
+    ):
+        """A dust-sized position below min notional cannot be sold: the close must
+        fail (no order sent, no success) rather than book a phantom close."""
+        mock_exchange.get_balance.return_value = Mock(free=0.04)
+        mock_exchange.get_symbol_info.return_value = {
+            "step_size": 0.01,
+            "min_qty": 0.0,
+            "min_notional": 5.0,
+            "apply_min_to_market": True,
+        }
+        position = LivePosition(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.04,
+            original_size=0.04,
+            current_size=0.04,
+            entry_price=100.0,
+            entry_time=datetime.now(UTC),
+            entry_balance=1000.0,
+            quantity=0.04,  # $4 at $100 < $5 minimum
+            order_id="entry-dust",
+        )
+        live_position_tracker.open_position(position)
+
+        result = live_exit_handler.execute_exit(
+            position=position,
+            exit_reason="signal_exit",
+            current_price=100.0,
+            limit_price=None,
+            current_balance=1000.0,
+        )
+
+        assert result.success is False
+        mock_exchange.place_order.assert_not_called()
 
 
 # ============================================================================

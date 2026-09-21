@@ -1133,7 +1133,7 @@ class TestPlaceOrderRateLimitDefinitiveReject:
                     "filters": [
                         {"filterType": "LOT_SIZE", "minQty": "0.00001", "stepSize": "0.00001"},
                         {"filterType": "PRICE_FILTER", "minPrice": "0.01", "tickSize": "0.01"},
-                        {"filterType": "MIN_NOTIONAL", "minNotional": "5"},
+                        {"filterType": "NOTIONAL", "minNotional": "5"},
                     ],
                 }
             ]
@@ -1161,7 +1161,7 @@ def _exchange_info_for(symbol: str) -> dict:
                 "filters": [
                     {"filterType": "LOT_SIZE", "minQty": "0.00001", "stepSize": "0.00001"},
                     {"filterType": "PRICE_FILTER", "minPrice": "0.01", "tickSize": "0.01"},
-                    {"filterType": "MIN_NOTIONAL", "minNotional": "5"},
+                    {"filterType": "NOTIONAL", "minNotional": "5"},
                 ],
             }
         ]
@@ -1503,7 +1503,7 @@ class TestQuantityScientificNotationAvoided:
                     "filters": [
                         {"filterType": "LOT_SIZE", "minQty": "0.00001", "stepSize": "0.00001"},
                         {"filterType": "PRICE_FILTER", "minPrice": "0.01", "tickSize": "0.01"},
-                        {"filterType": "MIN_NOTIONAL", "minNotional": "5"},
+                        {"filterType": "NOTIONAL", "minNotional": "5"},
                     ],
                 }
             ]
@@ -2611,7 +2611,7 @@ class TestMarginSideEffectIntegration:
         "filters": [
             {"filterType": "LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
             {"filterType": "PRICE_FILTER", "minPrice": "0.01", "tickSize": "0.01"},
-            {"filterType": "MIN_NOTIONAL", "minNotional": "10"},
+            {"filterType": "NOTIONAL", "minNotional": "10"},
         ],
     }
 
@@ -2752,7 +2752,7 @@ class TestMarginErrorCodes:
                     "filters": [
                         {"filterType": "LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
                         {"filterType": "PRICE_FILTER", "minPrice": "0.01", "tickSize": "0.01"},
-                        {"filterType": "MIN_NOTIONAL", "minNotional": "10"},
+                        {"filterType": "NOTIONAL", "minNotional": "10"},
                     ],
                 }
             ],

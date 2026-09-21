@@ -204,6 +204,7 @@ def create_hyper_growth_strategy(
     early_cut_evaluation_window_hours: float | None = None,
     model_version: str | None = None,
     allow_shorts: bool | None = None,
+    timeframe: str | None = None,
 ) -> Strategy:
     """Create hyper-growth strategy targeting high annual returns.
 
@@ -321,6 +322,7 @@ def create_hyper_growth_strategy(
             name=f"{name}_signals",
             model_type="basic",
             symbol=symbol,
+            timeframe=timeframe,
             model_version=model_version,
             allow_shorts=resolved_allow_shorts,
         )

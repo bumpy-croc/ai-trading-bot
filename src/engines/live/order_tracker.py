@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from src.config.constants import DEFAULT_ORDER_POLL_INTERVAL, DEFAULT_ORDER_TRACKER_TIMEOUT
+from src.data_providers.binance_order_types import map_binance_order_type
 from src.data_providers.exchange_interface import (
     ExchangeInterface,
     Order,
@@ -23,6 +24,7 @@ from src.data_providers.exchange_interface import (
 )
 from src.engines.live.event_deduplicator import EventDeduplicator
 from src.infrastructure.circuit_breaker import CircuitBreaker
+from src.infrastructure.live_threads import create_live_thread
 
 logger = logging.getLogger(__name__)
 
@@ -253,7 +255,7 @@ class OrderTracker:
 
         self._running = True
         self._stop_event.clear()  # Clear stop signal for new run
-        self._thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._thread = create_live_thread(self._poll_loop, name="OrderTracker")
         self._thread.start()
         logger.info("OrderTracker started (poll interval: %ss)", self.poll_interval)
 
@@ -845,15 +847,7 @@ class OrderTracker:
         Returns:
             Mapped OrderType, defaulting to MARKET for unknown types.
         """
-        mapping = {
-            "MARKET": OrderType.MARKET,
-            "LIMIT": OrderType.LIMIT,
-            "STOP_LOSS": OrderType.STOP_LOSS,
-            "STOP_LOSS_LIMIT": OrderType.STOP_LOSS,
-            "TAKE_PROFIT": OrderType.TAKE_PROFIT,
-            "TAKE_PROFIT_LIMIT": OrderType.TAKE_PROFIT,
-        }
-        return mapping.get(ws_type, OrderType.MARKET)
+        return map_binance_order_type(ws_type)
 
     def poll_once(self) -> None:
         """Execute a single poll cycle. Used during WS to REST transitions."""

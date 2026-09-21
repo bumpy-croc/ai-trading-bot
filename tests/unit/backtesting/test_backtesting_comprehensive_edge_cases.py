@@ -1169,3 +1169,20 @@ class TestTimeframeEdgeCases:
         results = backtester.run("BTCUSDT", "1w", datetime(2024, 1, 1))
 
         assert isinstance(results, dict)
+
+
+class TestEarlyStopThresholdSingleSource:
+    """Reported drawdown cap must equal the one enforced (#1089)."""
+
+    def test_bare_backtester_uses_hydrated_risk_manager_limit(
+        self, minimal_strategy, mock_data_provider
+    ):
+        backtester = Backtester(
+            strategy=minimal_strategy,
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+            log_to_database=False,
+        )
+
+        assert backtester._early_stop_max_drawdown == pytest.approx(0.20)
+        assert backtester._early_stop_max_drawdown == backtester.risk_manager.params.max_drawdown

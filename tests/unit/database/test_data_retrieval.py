@@ -67,6 +67,19 @@ class TestDataRetrieval:
         assert len(positions) == 1
         assert positions[0]["symbol"] == "BTCUSDT"
 
+    def test_get_open_position_refs_returns_id_symbol_strategy_only(self, mock_postgresql_db):
+        query = Mock()
+        query.filter.return_value = query
+        query.all.return_value = [(7, "BTCUSDT", "exchange_sync"), (8, "ETHUSDT", "ml_basic")]
+        mock_postgresql_db._mock_session.query.side_effect = lambda *args: query
+
+        refs = mock_postgresql_db.get_open_position_refs(1)
+
+        assert refs == [
+            {"id": 7, "symbol": "BTCUSDT", "strategy": "exchange_sync"},
+            {"id": 8, "symbol": "ETHUSDT", "strategy": "ml_basic"},
+        ]
+
     def test_get_active_positions_coerces_numeric_fields_to_float(self, mock_postgresql_db):
         """Numeric columns come back from PostgreSQL as Decimal; get_active_positions
         must coerce them to float so downstream float arithmetic (e.g. the default

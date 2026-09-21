@@ -60,6 +60,7 @@ def _write_bundle(root: Path, symbol: str, model_type: str, version: str, metada
     base.mkdir(parents=True, exist_ok=True)
     (base / "model.onnx").write_bytes(b"dummy")
     (base / "metadata.json").write_text(json.dumps(metadata))
+    (base.parent / "latest").symlink_to(version)
     return base
 
 
@@ -326,3 +327,26 @@ def test_promotion_allows_complete_bundle(tmp_path: Path):
 
     assert promoted.is_dir()
     assert (promoted / "metadata.json").exists()
+
+
+def test_price_scale_target_types_are_regression_targets():
+    """GH #1154: the price-scale set must stay inside TARGET_TASK_TYPES' regression targets."""
+    from src.ml.training_pipeline.task_types import (
+        PRICE_SCALE_TARGET_TYPES,
+        TARGET_TASK_TYPES,
+        TaskType,
+    )
+
+    assert PRICE_SCALE_TARGET_TYPES
+    for target in PRICE_SCALE_TARGET_TYPES:
+        assert TARGET_TASK_TYPES[target] is TaskType.REGRESSION
+
+
+def test_unknown_target_type_is_non_price_but_warns(caplog):
+    metadata = _cloud_style_metadata()
+    metadata["training_params"] = {"target_type": "log_price"}
+
+    with caplog.at_level("WARNING", logger="src.ml.model_metadata"):
+        assert uses_rolling_minmax_features(metadata) is False
+
+    assert "log_price" in caplog.text

@@ -16,6 +16,7 @@ import time
 from typing import TYPE_CHECKING, Any, Protocol
 
 from src.database.models import EventType, TradeSource
+from src.infrastructure.live_threads import create_live_thread
 from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import log_engine_event
 
@@ -159,6 +160,7 @@ class LiveStartupSequencer:
         # strategies select models for this pair, not the default (#867).
         if state.strategy_manager is not None:
             state.strategy_manager.symbol = symbol
+            state.strategy_manager.timeframe = timeframe
         # Set base logging context for this engine run
         set_context(
             component="live_engine",
@@ -484,10 +486,9 @@ class LiveStartupSequencer:
         """Launch the trading-loop thread and block until it stops, then tear down."""
         state = self._state
         # Start main trading loop in separate thread
-        state.main_thread = threading.Thread(
-            target=state._run_trading_loop, args=(symbol, timeframe, max_steps)
+        state.main_thread = create_live_thread(
+            state._run_trading_loop, args=(symbol, timeframe, max_steps)
         )
-        state.main_thread.daemon = True
         state.main_thread.start()
 
         try:

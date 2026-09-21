@@ -113,6 +113,7 @@ from src.engines.shared.risk_configuration import (
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
 )
+from src.infrastructure.live_threads import create_live_thread
 from src.infrastructure.logging.events import (
     log_data_event,
     log_engine_event,
@@ -127,6 +128,7 @@ from src.position_management.trailing_stops import TrailingStopPolicy
 from src.prediction.inference_context import (
     InferenceContext,
     inference_scope,
+    register_live_process,
     set_inference_context,
 )
 from src.regime.detector import RegimeDetector
@@ -281,6 +283,7 @@ class LiveTradingEngine:
         # This pins the constructing thread only (contextvar, #926); the
         # trading loop thread scopes itself LIVE in _run_trading_loop.
         set_inference_context(InferenceContext.LIVE)
+        register_live_process()
 
         self._validate_inputs(
             initial_balance=initial_balance,
@@ -901,6 +904,27 @@ class LiveTradingEngine:
                     exc_info=True,
                 )
                 self.time_exit_policy = None
+        self._log_resolved_time_exit_policy()
+
+    def _log_resolved_time_exit_policy(self) -> None:
+        """Log the resolved time-exit policy so its absence is visible at boot.
+
+        DEFAULT_MAX_HOLDING_HOURS only applies inside a strategy-supplied
+        ``time_exits`` config; with none supplied no time-based exit exists.
+        """
+        policy = self.time_exit_policy
+        if policy is None:
+            logger.info(
+                "Time-exit policy: NONE (strategy supplies no time_exits config; "
+                "positions have no maximum holding time)"
+            )
+        else:
+            logger.info(
+                "Time-exit policy: max_holding_hours=%s end_of_day_flat=%s weekend_flat=%s",
+                policy.max_holding_hours,
+                policy.end_of_day_flat,
+                policy.weekend_flat,
+            )
 
     def _install_signal_handlers(self) -> None:
         """Register SIGINT/SIGTERM handlers for graceful shutdown (main thread)."""
@@ -2070,6 +2094,30 @@ class LiveTradingEngine:
                 with self._balance_lock:
                     self.current_balance = corrected
                 logger.info("💰 Balance corrected %s: $%.2f", source, corrected)
+        elif "exchange_cash" in balance_sync:
+            # Spot: the sync only reports; the periodic reconciler writes balance
+            # corrections to the DB only. Re-read so sizing follows the DB.
+            self._refresh_balance_from_db(source)
+
+    def _refresh_balance_from_db(self, source: str) -> None:
+        """Load the session balance from the DB into the in-memory sizing balance."""
+        # Read and assign under one lock hold so a concurrent balance write cannot
+        # be overwritten with a value read before it.
+        try:
+            with self._balance_lock:
+                db_balance = self.db_manager.get_current_balance(self.trading_session_id)
+                if db_balance is None or not math.isfinite(db_balance) or db_balance <= 0:
+                    return
+                if abs(self.current_balance - db_balance) < 1e-9:
+                    return
+                previous = self.current_balance
+                self.current_balance = db_balance
+        except Exception as e:
+            logger.warning("Could not refresh in-memory balance %s: %s", source, e)
+            return
+        logger.info(
+            "💰 In-memory balance refreshed %s: $%.2f -> $%.2f", source, previous, db_balance
+        )
 
     def _check_pending_startup_equity_retry(self) -> None:
         """Drive #659's cold-boot margin-equity self-heal from the trading
@@ -2846,7 +2894,7 @@ class LiveTradingEngine:
             )
 
         try:
-            threading.Thread(target=_deliver, name="order-tracker-alert", daemon=True).start()
+            create_live_thread(_deliver, name="order-tracker-alert").start()
         except Exception as e:  # pragma: no cover - defensive; never break order handling
             logger.warning("order-tracker alert dispatch failed: %s", e)
 

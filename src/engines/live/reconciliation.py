@@ -49,6 +49,7 @@ from src.engines.live.trade_close_accounting import held_base_quantity
 from src.engines.shared.commission import order_commission_usd, split_base_quote
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
+from src.infrastructure.live_threads import create_live_thread
 from src.trading.close_sizing import cap_closing_sell_quantity
 from src.trading.exit_reason import ExitReason, classify_stop_exit
 
@@ -65,6 +66,13 @@ logger = logging.getLogger(__name__)
 # DEFAULT_RECONCILIATION_INTERVAL_SECONDS so a record can only ever come from the
 # cycle in flight, never from a previous one (#1094).
 _EXCHANGE_ERROR_ATTRIBUTION_WINDOW_S = 90.0
+
+# ``strategy_name`` of the DB rows AccountSynchronizer writes for exchange positions
+# it finds at startup. It records them but never tracks them, so they are not
+# evidence of a lost position.
+EXCHANGE_SYNC_STRATEGY_NAME = "exchange_sync"
+
+_SWEEP_UNTRACKED_FINDING = "open DB position not tracked"
 
 
 def _emit_event(
@@ -384,6 +392,19 @@ def _classify_stop_placement(
         )
     if stop_price is not None and stop_price > 0:
         resting_price = getattr(only, "stop_price", None)
+        if _usable_stop_price(resting_price) is None:
+            # NaN compares False against everything, so it would slip through the
+            # tolerance test below and be ADOPTed as if it rested at intent.
+            return StopPlacementDecision(
+                StopPlacementCheck.REFUSE,
+                reason=(
+                    f"a resting stop {only.order_id} exists for {symbol} but its "
+                    f"stop_price ({resting_price!r}) is not a finite positive number — "
+                    "cannot verify where it protects, will not adopt or duplicate"
+                ),
+                unconfirmed=True,
+                reason_code=StopPlacementRefuseReason.UNCONFIRMED,
+            )
         if (
             resting_price is None
             or abs(resting_price - stop_price) > stop_price * _ADOPT_PRICE_TOLERANCE_FRACTION
@@ -465,6 +486,9 @@ def _log_adoption(
     )
 
 
+_STOP_LOSS_CLIENT_ID_PREFIX = "atbsl_"
+
+
 def _generate_stop_loss_client_order_id() -> str:
     """Build an ``atbsl_``-prefixed client order id for one stop-loss placement.
 
@@ -485,7 +509,42 @@ def _generate_stop_loss_client_order_id() -> str:
     """
     timestamp_ms = int(time.time() * 1000)
     unique_suffix = uuid.uuid4().hex[:8]
-    return f"atbsl_{timestamp_ms:x}_{unique_suffix}"
+    return f"{_STOP_LOSS_CLIENT_ID_PREFIX}{timestamp_ms:x}_{unique_suffix}"
+
+
+def _usable_stop_price(price: Any) -> float | None:
+    """``price`` as a finite positive float, or None when it is not one."""
+    if price is None:
+        return None
+    try:
+        price_f = float(price)
+    except (TypeError, ValueError):
+        return None
+    return price_f if math.isfinite(price_f) and price_f > 0 else None
+
+
+def adopted_stop_price(decision: StopPlacementDecision) -> float | None:
+    """The resting price of an ADOPTed order, or None when it is unusable.
+
+    An exchange response with a NaN/inf/non-positive ``stop_price`` must never
+    become the "achieved" price: it flows unconditionally into the
+    min-trailing-stop-move floor's baseline and would break every later
+    trailing-stop comparison for the position (#1219). ``_classify_stop_placement``
+    already refuses such an order when a price is being checked; this is the
+    backstop for callers that adopt without one. A missing price is the normal
+    "nothing to capture" case and stays silent; a present-but-unusable one is
+    logged, since the engine will then record an unverified baseline.
+    """
+    price = getattr(decision.existing_order, "stop_price", None)
+    usable = _usable_stop_price(price)
+    if usable is None and price is not None:
+        logger.warning(
+            "Adopted stop %s has an unusable stop_price %r -- falling back to the intended "
+            "price for the min-move baseline; the resting order's actual level is unverified.",
+            decision.existing_order_id,
+            price,
+        )
+    return usable
 
 
 class _AchievedStopPriceCapture:
@@ -514,7 +573,7 @@ class _AchievedStopPriceCapture:
         self.price = intended_price
 
     def __call__(self, decision: StopPlacementDecision) -> None:
-        price = getattr(decision.existing_order, "stop_price", None)
+        price = adopted_stop_price(decision)
         if price is not None:
             self.price = price
 
@@ -536,6 +595,130 @@ def _achieved_price_is_safe_to_ratify(
     if side_is_long:
         return achieved_price >= intended_price
     return achieved_price <= intended_price
+
+
+def _cancel_order_marking_self(
+    exchange: Any, order_tracker: Any, symbol: str, order_id: str
+) -> bool:
+    """Cancel an order a reconciler is deliberately retiring; True only when confirmed.
+
+    Marks the order self-cancelled BEFORE the cancel so the OrderTracker's WS
+    listener does not treat the terminal CANCELED event as an unexpected
+    cancellation and page a false UNPROTECTED alert (#1194; mirrors
+    ``LiveStopLossManager.cancel``). An unconfirmed cancel drops the mark: the
+    order may still rest, so a later terminal status is genuine. ``order_tracker``
+    may be None (paper mode, standalone use).
+    """
+    if order_tracker:
+        order_tracker.mark_self_cancelled(order_id)
+    cancelled = False
+    try:
+        cancelled = bool(exchange.cancel_order(order_id, symbol))
+    except Exception as e:
+        logger.warning("Failed to cancel order %s for %s: %s", order_id, symbol, e)
+    if order_tracker:
+        if cancelled:
+            order_tracker.stop_tracking(order_id)
+        else:
+            order_tracker.clear_self_cancelled(order_id)
+    return cancelled
+
+
+def _stop_tracking_order(order_tracker: Any, order_id: str) -> None:
+    """Drop a dead order id from the OrderTracker (None-safe, fault-isolated).
+
+    A reconciler that discovers a tracked stop is gone (missing or already
+    terminal on the exchange) and replaces it must untrack the old id, or the
+    tracker keeps polling it and eventually pages a false ORDER_TRACKING_LOST.
+    """
+    if not order_tracker:
+        return
+    try:
+        order_tracker.stop_tracking(order_id)
+    except Exception as e:
+        logger.warning("Failed to stop tracking order %s: %s", order_id, e)
+
+
+def _page_failed_db_close(
+    on_event: Any, position: Any, db_pos_id: Any, context: str = "External close"
+) -> None:
+    """Page a removal that popped the tracker but left the DB row OPEN.
+
+    Shared by the startup and periodic reconcilers so both surface the same
+    CRITICAL, paged ``system_events`` row (``RECONCILE_DB_CLOSE_FAILED``) for the
+    same memory/DB divergence, instead of the startup path logging alone.
+    ``context`` names what removed the position (external close, margin phantom).
+    """
+    symbol = getattr(position, "symbol", "?")
+    logger.critical(
+        "%s for %s: removed from tracker but DB position %s close "
+        "FAILED (still OPEN) — memory/DB divergence; manual reconciliation may "
+        "be needed.",
+        context,
+        symbol,
+        db_pos_id,
+    )
+    _emit_event(
+        on_event,
+        EventType.ALERT,
+        f"{context} for {symbol}: position removed from tracker but DB "
+        f"position {db_pos_id} is still OPEN (close failed) — memory/DB "
+        "divergence until the next restart re-adoption",
+        severity="critical",
+        error_code="RECONCILE_DB_CLOSE_FAILED",
+        alert=True,
+    )
+
+
+def _log_unratified_looser_stop(symbol: str, achieved_price: float, intended_price: float) -> None:
+    """Log that an adopted stop rests looser than intended and will stay so.
+
+    Both reconcilers' drift checks share ``_ADOPT_PRICE_TOLERANCE_FRACTION`` with
+    the adoption guard, so an adopted price is by construction within tolerance
+    of intent and no later pass will flag it (#1214). The resting order stays
+    looser until the stop is next replaced (a trailing-stop ratchet or manual
+    action). The engine's own software trigger stays at the tighter intended
+    price, so this is offline/backstop protection only -- not a loss vector --
+    but it is a latched condition an operator has to know about.
+    """
+    logger.critical(
+        "Adopted stop-loss for %s rests at $%.2f, looser than the intended $%.2f -- NOT "
+        "ratifying into position.stop_loss (would weaken the engine's own exit trigger). "
+        "The resting order stays looser until the stop is next replaced; no reconciliation "
+        "pass will correct it (the drift check shares the adopt tolerance). Manual "
+        "attention required.",
+        symbol,
+        achieved_price,
+        intended_price,
+    )
+
+
+def _page_unratified_looser_stop(
+    on_event: Any, symbol: str, achieved_price: float, intended_price: float
+) -> None:
+    """Page an operator about a latched looser-than-intended adopted stop (#1214).
+
+    ``alert=True`` POSTs to the alert webhook, so callers holding the
+    base-asset lock must defer this until it is released.
+    """
+    _emit_event(
+        on_event,
+        EventType.ALERT,
+        f"Adopted stop-loss for {symbol} rests at ${achieved_price:.2f}, looser than the "
+        f"intended ${intended_price:.2f}; it will not self-correct — manual attention "
+        "required (the engine's own tighter trigger is unaffected)",
+        severity="critical",
+        error_code="STOP_LOSS_LOOSER_THAN_INTENDED",
+        alert=True,
+    )
+
+
+def _report_unratified_looser_stop(
+    on_event: Any, symbol: str, achieved_price: float, intended_price: float
+) -> None:
+    """Log and page a looser-than-intended adopted stop in one step."""
+    _log_unratified_looser_stop(symbol, achieved_price, intended_price)
+    _page_unratified_looser_stop(on_event, symbol, achieved_price, intended_price)
 
 
 def place_or_adopt_stop_loss(
@@ -1188,9 +1371,19 @@ class PositionReconciler:
         fee_rate: float = DEFAULT_FEE_RATE,
         data_provider: Any | None = None,
         on_event: Any = None,
+        order_tracker: Any = None,
     ) -> None:
+        """Initialize the startup reconciler.
+
+        ``order_tracker`` is the engine's OrderTracker: stops this reconciler
+        places or replaces are registered with it so they get fill/cancel
+        routing once polling and the WS streams start, and its own deliberate
+        cancels are marked self-cancelled (#1193). None in paper mode and
+        standalone use.
+        """
         self.exchange = exchange_interface
         self.position_tracker = position_tracker
+        self.order_tracker = order_tracker
         self.db_manager = db_manager
         self.session_id = session_id
         self.on_event = on_event
@@ -1206,6 +1399,20 @@ class PositionReconciler:
         # future min-fee/maker-taker change applies to reconciler-logged trades too.
         self._fee_rate = fee_rate
         self._cost_calc = CostCalculator(fee_rate=fee_rate)
+
+    def _track_stop_loss(self, order_id: str, symbol: str) -> None:
+        """Register a stop-loss this reconciler placed or adopted with the OrderTracker.
+
+        Without this the order is invisible to REST polling once it starts, so a
+        later fill or cancel is only found by the next periodic pass (#1193).
+        Fault-isolated: tracking must never undo a stop that is already resting.
+        """
+        if not self.order_tracker:
+            return
+        try:
+            self.order_tracker.track_order(order_id, symbol)
+        except Exception as e:
+            logger.warning("Failed to track stop-loss %s for %s: %s", order_id, symbol, e)
 
     def reconcile_startup(self, positions: dict[str, Any]) -> list[ReconciliationResult]:
         """Run full startup reconciliation.
@@ -1736,6 +1943,7 @@ class PositionReconciler:
                         on_refuse=_capture_refusal,
                     )
                     if sl_order_id:
+                        self._track_stop_loss(sl_order_id, symbol)
                         position.stop_loss_order_id = sl_order_id
                         # Baseline for the min-trailing-stop-move floor (#1179)
                         # -- must reflect where the exchange order actually
@@ -1755,12 +1963,8 @@ class PositionReconciler:
                                 position.stop_loss = achieved.price
                                 update_kwargs["stop_loss"] = achieved.price
                             else:
-                                logger.critical(
-                                    "Adopted recovery stop-loss for %s achieved $%.2f, "
-                                    "looser than the intended $%.2f -- NOT ratifying into "
-                                    "position.stop_loss (would weaken the engine's own "
-                                    "exit trigger); leaving the divergence for the next "
-                                    "reconciliation pass.",
+                                _report_unratified_looser_stop(
+                                    self.on_event,
                                     symbol,
                                     achieved.price,
                                     intended_stop_price,
@@ -2232,23 +2436,21 @@ class PositionReconciler:
             )
             return
 
-        # Cancel the old stop-loss order
-        try:
-            self.exchange.cancel_order(sl_order_id, symbol)
-            logger.info(
-                "Cancelled stale stop-loss %s for %s after partial exit",
-                sl_order_id,
-                symbol,
-            )
-        except Exception as e:
+        # Cancel the old stop-loss order. An unconfirmed cancel keeps the old SL —
+        # better oversized than none, and placing another risks stacking a duplicate.
+        if not _cancel_order_marking_self(self.exchange, self.order_tracker, symbol, sl_order_id):
             logger.warning(
-                "Failed to cancel stale stop-loss %s for %s: %s",
+                "Could not confirm cancel of stale stop-loss %s for %s after partial exit "
+                "— keeping it",
                 sl_order_id,
                 symbol,
-                e,
             )
-            # If cancel fails, keep the old SL — better oversized than none
             return
+        logger.info(
+            "Cancelled stale stop-loss %s for %s after partial exit",
+            sl_order_id,
+            symbol,
+        )
 
         position.stop_loss_order_id = None  # type: ignore[attr-defined]
 
@@ -2283,9 +2485,11 @@ class PositionReconciler:
                 # open-orders view yet; without this the just-cancelled order
                 # could be re-adopted as if it were a genuine untracked stop.
                 exclude_order_id=sl_order_id,
+                just_cancelled=True,
                 on_adopt=achieved,
             )
             if new_sl_id:
+                self._track_stop_loss(new_sl_id, symbol)
                 position.stop_loss_order_id = new_sl_id  # type: ignore[attr-defined]
                 # Baseline for the min-trailing-stop-move floor (#1179) --
                 # must reflect where the exchange order actually landed, not
@@ -2302,12 +2506,8 @@ class PositionReconciler:
                         position.stop_loss = achieved.price  # type: ignore[attr-defined]
                         update_kwargs["stop_loss"] = achieved.price
                     else:
-                        logger.critical(
-                            "Adopted stop-loss for %s (post-partial-exit resize) "
-                            "achieved $%.2f, looser than the intended $%.2f -- NOT "
-                            "ratifying into position.stop_loss (would weaken the "
-                            "engine's own exit trigger); leaving the divergence for "
-                            "the next reconciliation pass.",
+                        _report_unratified_looser_stop(
+                            self.on_event,
                             symbol,
                             achieved.price,
                             stop_loss,
@@ -2333,16 +2533,33 @@ class PositionReconciler:
                             e,
                         )
             else:
-                logger.warning(
-                    "Failed to place resized stop-loss for %s — no order ID " "returned",
-                    symbol,
-                )
+                self._escalate_unprotected_resize(position, symbol, "no order id returned")
         except Exception as e:
-            logger.warning(
-                "Failed to place resized stop-loss for %s: %s",
-                symbol,
-                e,
-            )
+            self._escalate_unprotected_resize(position, symbol, f"placement raised: {e}")
+
+    def _escalate_unprotected_resize(self, position: Any, symbol: str, cause: str) -> None:
+        """Escalate a resize whose old stop is cancelled but whose replacement failed.
+
+        The position is left with no resting stop, the same state every other
+        placement-failure path audits and pages.
+        """
+        detail = write_unprotected_audit(
+            self.db_manager,
+            self.session_id,
+            position,
+            f"partial-exit stop resize: replacement failed ({cause})",
+        )
+        logger.critical(
+            "Failed to place resized stop-loss for %s (%s) — position is UNPROTECTED", symbol, cause
+        )
+        _emit_event(
+            self.on_event,
+            EventType.ALERT,
+            detail,
+            severity="critical",
+            error_code="RESIZE_STOP_UNPROTECTED",
+            alert=True,
+        )
 
     def _handle_not_found_order(
         self, order_data: dict, status: str, result: ReconciliationResult
@@ -2607,6 +2824,7 @@ class PositionReconciler:
                         on_adopt=achieved,
                     )
                     if new_sl_id:
+                        self._track_stop_loss(new_sl_id, position.symbol)
                         position.stop_loss_order_id = new_sl_id
                         # Baseline for the min-trailing-stop-move floor
                         # (#1179) -- must reflect where the exchange order
@@ -2622,12 +2840,8 @@ class PositionReconciler:
                                 # exchange isn't actually resting at.
                                 position.stop_loss = achieved.price
                             else:
-                                logger.critical(
-                                    "Adopted missing stop-loss for %s achieved $%.2f, "
-                                    "looser than the intended $%.2f -- NOT ratifying "
-                                    "into position.stop_loss (would weaken the engine's "
-                                    "own exit trigger); leaving the divergence for the "
-                                    "next reconciliation pass.",
+                                _report_unratified_looser_stop(
+                                    self.on_event,
                                     position.symbol,
                                     achieved.price,
                                     sl_price,
@@ -2785,9 +2999,12 @@ class PositionReconciler:
                         denom = prev_original_size if prev_original_size is not None else prev_size
                         denom_f = float(denom) if denom is not None else 0.0
                         if prev_current_size is not None and denom_f > 0:
-                            remaining_fraction = min(
-                                max(float(prev_current_size) / denom_f, 0.0), 1.0
-                            )
+                            # No upper clamp: a scaled-in position (current > original) must
+                            # keep its >1 fraction or the final close undersizes the
+                            # scaled-in portion.
+                            fraction = float(prev_current_size) / denom_f
+                            if math.isfinite(fraction):
+                                remaining_fraction = max(fraction, 0.0)
                         if hasattr(position, "current_size"):
                             position.current_size = new_size * remaining_fraction
                         if hasattr(position, "original_size"):
@@ -2911,6 +3128,7 @@ class PositionReconciler:
                 result.corrections.append(audit)
                 if result.severity < Severity.MEDIUM:
                     result.severity = Severity.MEDIUM
+                _stop_tracking_order(self.order_tracker, sl_order_id)
                 position.stop_loss_order_id = None
 
                 # Attempt to re-place the stop-loss so the position is protected — unless the
@@ -2951,6 +3169,7 @@ class PositionReconciler:
                             on_adopt=achieved,
                         )
                         if new_sl_id:
+                            self._track_stop_loss(new_sl_id, position.symbol)
                             position.stop_loss_order_id = new_sl_id
                             # Baseline for the min-trailing-stop-move floor
                             # (#1179) -- must reflect where the exchange order
@@ -2971,13 +3190,8 @@ class PositionReconciler:
                                     position.stop_loss = achieved.price
                                     update_kwargs["stop_loss"] = achieved.price
                                 else:
-                                    logger.critical(
-                                        "Adopted re-placed stop-loss for %s achieved "
-                                        "$%.2f, looser than the intended $%.2f -- NOT "
-                                        "ratifying into position.stop_loss (would "
-                                        "weaken the engine's own exit trigger); "
-                                        "leaving the divergence for the next "
-                                        "reconciliation pass.",
+                                    _report_unratified_looser_stop(
+                                        self.on_event,
                                         position.symbol,
                                         achieved.price,
                                         intended_stop_price,
@@ -3106,6 +3320,7 @@ class PositionReconciler:
                 result.corrections.append(audit)
                 if result.severity < Severity.MEDIUM:
                     result.severity = Severity.MEDIUM
+                _stop_tracking_order(self.order_tracker, sl_order_id)
                 position.stop_loss_order_id = None
                 logger.warning(
                     "Stop-loss %s for %s was %s — cleared stale reference",
@@ -3160,6 +3375,7 @@ class PositionReconciler:
                             on_adopt=achieved,
                         )
                         if new_sl_id:
+                            self._track_stop_loss(new_sl_id, position.symbol)
                             position.stop_loss_order_id = new_sl_id
                             # Baseline for the min-trailing-stop-move floor
                             # (#1179) -- must reflect where the exchange order
@@ -3178,13 +3394,8 @@ class PositionReconciler:
                                     position.stop_loss = achieved.price
                                     ratified_stop_loss = True
                                 else:
-                                    logger.critical(
-                                        "Adopted re-placed stop-loss for %s achieved "
-                                        "$%.2f, looser than the intended $%.2f -- NOT "
-                                        "ratifying into position.stop_loss (would "
-                                        "weaken the engine's own exit trigger); "
-                                        "leaving the divergence for the next "
-                                        "reconciliation pass.",
+                                    _report_unratified_looser_stop(
+                                        self.on_event,
                                         position.symbol,
                                         achieved.price,
                                         intended_stop_price,
@@ -3338,13 +3549,9 @@ class PositionReconciler:
             )
             return
 
-        cancelled = False
-        try:
-            cancelled = bool(self.exchange.cancel_order(sl_order_id, symbol))
-        except Exception as e:
-            logger.warning(
-                "Failed to cancel diverged stop-loss %s for %s: %s", sl_order_id, symbol, e
-            )
+        cancelled = _cancel_order_marking_self(
+            self.exchange, self.order_tracker, symbol, sl_order_id
+        )
         if not cancelled:
             logger.critical(
                 "Could not confirm cancel of diverged stop-loss %s for %s — leaving it "
@@ -3384,6 +3591,7 @@ class PositionReconciler:
                 stop_price=tracked_price,
                 side_effect_type=SideEffectType.AUTO_REPAY,
                 exclude_order_id=sl_order_id,
+                just_cancelled=True,
                 on_adopt=achieved,
             )
         except Exception as e:
@@ -3399,6 +3607,7 @@ class PositionReconciler:
         position.stop_loss_order_id = new_sl_id
         update_kwargs: dict[str, Any] = {"stop_loss_order_id": new_sl_id}
         if new_sl_id:
+            self._track_stop_loss(new_sl_id, symbol)
             # last_placed_stop_price is the min-trailing-stop-move floor's
             # baseline (#1179) -- it must reflect where the exchange order
             # actually landed, not what this correction intended (#1187).
@@ -3412,11 +3621,8 @@ class PositionReconciler:
                     position.stop_loss = achieved.price
                     update_kwargs["stop_loss"] = achieved.price
                 else:
-                    logger.critical(
-                        "Adopted stop-loss for %s achieved $%.2f, looser than the "
-                        "intended $%.2f -- NOT ratifying into position.stop_loss "
-                        "(would weaken the engine's own exit trigger); leaving the "
-                        "divergence for the next reconciliation pass.",
+                    _report_unratified_looser_stop(
+                        self.on_event,
                         symbol,
                         achieved.price,
                         tracked_price,
@@ -3794,13 +4000,7 @@ class PositionReconciler:
                     # (tracker says gone, DB says OPEN). Escalate (CODE.md: no silent divergence) —
                     # the OPEN row is re-recovered on the next restart; manual reconciliation may be
                     # needed meanwhile.
-                    logger.critical(
-                        "External close for %s: removed from tracker but DB position %s close "
-                        "FAILED (still OPEN) — memory/DB divergence; manual reconciliation may be "
-                        "needed.",
-                        symbol,
-                        db_pos_id,
-                    )
+                    _page_failed_db_close(self.on_event, position, db_pos_id)
         except Exception as e:
             logger.warning("Asset holdings check failed for %s: %s", base_asset, e)
 
@@ -3903,19 +4103,31 @@ class PositionReconciler:
         # if it triggers with AUTO_REPAY, it opens a new naked position.
         sl_order_id = getattr(position, "stop_loss_order_id", None)
         if sl_order_id:
-            try:
-                self.exchange.cancel_order(sl_order_id, position.symbol)
+            if _cancel_order_marking_self(
+                self.exchange, self.order_tracker, position.symbol, sl_order_id
+            ):
                 logger.info(
                     "Cancelled orphaned SL %s for removed position %s",
                     sl_order_id,
                     position.symbol,
                 )
-            except Exception as e:
-                logger.warning(
-                    "Failed to cancel SL %s for removed position %s: %s",
+            else:
+                logger.critical(
+                    "Could not confirm cancel of stop-loss %s for removed phantom %s — it "
+                    "may still rest on the exchange and, with AUTO_REPAY, open a naked "
+                    "position when triggered. Manual verification required.",
                     sl_order_id,
                     position.symbol,
-                    e,
+                )
+                _emit_event(
+                    self.on_event,
+                    EventType.ALERT,
+                    f"Stop-loss {sl_order_id} for removed phantom {position.symbol} could not "
+                    "be cancelled and may still rest on the exchange — manual verification "
+                    "required",
+                    severity="critical",
+                    error_code="PHANTOM_STOP_CANCEL_UNCONFIRMED",
+                    alert=True,
                 )
 
         removed = self.position_tracker.pop_position(position.order_id)
@@ -3937,12 +4149,7 @@ class PositionReconciler:
             # Popped from the in-memory tracker but the DB row did NOT close — memory/DB divergence
             # (CODE.md: no silent divergence). The phantom is gone on the exchange, so do not
             # re-track; the OPEN DB row is re-recovered on the next restart.
-            logger.critical(
-                "Margin phantom %s removed from tracker but DB position %s close FAILED (still "
-                "OPEN) — memory/DB divergence; manual reconciliation may be needed.",
-                getattr(position, "symbol", "?"),
-                db_pos_id,
-            )
+            _page_failed_db_close(self.on_event, position, db_pos_id, "Margin phantom")
         # Audit the phantom removal (it sets HIGH severity but previously wrote no
         # reconciliation_audit_events row, unlike the spot external-close path). #853
         audit = AuditEvent(
@@ -4668,6 +4875,10 @@ class PeriodicReconciler:
         # re-pages on a cadence instead of going silent after the first rising edge.
         self._last_cycle_emit_ts = 0.0
         self._symbols = symbols or []
+        # Untracked-OPEN-position check state (#1245): DB ids seen untracked once
+        # (awaiting confirmation on a second cycle) and ids confirmed untracked.
+        self._untracked_open_suspects: set[int] = set()
+        self._untracked_open_confirmed: dict[int, str] = {}
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -4690,6 +4901,9 @@ class PeriodicReconciler:
         # for standalone/test construction but must not go unnoticed if it
         # ever happens with a real engine, without spamming every cycle.
         self._warned_no_stop_loss_lock_registry = False
+        # Looser-than-intended adopted-stop findings noted while the base-asset lock
+        # is held; paged once the cycle has released it (webhook POSTs block).
+        self._pending_looser_stop_pages: list[tuple[str, float, float]] = []
         # Reuses the startup reconciler's P&L realization (balance + audit) so a
         # stop-loss fill detected by the periodic cycle books money identically
         # to one detected at startup. Construction is side-effect-free.
@@ -4701,6 +4915,7 @@ class PeriodicReconciler:
             use_margin=use_margin,
             data_provider=data_provider,
             on_event=on_event,
+            order_tracker=order_tracker,
         )
 
     def start(self) -> None:
@@ -4708,11 +4923,7 @@ class PeriodicReconciler:
         if self._running:
             return
         self._running = True
-        self._thread = threading.Thread(
-            target=self._run_loop,
-            name="PeriodicReconciler",
-            daemon=True,
-        )
+        self._thread = create_live_thread(self._run_loop, name="PeriodicReconciler")
         self._thread.start()
         logger.info("Periodic reconciler started (interval=%ds)", self.interval)
 
@@ -4783,8 +4994,9 @@ class PeriodicReconciler:
 
         Skips when the position is no longer tracked — the engine's
         deferred SL-exit drain already processed this fill — so the P&L is
-        not double-booked. A residual race with an engine exit already in
-        flight remains until the reconciler is base-lock-aware (#714).
+        not double-booked. The step-2 caller holds the base-asset lock (#714), so an
+        engine exit cannot be in flight; the step-1b callers do not, so a residual race
+        with one remains there.
 
         Returns True when this call closed the position.
         """
@@ -4917,7 +5129,31 @@ class PeriodicReconciler:
         return False
 
     def _reconcile_cycle(self) -> None:
-        """Execute one reconciliation cycle."""
+        """Execute one reconciliation cycle, then page findings deferred past the locks."""
+        try:
+            self._run_reconcile_cycle()
+        finally:
+            self._flush_looser_stop_pages()
+
+    def _note_unratified_looser_stop(
+        self, symbol: str, achieved_price: float, intended_price: float
+    ) -> None:
+        """Log a looser-than-intended adopted stop now and defer its page.
+
+        Called with the base-asset lock held, where a blocking webhook POST
+        would stall a concurrent close; ``_flush_looser_stop_pages`` sends it.
+        """
+        _log_unratified_looser_stop(symbol, achieved_price, intended_price)
+        self._pending_looser_stop_pages.append((symbol, achieved_price, intended_price))
+
+    def _flush_looser_stop_pages(self) -> None:
+        """Page the deferred looser-stop findings (no lock may be held)."""
+        pending, self._pending_looser_stop_pages = self._pending_looser_stop_pages, []
+        for symbol, achieved_price, intended_price in pending:
+            _page_unratified_looser_stop(self.on_event, symbol, achieved_price, intended_price)
+
+    def _run_reconcile_cycle(self) -> None:
+        """Body of one reconciliation cycle."""
         # Orphaned-borrow sweep runs every cycle — INCLUDING when flat — because an
         # orphaned borrow exists precisely when there is no tracked position. Must
         # run before the flat early-return below. No-op unless margin + flag enabled.
@@ -4943,11 +5179,15 @@ class PeriodicReconciler:
             # sweep must run precisely in the flat case this early return would
             # otherwise skip entirely (#740) -- mirroring the orphaned-borrow
             # sweep above, which runs before the flat return for the same reason.
-            sweep_severity = self._sweep_orphaned_orders()
+            sweep_findings: list[str] = []
+            sweep_severity = self._sweep_orphaned_orders(sweep_findings)
+            sweep_severity = self._merge_severity(
+                sweep_severity, self._check_untracked_open_positions(sweep_findings)
+            )
             if sweep_severity is not None:
-                self._emit_cycle_severity(
-                    sweep_severity, ["orphaned order(s) cancelled while flat"]
-                )
+                if sweep_severity == Severity.CRITICAL:
+                    self._trigger_close_only(sweep_findings)
+                self._emit_cycle_severity(sweep_severity, sweep_findings)
             return
 
         max_severity = Severity.LOW
@@ -4991,6 +5231,9 @@ class PeriodicReconciler:
                     # Remove ghost position from tracker and close in DB.
                     # Thread safety: LivePositionTracker._positions_lock
                     # serializes all mutations, no per-position lock needed.
+                    # Retire its resting stop first: the ghost's own stop stays
+                    # live on the exchange otherwise (#739).
+                    self._retire_stop_loss(position)
                     self.position_tracker.remove_position(order_key)
                     db_pos_id = getattr(position, "db_position_id", None)
                     if db_pos_id is not None:
@@ -5127,12 +5370,7 @@ class PeriodicReconciler:
                             severity=Severity.HIGH.value,
                         )
                         # Cancel exchange SL to prevent orphaned order
-                        if sl_id:
-                            try:
-                                self.exchange.cancel_order(sl_id, symbol)
-                                logger.info("Cancelled orphaned SL %s for %s", sl_id, symbol)
-                            except Exception as e:
-                                logger.warning("Failed to cancel SL %s: %s", sl_id, e)
+                        self._retire_stop_loss(position)
                         # Pop only if still tracked, then gate the audit row on the DB
                         # close actually succeeding (close_position returns False without
                         # raising on a failed commit), mirroring the startup path.
@@ -5301,9 +5539,12 @@ class PeriodicReconciler:
                             severity=severity.value,
                         )
 
-                        # Pop only if still tracked, then gate the audit row on the DB
-                        # close actually succeeding. Thread safety:
-                        # LivePositionTracker._positions_lock serializes all mutations.
+                        # Retire any resting stop so it is not left live for a position
+                        # that no longer exists (#739), then pop only if still tracked
+                        # and gate the audit row on the DB close actually succeeding.
+                        # Thread safety: LivePositionTracker._positions_lock serializes
+                        # all mutations.
+                        self._retire_stop_loss(position)
                         removed = self.position_tracker.pop_position(order_key)
                         db_pos_id = getattr(position, "db_position_id", None)
                         db_closed = False
@@ -5343,298 +5584,26 @@ class PeriodicReconciler:
 
         # 2. Verify stop-loss orders are still active on exchange
         for order_key, position in list(positions_snapshot.items()):
-            sl_order_id = getattr(position, "stop_loss_order_id", None)
-            if not sl_order_id:
-                # Position has no SL order (e.g. phantom from timeout) —
-                # attempt to place one so it is protected at runtime.
-                self._place_missing_stop_loss(position, order_key)
-                if Severity.HIGH > max_severity:
-                    max_severity = Severity.HIGH
-                continue
-
-            try:
-                from src.data_providers.exchange_interface import (
-                    OrderStatus as ExOrderStatus,
-                )
-
-                sl_order, confirmed = lookup_order_fail_closed(
-                    self.exchange, sl_order_id, position.symbol
-                )
-                if not confirmed:
-                    # Transient lookup failure — the stop may still be resting
-                    # on the exchange. Treating it as "missing" would clear the
-                    # tracked ID and place a DUPLICATE stop (#713). Skip this
-                    # cycle; the next run (~2 min) re-checks.
-                    logger.warning(
-                        "Stop-loss %s for %s could not be verified this cycle "
-                        "(lookup failed) — skipping fail-closed, no re-placement.",
-                        sl_order_id,
-                        position.symbol,
-                    )
-                    continue
-
-                if sl_order and sl_order.status == ExOrderStatus.FILLED:
-                    # SL triggered — book realized P&L, remove from tracker,
-                    # close in DB (all in the shared handler).
-                    if self._close_position_from_filled_sl(order_key, position, sl_order):
-                        if Severity.HIGH > max_severity:
-                            max_severity = Severity.HIGH
-
-                elif (
-                    sl_order
-                    and sl_order.status
-                    in (
-                        ExOrderStatus.CANCELLED,
-                        ExOrderStatus.EXPIRED,
-                        # A triggered stop whose limit leg was rejected by margin
-                        # checks (-2010 class) is terminal: without REJECTED here
-                        # it fell through every cycle and the position stayed
-                        # unprotected with no escalation (#741).
-                        ExOrderStatus.REJECTED,
-                    )
-                ) or sl_order is None:
-                    # SL cancelled/expired/rejected/missing — attempt re-placement
-                    status_desc = sl_order.status.value if sl_order else "MISSING"
-                    logger.warning(
-                        "Stop-loss %s for %s is %s — attempting re-placement",
-                        sl_order_id,
-                        position.symbol,
-                        status_desc,
-                    )
-                    # Cleared immediately, before any of the early-exit paths
-                    # below (position-gone, flat qty, no stop price, or an
-                    # exception during placement) — leaving a dead id in place
-                    # on those paths breaks the `not sl_order_id` check at the
-                    # top of this loop, so the position never routes into
-                    # _place_missing_stop_loss() on a later cycle and is stuck
-                    # unprotected forever (#1179 round 5). Wrapped in the
-                    # placement lock since it's the same field move()'s
-                    # trailing-stop ratchet reads and writes under that lock
-                    # (#1179 round 3); the placement block below re-nulls it
-                    # again once it reacquires the lock, which is a harmless,
-                    # idempotent no-op.
-                    with self._stop_loss_placement_lock(position.symbol):
-                        position.stop_loss_order_id = None
-
-                    # Account for partial SL fills before re-placement.
-                    # If the SL partially executed, reduce current_size
-                    # so the replacement uses the correct held quantity.
-                    if sl_order is not None:
-                        partial_fill = getattr(sl_order, "filled_quantity", None) or 0.0
-                        if partial_fill > 0:
-                            pos_qty = getattr(position, "quantity", 0) or 0.0
-                            current = getattr(position, "current_size", None)
-                            original = getattr(position, "original_size", None)
-                            # allow_scale_in=True: this derives the real remaining held amount
-                            # after the SL's partial fill, not a persisted record.
-                            # held_base_quantity already guarantees original is finite-positive
-                            # whenever it returns non-None; `original is not None` below is
-                            # just the mypy narrowing for the `original * ...` use.
-                            held = held_base_quantity(
-                                pos_qty, current, original, allow_scale_in=True
-                            )
-                            if held is not None and original is not None:
-                                remaining = max(held - partial_fill, 0.0)
-                                position.current_size = original * (remaining / max(pos_qty, 1e-9))
-                            else:
-                                if pos_qty > 0:
-                                    position.quantity = max(pos_qty - partial_fill, 0.0)
-                            logger.info(
-                                "Periodic: partial SL fill %.8f for %s — adjusted position size",
-                                partial_fill,
-                                position.symbol,
-                            )
-
-                    # Do not re-place a stop for a position closed/liquidated externally (asset
-                    # gone): a margin AUTO_REPAY stop would open a naked position. Step 1b above
-                    # removes such phantoms, but it works off the live tracker while this loop
-                    # iterates a stale snapshot — so guard here too.
-                    if _position_holding_is_gone(self.exchange, self._use_margin, position):
-                        logger.warning(
-                            "Stop-loss for %s is %s but the position no longer backs an exchange "
-                            "holding — skipping re-placement (external close/liquidation; the "
-                            "asset-holdings check removes the phantom).",
-                            position.symbol,
-                            status_desc,
-                        )
-                        continue
-
-                    stop_price = getattr(position, "stop_loss", None)
-                    if stop_price and hasattr(self.exchange, "place_stop_loss_order"):
-                        try:
-                            from src.data_providers.exchange_interface import (
-                                OrderSide,
-                            )
-
-                            side = getattr(position, "side", "long")
-                            side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
-                            sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
-                            # Compute held qty accounting for partial exits.
-                            # allow_scale_in=True: sizes the actual re-placed stop.
-                            qty = getattr(position, "quantity", 0) or 0.0
-                            current = getattr(position, "current_size", None)
-                            original = getattr(position, "original_size", None)
-                            scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
-                            qty = qty if scaled is None else scaled
-                            # Position is flat — skip SL, remove from tracker
-                            if qty <= 0:
-                                logger.info(
-                                    "Position %s is flat after partial SL fill "
-                                    "— skipping SL re-placement (periodic)",
-                                    position.symbol,
-                                )
-                                continue
-                            achieved = _AchievedStopPriceCapture(stop_price)
-                            ratified_stop_loss = False
-                            with self._stop_loss_placement_lock(position.symbol):
-                                # Null and (on success) re-set INSIDE the lock:
-                                # move()'s trailing-stop ratchet serialises on
-                                # this same lock and re-reads this field fresh
-                                # once it acquires it, so both ends must see a
-                                # consistent value rather than racing an
-                                # unsynchronised write from out here (#1179).
-                                position.stop_loss_order_id = None
-                                new_sl_id = place_or_adopt_stop_loss(
-                                    self.exchange,
-                                    symbol=position.symbol,
-                                    side=sl_side,
-                                    quantity=qty,
-                                    stop_price=stop_price,
-                                    side_effect_type=SideEffectType.AUTO_REPAY,
-                                    on_adopt=achieved,
-                                )
-                                if new_sl_id:
-                                    position.stop_loss_order_id = new_sl_id
-                                    # Baseline for the min-trailing-stop-move
-                                    # floor (#1179) -- must reflect where the
-                                    # exchange order actually landed, not this
-                                    # re-placement's own intent (#1187).
-                                    position.last_placed_stop_price = achieved.price
-                                    if achieved.price != stop_price:
-                                        if _achieved_price_is_safe_to_ratify(
-                                            side_is_long, achieved.price, stop_price
-                                        ):
-                                            # Mirrors move() (#1167): keep the
-                                            # engine's own exit check from trusting
-                                            # a price the exchange isn't actually
-                                            # resting at.
-                                            position.stop_loss = achieved.price
-                                            ratified_stop_loss = True
-                                        else:
-                                            logger.critical(
-                                                "Adopted stop-loss for %s achieved $%.2f, "
-                                                "looser than the intended $%.2f -- NOT "
-                                                "ratifying into position.stop_loss (would "
-                                                "weaken the engine's own exit trigger); "
-                                                "leaving the divergence for the next "
-                                                "reconciliation pass.",
-                                                position.symbol,
-                                                achieved.price,
-                                                stop_price,
-                                            )
-                            if new_sl_id:
-                                if self.order_tracker:
-                                    self.order_tracker.track_order(new_sl_id, position.symbol)
-                                logger.info(
-                                    "Re-placed stop-loss for %s: %s @ %.2f " "(periodic check)",
-                                    position.symbol,
-                                    new_sl_id,
-                                    achieved.price,
-                                )
-                                db_pos_id = getattr(position, "db_position_id", None)
-                                if db_pos_id is not None:
-                                    try:
-                                        _update_kw: dict[str, Any] = {}
-                                        _cs = getattr(position, "current_size", None)
-                                        if _cs is not None:
-                                            _update_kw["current_size"] = _cs
-                                        # Re-verify under the lock before persisting
-                                        # stop_loss_order_id/stop_loss: a concurrent
-                                        # move() could have acquired the placement
-                                        # lock the instant it was released above,
-                                        # ratcheted the stop, and persisted its own
-                                        # newer values -- persisting ours
-                                        # unconditionally here would clobber them
-                                        # back to stale ones (#1199 P1).
-                                        with self._stop_loss_placement_lock(position.symbol):
-                                            still_ours = position.stop_loss_order_id == new_sl_id
-                                        if still_ours:
-                                            _update_kw["stop_loss_order_id"] = new_sl_id
-                                            if ratified_stop_loss:
-                                                _update_kw["stop_loss"] = achieved.price
-                                        if _update_kw:
-                                            self.db_manager.update_position(
-                                                position_id=db_pos_id,
-                                                **_update_kw,
-                                            )
-                                    except Exception as e:
-                                        logger.warning(
-                                            "Failed to persist re-placed SL " "order ID for %s: %s",
-                                            position.symbol,
-                                            e,
-                                        )
-                            else:
-                                logger.critical(
-                                    "Failed to re-place stop-loss for %s — "
-                                    "position is unprotected (periodic check)",
-                                    position.symbol,
-                                )
-                                max_severity = Severity.CRITICAL
-                                findings.append(
-                                    self._audit_unprotected(
-                                        position, "exchange returned no order id"
-                                    )
-                                )
-                        except Exception as e:
-                            logger.critical(
-                                "Exception re-placing stop-loss for %s: %s — "
-                                "position is unprotected (periodic check)",
-                                position.symbol,
-                                e,
-                            )
-                            max_severity = Severity.CRITICAL
-                            findings.append(
-                                self._audit_unprotected(position, "exception during placement")
-                            )
-                    else:
-                        logger.critical(
-                            "Cannot re-place stop-loss for %s — no stop_price "
-                            "or exchange does not support SL orders",
-                            position.symbol,
-                        )
-                        max_severity = Severity.CRITICAL
-                        findings.append(
-                            self._audit_unprotected(position, "no stop price or SL unsupported")
-                        )
-
-                else:
-                    # sl_order is confirmed present and is none of FILLED/CANCELLED/
-                    # EXPIRED/REJECTED — i.e. it looks completely healthy by status
-                    # alone (NEW or PARTIALLY_FILLED). The branches above only ever
-                    # checked STATUS; verify its actual PRICE against the tracked
-                    # stop too (#1172).
-                    drift_finding = self._verify_stop_loss_price_drift(position, sl_order)
-                    if drift_finding:
-                        max_severity = Severity.CRITICAL
-                        findings.append(drift_finding)
-
-            except Exception as e:
-                logger.warning(
-                    "Failed to verify stop-loss %s for %s: %s",
-                    sl_order_id,
-                    position.symbol,
-                    e,
-                )
+            severity = self._verify_position_stop_loss(order_key, position, findings)
+            if severity > max_severity:
+                max_severity = severity
 
         # 3. Check for orphaned orders (entry/exit/stop-loss) with no tracked
         # position. Uses a snapshot taken fresh right now (not positions_snapshot
         # from the top of the cycle) so a position closed during steps 1-2 above
         # is already excluded -- an orphaned stop-loss left behind by that close
         # is caught THIS cycle instead of waiting for the next one.
-        sweep_severity = self._sweep_orphaned_orders()
-        if sweep_severity is not None and sweep_severity > max_severity:
-            max_severity = sweep_severity
-            findings.append("orphaned order(s) cancelled")
+        sweep_findings = []
+        sweep_severity = self._sweep_orphaned_orders(sweep_findings)
+        # 3b. An OPEN DB position the tracker does not hold, whether or not a stop
+        # rests for it (#1245).
+        sweep_severity = self._merge_severity(
+            sweep_severity, self._check_untracked_open_positions(sweep_findings)
+        )
+        if sweep_severity is not None:
+            findings.extend(sweep_findings)
+            if sweep_severity > max_severity:
+                max_severity = sweep_severity
 
         # 4. Verify balance — delegates to the shared, self-contained reconcile that
         # values a FRESH position snapshot (a position closed earlier this cycle is
@@ -5646,15 +5615,8 @@ class PeriodicReconciler:
             findings.append("spot balance corrected beyond tolerance")
 
         # 5. Trigger close-only mode on CRITICAL
-        if max_severity == Severity.CRITICAL and self.on_critical:
-            try:
-                # Pass WHY: the close-only latch keeps this reason for its
-                # re-announcements long after the log line rotates away (#1095).
-                self.on_critical(
-                    "periodic reconciliation CRITICAL: " + self._format_findings(findings)
-                )
-            except Exception as e:
-                logger.error("on_critical callback failed: %s", e)
+        if max_severity == Severity.CRITICAL:
+            self._trigger_close_only(findings)
 
         # 6. Surface the cycle's peak severity in system_events (+ page on
         # CRITICAL). Lock-free: positions were snapshotted at the top of the
@@ -5662,7 +5624,410 @@ class PeriodicReconciler:
         # block a position mutation.
         self._emit_cycle_severity(max_severity, findings)
 
-    def _sweep_orphaned_orders(self) -> Severity | None:
+    def _verify_position_stop_loss(
+        self, order_key: str, position: Any, findings: list[str]
+    ) -> Severity:
+        """Verify one position's resting stop-loss under the base-asset lock.
+
+        Holds the same per-base-asset lock the close/entry paths and
+        ``LiveStopLossManager`` take, so a stop is never re-placed in the window
+        between an active close's cancel and its market exit (#714). The tracker
+        is re-checked once the lock is held: steps 1/1b of the cycle (and any
+        concurrent close) remove positions while this loop iterates a snapshot
+        taken earlier, and re-arming a stop for a position that no longer exists
+        leaves a live, untracked order -- a naked BUY stop for a short (#739).
+
+        Returns the peak severity found; appends operator-facing descriptions of
+        CRITICAL findings to ``findings``.
+        """
+        with self._stop_loss_placement_lock(position.symbol):
+            if self.position_tracker.get_position(order_key) is None:
+                logger.info(
+                    "Skipping stop-loss verification for %s — position was removed "
+                    "earlier in this cycle or by a concurrent close",
+                    order_key,
+                )
+                return Severity.LOW
+            return self._verify_position_stop_loss_locked(order_key, position, findings)
+
+    def _verify_position_stop_loss_locked(
+        self, order_key: str, position: Any, findings: list[str]
+    ) -> Severity:
+        """Body of :meth:`_verify_position_stop_loss`; caller holds the base-asset lock."""
+        max_severity = Severity.LOW
+        sl_order_id = getattr(position, "stop_loss_order_id", None)
+        if not sl_order_id:
+            # Position has no SL order (e.g. phantom from timeout) —
+            # attempt to place one so it is protected at runtime.
+            self._place_missing_stop_loss(position, order_key)
+            if Severity.HIGH > max_severity:
+                max_severity = Severity.HIGH
+            return max_severity
+
+        try:
+            from src.data_providers.exchange_interface import (
+                OrderStatus as ExOrderStatus,
+            )
+
+            sl_order, confirmed = lookup_order_fail_closed(
+                self.exchange, sl_order_id, position.symbol
+            )
+            if not confirmed:
+                # Transient lookup failure — the stop may still be resting
+                # on the exchange. Treating it as "missing" would clear the
+                # tracked ID and place a DUPLICATE stop (#713). Skip this
+                # cycle; the next run (~2 min) re-checks.
+                logger.warning(
+                    "Stop-loss %s for %s could not be verified this cycle "
+                    "(lookup failed) — skipping fail-closed, no re-placement.",
+                    sl_order_id,
+                    position.symbol,
+                )
+                return max_severity
+
+            if sl_order and sl_order.status == ExOrderStatus.FILLED:
+                # SL triggered — book realized P&L, remove from tracker,
+                # close in DB (all in the shared handler).
+                if self._close_position_from_filled_sl(order_key, position, sl_order):
+                    if Severity.HIGH > max_severity:
+                        max_severity = Severity.HIGH
+
+            elif (
+                sl_order
+                and sl_order.status
+                in (
+                    ExOrderStatus.CANCELLED,
+                    ExOrderStatus.EXPIRED,
+                    # A triggered stop whose limit leg was rejected by margin
+                    # checks (-2010 class) is terminal: without REJECTED here
+                    # it fell through every cycle and the position stayed
+                    # unprotected with no escalation (#741).
+                    ExOrderStatus.REJECTED,
+                )
+            ) or sl_order is None:
+                # SL cancelled/expired/rejected/missing — attempt re-placement
+                status_desc = sl_order.status.value if sl_order else "MISSING"
+                logger.warning(
+                    "Stop-loss %s for %s is %s — attempting re-placement",
+                    sl_order_id,
+                    position.symbol,
+                    status_desc,
+                )
+                # Cleared immediately, before any of the early-exit paths
+                # below (position-gone, flat qty, no stop price, or an
+                # exception during placement) — leaving a dead id in place
+                # on those paths breaks the `not sl_order_id` check at the
+                # top of this loop, so the position never routes into
+                # _place_missing_stop_loss() on a later cycle and is stuck
+                # unprotected forever (#1179 round 5). Wrapped in the
+                # placement lock since it's the same field move()'s
+                # trailing-stop ratchet reads and writes under that lock
+                # (#1179 round 3); the placement block below re-nulls it
+                # again once it reacquires the lock, which is a harmless,
+                # idempotent no-op.
+                with self._stop_loss_placement_lock(position.symbol):
+                    position.stop_loss_order_id = None
+                _stop_tracking_order(self.order_tracker, sl_order_id)
+
+                # Account for partial SL fills before re-placement.
+                # If the SL partially executed, reduce current_size
+                # so the replacement uses the correct held quantity.
+                if sl_order is not None:
+                    partial_fill = getattr(sl_order, "filled_quantity", None) or 0.0
+                    if partial_fill > 0:
+                        pos_qty = getattr(position, "quantity", 0) or 0.0
+                        current = getattr(position, "current_size", None)
+                        original = getattr(position, "original_size", None)
+                        # allow_scale_in=True: this derives the real remaining held amount
+                        # after the SL's partial fill, not a persisted record.
+                        # held_base_quantity already guarantees original is finite-positive
+                        # whenever it returns non-None; `original is not None` below is
+                        # just the mypy narrowing for the `original * ...` use.
+                        held = held_base_quantity(pos_qty, current, original, allow_scale_in=True)
+                        if held is not None and original is not None:
+                            remaining = max(held - partial_fill, 0.0)
+                            position.current_size = original * (remaining / max(pos_qty, 1e-9))
+                        else:
+                            if pos_qty > 0:
+                                position.quantity = max(pos_qty - partial_fill, 0.0)
+                        logger.info(
+                            "Periodic: partial SL fill %.8f for %s — adjusted position size",
+                            partial_fill,
+                            position.symbol,
+                        )
+
+                # Do not re-place a stop for a position closed/liquidated externally (asset
+                # gone): a margin AUTO_REPAY stop would open a naked position. Step 1b above
+                # removes such phantoms, but it works off the live tracker while this loop
+                # iterates a stale snapshot — so guard here too.
+                if _position_holding_is_gone(self.exchange, self._use_margin, position):
+                    logger.warning(
+                        "Stop-loss for %s is %s but the position no longer backs an exchange "
+                        "holding — skipping re-placement (external close/liquidation; the "
+                        "asset-holdings check removes the phantom).",
+                        position.symbol,
+                        status_desc,
+                    )
+                    return max_severity
+
+                stop_price = getattr(position, "stop_loss", None)
+                if stop_price and hasattr(self.exchange, "place_stop_loss_order"):
+                    try:
+                        from src.data_providers.exchange_interface import (
+                            OrderSide,
+                        )
+
+                        side = getattr(position, "side", "long")
+                        side_is_long = side == PositionSide.LONG or str(side).lower() == "long"
+                        sl_side = OrderSide.SELL if side_is_long else OrderSide.BUY
+                        # Compute held qty accounting for partial exits.
+                        # allow_scale_in=True: sizes the actual re-placed stop.
+                        qty = getattr(position, "quantity", 0) or 0.0
+                        current = getattr(position, "current_size", None)
+                        original = getattr(position, "original_size", None)
+                        scaled = held_base_quantity(qty, current, original, allow_scale_in=True)
+                        qty = qty if scaled is None else scaled
+                        # Position is flat — skip SL, remove from tracker
+                        if qty <= 0:
+                            logger.info(
+                                "Position %s is flat after partial SL fill "
+                                "— skipping SL re-placement (periodic)",
+                                position.symbol,
+                            )
+                            return max_severity
+                        achieved = _AchievedStopPriceCapture(stop_price)
+                        ratified_stop_loss = False
+                        with self._stop_loss_placement_lock(position.symbol):
+                            # Null and (on success) re-set INSIDE the lock:
+                            # move()'s trailing-stop ratchet serialises on
+                            # this same lock and re-reads this field fresh
+                            # once it acquires it, so both ends must see a
+                            # consistent value rather than racing an
+                            # unsynchronised write from out here (#1179).
+                            position.stop_loss_order_id = None
+                            new_sl_id = place_or_adopt_stop_loss(
+                                self.exchange,
+                                symbol=position.symbol,
+                                side=sl_side,
+                                quantity=qty,
+                                stop_price=stop_price,
+                                side_effect_type=SideEffectType.AUTO_REPAY,
+                                on_adopt=achieved,
+                            )
+                            if new_sl_id:
+                                position.stop_loss_order_id = new_sl_id
+                                # Baseline for the min-trailing-stop-move
+                                # floor (#1179) -- must reflect where the
+                                # exchange order actually landed, not this
+                                # re-placement's own intent (#1187).
+                                position.last_placed_stop_price = achieved.price
+                                if achieved.price != stop_price:
+                                    if _achieved_price_is_safe_to_ratify(
+                                        side_is_long, achieved.price, stop_price
+                                    ):
+                                        # Mirrors move() (#1167): keep the
+                                        # engine's own exit check from trusting
+                                        # a price the exchange isn't actually
+                                        # resting at.
+                                        position.stop_loss = achieved.price
+                                        ratified_stop_loss = True
+                                    else:
+                                        self._note_unratified_looser_stop(
+                                            position.symbol,
+                                            achieved.price,
+                                            stop_price,
+                                        )
+                        if new_sl_id:
+                            if self.order_tracker:
+                                self.order_tracker.track_order(new_sl_id, position.symbol)
+                            logger.info(
+                                "Re-placed stop-loss for %s: %s @ %.2f " "(periodic check)",
+                                position.symbol,
+                                new_sl_id,
+                                achieved.price,
+                            )
+                            db_pos_id = getattr(position, "db_position_id", None)
+                            if db_pos_id is not None:
+                                try:
+                                    _update_kw: dict[str, Any] = {}
+                                    _cs = getattr(position, "current_size", None)
+                                    if _cs is not None:
+                                        _update_kw["current_size"] = _cs
+                                    # Re-verify under the lock before persisting
+                                    # stop_loss_order_id/stop_loss: a concurrent
+                                    # move() could have acquired the placement
+                                    # lock the instant it was released above,
+                                    # ratcheted the stop, and persisted its own
+                                    # newer values -- persisting ours
+                                    # unconditionally here would clobber them
+                                    # back to stale ones (#1199 P1).
+                                    with self._stop_loss_placement_lock(position.symbol):
+                                        still_ours = position.stop_loss_order_id == new_sl_id
+                                    if still_ours:
+                                        _update_kw["stop_loss_order_id"] = new_sl_id
+                                        if ratified_stop_loss:
+                                            _update_kw["stop_loss"] = achieved.price
+                                    if _update_kw:
+                                        self.db_manager.update_position(
+                                            position_id=db_pos_id,
+                                            **_update_kw,
+                                        )
+                                except Exception as e:
+                                    logger.warning(
+                                        "Failed to persist re-placed SL " "order ID for %s: %s",
+                                        position.symbol,
+                                        e,
+                                    )
+                        else:
+                            logger.critical(
+                                "Failed to re-place stop-loss for %s — "
+                                "position is unprotected (periodic check)",
+                                position.symbol,
+                            )
+                            max_severity = Severity.CRITICAL
+                            findings.append(
+                                self._audit_unprotected(position, "exchange returned no order id")
+                            )
+                    except Exception as e:
+                        logger.critical(
+                            "Exception re-placing stop-loss for %s: %s — "
+                            "position is unprotected (periodic check)",
+                            position.symbol,
+                            e,
+                        )
+                        max_severity = Severity.CRITICAL
+                        findings.append(
+                            self._audit_unprotected(position, "exception during placement")
+                        )
+                else:
+                    logger.critical(
+                        "Cannot re-place stop-loss for %s — no stop_price "
+                        "or exchange does not support SL orders",
+                        position.symbol,
+                    )
+                    max_severity = Severity.CRITICAL
+                    findings.append(
+                        self._audit_unprotected(position, "no stop price or SL unsupported")
+                    )
+
+            else:
+                # sl_order is confirmed present and is none of FILLED/CANCELLED/
+                # EXPIRED/REJECTED — i.e. it looks completely healthy by status
+                # alone (NEW or PARTIALLY_FILLED). The branches above only ever
+                # checked STATUS; verify its actual PRICE against the tracked
+                # stop too (#1172).
+                drift_finding = self._verify_stop_loss_price_drift(position, sl_order)
+                if drift_finding:
+                    max_severity = Severity.CRITICAL
+                    findings.append(drift_finding)
+
+        except Exception as e:
+            logger.warning(
+                "Failed to verify stop-loss %s for %s: %s",
+                sl_order_id,
+                position.symbol,
+                e,
+            )
+        return max_severity
+
+    def _trigger_close_only(self, findings: list[str]) -> None:
+        """Invoke ``on_critical`` (the engine's close-only latch), naming WHY.
+
+        The latch keeps the reason for its re-announcements long after the log
+        line rotates away (#1095). A callback failure never breaks the cycle.
+        """
+        if not self.on_critical:
+            return
+        try:
+            self.on_critical("periodic reconciliation CRITICAL: " + self._format_findings(findings))
+        except Exception as e:
+            logger.error("on_critical callback failed: %s", e)
+
+    def _read_open_db_positions(self) -> list[dict[str, Any]] | None:
+        """The session's OPEN DB positions, or None when they cannot be read."""
+        try:
+            return list(self.db_manager.get_active_positions(self.session_id))
+        except Exception as e:
+            logger.warning("Could not read open DB positions: %s", e)
+            return None
+
+    @staticmethod
+    def _merge_severity(a: Severity | None, b: Severity | None) -> Severity | None:
+        """The higher of two optional severities."""
+        if a is None or b is None:
+            return a if b is None else b
+        return max(a, b)
+
+    def _tracked_db_position_ids(self) -> set[Any]:
+        """DB ids the tracker holds, from the position attribute and the tracker's id map.
+
+        Recovered positions record their id only in the map
+        (``track_recovered_position``), so the attribute alone under-reports.
+        """
+        ids = {
+            getattr(pos, "db_position_id", None) for pos in self.position_tracker.positions.values()
+        }
+        ids.update(self.position_tracker.position_db_ids.values())
+        return ids
+
+    def _check_untracked_open_positions(self, findings: list[str]) -> Severity | None:
+        """CRITICAL when the DB shows an OPEN position the tracker does not hold (#1245).
+
+        Such a position is live exposure the bot does not manage. The orphan sweep
+        only notices it when an ``atbsl_`` stop happens to rest for it, so this
+        compares ids directly. The caller latches close-only, as it does for the
+        sweep's equivalent finding.
+
+        A position is reported only once it has been seen untracked on two
+        consecutive cycles: an entry writes its DB row a moment before the
+        tracker holds the id, and a one-off sighting is that window, not a lost
+        position. Rows written by the account sync are skipped: it records
+        exchange positions without tracking them. An unreadable DB reports
+        nothing: unknown is not evidence.
+        """
+        rows = self._read_open_db_position_refs()
+        if rows is not None:
+            # Snapshot the tracker AFTER the DB read so a position added in
+            # between is not mistaken for an untracked one.
+            tracked_ids = self._tracked_db_position_ids()
+            untracked = {
+                row["id"]: str(row.get("symbol") or "unknown-symbol")
+                for row in rows
+                if row.get("id") is not None
+                and row["id"] not in tracked_ids
+                and row.get("strategy") != EXCHANGE_SYNC_STRATEGY_NAME
+            }
+            self._untracked_open_confirmed = {
+                pid: sym
+                for pid, sym in untracked.items()
+                if pid in self._untracked_open_suspects or pid in self._untracked_open_confirmed
+            }
+            self._untracked_open_suspects = set(untracked) - set(self._untracked_open_confirmed)
+
+        if not self._untracked_open_confirmed:
+            return None
+        detail = ", ".join(
+            f"{sym} (id={pid})" for pid, sym in sorted(self._untracked_open_confirmed.items())
+        )
+        logger.critical(
+            "OPEN DB position(s) not held by the tracker: %s — untracked live exposure; "
+            "needs re-adoption (restart) or manual close.",
+            detail,
+        )
+        # The orphan sweep reports the same position when a stop rests for it; name it once.
+        findings[:] = [f for f in findings if not f.startswith(_SWEEP_UNTRACKED_FINDING)]
+        findings.append(f"open DB position not tracked: {detail}")
+        return Severity.CRITICAL
+
+    def _read_open_db_position_refs(self) -> list[dict[str, Any]] | None:
+        """``id``/``symbol``/``strategy`` of the session's OPEN DB positions, or None."""
+        try:
+            return list(self.db_manager.get_open_position_refs(self.session_id))
+        except Exception as e:
+            logger.warning("Could not read open DB position refs: %s", e)
+            return None
+
+    def _sweep_orphaned_orders(self, findings: list[str] | None = None) -> Severity | None:
         """Cancel resting exchange orders that belong to no tracked position (#740).
 
         An orphaned order is defined by the ABSENCE of a tracked position, so this
@@ -5682,10 +6047,20 @@ class PeriodicReconciler:
         never cancelled even if untracked-looking by prefix, which is what keeps a
         currently-protecting stop-loss for a live position safe here.
 
-        Returns ``Severity.HIGH`` if anything was cancelled this call, else
-        ``None`` (nothing found, or the sweep itself failed -- fail-open by
-        design, matching ``get_open_orders``'s own fail-open contract, since a
-        lookup failure here must not block the rest of the reconciliation cycle).
+        An ``atbsl_`` stop is NOT cancelled when the DB shows an OPEN position on
+        its symbol that the tracker does not hold (#1217): "orphaned" here means
+        absent from the in-memory tracker, which is also true of a live position
+        that failed to load, whose stop is then its only protection. That is
+        CRITICAL (untracked live exposure; the caller latches close-only). A DB
+        that cannot be read keeps the stop too but is only HIGH -- unknown is not
+        evidence of an untracked position. ``findings`` receives short
+        operator-facing descriptions of what was found.
+
+        Returns the peak severity, or ``None`` when nothing was found (or the sweep
+        itself failed -- fail-open by design, matching ``get_open_orders``'s own
+        fail-open contract, since a lookup failure here must not block the rest of
+        the reconciliation cycle). An orphan whose cancel the exchange refuses is
+        HIGH, not silent.
 
         Runs each symbol's query+cancel under ``_stop_loss_placement_lock``
         (#740 follow-up): before this order class carried the ``atb`` prefix a
@@ -5698,7 +6073,12 @@ class PeriodicReconciler:
         The per-symbol snapshot is re-read fresh inside the lock so an id
         recorded while this sweep was waiting on it is honoured.
         """
-        found_orphan = False
+        cancelled = False
+        cancel_failed = False
+        untracked_open = False
+        unverified = False
+        open_db_rows: list[dict[str, Any]] | None = None
+        db_rows_loaded = False
         try:
             fresh_snapshot = self.position_tracker.positions
             # Every configured symbol, plus (defensively) any symbol with a
@@ -5710,6 +6090,7 @@ class PeriodicReconciler:
             for symbol in symbols:
                 with self._stop_loss_placement_lock(symbol):
                     tracked_exchange_ids = set()
+                    tracked_db_ids = self._tracked_db_position_ids()
                     for pos in self.position_tracker.positions.values():
                         eid = getattr(pos, "exchange_order_id", None)
                         if eid:
@@ -5725,30 +6106,90 @@ class PeriodicReconciler:
                         client_id = getattr(order, "client_order_id", "") or ""
                         if not client_id.startswith("atb"):  # atb_/atbx_/atbsl_
                             continue
+                        if client_id.startswith(_STOP_LOSS_CLIENT_ID_PREFIX):
+                            # "Untracked" only means absent from the in-memory tracker.
+                            # A stop resting for a position the DB still shows OPEN is
+                            # that position's only protection, not an orphan (#1217).
+                            if not db_rows_loaded:
+                                open_db_rows = self._read_open_db_positions()
+                                db_rows_loaded = True
+                            if open_db_rows is None:
+                                logger.warning(
+                                    "Stop-loss %s (%s) on %s looks orphaned but the open DB "
+                                    "positions could not be read — NOT cancelling it.",
+                                    order.order_id,
+                                    client_id,
+                                    symbol,
+                                )
+                                unverified = True
+                                continue
+                            if any(
+                                row.get("symbol") == symbol and row.get("id") not in tracked_db_ids
+                                for row in open_db_rows
+                            ):
+                                logger.critical(
+                                    "Stop-loss %s (%s) on %s belongs to an OPEN DB position "
+                                    "the tracker does not hold — NOT cancelling it; the "
+                                    "position is untracked and needs re-adoption.",
+                                    order.order_id,
+                                    client_id,
+                                    symbol,
+                                )
+                                untracked_open = True
+                                continue
                         logger.warning(
                             "Orphaned order found: %s (%s) on %s — cancelling",
                             order.order_id,
                             client_id,
                             symbol,
                         )
-                        try:
-                            self.exchange.cancel_order(order.order_id, symbol)
+                        if self._cancel_order_deliberately(symbol, order.order_id):
                             logger.info(
                                 "Cancelled orphaned order %s on %s",
                                 order.order_id,
                                 symbol,
                             )
-                            found_orphan = True
-                        except Exception as cancel_err:
-                            logger.warning(
-                                "Failed to cancel orphaned order %s: %s",
-                                order.order_id,
-                                cancel_err,
-                            )
-            return Severity.HIGH if found_orphan else None
+                            cancelled = True
+                        else:
+                            cancel_failed = True
+            return self._sweep_result(
+                cancelled, cancel_failed, untracked_open, unverified, findings
+            )
         except Exception as e:
             logger.warning("Orphaned order check failed: %s", e)
-            return Severity.HIGH if found_orphan else None
+            return self._sweep_result(
+                cancelled, cancel_failed, untracked_open, unverified, findings
+            )
+
+    @staticmethod
+    def _sweep_result(
+        cancelled: bool,
+        cancel_failed: bool,
+        untracked_open: bool,
+        unverified: bool,
+        findings: list[str] | None,
+    ) -> Severity | None:
+        """Severity of one orphan sweep, naming what it found in ``findings``.
+
+        An untracked OPEN position is CRITICAL: it is live exposure the bot does
+        not manage, so the caller latches close-only until an operator or a
+        restart re-adopts it. Everything else the sweep acted on or declined to
+        act on is HIGH.
+        """
+        if findings is not None:
+            if untracked_open:
+                findings.append(_SWEEP_UNTRACKED_FINDING + "; its stop-loss left in place")
+            if unverified:
+                findings.append("could not verify open DB positions; stop-loss left in place")
+            if cancelled:
+                findings.append("orphaned order(s) cancelled")
+            if cancel_failed:
+                findings.append("orphaned order(s) could not be cancelled")
+        if untracked_open:
+            return Severity.CRITICAL
+        if cancelled or cancel_failed or unverified:
+            return Severity.HIGH
+        return None
 
     def _emit_cycle_severity(
         self, max_severity: Severity, findings: list[str] | None = None
@@ -5815,29 +6256,35 @@ class PeriodicReconciler:
 
         The periodic loop iterates the tracker, so once the position is popped
         the OPEN row is never re-examined — it heals only on restart re-adoption.
-        The startup twins (``_verify_asset_holdings`` / ``_remove_phantom_position``)
-        treat this identical condition as CRITICAL; mirror them here instead of
-        diverging silently. Emits an honest paged system_event (``alert=True``);
-        safe to POST here — the cycle iterates a snapshot, no tracker lock is held.
+        Safe to POST here — the cycle iterates a snapshot, no tracker lock is held.
         """
-        symbol = getattr(position, "symbol", "?")
-        logger.critical(
-            "External close for %s: removed from tracker but DB position %s close "
-            "FAILED (still OPEN) — memory/DB divergence; manual reconciliation may "
-            "be needed.",
-            symbol,
-            db_pos_id,
-        )
-        _emit_event(
-            self.on_event,
-            EventType.ALERT,
-            f"External close for {symbol}: position removed from tracker but DB "
-            f"position {db_pos_id} is still OPEN (close failed) — memory/DB "
-            "divergence until the next restart re-adoption",
-            severity="critical",
-            error_code="RECONCILE_DB_CLOSE_FAILED",
-            alert=True,
-        )
+        _page_failed_db_close(self.on_event, position, db_pos_id)
+
+    def _cancel_order_deliberately(self, symbol: str, order_id: str) -> bool:
+        """Cancel an order this reconciler is retiring; True only when confirmed."""
+        return _cancel_order_marking_self(self.exchange, self.order_tracker, symbol, order_id)
+
+    def _retire_stop_loss(self, position: Any) -> None:
+        """Cancel and forget the resting stop of a position being removed.
+
+        Every path that drops a position from the tracker must retire its stop:
+        left resting it is an orphan (a BUY stop for a short buys real base once
+        price crosses it), and a stale ``stop_loss_order_id`` on the removed
+        object lets a cycle that iterates an older snapshot re-arm it (#739).
+        A failed cancel is logged; the id is still cleared because the position
+        is going away. The orphan sweep then cancels the surviving ``atbsl_`` stop
+        on a later cycle, unless the DB row is still OPEN (a failed DB close,
+        already paged by ``_escalate_failed_db_close``), in which case the sweep
+        deliberately leaves it and reports the untracked position.
+        """
+        sl_id = getattr(position, "stop_loss_order_id", None)
+        if not sl_id:
+            return
+        symbol = position.symbol
+        with self._stop_loss_placement_lock(symbol):
+            if self._cancel_order_deliberately(symbol, sl_id):
+                logger.info("Cancelled orphaned SL %s for %s", sl_id, symbol)
+            position.stop_loss_order_id = None
 
     def _stop_loss_placement_lock(self, symbol: str) -> contextlib.AbstractContextManager[Any]:
         """Per-base-asset lock guarding a stop-loss re-placement, or a no-op.
@@ -6000,13 +6447,7 @@ class PeriodicReconciler:
             )
             return detail
 
-        cancelled = False
-        try:
-            cancelled = bool(self.exchange.cancel_order(sl_order_id, symbol))
-        except Exception as e:
-            logger.warning(
-                "Failed to cancel diverged stop-loss %s for %s: %s", sl_order_id, symbol, e
-            )
+        cancelled = self._cancel_order_deliberately(symbol, sl_order_id)
         if not cancelled:
             logger.critical(
                 "Could not confirm cancel of diverged stop-loss %s for %s — leaving it "
@@ -6064,6 +6505,7 @@ class PeriodicReconciler:
                     stop_price=tracked_price,
                     side_effect_type=SideEffectType.AUTO_REPAY,
                     exclude_order_id=sl_order_id,
+                    just_cancelled=True,
                     on_adopt=achieved,
                 )
                 if new_sl_id:
@@ -6082,12 +6524,7 @@ class PeriodicReconciler:
                             position.stop_loss = achieved.price
                             ratified_stop_loss = True
                         else:
-                            logger.critical(
-                                "Adopted stop-loss for %s achieved $%.2f, looser than "
-                                "the intended $%.2f -- NOT ratifying into "
-                                "position.stop_loss (would weaken the engine's own "
-                                "exit trigger); leaving the divergence for the next "
-                                "reconciliation pass.",
+                            self._note_unratified_looser_stop(
                                 symbol,
                                 achieved.price,
                                 tracked_price,
@@ -6233,12 +6670,7 @@ class PeriodicReconciler:
                             position.stop_loss = achieved.price
                             ratified_stop_loss = True
                         else:
-                            logger.critical(
-                                "Adopted stop-loss for %s achieved $%.2f, looser than "
-                                "the intended $%.2f -- NOT ratifying into "
-                                "position.stop_loss (would weaken the engine's own "
-                                "exit trigger); leaving the divergence for the next "
-                                "reconciliation pass.",
+                            self._note_unratified_looser_stop(
                                 position.symbol,
                                 achieved.price,
                                 stop_price,

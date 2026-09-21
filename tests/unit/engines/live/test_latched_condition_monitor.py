@@ -419,15 +419,18 @@ class TestFaultIsolation:
         started: list[str] = []
 
         class FakeThread:
-            def __init__(self, target=None, name=None, daemon=None):
+            def __init__(self, target):
                 self._target = target
-                started.append(name or "")
 
             def start(self):
                 self._target()
 
+        def fake_spawn(target, *, name=None, **_):
+            started.append(name or "")
+            return FakeThread(target)
+
         monkeypatch.setattr(
-            "src.engines.live.monitoring.latched_condition_monitor.threading.Thread", FakeThread
+            "src.engines.live.monitoring.latched_condition_monitor.create_live_thread", fake_spawn
         )
         state._close_only_mode = True
         monitor.check()

@@ -56,7 +56,8 @@ atb train cloud BTCUSDT --provider local --days 30 --epochs 10
 3. Poll for completion and collect metrics (skipped with `--no-wait`).
 4. Download artifacts from S3 and sync into `src/ml/models/{SYMBOL}/price/`.
 5. Optionally promote the bundle into `basic/` with `atb train cloud-promote`
-   (live strategies load `basic/latest`; cloud sync never touches it).
+   (live strategies load `basic/latest`; cloud sync never touches it, and leaves
+   `price/latest` alone too unless `--set-latest` is passed).
 
 ## Modules
 

@@ -1604,7 +1604,9 @@ class DatabaseManager:
             return [
                 {
                     "id": trade.id,
-                    "trade_id": trade.id,  # Trade model uses 'id' as primary key
+                    # Exchange order that closed the trade; the only exchange-side
+                    # identifier the trades table stores.
+                    "order_id": trade.order_id,
                     "symbol": trade.symbol,
                     "side": trade.side.value,
                     "entry_price": float(trade.entry_price),
@@ -1616,6 +1618,48 @@ class DatabaseManager:
                 }
                 for trade in trades
             ]
+
+    def get_known_exchange_order_ids(self, symbol: str, since: datetime) -> set[str]:
+        """Exchange order IDs already recorded for a symbol since a date.
+
+        Unions ``trades.order_id`` (exit orders) with ``orders.exchange_order_id``
+        (entry, stop-loss and exit orders) across ALL sessions: exchange order IDs
+        are globally unique, and a restart opens a new session, so a session-scoped
+        lookup would let the same fills be recovered again.
+
+        Args:
+            symbol: Trading pair symbol
+            since: Lower bound (aware datetimes are converted to naive UTC, the
+                storage convention for these columns)
+
+        Returns:
+            Set of exchange order ID strings.
+        """
+        if since.tzinfo is not None:
+            since = since.astimezone(UTC).replace(tzinfo=None)
+
+        with self.get_session() as session:
+            trade_ids = (
+                session.query(Trade.order_id)
+                .filter(
+                    Trade.symbol == symbol,
+                    Trade.exit_time >= since,
+                    Trade.order_id.isnot(None),
+                )
+                .all()
+            )
+            order_ids = (
+                session.query(Order.exchange_order_id)
+                .filter(
+                    Order.symbol == symbol,
+                    # Wider than the trade bound: an order placed before the window
+                    # can still fill inside it.
+                    Order.created_at >= since - timedelta(days=1),
+                    Order.exchange_order_id.isnot(None),
+                )
+                .all()
+            )
+            return {str(row[0]) for row in trade_ids} | {str(row[0]) for row in order_ids}
 
     def log_account_snapshot(
         self,
@@ -1904,6 +1948,21 @@ class DatabaseManager:
                     exc_info=True,
                 )
                 raise
+
+    def get_open_position_refs(self, session_id: int | None = None) -> list[dict]:
+        """Lightweight OPEN-position listing: ``id``, ``symbol`` and ``strategy`` only.
+
+        Unlike ``get_active_positions`` it loads no orders, so it is cheap enough
+        to run every reconciliation cycle.
+        """
+        with self.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
+            query = session.query(Position.id, Position.symbol, Position.strategy_name).filter(
+                Position.status == PositionStatus.OPEN
+            )
+            effective_session_id = session_id or self._current_session_id
+            if effective_session_id:
+                query = query.filter(Position.session_id == effective_session_id)
+            return [{"id": row[0], "symbol": row[1], "strategy": row[2]} for row in query.all()]
 
     def get_active_positions(self, session_id: int | None = None) -> list[dict]:
         """Get all active positions with their associated orders."""

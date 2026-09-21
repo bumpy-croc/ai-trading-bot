@@ -53,7 +53,11 @@ from .exceptions import (
 )
 from .features.pipeline import FeaturePipeline
 from .features.selector import FeatureSelector
-from .inference_context import InferenceContext, get_inference_context
+from .inference_context import (
+    InferenceContext,
+    get_inference_context,
+    is_unscoped_in_live_process,
+)
 from .models.onnx_runner import ModelPrediction
 from .models.registry import PredictionModelRegistry, StrategyModel
 from .utils.caching import PredictionCacheManager
@@ -940,6 +944,10 @@ class PredictionEngine:
         cannot block indefinitely on a hung model.
         """
         if get_inference_context() is InferenceContext.LIVE:
+            return self.config.live_inference_timeout
+        # Fail closed: a live-process thread that never chose a policy must
+        # not infer without a deadline.
+        if is_unscoped_in_live_process():
             return self.config.live_inference_timeout
         return None
 

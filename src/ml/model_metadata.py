@@ -16,6 +16,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from src.ml.target_types import PRICE_SCALE_TARGET_TYPES, TARGET_TASK_TYPES
+
 logger = logging.getLogger(__name__)
 
 ROLLING_MINMAX = "rolling_minmax"
@@ -83,7 +85,15 @@ def uses_rolling_minmax_features(metadata: dict[str, Any]) -> bool:
     target_type = training_params.get("target_type")
     if target_type is None:
         return True
-    return str(target_type).lower() == "regression"
+    normalized_target = str(target_type).lower()
+    if normalized_target not in TARGET_TASK_TYPES:
+        logger.warning(
+            "Unknown target_type %r in bundle metadata; treating as non-price output. "
+            "Register it in task_types.TARGET_TASK_TYPES (and PRICE_SCALE_TARGET_TYPES if "
+            "it is price-scale).",
+            target_type,
+        )
+    return normalized_target in PRICE_SCALE_TARGET_TYPES
 
 
 def missing_prediction_keys(metadata: dict[str, Any]) -> list[str]:
