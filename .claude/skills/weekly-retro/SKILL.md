@@ -23,7 +23,7 @@ checklist line, a new tripwire.
    **Known-weak mechanism — weight it accordingly.** `git log --follow` on this file shows exactly
    **two** non-retro appends in its whole life (`aee03a26`, and `3f667afe`/#1060 — which was then
    lost when the retro cleared `develop`'s copy while the item sat on a branch). Every other commit
-   is a retro clearing it. Seven consecutive empty windows is not evidence of a quiet fleet; it is
+   is a retro clearing it. Eight consecutive empty windows is not evidence of a quiet fleet; it is
    evidence that the intended writers use GH issues instead. Sweep `--label source:automation`
    issues opened in the window alongside this file.
    **Before clearing, `gh pr list --state open` and check every open PR's file list for
@@ -45,7 +45,10 @@ checklist line, a new tripwire.
    `install_merge_drivers.py --check`, `install_worktree_shim.py --check`) instead of trusting last
    week's issue; installing is an environment action, not a code change, so **run the installer
    yourself** if one has drifted (LESSONS §3). Invoke the venv interpreter directly — the `make`
-   targets call bare `python`, which does not exist on this machine. Earned: #1026
+   targets call bare `python`, which does not exist on this machine. **But first diff the installed
+   artifact against `git show origin/develop:<source>`:** the installers read their source from the
+   primary checkout, and on 2026-09-21 a false `DRIFT` would have downgraded the fixed hook (#1260).
+   Earned: #1026
    closed unmerged 2026-07-21 after the 07-20 retro deliberately did not reproduce it; LESSONS §2.9.
    **If that PR is still open: `git reset --hard origin/<its-branch>` and build this retro on top of
    it** — this PR then supersedes it and merges whether or not the old one lands, instead of adding a
@@ -58,6 +61,15 @@ checklist line, a new tripwire.
    7 days green. That is a pass on input 0b and a delivery failure at the same time, and only the latency
    shows it. Apply the same read to the whole queue — a week in which nothing merged until the human
    appeared is a finding regardless of how healthy each individual PR looks (LESSONS §2.9 rule (f)).
+0c. **Is the distillate actually LOADED?** Merged is not read. Sessions load LESSONS, skills,
+   `/commands` and agents from the primary checkout, and nothing updates it (LESSONS §3, #1260):
+   `git -C /Users/alex/Sites/ai-trading-bot rev-list --count HEAD..origin/main` and
+   `git -C /Users/alex/Sites/ai-trading-bot diff --stat HEAD origin/main -- .claude/ CLAUDE.md CODE.md`.
+   Non-zero means every retro since that commit shipped into a file nobody reads. **Lead the
+   completion summary with it**, above this week's content. Read this skill itself from
+   `git show origin/develop:.claude/skills/weekly-retro/SKILL.md`, not from the path the task prompt
+   names. Earned: 2026-09-21, primary frozen at `8da478a3` since 2026-08-24, 10 files and 772 lines
+   of three retros' output unloaded.
 1. **log.md** — the week's entries end to end, not just the tail. **A week with no entries is a
    finding, not a quiet week** — cross-check against the scheduled-task traces (input 6): if the
    monitors ran and the log is empty, findings were surfaced and dropped (LESSONS §2.10).
@@ -129,6 +141,10 @@ checklist line, a new tripwire.
    - **Add `hit your session limit`** (the 5-hour rolling cap, rendered
      `You've hit your session limit · resets <time>`) to the quota strings — it contains neither
      "weekly" nor "usage" and killed the 2026-09-03 `prune-worktrees` slot. Full list: LESSONS §2.15.
+   - **`list_task_runs` ids are not transcript filenames.** Its `local_<uuid>` session ids match no
+     `*.jsonl` name; read a run through `mcp__ccd_session_mgmt__list_events` with that id, or find
+     the file by first timestamp. And its `status: succeeded` is not evidence: the 2026-09-14
+     `prune-worktrees` run is `succeeded` after 71s with **zero messages**. An empty run is a MISS.
 7. **Model scoreboard** — new rows this week; stale `latest` claims.
 8. **Outstanding pre-merge asks from previous retros.** For every "requested change / blocking
    observation" this retro or a previous one left on someone else's PR, check the **merged tree**
