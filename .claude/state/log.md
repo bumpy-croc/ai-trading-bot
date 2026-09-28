@@ -2000,3 +2000,137 @@ promotion gate, but the retrain prompt's step 4 still uses the degenerate "2 of 
 Ref: #1260, #1261, #1262, #1127, #1165, #1190, #1143, #1215, #1233, #1241, #1146, #1147, #1090/#1099,
 #1224/#1199/#1221; promotes `be451698`…`f5ccd794`; PM session `b3015dfb`; [D-2026-09-15-01],
 [D-2026-09-14-01]; LESSONS §2.1/§2.11/§2.16/§3.
+
+## [D-2026-09-28-01] 2026-09-28 ~11:00 · note · daemon(weekly-retro)
+**Weekly retro, window 2026-09-21 10:15Z → 2026-09-28. Distillate-only PR to `develop`. It is
+built on top of last week's retro PR #1263 and supersedes it.**
+
+**Headline: nothing merged to `develop` for seven days, including last week's retro.** PR #1263
+has been `CLEAN` and CI-green since 2026-09-21 10:06Z. It is the only open PR in the repo, it has no
+review, and it did not merge. `develop`'s last commit is still `68f04d70` (09-20 23:02Z). The only
+merge anywhere in the window was prod promote **#1264** (`904e038e`, 09-21 15:05Z), which the PM
+daemon ran after one two-word human message ("Promote prod"). After that the daemon session was
+idle, and it was torn down 09-23 17:22Z. Throughput again equalled human attendance (§2.9 rule (f)).
+This time the attendance was one message. If this PR also sits unmerged, it will be the second
+consecutive stranded retro PR.
+
+**Backfill record, written because nobody else wrote it:** promote #1264 was a parity promote of
+`develop @ 68f04d70` to `main` (`904e038e`), with 16 commits: the #1236/#1235/#1239/#1247/#1244/#1254/
+#1250/#1248/#1237 live-trading fixes, #1251/#1255/#1257/#1241 ML/strategy fixes, and
+#1246/#1238/#1243. The daemon's transcript shows it verified the Railway deploy and DB health.
+`main` and `develop` trees are identical as of this retro. It wrote no `log.md` entry, so that is
+**6 of the last 7 promotes unrecorded**. The `deploy-prod` "Record" section that requires one is on
+#1263, which is unmerged, and the daemon loads skills from the frozen primary anyway.
+→ LESSONS **§2.9 rule (i)**.
+
+**Input 0 / 0b / 0c.** AGENDA was empty for the ninth window. Its disposition note was updated,
+and #1099 is still open. #1263 is stranded, handled by rebuilding on it (above). Its three issues
+had **zero** non-standup activity in 7 days: **#1260** (p1, primary frozen), **#1261** (p1, three
+money-path review findings shipped unresolved), **#1262** (p2, retrain gate). The standups
+re-sighted #1260 on 09-22 (127 behind `origin/main`) and 09-26. **Input 0c:** the primary is still
+`8da478a3`, now **33 days** frozen and 127 commits behind `origin/main`. So nothing distilled by the
+08-31, 09-07, 09-14 or 09-21 retros has been loaded by any scheduled task or by the PM. Install
+checks: merge driver `ok`, shim `ok`, hooks `DRIFT`. The hooks result is false again: the installed
+hook is byte-identical to `origin/develop:.githooks/pre-push`, and the checker compares against the
+stale primary. **Installer not run**, per §3.
+
+**Input 1: log coverage.** `develop`'s `log.md` ends at `[D-2026-09-15-01]`. The only later entry is
+#1263's retro, which is on a branch. In this window, standups were NOMINAL apart from comments.
+Their durable artifacts were GH comments on #1127 (09-20), #1230 (09-25) and #1260 (09-22, 09-26),
+plus issue #1265 (09-28). The one material action, promote #1264, is recorded only by this backfill.
+
+**Input 2: incidents.** None opened. Prod was healthy all window according to every graded standup.
+#1230 is still open (the `2026-08-24T1200` incident file still says `status: open`), and the 09-25
+standup re-sighted it. #1127 (p0): no owner, no activity since the 09-20 standup's yes/no question,
+which nobody answered.
+
+**Input 3: agent failures.** In the PM session's in-window span, no `--no-verify`, no forced
+worktree removal and no secrets printed. `prune-worktrees` removed 9+8, 7+6, 6+6 and 3
+worktrees/branches with clean-tree + merged-SHA checks and zero `--force`. The 09-21 standup's
+credential exposure happened just before this window, and last week's summary escalated it. I
+cannot verify whether it has been rotated, so it is re-escalated below.
+
+**Input 4: prediction vs outcome.**
+- 09-21 retro, "16 unpromoted commits waiting": **acted on within 5h** (#1264). Correct call, and
+  it was answered.
+- 09-21 retro, "#1233 and #1262 before the 09-27 retrain": **untested**. The retrain never ran
+  (below), and neither issue moved. Prediction: the 10-04 retrain will block on the stale ECR image
+  again (#1233).
+- 09-21 retro, "rules take effect once #1263 merges": **wrong in practice**. It did not merge, and
+  the first action its new rule covered (a promote record) was missed 5h later.
+- 09-21 retro, "Require conversation resolution" Board item: no evidence it was actioned.
+- `daily-trading-standup` 09-28 / #1265: "DNS outage in the host environment, not a bug in either
+  task" is **half right**. See input 6.
+
+**Input 5: experiments.** None, for the fifth window in a row. Nothing in `docs/research/` since
+2026-08-25 (34 days). The #1106 flag is still OFF with no decision on it.
+
+**Input 6: scheduled-task audit (registry + slots + endings).** 22 directories, 16 registered, 4
+enabled. The six unregistered directories are the retirements Alex confirmed 08-13, so no drift.
+The newer one-offs (`close-1089…`, `morning-reminder…`, `remind-57…`) all fired on
+09-22 and are `hands-up-education` tasks. **15 slots: 11 HIT, 3 MISS, 1 this session.**
+- Standup **6/7**. The 09-27 run launched at 12:31:57Z (4.5h late), hit `ENOTFOUND`
+  (`isNetworkDown: true`) before any tool call, and was a MISS. The 09-24 and 09-26 runs spent
+  1h54m and 6h06m in `StreamSuspended` ("computer was asleep") retries, then finished, so both are
+  HIT. The 09-26 brief landed about 8h after its slot. Fire times drifted: 08:07, 08:36, 10:02, 12:31.
+- `prune-worktrees` **4/5**. The 09-25 run (`2a1db6fe`) retried through sleep, then died on
+  `401 OAuth access token has expired`. That is a MISS, although the registry lists it as
+  `succeeded`. The 09-26 run's apparent 39h duration was a stray background check reporting late;
+  its real work finished at 10:00Z.
+- `weekly-model-retrain` **0/1**. It launched in the same second as the 09-27 standup and failed the
+  same way. It made zero tool calls and left nothing half-done. **No retrain this week.**
+- `weekly-retro` 09-21 HIT (produced #1263).
+Tasks sharing a launch second, after a drift that started 09-24, are the catch-up signature. The
+machine was asleep first and woke without network second, and a failed catch-up gets no retry.
+→ LESSONS **§2.15** (new bullet: 401 signature, sleep retries are not misses, same-second launch
+means catch-up), `weekly-retro` input 6. Corrected on #1265 by comment.
+
+**Input 7: model scoreboard.** #1264 took #1241's removal of the stray `ETHUSDT/price/latest` to
+`main`. `git ls-tree origin/main` confirms it is gone, and only `ETHUSDT/basic/latest` remains
+(unchanged). No promotion happened, so no `model-promotions.md` row is owed. Tripwire table unchanged.
+
+**Input 8: outstanding pre-merge asks.** The 09-07 ask to drop `ETHUSDT/price/latest` is **done in
+production** as of 09-21 15:05Z. Closed out.
+
+**Issue hygiene, not actioned here (the PM should check each against its merged diff and close it):**
+#1264's body lists #1135, #1146, #739, #714, #1194, #1217, #1214, #1201, #1219, #1005, #1023,
+#1154, #1003 and others as fixed. Those fixes are now in production, but the issues are still open
+because the PRs used parentheses instead of `Closes #N`. 99 open issues, **0 assigned**.
+
+**Diffs shipped (this PR, on top of #1263's):**
+- `.claude/LESSONS.md`: **§2.9 rule (i)** (a rule on an open PR binds nobody; the summary must say
+  it is not in force); **§2.15** new bullet (401 signature; sleep retries; same-second launch means
+  catch-up, and a failed catch-up gets no retry).
+- `.claude/skills/weekly-retro/SKILL.md`: input 6 adds the 401 signature, the sleep-retry grading
+  rule and the catch-up note.
+- `.claude/skills/weekly-retro/AGENDA.md`: cleared.
+- Plus everything in #1263: LESSONS §2.1/§2.11/§2.16/§3, `pm-session-boot` (l), `deploy-prod`
+  Record section, `weekly-retro` 0b/0c/6, and `[D-2026-09-21-01]`.
+
+**Issues filed:** none. #1265 already covers the scheduled-task failure and got a correcting
+comment. Every other finding is an existing open issue (#1260, #1261, #1262, #1233, #1127, #1230,
+#1099). Per §2.11, re-filing them would add nothing.
+
+**Calibration.**
+- `daily-trading-standup`: 6/7. It kept the right discipline on a frozen checkout: it read ratified
+  config via `origin/main` and said so on #1260. It filed #1265 on its own miss, which is the first
+  time the watchdog has reported its own gap. Its diagnosis there was over-confident ("not a bug",
+  DNS only) and missed the sleep drift in its own run history.
+- `prune-worktrees`: 4/5, safe, effect verified (worktrees cut to 1 + this retro's).
+- `weekly-model-retrain`: 0/1 (environment failure, not the actor's fault).
+- PM daemon `b3015dfb`: one action, well executed and verified, and not recorded. It is the same
+  pattern as the last two windows, and the rule meant to fix it has still not been loaded.
+- `daemon(weekly-retro)` 09-21: 1 correct, 1 wrong, 2 untested (above).
+
+**For the Board (not decided here), in order of leverage:**
+1. **Merge this PR** (it carries #1263). Until it merges and the primary is pulled, none of the
+   last five retros' rules reach any session.
+2. **#1260: `git -C /Users/alex/Sites/ai-trading-bot pull --ff-only`** (only an untracked file is
+   present) and name who keeps it current.
+3. Rotate the prod DB credential printed by the 09-21 standup (escalated 09-21; no evidence of
+   rotation).
+4. **#1233** (ECR image) before the 10-04 retrain, or that retrain blocks too.
+5. #1127 (p0): answer the 09-20 yes/no.
+6. #1261 (p1): three money-path findings in production, unowned for 7 days.
+Ref: PR #1263, #1264 (`904e038e`), #1265, #1260, #1261, #1262, #1233, #1127, #1230, #1099;
+[D-2026-09-21-01], [D-2026-09-15-01]; LESSONS §2.9(i)/§2.15.

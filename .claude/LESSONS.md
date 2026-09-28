@@ -508,6 +508,20 @@ recovered them.
   **Corollary:** report a drain by its *composition*, not its count. "7 PRs merged" and "7 PRs merged
   in 25 minutes, two of them past an unresolved blocking review" are different weeks.
   Earned: the 2026-09-13 drain (#1124/#1129/#1133/#1134/#1130/#1137/#1139); §1.16 update; #1135.
+- **Rule (i) — a rule on an open PR binds nobody, and it gets tested before it lands.** The
+  2026-09-21 retro (PR #1263, `CLEAN` at 10:06Z) added a "Record" section to `deploy-prod`: every
+  production promote gets a `log.md` entry. At 14:55Z the same day the PM daemon got a two-word
+  message, "Promote prod", ran the full `deploy-prod` flow for #1264, verified the deploy, and wrote
+  no record. That makes 6 of the last 7 promotes unrecorded. The daemon was not at fault: the rule
+  was on an unmerged branch, and the daemon's skills load from a primary checkout frozen at
+  2026-08-24 (§3, #1260). Two layers of "not loaded" stacked up. #1263 then sat unmerged for the
+  whole following week, the only open PR in the repo, with `develop` getting **zero** merges.
+  **Rule:** when a retro PR adds a rule for a specific recurring action (a promote, a merge, an
+  incident close), the completion summary names that action and says the rule is **not in force**
+  until the PR merges **and** the primary checkout is pulled. The retro cannot make either happen,
+  so it has to say this to the human instead of treating the rule as shipped.
+  Earned: 2026-09-21 → 09-28; PR #1263 (stranded 7 days), promote #1264 (`904e038e`, unrecorded);
+  #1260.
 
 ### 2.10 A monitoring run that writes nothing durable did not happen
 Between 2026-07-20 and 2026-07-27 the scheduled fleet ran ~25 times (`daily-trading-standup` 8/8
@@ -779,6 +793,28 @@ old"*) could not have said anything else, for two independent reasons:
     not when the string appears anywhere in the file.
   Earned: the 2026-09-03 `prune-worktrees` session-limit death (masked downstream by 09-04's healthy
   5-worktree cleanup, and invisible to `lastRunAt`, which advanced to 09-04).
+
+- **Two more signatures, and a slow run is not a failed run (2026-09-28 audit).** In the
+  09-21→28 window, runs failed or stretched in three distinguishable ways:
+  - **`401 OAuth access token has expired. Re-authenticate to continue.`** This is a MISS.
+    `prune-worktrees` on 09-25 (transcript `2a1db6fe`, under the `hands-up-education` project dir)
+    retried through sleep for 45 minutes, then died on it with no report. The registry lists it
+    as `succeeded`. Add it to the grep list.
+  - **`Connection lost while your computer was asleep` (`StreamSuspended`).** This is **not** a
+    miss by itself. The 09-24 and 09-26 standups ran 1h54m and 6h06m, retrying every ~15-20 minutes
+    and doing all their work in the last few minutes. Both ended with a complete brief, so both are
+    HIT. They are still findings: the 09-26 brief landed about 8 hours after its slot, and that is
+    detection latency for the only watchdog. Grade by the last message, then report how late it
+    landed.
+  - **Tasks launching within the same second means catch-up, whatever error follows.** On 09-27 the
+    standup and `weekly-model-retrain` launched 221ms apart at 12:31:57Z, 4.5h and 5.3h after their
+    slots, and both died on `ENOTFOUND` (`isNetworkDown: true`) before any tool call. #1265 blamed a
+    DNS outage alone. The fire times had been drifting since 09-24 (08:07 → 08:36 → 10:02 → 12:31),
+    so the machine was asleep first and woke without network second. **No retry follows a failed
+    catch-up:** the slot is gone, and for a weekly task the whole week is gone (no retrain this
+    week). When two tasks share a launch second, look for the sleep drift before accepting a
+    network-only diagnosis.
+  Earned: 2026-09-24/25/26/27 runs; #1265.
 
 ### 2.16 Detection plus escalation, with no scheduled actor, is not a control
 Production latched **close-only** on 2026-08-27 08:35 UTC and was still latched on 2026-08-31 —

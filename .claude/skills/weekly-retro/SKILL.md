@@ -145,6 +145,12 @@ checklist line, a new tripwire.
      `*.jsonl` name; read a run through `mcp__ccd_session_mgmt__list_events` with that id, or find
      the file by first timestamp. And its `status: succeeded` is not evidence: the 2026-09-14
      `prune-worktrees` run is `succeeded` after 71s with **zero messages**. An empty run is a MISS.
+   - **Add `401 OAuth access token has expired`** to the grep list. It killed the 2026-09-25
+     `prune-worktrees` run, which the registry lists as `succeeded`. **`computer was asleep`
+     (`StreamSuspended`) retries are not a miss** if the run ends with its report (the 09-26 standup
+     took 6h and finished). Record how late the report landed, not just whether it landed.
+     Tasks launching within the same second are a catch-up batch, and a catch-up that fails gets no
+     retry (LESSONS §2.15, 09-28 bullet).
 7. **Model scoreboard** — new rows this week; stale `latest` claims.
 8. **Outstanding pre-merge asks from previous retros.** For every "requested change / blocking
    observation" this retro or a previous one left on someone else's PR, check the **merged tree**
