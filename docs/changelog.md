@@ -17,8 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trained bundle, so any local run (and `atb train cloud --provider local`) published a candidate to
   the registry, which serves every `latest` as production. `TrainingConfig.set_latest` (default
   off) now gates the symlink; opt in with `atb train model|price --set-latest`, or
-  `atb live-control train --auto-deploy`, which still validates through the #801 gate and rolls back
-  on failure. `atb train cloud --set-latest` now also covers the local provider. A bare
+  `atb live-control train --auto-deploy`, which trains without touching `latest` and then gates the
+  new bundle (in the registry namespace it was written to) through the #801 gate; a failed first
+  model is left with no `latest` instead of being served. `atb train cloud --set-latest` now also covers the local provider. A bare
   `live-control train` no longer leaves an unvalidated `latest` behind; promote with `deploy-model`.
   A new `model-promotion-check` workflow (`tools/check_promotion_log.py`) fails a PR whose
   `docs/research/model-promotions.md` adds a `NO CHANGE` entry while a `src/ml/models/**/latest`

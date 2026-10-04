@@ -19,7 +19,8 @@ import sys
 
 PROMOTION_LOG = "docs/research/model-promotions.md"
 NO_CHANGE_HEADING = re.compile(r"^\+#{1,6}\s.*\bNO CHANGE\b")
-LATEST_POINTER = re.compile(r"(^|/)models/.+/latest$")
+HEADING_SYMBOL = re.compile(r"\b([A-Z0-9]{3,})/[a-z_]+\b")
+LATEST_POINTER = re.compile(r"(^|/)models/(?P<symbol>[^/]+)/[^/]+/latest$")
 
 
 def added_no_change_headings(log_diff: str) -> list[str]:
@@ -33,18 +34,30 @@ def moved_latest_pointers(changed_paths: list[str]) -> list[str]:
 
 
 def violations(log_diff: str, changed_paths: list[str]) -> list[str]:
-    """Describe each contradiction between the log's NO CHANGE claims and the diff."""
-    if not added_no_change_headings(log_diff):
+    """Describe each contradiction between the log's NO CHANGE claims and the diff.
+
+    A pointer is only a contradiction for a symbol the log says was left alone, so
+    a PR may record ETHUSDT NO CHANGE and promote BTCUSDT. A heading with no
+    parsable ``SYMBOL/type`` covers every symbol. The model type is not matched:
+    a candidate trained into ``price/`` was once shipped under a ``basic`` entry.
+    """
+    headings = added_no_change_headings(log_diff)
+    if not headings:
         return []
-    return [
-        f"{path} changed in a PR that records a NO CHANGE promotion"
-        for path in moved_latest_pointers(changed_paths)
-    ]
+    symbols = {m.group(1) for heading in headings if (m := HEADING_SYMBOL.search(heading))}
+    covers_all = len(symbols) < len(headings)
+    problems = []
+    for path in moved_latest_pointers(changed_paths):
+        match = LATEST_POINTER.search(path)
+        if match and (covers_all or match.group("symbol") in symbols):
+            problems.append(f"{path} changed in a PR that records a NO CHANGE promotion")
+    return problems
 
 
 def _git(*args: str) -> str:
+    """Run git and return stdout; raises CalledProcessError on failure."""
     return subprocess.run(  # nosec B603 B607 — fixed git argv, ref comes from the CI workflow
-        ["git", *args], check=True, capture_output=True, text=True
+        ["git", *args], check=True, capture_output=True, text=True, timeout=60
     ).stdout
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -53,7 +54,7 @@ def _diagnostics_from_args(args) -> DiagnosticsOptions:
     )
 
 
-def _print_promotion_status(version_dir, set_latest: bool) -> None:
+def _print_promotion_status(version_dir: Path, set_latest: bool) -> None:
     """Tell the operator whether the trained bundle took the production pointer."""
     if set_latest:
         print(f"'latest' now points to {version_dir.name}.")
@@ -65,16 +66,26 @@ def _print_promotion_status(version_dir, set_latest: bool) -> None:
 
 
 def train_model_main(args) -> int:
-    """Train a combined model."""
+    """Train a combined model and return the exit code."""
+    return train_model(args)[0]
+
+
+def train_model(args) -> tuple[int, Path | None]:
+    """Train a combined model.
+
+    Returns:
+        ``(exit_code, bundle_dir)``; ``bundle_dir`` is the version directory the
+        run wrote, or None when training failed or produced no artifacts.
+    """
     if not _TENSORFLOW_AVAILABLE:
         print("❌ tensorflow is required for model training but is not installed.")
         print("Install it with: pip install tensorflow")
-        return 1
+        return 1, None
     try:
         start_date, end_date = _parse_dates(args.start_date, args.end_date)
     except ValueError as exc:
         print(f"❌ {exc}")
-        return 1
+        return 1, None
 
     config = TrainingConfig(
         symbol=args.symbol,
@@ -110,7 +121,7 @@ def train_model_main(args) -> int:
     result: TrainingResult = run_training_pipeline(ctx)
     if not result.success:
         print(f"❌ Training failed: {result.metadata.get('error')}")
-        return 1
+        return 1, None
 
     print(f"✅ Training complete in {result.duration_seconds:.1f}s")
     eval_results = result.metadata.get("evaluation_results", {})
@@ -127,7 +138,7 @@ def train_model_main(args) -> int:
         if artifacts.plot_path:
             print(f"Training plot: {artifacts.plot_path}")
         _print_promotion_status(artifacts.directory, config.set_latest)
-    return 0
+    return 0, artifacts.directory if artifacts else None
 
 
 # --- Price-only training (legacy path) ---------------------------------------------------------
@@ -220,11 +231,20 @@ def _download_price_frame(symbol: str, timeframe: str, start: str, end: str) -> 
 
 
 def train_price_model_main(args) -> int:
-    """Train a price model."""
+    """Train a price model and return the exit code."""
+    return train_price_model(args)[0]
+
+
+def train_price_model(args) -> tuple[int, Path | None]:
+    """Train a price model.
+
+    Returns:
+        ``(exit_code, bundle_dir)``; ``bundle_dir`` is None when training failed.
+    """
     if not _TENSORFLOW_AVAILABLE:
         print("❌ tensorflow is required for model training but is not installed.")
         print("Install it with: pip install tensorflow")
-        return 1
+        return 1, None
 
     # Configure GPU early
     device_name = configure_gpu()
@@ -238,7 +258,7 @@ def train_price_model_main(args) -> int:
         start_date, end_date = _parse_dates(args.start_date, args.end_date)
     except ValueError as exc:
         print(f"❌ {exc}")
-        return 1
+        return 1, None
 
     start_str = start_date.strftime("%Y-%m-%dT00:00:00Z")
     end_str = end_date.strftime("%Y-%m-%dT23:59:59Z")
@@ -247,13 +267,13 @@ def train_price_model_main(args) -> int:
         price_df = _download_price_frame(args.symbol, args.timeframe, start_str, end_str)
     except Exception as exc:  # noqa: BLE001
         print(f"❌ Failed to download price data: {exc}")
-        return 1
+        return 1, None
 
     try:
         X, y, feature_cols = _prepare_price_only_sequences(price_df.astype(float), sequence_length)
     except Exception as exc:  # noqa: BLE001
         print(f"❌ Failed to prepare sequences: {exc}")
-        return 1
+        return 1, None
 
     split_idx = int(len(X) * 0.8)
     X_train, X_val = X[:split_idx], X[split_idx:]
@@ -342,7 +362,7 @@ def train_price_model_main(args) -> int:
 
     print(f"✅ Saved bundle to {bundle_dir}")
     _print_promotion_status(bundle_dir, set_latest)
-    return 0
+    return 0, bundle_dir
 
 
 def train_price_only_model_main(args) -> int:

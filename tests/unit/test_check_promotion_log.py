@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 
@@ -31,6 +32,17 @@ class TestViolations:
         assert (
             check.violations(NO_CHANGE_DIFF, ["src/ml/models/ETHUSDT/price/v2/metadata.json"]) == []
         )
+
+    def test_other_symbol_may_be_promoted_next_to_a_no_change_entry(self):
+        assert check.violations(NO_CHANGE_DIFF, ["src/ml/models/BTCUSDT/basic/latest"]) == []
+
+    def test_model_type_is_not_matched(self):
+        """#1130 shipped a price/latest under an entry about basic."""
+        assert check.violations(NO_CHANGE_DIFF, [LATEST]) != []
+
+    def test_heading_without_a_symbol_covers_every_symbol(self):
+        diff = "+## 2026-10-04 — weekly retrain — NO CHANGE\n"
+        assert check.violations(diff, ["src/ml/models/BTCUSDT/basic/latest"]) != []
 
     def test_real_promotion_may_move_latest(self):
         assert check.violations(PROMOTION_DIFF, [LATEST]) == []
@@ -61,10 +73,14 @@ class TestMainAgainstARealRepo:
             ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", *args],
             check=True,
             capture_output=True,
+            env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
         )
 
     @pytest.fixture
     def repo(self, tmp_path, monkeypatch):
+        # check.main shells out to git too: scrub hook-injected GIT_* (GH #1148)
+        for key in [k for k in os.environ if k.startswith("GIT_")]:
+            monkeypatch.delenv(key)
         self._git(tmp_path, "init", "-q", "-b", "base")
         (tmp_path / "docs/research").mkdir(parents=True)
         (tmp_path / "docs/research/model-promotions.md").write_text("# Model promotions\n")

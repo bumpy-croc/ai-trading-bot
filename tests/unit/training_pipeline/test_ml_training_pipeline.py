@@ -399,6 +399,22 @@ class TestRunMetaLabelPipeline:
         assert latest_link.is_symlink()
         assert latest_link.resolve() == result.artifact_paths.directory.resolve()
 
+    @patch("src.ml.training_pipeline.pipeline.point_latest_at")
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_failed_latest_update_fails_the_run_when_requested(
+        self, mock_download, mock_signal_cls, mock_point, tmp_path
+    ):
+        mock_download.return_value = self._synthetic_price_df()
+        mock_signal_cls.return_value = self._StubPrimarySignalGenerator()
+        mock_point.side_effect = RuntimeError("Failed to update 'latest' symlink")
+        ctx = self._make_ctx(tmp_path, set_latest=True)
+
+        result = run_training_pipeline(ctx)
+
+        assert result.success is False
+        assert "latest" in result.metadata["error"]
+
     @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
     @patch("src.ml.training_pipeline.pipeline.download_price_data")
     def test_primary_signal_generator_constructed_with_config_fields(

@@ -138,12 +138,38 @@ class TestTrainModelMainSetLatest:
         assert self._config_for(_base_args()).set_latest is False
 
     def test_missing_attribute_does_not_set_latest(self):
-        args = _base_args()
-        del args.model_type
+        args = _base_args(set_latest=True)
+        del args.set_latest
         assert self._config_for(args).set_latest is False
 
     def test_flag_reaches_training_config(self):
         assert self._config_for(_base_args(set_latest=True)).set_latest is True
+
+    def test_train_model_returns_the_bundle_dir(self):
+        from cli.commands.train_commands import train_model
+
+        version_dir = Path("/registry/BTCUSDT/basic/2024-01-01_00h_v1")
+        with (
+            patch("cli.commands.train_commands.run_training_pipeline") as mock_run,
+            patch("cli.commands.train_commands._TENSORFLOW_AVAILABLE", True),
+        ):
+            mock_run.return_value = MagicMock(
+                success=True,
+                duration_seconds=1.0,
+                metadata={"evaluation_results": {}},
+                artifact_paths=MagicMock(directory=version_dir),
+            )
+            assert train_model(_base_args()) == (0, version_dir)
+
+    def test_train_model_failure_returns_no_bundle(self):
+        from cli.commands.train_commands import train_model
+
+        with (
+            patch("cli.commands.train_commands.run_training_pipeline") as mock_run,
+            patch("cli.commands.train_commands._TENSORFLOW_AVAILABLE", True),
+        ):
+            mock_run.return_value = MagicMock(success=False, metadata={"error": "boom"})
+            assert train_model(_base_args()) == (1, None)
 
     @pytest.mark.parametrize("set_latest", [True, False])
     def test_promotion_status_is_reported(self, set_latest, capsys):
