@@ -84,6 +84,7 @@ class RegimeHandler:
         initial_strategy_name: str,
         check_frequency: int = REGIME_CHECK_FREQUENCY,
         warmup_candles: int = REGIME_WARMUP_CANDLES,
+        model_version: str | None = None,
     ) -> None:
         """Initialize regime handler.
 
@@ -93,12 +94,15 @@ class RegimeHandler:
             initial_strategy_name: Name of the initial strategy.
             check_frequency: How often to check regime (in candles).
             warmup_candles: Minimum candles before first check.
+            model_version: The run's model pin, applied to every switched-in
+                strategy. None means the run is unpinned.
         """
         self.regime_switcher = regime_switcher
         self.strategy_manager = strategy_manager
         self.initial_strategy_name = initial_strategy_name
         self.check_frequency = check_frequency
         self.warmup_candles = warmup_candles
+        self.model_version = model_version
 
         self.regime_history: list[dict] = []
         self.strategy_switches: list[dict] = []
@@ -284,6 +288,11 @@ class RegimeHandler:
         it replaces. A missing bundle fails the load (returns None, no switch)
         rather than falling back to the factory's 1h/default-symbol model.
 
+        Under a model pin the same version is requested from the factory, and
+        a factory that cannot honor it (no ``model_version`` parameter) fails
+        the load too: the alternative is a switched-in strategy that silently
+        scores with ``latest`` inside a "pinned" run.
+
         Args:
             strategy_name: Name of strategy to load.
             symbol: Traded symbol.
@@ -322,9 +331,19 @@ class RegimeHandler:
             module_path, factory_name = strategy_factories[strategy_name]
             module = __import__(module_path, fromlist=[factory_name])
             factory_function = getattr(module, factory_name)
-            return call_strategy_factory(factory_function, symbol=symbol, timeframe=timeframe)
+            return call_strategy_factory(
+                factory_function,
+                symbol=symbol,
+                model_version=self.model_version,
+                timeframe=timeframe,
+            )
         except Exception as e:
-            logger.error("Failed to load strategy %s: %s", strategy_name, e)
+            logger.error(
+                "Failed to load strategy %s (model pin %s): %s",
+                strategy_name,
+                self.model_version,
+                e,
+            )
             self._failed_loads.add(load_key)
             return None
 

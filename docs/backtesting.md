@@ -198,6 +198,9 @@ Notes:
   never silently fall back to `latest`. Mainline support: `ml_basic` and
   `hyper_growth`; exam strategies accept `--model-version` via
   `ATB_MODEL_VERSION_OVERRIDE`.
+- Regime switching (`Backtester(enable_regime_switching=True, model_version=...)`) applies the
+  same pin to every switched-in strategy; a switch target that cannot honor it is refused
+  (logged at error level, no switch) rather than built against `latest`.
 - The live trading path is unaffected: it always resolves `latest` and cannot
   be pinned by env var or config.
 
