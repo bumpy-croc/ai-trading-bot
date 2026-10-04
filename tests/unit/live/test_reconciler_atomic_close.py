@@ -214,8 +214,8 @@ def test_filled_exit_crash_mid_close_raises_leaves_position_open_and_retry_reali
 
 
 def test_dedup_collision_closes_position_without_reapplying_pnl(env):
-    """A trade with the same exit order id already exists (an earlier pass) but the position
-    row is still OPEN: the collision must still close the row, and must not re-book the PnL."""
+    """A trade linked to this position already exists (an earlier pass booked it) but the
+    row is still OPEN: the close must still close the row, and must not re-book the PnL."""
     env.db.log_trade(
         symbol="BTCUSDT",
         side="long",
@@ -230,6 +230,7 @@ def test_dedup_collision_closes_position_without_reapplying_pnl(env):
         source=TradeSource.LIVE,
         session_id=env.session_id,
         exit_order_id="sl-dup",
+        position_id=env.position_id,
     )
 
     env.reconciler._close_position_from_filled_sl(env.position, _sl_order("sl-dup"))
@@ -238,6 +239,59 @@ def test_dedup_collision_closes_position_without_reapplying_pnl(env):
     assert _trade_count(env.db, env.session_id) == 1
     assert env.db.get_current_balance(env.session_id) == pytest.approx(SEED_BALANCE)
     assert env.position.order_id not in env.tracker._positions
+
+
+def test_racing_second_close_with_a_new_order_id_is_recognised_as_already_booked(env):
+    """A second closer arriving with a different exit order id (so no unique-key collision)
+    is stopped by the in-transaction duplicate-close check: the row is closed idempotently and
+    the PnL is booked exactly once."""
+    env.reconciler._close_position_from_filled_sl(env.position, _sl_order("sl-first"))
+
+    outcome = env.reconciler._log_reconciliation_trade(
+        position=env.position,
+        entry_price=ENTRY_PRICE,
+        exit_price=SL_PRICE,
+        qty=QUANTITY,
+        gross_pnl=-20.0,
+        exit_fee=0.0,
+        interest_cost=0.0,
+        reason="stop_loss_filled_offline",
+        exit_order_id="sl-second",
+        balance_delta=-20.0,
+    )
+
+    assert outcome.position_closed is True
+    assert outcome.balance is None
+    assert _trade_count(env.db, env.session_id) == 1
+    assert env.db.get_current_balance(env.session_id) == pytest.approx(
+        SEED_BALANCE + (SL_PRICE - ENTRY_PRICE) * QUANTITY
+    )
+
+
+def test_unrelated_order_id_collision_does_not_close_the_row_or_drop_the_pnl(env):
+    """A unique-key collision with a trade that is NOT linked to this position is not proof
+    the PnL was booked: the row must stay OPEN and tracked, not be closed with the PnL lost."""
+    env.db.log_trade(
+        symbol="BTCUSDT",
+        side="long",
+        entry_price=ENTRY_PRICE,
+        exit_price=SL_PRICE,
+        size=SIZE,
+        entry_time=datetime(2025, 1, 1, tzinfo=UTC),
+        exit_time=datetime.now(UTC),
+        pnl=-20.0,
+        exit_reason="stop_loss",
+        strategy_name="TestStrategy",
+        source=TradeSource.LIVE,
+        session_id=env.session_id,
+        exit_order_id="sl-unrelated",
+    )
+
+    env.reconciler._close_position_from_filled_sl(env.position, _sl_order("sl-unrelated"))
+
+    assert _position_status(env.db, env.position_id) == PositionStatus.OPEN
+    assert env.position.order_id in env.tracker._positions
+    assert env.position.exchange_close_pending is True
 
 
 def test_unpriced_exit_still_closes_the_row(env):
@@ -280,6 +334,29 @@ def test_ledger_rejection_does_not_block_the_offline_close(env):
     assert env.db.get_current_balance(env.session_id) == pytest.approx(5.0)
     assert len(env.db.get_audit_events(env.session_id, severity="CRITICAL")) == 1
     assert env.position.order_id not in env.tracker._positions
+    # The refused delta moved nothing, so no balance-change audit row may claim it did.
+    assert env.db.get_audit_events(env.session_id, severity="MEDIUM") == []
+
+
+def test_session_less_reconciler_still_closes_the_row(env):
+    """With no session to book against, the closing caller still gets its row closed."""
+    env.reconciler.session_id = None
+
+    outcome = env.reconciler._log_reconciliation_trade(
+        position=env.position,
+        entry_price=ENTRY_PRICE,
+        exit_price=SL_PRICE,
+        qty=QUANTITY,
+        gross_pnl=-20.0,
+        exit_fee=0.0,
+        interest_cost=0.0,
+        reason="stop_loss_filled_offline",
+        exit_order_id="sl-nosession",
+        balance_delta=-20.0,
+    )
+
+    assert outcome.position_closed is True
+    assert _position_status(env.db, env.position_id) == PositionStatus.CLOSED
 
 
 def test_filled_exit_for_untracked_missing_row_does_not_wedge_the_journal(env):

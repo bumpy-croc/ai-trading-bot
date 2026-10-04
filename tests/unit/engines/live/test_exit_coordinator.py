@@ -554,3 +554,54 @@ def test_execute_exit_locked_persists_close_when_ledger_rejects_negative_balance
     assert state.current_balance == pytest.approx(10.0)
     assert len(db.get_audit_events(session_id, severity="CRITICAL")) == 1
     assert "Failed to close position" not in caplog.text
+    # The ledger no longer matches the exchange, so new entries must stop.
+    state._enter_close_only_mode.assert_called_once()
+
+
+def test_ledger_rejected_close_does_not_apply_the_refused_delta_in_memory(caplog):
+    """If the post-close balance re-read also fails, the fallback must not add a delta the
+    ledger refused to the in-memory balance."""
+    from src.database.manager import DatabaseManager
+    from src.database.models import TradeSource
+
+    db = DatabaseManager("sqlite:///:memory:")
+    session_id = db.create_trading_session(
+        strategy_name="TestStrategy",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        mode=TradeSource.PAPER,
+        initial_balance=10.0,
+    )
+    db.update_balance(10.0, "seed", "test", session_id)
+    db_position_id = db.log_position(
+        symbol="BTCUSDT",
+        side="long",
+        entry_price=50000.0,
+        size=0.1,
+        strategy_name="TestStrategy",
+        entry_order_id="order-1",
+        quantity=0.1,
+        entry_balance=10.0,
+        session_id=session_id,
+    )
+    position = _make_closable_position()
+    position.db_position_id = db_position_id
+    state = _make_closing_state(position, db_manager=db)
+    state.trading_session_id = session_id
+    state.current_balance = 10.0
+    state.live_position_tracker.mfe_mae_tracker.get_position_metrics.return_value = None
+    state.live_exit_handler.execute_filled_exit.return_value = LiveExitResult(
+        success=True,
+        realized_pnl=-500.0,
+        realized_pnl_percent=-10.0,
+        exit_price=45000.0,
+        exit_fee=0.05,
+        slippage_cost=0.0,
+    )
+    db.get_current_balance = MagicMock(side_effect=RuntimeError("pool exhausted"))
+
+    LiveExitCoordinator(engine_state=state).execute_exit_locked(
+        position, "stop_loss", None, 45000.0, None, None, None, skip_live_close=True
+    )
+
+    assert state.current_balance == pytest.approx(10.0)

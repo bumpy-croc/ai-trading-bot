@@ -81,6 +81,14 @@ class NegativeBalanceError(ValueError):
     """
 
 
+class DuplicateCloseError(ValueError):
+    """A Trade already references the position a ``balance_delta`` close targets.
+
+    Raised by ``log_trade`` under the balance-ledger lock so two racing closers of the
+    same position (engine exit vs reconciler) cannot both book its PnL.
+    """
+
+
 @dataclass(frozen=True)
 class SystemHaltStatus:
     """Detached snapshot of the ``system_halt`` control flag (#922).
@@ -839,6 +847,7 @@ class DatabaseManager:
         margin_interest_cost: float | None = None,
         position_id: int | None = None,
         balance_delta: float | None = None,
+        ledger_result: dict[str, Any] | None = None,
     ) -> int:
         """Logs a completed trade to the database.
 
@@ -897,6 +906,12 @@ class DatabaseManager:
                 behaviour is unchanged: no balance write happens here, matching
                 every existing caller that owns its own balance update.
 
+            ledger_result: Optional out-parameter, filled only when ``balance_delta``
+                is given: with the ``old_balance``/``new_balance``/``change`` of the
+                applied delta, or with ``rejected_reason`` when the ledger refused it
+                (the Trade/Position close still committed). Lets callers tell a
+                moved ledger from an untouched one without a second read.
+
         Returns:
             Trade ID
 
@@ -930,6 +945,17 @@ class DatabaseManager:
                 # _apply_balance_delta.
                 locked_session_id = cast(int, effective_session_id)  # validated above
                 self._lock_balance_ledger(session, locked_session_id)
+                # Checked under the ledger lock (position_id is set, validated above): a
+                # Trade already linked to this position means another closer booked its
+                # PnL, and a second booking would double-apply it.
+                if (
+                    session.query(Trade.id).filter(Trade.position_id == position_id).first()
+                    is not None
+                ):
+                    raise DuplicateCloseError(
+                        f"position {position_id} already has a terminal trade; "
+                        "refusing to book its PnL again"
+                    )
                 try:
                     balance_result = self._apply_balance_delta(
                         session,
@@ -1052,6 +1078,10 @@ class DatabaseManager:
                         )
                     )
 
+                # Flushed before the commit so the id is read while the transaction is
+                # still open: a refresh after commit could fail on a close that did commit.
+                session.flush()
+                trade_id = trade.id
                 session.commit()
             except IntegrityError as ie:
                 # Rollback on integrity errors (duplicate keys, constraint violations)
@@ -1073,8 +1103,13 @@ class DatabaseManager:
                 raise
 
             logger.info(
-                f"Logged trade #{trade.id}: {symbol} {db_side.value} P&L: ${pnl:.2f} ({pnl_percent:.2f}%)"
+                f"Logged trade #{trade_id}: {symbol} {db_side.value} P&L: ${pnl:.2f} ({pnl_percent:.2f}%)"
             )
+            if ledger_result is not None:
+                if ledger_rejection is not None:
+                    ledger_result["rejected_reason"] = ledger_rejection
+                elif balance_result is not None:
+                    ledger_result.update(balance_result)
             if ledger_rejection is not None:
                 logger.critical(
                     "LEDGER ANOMALY: realized PnL %+.2f for %s (Trade #%s, Position %s) was "
@@ -1082,7 +1117,7 @@ class DatabaseManager:
                     "ledger is NOT adjusted and must be reconciled against the exchange.",
                     cast(float, balance_delta),
                     symbol,
-                    trade.id,
+                    trade_id,
                     position_id,
                     ledger_rejection,
                 )
@@ -1091,15 +1126,24 @@ class DatabaseManager:
                     "Atomic exit: balance $%.2f -> $%.2f | Trade #%s | Position %s closed",
                     balance_result["old_balance"],
                     balance_result["new_balance"],
-                    trade.id,
+                    trade_id,
                     position_id,
                 )
 
-            # Update performance metrics - handle None session_id
+            # Update performance metrics - handle None session_id. The trade is already
+            # committed, so a metrics failure must not make the write look failed.
             if effective_session_id:
-                self._update_performance_metrics(effective_session_id)
+                try:
+                    self._update_performance_metrics(effective_session_id)
+                except Exception as metrics_err:
+                    logger.warning(
+                        "Trade #%s committed but the performance metrics update failed: %s",
+                        trade_id,
+                        metrics_err,
+                        exc_info=True,
+                    )
 
-            return trade.id
+            return trade_id
 
     def log_position(
         self,

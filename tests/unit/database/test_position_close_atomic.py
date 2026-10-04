@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from src.database.manager import DatabaseManager
+from src.database.manager import DatabaseManager, DuplicateCloseError
 from src.database.models import Position, PositionStatus, Trade, TradeSource
 
 pytestmark = pytest.mark.unit
@@ -463,6 +463,86 @@ class TestLogTradeBalanceDelta:
         assert events[0]["old_value"] == "10.00"
         assert "-500.00" in events[0]["reason"]
         assert "ledger NOT adjusted" in events[0]["reason"]
+
+    def test_ledger_result_reports_applied_delta_or_rejection(self):
+        """The out-parameter tells callers whether the ledger moved, without a second read."""
+        db = _make_db()
+        session_id = _new_session(db)
+        db.update_balance(100.0, "seed", "test", session_id)
+
+        applied: dict = {}
+        db.log_trade(
+            symbol="BTCUSDT",
+            side="long",
+            entry_price=100.0,
+            exit_price=110.0,
+            size=0.1,
+            entry_time=datetime.now(UTC) - timedelta(hours=1),
+            exit_time=datetime.now(UTC),
+            pnl=10.0,
+            exit_reason="take_profit",
+            strategy_name="TestStrategy",
+            source=TradeSource.PAPER,
+            session_id=session_id,
+            position_id=_open_position(db, session_id, "order-applied"),
+            balance_delta=10.0,
+            ledger_result=applied,
+        )
+        rejected: dict = {}
+        db.log_trade(
+            symbol="BTCUSDT",
+            side="long",
+            entry_price=100.0,
+            exit_price=50.0,
+            size=0.1,
+            entry_time=datetime.now(UTC) - timedelta(hours=1),
+            exit_time=datetime.now(UTC),
+            pnl=-500.0,
+            exit_reason="stop_loss",
+            strategy_name="TestStrategy",
+            source=TradeSource.PAPER,
+            session_id=session_id,
+            position_id=_open_position(db, session_id, "order-rejected"),
+            balance_delta=-500.0,
+            ledger_result=rejected,
+        )
+
+        assert applied["old_balance"] == pytest.approx(100.0)
+        assert applied["new_balance"] == pytest.approx(110.0)
+        assert "rejected_reason" not in applied
+        assert "negative balance" in rejected["rejected_reason"]
+        assert "new_balance" not in rejected
+
+    def test_second_close_of_the_same_position_is_refused_and_books_nothing(self):
+        """Two closers racing on one position (engine exit vs reconciler) must not both book
+        its PnL: the second sees the first's Trade under the ledger lock and writes nothing."""
+        db = _make_db()
+        session_id = _new_session(db)
+        position_id = _open_position(db, session_id)
+        db.update_balance(1000.0, "seed", "test", session_id)
+        kwargs = {
+            "symbol": "BTCUSDT",
+            "side": "long",
+            "entry_price": 100.0,
+            "exit_price": 90.0,
+            "size": 0.1,
+            "entry_time": datetime.now(UTC) - timedelta(hours=1),
+            "exit_time": datetime.now(UTC),
+            "pnl": -10.0,
+            "exit_reason": "stop_loss",
+            "strategy_name": "TestStrategy",
+            "source": TradeSource.PAPER,
+            "session_id": session_id,
+            "position_id": position_id,
+            "balance_delta": -10.0,
+        }
+        db.log_trade(**kwargs)
+
+        with pytest.raises(DuplicateCloseError):
+            db.log_trade(**kwargs)
+
+        assert _count_trades(db, session_id) == 1
+        assert _balance(db, session_id) == pytest.approx(990.0)
 
     def test_non_ledger_failure_still_rolls_back_everything(self):
         """Only a ledger rejection is tolerated: a non-finite delta is a caller

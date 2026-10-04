@@ -43,6 +43,7 @@ from src.config.constants import (
 )
 from src.config.feature_flags import get_flag
 from src.data_providers.exchange_interface import OrderLookupError, SideEffectType
+from src.database.manager import DuplicateCloseError
 from src.database.models import EventType
 from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.live.trade_close_accounting import held_base_quantity
@@ -2295,10 +2296,10 @@ class PositionReconciler:
                     return
 
                 # The position-CLOSED flip, Trade insert and balance delta commit in ONE
-                # transaction inside _realize_pnl_on_close (#1223) — a separate upfront
-                # close let a crash between the two drop this PnL permanently. When there is
-                # nothing to realize against (position not tracked, or no usable fill price)
-                # fall back to a plain close of the DB row, as before.
+                # transaction inside _realize_pnl_on_close: a separate close ahead of the
+                # write would leave a CLOSED position with its PnL dropped if the process
+                # died in between. When there is nothing to realize against (position not
+                # tracked, or no usable fill price) the DB row is closed on its own.
                 if matched_position is not None and fill_price > 0:
                     # position_id is non-NULL here, so the synthetic key is non-NULL.
                     stable_exit_id = exit_order_id or f"reconcile_exit_{position_id}"
@@ -3753,11 +3754,10 @@ class PositionReconciler:
             )
 
         # The position-CLOSED flip, the Trade insert and the balance delta commit in ONE
-        # transaction inside _realize_pnl_on_close (#1223): closing the row in a separate
-        # upfront transaction let a crash between the two leave the position CLOSED with no
-        # trade and no balance change — a PnL that was dropped and never recovered, since a
-        # CLOSED position is never re-picked-up. A truthy db_pos_id makes the synthetic key
-        # below non-NULL.
+        # transaction inside _realize_pnl_on_close: closing the row in a separate earlier
+        # transaction would leave the position CLOSED with no trade and no balance change if
+        # the process died in between — a PnL that is never recovered, since a CLOSED position
+        # is never re-picked-up. A truthy db_pos_id makes the synthetic key below non-NULL.
         sl_oid = getattr(sl_order, "order_id", None) or f"reconcile_sl_{db_pos_id}"
         db_closed = self._realize_pnl_on_close(
             position,
@@ -4389,9 +4389,8 @@ class PositionReconciler:
         """Audit a skipped P&L realization and, for closing callers, still close the row.
 
         The exit already happened on the exchange, so when no P&L can be computed the DB
-        row must still be closed (as it was when closing was a separate upfront step) —
-        leaving it OPEN would resurrect a phantom position on restart. Returns True only
-        when the row is confirmed CLOSED.
+        row must still be closed — leaving it OPEN would resurrect a phantom position on
+        restart. Returns True only when the row is confirmed CLOSED.
         """
         self._audit_pnl_skip(position, reason, detail)
         if not close_position_row:
@@ -4660,12 +4659,18 @@ class PositionReconciler:
             (no balance_delta, a deduped re-run, or a failed write — the caller
             should not audit a balance change that never happened).
         """
-        if self.session_id is None:
-            return ReconciliationTradeOutcome(position_closed=False)
         # Derived, not a separate caller-supplied flag, so it can never disagree
         # with what balance_delta actually does.
         balance_realized = balance_delta is not None
         db_pos_id = getattr(position, "db_position_id", None)
+        if self.session_id is None:
+            # No session to book against: a closing caller still gets its row closed.
+            return ReconciliationTradeOutcome(
+                position_closed=(
+                    self._close_db_position(db_pos_id, exit_price) if balance_realized else False
+                )
+            )
+        ledger_result: dict[str, Any] = {}
         try:
             side = getattr(position, "side", None)
             # PositionSide enum -> its .value ("LONG"/"SHORT"); a str side passes through.
@@ -4740,6 +4745,7 @@ class PositionReconciler:
                 # closure is balance-neutral (e.g. external close — capital is
                 # reconciled elsewhere) and only the trade/position-close happen.
                 balance_delta=balance_delta,
+                ledger_result=ledger_result,
             )
             logger.info(
                 "Logged reconciliation trade #%s for %s: pnl=%.2f commission=%.4f qty=%s",
@@ -4750,7 +4756,7 @@ class PositionReconciler:
                 "NULL" if logged_quantity is None else format(logged_quantity, ".8f"),
             )
             position_closed = db_pos_id is not None
-        except IntegrityError:
+        except (IntegrityError, DuplicateCloseError):
             logger.info(
                 "Reconciliation trade for %s already recorded (dedup); skipping",
                 getattr(position, "symbol", "?"),
@@ -4758,11 +4764,22 @@ class PositionReconciler:
             if not balance_realized:
                 # The caller owns the position close on balance-neutral paths.
                 return ReconciliationTradeOutcome(position_closed=db_pos_id is not None)
-            # The rolled-back write also discarded the position flip, so close the row
-            # idempotently: an earlier pass recorded this exit's trade and PnL.
-            return ReconciliationTradeOutcome(
-                position_closed=self._close_db_position(db_pos_id, exit_price)
+            # The rolled-back write also discarded the position flip. Close the row
+            # idempotently only when a trade really is linked to this position (an earlier
+            # pass booked its PnL); any other constraint failure books nothing and must
+            # not drop the PnL by closing the row.
+            if db_pos_id is not None and self.db_manager.has_terminal_trade_for_position(db_pos_id):
+                return ReconciliationTradeOutcome(
+                    position_closed=self._close_db_position(db_pos_id, exit_price)
+                )
+            logger.critical(
+                "Reconciliation trade for %s hit a constraint failure but no trade is linked to "
+                "position %s — nothing was booked; the position stays tracked for retry.",
+                getattr(position, "symbol", "?"),
+                db_pos_id,
+                exc_info=True,
             )
+            return ReconciliationTradeOutcome(position_closed=False)
         except Exception as e:
             # Escalate (CRITICAL + stack trace) rather than swallow at WARNING — "silent
             # divergence is a bug" (CODE.md). Still do not re-raise: reconciliation must continue
@@ -4773,9 +4790,11 @@ class PositionReconciler:
             # reconciliation pass (or the next restart) retries the whole close.
             if balance_realized:
                 logger.critical(
-                    "Atomic balance+trade+close write FAILED for %s: %s — nothing was "
-                    "committed: the position is still OPEN in the DB and stays tracked for "
-                    "retry on the next reconciliation pass.",
+                    "Atomic balance+trade+close write FAILED for %s: %s — the position "
+                    "stays tracked and is retried on the next reconciliation pass (the "
+                    "write is atomic, so unless the failure struck after the commit the "
+                    "position is still OPEN; a retry after a commit is closed idempotently "
+                    "by the terminal-trade guard).",
                     getattr(position, "symbol", "?"),
                     e,
                     exc_info=True,
@@ -4791,7 +4810,9 @@ class PositionReconciler:
                 )
             return ReconciliationTradeOutcome(position_closed=False)
 
-        if balance_delta is None:
+        if balance_delta is None or "rejected_reason" in ledger_result:
+            # A refused delta moved nothing: there is no balance change to audit (the
+            # ledger anomaly was recorded CRITICAL inside log_trade's transaction).
             return ReconciliationTradeOutcome(position_closed=position_closed)
         # log_trade already committed the atomic balance+trade+close write; this is a
         # post-commit read for the caller's audit trail only (not used for any further
