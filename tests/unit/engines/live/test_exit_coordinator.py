@@ -494,3 +494,63 @@ def test_execute_exit_locked_falls_back_to_delta_when_balance_reread_fails():
     # Balance falls back to pre-close balance + the same delta the atomic commit
     # already applied (realized_pnl - exit_fee = 9.95), not left stale.
     assert state.current_balance == pytest.approx(balance_before_close + 9.95)
+
+
+def test_execute_exit_locked_persists_close_when_ledger_rejects_negative_balance(caplog):
+    """#1261: the exchange close already filled, so a realized loss that would
+    take the ledger negative must not abort the Trade insert / Position CLOSED
+    flip (the old abort left the DB position OPEN while the exchange position
+    was gone). Runs against a real DatabaseManager so the whole atomic write is
+    exercised, not a mock."""
+    from src.database.manager import DatabaseManager
+    from src.database.models import Position, PositionStatus, Trade, TradeSource
+
+    db = DatabaseManager("sqlite:///:memory:")
+    session_id = db.create_trading_session(
+        strategy_name="TestStrategy",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        mode=TradeSource.PAPER,
+        initial_balance=10.0,
+    )
+    db.update_balance(10.0, "seed", "test", session_id)
+    db_position_id = db.log_position(
+        symbol="BTCUSDT",
+        side="long",
+        entry_price=50000.0,
+        size=0.1,
+        strategy_name="TestStrategy",
+        entry_order_id="order-1",
+        quantity=0.1,
+        entry_balance=10.0,
+        session_id=session_id,
+    )
+
+    position = _make_closable_position()
+    position.db_position_id = db_position_id
+    state = _make_closing_state(position, db_manager=db)
+    state.trading_session_id = session_id
+    state.current_balance = 10.0
+    state.live_position_tracker.mfe_mae_tracker.get_position_metrics.return_value = None
+    state.live_exit_handler.execute_filled_exit.return_value = LiveExitResult(
+        success=True,
+        realized_pnl=-500.0,
+        realized_pnl_percent=-10.0,
+        exit_price=45000.0,
+        exit_fee=0.05,
+        slippage_cost=0.0,
+    )
+
+    with caplog.at_level("ERROR"):
+        LiveExitCoordinator(engine_state=state).execute_exit_locked(
+            position, "stop_loss", None, 45000.0, None, None, None, skip_live_close=True
+        )
+
+    with db.get_session() as session:
+        assert session.query(Trade).filter(Trade.session_id == session_id).count() == 1
+        closed = session.query(Position).filter(Position.id == db_position_id).one()
+        assert closed.status == PositionStatus.CLOSED
+    assert db.get_current_balance(session_id) == pytest.approx(10.0)
+    assert state.current_balance == pytest.approx(10.0)
+    assert len(db.get_audit_events(session_id, severity="CRITICAL")) == 1
+    assert "Failed to close position" not in caplog.text

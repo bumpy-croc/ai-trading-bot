@@ -396,19 +396,84 @@ class TestLogTradeBalanceDelta:
                 balance_delta=-5.0,  # no position_id
             )
 
-    def test_negative_balance_rolls_back_trade_and_position_too(self):
-        """The discriminating case: a delta that would take the balance negative
-        must abort the WHOLE write — no trade row, no status flip, no balance
-        change — not just skip the balance leg while still logging the trade
-        (the exact inverse-direction #736 symptom: 'trade recorded + position
-        closed + balance never adjusted')."""
+    def test_negative_balance_still_persists_trade_and_close(self):
+        """The exchange close already happened, so a delta the ledger refuses
+        (resulting balance negative) must NOT undo the Trade insert or the
+        Position CLOSED flip — aborting would leave a gone exchange position
+        OPEN in the DB (phantom position, #1261). The ledger itself stays
+        untouched."""
         db = _make_db()
         session_id = _new_session(db)
         position_id = _open_position(db, session_id)
         db.update_balance(10.0, "seed", "test", session_id)
         trades_before = _count_trades(db, session_id)
 
-        with pytest.raises(ValueError, match="negative balance"):
+        trade_id = db.log_trade(
+            symbol="BTCUSDT",
+            side="long",
+            entry_price=100.0,
+            exit_price=50.0,
+            size=0.1,
+            entry_time=datetime.now(UTC) - timedelta(hours=1),
+            exit_time=datetime.now(UTC),
+            pnl=-500.0,
+            exit_reason="stop_loss",
+            strategy_name="TestStrategy",
+            source=TradeSource.PAPER,
+            session_id=session_id,
+            position_id=position_id,
+            balance_delta=-500.0,  # 10.0 - 500.0 < 0
+        )
+
+        assert isinstance(trade_id, int)
+        assert _count_trades(db, session_id) == trades_before + 1
+        assert _position_status(db, position_id) == PositionStatus.CLOSED
+        assert _balance(db, session_id) == pytest.approx(10.0)
+
+    def test_negative_balance_records_critical_audit_event(self):
+        """The refused delta is recorded as its own CRITICAL audit row, written
+        in the same transaction as the Trade so the anomaly cannot be lost."""
+        db = _make_db()
+        session_id = _new_session(db)
+        position_id = _open_position(db, session_id)
+        db.update_balance(10.0, "seed", "test", session_id)
+
+        db.log_trade(
+            symbol="BTCUSDT",
+            side="long",
+            entry_price=100.0,
+            exit_price=50.0,
+            size=0.1,
+            entry_time=datetime.now(UTC) - timedelta(hours=1),
+            exit_time=datetime.now(UTC),
+            pnl=-500.0,
+            exit_reason="stop_loss",
+            strategy_name="TestStrategy",
+            source=TradeSource.PAPER,
+            session_id=session_id,
+            position_id=position_id,
+            balance_delta=-500.0,
+        )
+
+        events = db.get_audit_events(session_id, severity="CRITICAL")
+        assert len(events) == 1
+        assert events[0]["entity_type"] == "balance"
+        assert events[0]["entity_id"] == position_id
+        assert events[0]["field"] == "realized_pnl"
+        assert events[0]["old_value"] == "10.00"
+        assert "-500.00" in events[0]["reason"]
+        assert "ledger NOT adjusted" in events[0]["reason"]
+
+    def test_non_ledger_failure_still_rolls_back_everything(self):
+        """Only a ledger rejection is tolerated: a non-finite delta is a caller
+        bug and still aborts the whole write."""
+        db = _make_db()
+        session_id = _new_session(db)
+        position_id = _open_position(db, session_id)
+        db.update_balance(10.0, "seed", "test", session_id)
+        trades_before = _count_trades(db, session_id)
+
+        with pytest.raises(ValueError, match="finite"):
             db.log_trade(
                 symbol="BTCUSDT",
                 side="long",
@@ -417,16 +482,15 @@ class TestLogTradeBalanceDelta:
                 size=0.1,
                 entry_time=datetime.now(UTC) - timedelta(hours=1),
                 exit_time=datetime.now(UTC),
-                pnl=-500.0,
+                pnl=-5.0,
                 exit_reason="stop_loss",
                 strategy_name="TestStrategy",
                 source=TradeSource.PAPER,
                 session_id=session_id,
                 position_id=position_id,
-                balance_delta=-500.0,  # 10.0 - 500.0 < 0
+                balance_delta=float("nan"),
             )
 
-        # Nothing committed: no trade, position still OPEN, balance untouched.
         assert _count_trades(db, session_id) == trades_before
         assert _position_status(db, position_id) == PositionStatus.OPEN
         assert _balance(db, session_id) == pytest.approx(10.0)
