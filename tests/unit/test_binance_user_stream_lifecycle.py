@@ -9,6 +9,7 @@ import asyncio
 import gc
 import logging
 import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -244,17 +245,62 @@ class TestShutdownVersusRebuild:
         provider._twm = MagicMock()
         provider._twm.start_margin_socket.return_value = "key"
         assert provider.start_user_stream(MagicMock()) is True
-        assert provider._streams_shut_down is False
+        assert provider._streams_shut_down.is_set() is False
+
+    @pytest.mark.fast
+    def test_rebuild_cannot_rearm_a_provider_shut_down_meanwhile(self, provider):
+        """A shutdown landing mid-rebuild stays in force: the rebuild's own start call
+        must not clear it, and the rebuild abandons before building a new TWM."""
+        provider._on_user_event_cb = MagicMock()
+
+        def shutdown_during_teardown() -> None:
+            provider._streams_shut_down.set()  # stop_streams() sets it before taking the lock
+
+        with (
+            patch.object(provider, "_teardown_twm", side_effect=shutdown_during_teardown),
+            patch.object(provider, "_ensure_twm") as ensure,
+        ):
+            assert provider.hard_reconnect_user() is False
+
+        ensure.assert_not_called()
+        assert provider._streams_shut_down.is_set()
+
+    @pytest.mark.fast
+    def test_start_inside_a_rebuild_does_not_clear_the_shutdown(self, provider):
+        provider._streams_shut_down.set()
+        provider._twm = MagicMock()
+        provider._twm.start_margin_socket.return_value = "key"
+        with provider._rebuild_scope():
+            provider.start_user_stream(MagicMock())
+        assert provider._streams_shut_down.is_set()
+
+    @pytest.mark.fast
+    def test_backoff_wait_wakes_on_shutdown(self, provider):
+        """A reconnect sleeping between attempts is released by stop_streams, not by the timer."""
+        provider._on_user_event_cb = MagicMock()
+        attempts: list[int] = []
+
+        def failing_start(_callback) -> bool:
+            attempts.append(1)
+            provider._streams_shut_down.set()  # shutdown arrives during the first attempt
+            return False
+
+        started = time.monotonic()
+        with patch.object(provider, "start_user_stream", side_effect=failing_start):
+            assert provider.reconnect_user() is False
+
+        assert attempts == [1]
+        assert time.monotonic() - started < 0.5  # the 1 s backoff was cut short
 
     @pytest.mark.fast
     def test_shutdown_waits_for_an_in_flight_rebuild(self, provider):
         """stop_streams takes the lifecycle lock, so it queues behind a rebuild."""
         provider._on_user_event_cb = MagicMock()
         release = threading.Event()
-        order: list[str] = []
+        in_teardown = threading.Event()
 
         def slow_teardown() -> None:
-            order.append("rebuild-teardown")
+            in_teardown.set()
             release.wait(5)
 
         with (
@@ -264,8 +310,7 @@ class TestShutdownVersusRebuild:
         ):
             rebuild = threading.Thread(target=provider.hard_reconnect_user)
             rebuild.start()
-            while "rebuild-teardown" not in order:
-                pass
+            assert in_teardown.wait(5)
             stopper = threading.Thread(target=provider.stop_streams)
             stopper.start()
             stopper.join(timeout=0.3)
@@ -273,7 +318,7 @@ class TestShutdownVersusRebuild:
             release.set()
             rebuild.join(5)
             stopper.join(5)
-        assert provider._streams_shut_down is True
+        assert provider._streams_shut_down.is_set() is True
 
     @pytest.mark.fast
     def test_hard_reconnect_refuses_when_this_provider_hosts_kline(self, provider):
@@ -302,6 +347,28 @@ class TestTeardown:
         assert twm._socket_running == {}
         assert twm.join.call_count == 2
         assert provider._twm is None
+
+    @pytest.mark.fast
+    def test_a_thread_that_will_not_exit_leaves_its_loop_open(self, provider, caplog):
+        """Never close a loop another thread may still be running."""
+        loop = MagicMock()
+        loop.is_closed.return_value = False
+        loop.is_running.return_value = False
+        twm = MagicMock()
+        twm._socket_running = {}
+        twm.is_alive.return_value = True
+        provider._twm = twm
+        provider._twm_loop = loop
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch.object(provider, "_close_stopped_loop") as close,
+        ):
+            provider._teardown_twm()
+
+        close.assert_not_called()
+        assert any("leaving its loop open" in r.getMessage() for r in caplog.records)
+        assert provider._twm is None  # still retired, so the next start builds a fresh one
 
     @pytest.mark.fast
     def test_clean_exit_does_not_touch_the_socket_keys(self, provider):
@@ -359,6 +426,23 @@ class TestTeardown:
         assert loop.is_closed()
 
     @pytest.mark.fast
+    def test_stopped_loop_closes_a_ws_api_reopened_by_the_exit_unsubscribe(self):
+        """The listener's exit-unsubscribe can re-open the ws-api after the first close."""
+        loop = asyncio.new_event_loop()
+        closed: list[str] = []
+        ws_api = MagicMock()
+
+        async def close() -> None:
+            closed.append("closed")
+
+        ws_api.ws.close = close
+
+        BinanceProvider._close_stopped_loop(loop, ws_api)
+
+        assert closed == ["closed"]
+        assert loop.is_closed()
+
+    @pytest.mark.fast
     def test_ws_api_quiesce_marks_exiting_and_closes_the_socket(self):
         """EXITING is set before the close so the read loop stops instead of reconnecting."""
         loop = asyncio.new_event_loop()
@@ -373,10 +457,8 @@ class TestTeardown:
 
             ws_api.ws.close = close
             ws_api._handle_read_loop = None  # read loop already gone after the first pass
-            twm = MagicMock()
-            twm._client.ws_api = ws_api
 
-            BinanceProvider._close_ws_api_transport(twm, loop)
+            BinanceProvider._close_ws_api_transport(ws_api, loop)
 
             assert order == [WSListenerState.EXITING]
         finally:
@@ -386,10 +468,14 @@ class TestTeardown:
 
     @pytest.mark.fast
     def test_ws_api_quiesce_is_a_noop_without_a_running_loop(self):
-        twm = MagicMock()
-        BinanceProvider._close_ws_api_transport(twm, None)
-        BinanceProvider._close_ws_api_transport(twm, asyncio.new_event_loop())
-        twm._client.ws_api.ws.close.assert_not_called()
+        ws_api = MagicMock()
+        BinanceProvider._close_ws_api_transport(ws_api, None)
+        stopped = asyncio.new_event_loop()
+        try:
+            BinanceProvider._close_ws_api_transport(ws_api, stopped)
+        finally:
+            stopped.close()
+        ws_api.ws.close.assert_not_called()
 
     @pytest.mark.fast
     def test_close_filter_drops_only_our_own_close_reports(self):
@@ -412,6 +498,22 @@ class TestTeardown:
             is False
         )
         assert close_filter.filter(record("Unknown exception: ValueError (boom)")) is True
+
+    @pytest.mark.fast
+    def test_close_filter_only_mutes_the_closing_thread(self):
+        """Another provider's genuine close report, on another thread, still logs."""
+        close_filter = _ExpectedTransportCloseFilter(thread_ident=123)
+        ours = logging.LogRecord(
+            "binance", logging.ERROR, __file__, 1, "ConnectionClosedOK", None, None
+        )
+        ours.thread = 123
+        other = logging.LogRecord(
+            "binance", logging.ERROR, __file__, 1, "ConnectionClosedOK", None, None
+        )
+        other.thread = 456
+
+        assert close_filter.filter(ours) is False
+        assert close_filter.filter(other) is True
 
     @pytest.mark.fast
     def test_close_filter_is_installed_only_inside_the_context(self):

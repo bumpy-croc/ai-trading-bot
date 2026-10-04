@@ -87,6 +87,8 @@ class FakeWsApiServer:
         except websockets.ConnectionClosed:
             pass
         finally:
+            if connection in self.connections:
+                self.connections.remove(connection)
             for subscription_id, owner in list(self.active_subscriptions.items()):
                 if owner is connection:
                     del self.active_subscriptions[subscription_id]
@@ -206,8 +208,22 @@ def wait_until(
     raise AssertionError(f"timed out waiting for {what}")
 
 
-def twm_threads() -> list[threading.Thread]:
+def _all_twm_threads() -> list[threading.Thread]:
     return [t for t in threading.enumerate() if isinstance(t, threaded_stream.ThreadedApiManager)]
+
+
+_TWM_THREADS_BEFORE_TEST: list[threading.Thread] = []
+
+
+@pytest.fixture(autouse=True)
+def _remember_twm_threads() -> None:
+    """Scope twm_threads() to this test, whatever other tests in the process left behind."""
+    _TWM_THREADS_BEFORE_TEST[:] = _all_twm_threads()
+
+
+def twm_threads() -> list[threading.Thread]:
+    """Manager threads started since the test began."""
+    return [t for t in _all_twm_threads() if t not in _TWM_THREADS_BEFORE_TEST]
 
 
 @pytest.mark.medium
@@ -262,6 +278,10 @@ def test_repeated_rebuilds_keep_one_listener_and_one_thread(provider, server):
 
     assert delivered == [2]  # only the newest generation's callback saw the event
     assert len(twm_threads()) == 1
+    wait_until(
+        lambda: len(server.connections) == 1,
+        what="retired ws-api sockets to close (not wait for GC)",
+    )
     assert all(loop.is_closed() for loop in loops[:-1])
     assert server.requests.count("userDataStream.unsubscribe") >= 2
 
@@ -291,6 +311,9 @@ def test_failed_subscribe_flags_resyncing_and_a_rebuild_recovers(provider, serve
 
     assert provider._user_ws_state == WebSocketState.PRIMARY
     assert len(delivered) == 1
+    # The failed subscribe's listener died holding its key; the rebuild must still
+    # have let that manager thread exit, leaving exactly one.
+    assert len(twm_threads()) == 1
 
 
 @pytest.mark.medium
@@ -304,5 +327,6 @@ def test_stop_streams_leaves_no_thread_or_open_loop(provider, server):
 
     assert twm_threads() == []
     assert loop.is_closed()
+    wait_until(lambda: server.connections == [], what="the ws-api socket to close")
     assert provider.hard_reconnect_user(lambda m: None) is False
     assert provider._twm is None

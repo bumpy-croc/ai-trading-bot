@@ -1223,6 +1223,72 @@ class TestUserHardReconnectMode:
         tracker.enable_polling.assert_called_once()
 
     @pytest.mark.fast
+    def test_reopening_the_circuit_after_a_failed_probe_does_not_page_again(self, mock_engine):
+        """A degraded probe that lands back in RESYNCING re-enters the circuit; the
+        operator was already paged for this outage (#853)."""
+        from src.config.constants import DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT
+
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex._user_ws_state = WebSocketState.RESYNCING
+        ex.user_ws_healthy = False
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        tracker.get_tracked_count.return_value = 2
+        mock_engine.order_tracker = tracker
+        mock_engine._ws_kline_provider = MagicMock()
+        mock_engine._record_event = MagicMock()
+
+        mock_engine._user_reconnect_failures = LIMIT
+        mock_engine._check_user_stream_health()
+        assert mock_engine._record_event.call_count == 1  # first open pages
+
+        mock_engine._user_reconnect_failures = LIMIT + 7  # a later failed probe
+        mock_engine._check_user_stream_health()
+        assert mock_engine._record_event.call_count == 1  # no duplicate
+        assert ex.mark_user_degraded.call_count == 2  # but it is still parked on REST
+
+    @pytest.mark.fast
+    def test_a_recovered_stream_pages_again_on_the_next_outage(self, mock_engine):
+        """The page-once latch clears when a real event proves the stream is back."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex._user_ws_state = WebSocketState.PRIMARY
+        ex.user_ws_healthy = True
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        tracker.get_tracked_count.return_value = 2
+        tracker.is_polling_enabled.return_value = False
+        mock_engine.order_tracker = tracker
+        mock_engine._ws_kline_provider = MagicMock()
+        mock_engine._user_degraded_paged = True
+
+        mock_engine._check_user_stream_health()
+
+        assert mock_engine._user_degraded_paged is False
+
+    @pytest.mark.fast
+    def test_a_failed_reconnect_pages_even_without_a_circuit_open(self, mock_engine):
+        """Reconnects that fail outright park the stream on REST without ever opening the
+        circuit; that outage must still page, once."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex.hard_reconnect_user.return_value = False
+        mock_engine.exchange_interface = ex
+        mock_engine.order_tracker = MagicMock()
+        mock_engine._user_data_processor = None
+        mock_engine._periodic_reconciler = None
+        mock_engine._record_event = MagicMock()
+        mock_engine._user_degraded_paged = False
+
+        mock_engine._handle_user_stream_disconnect(hard=True)
+        mock_engine._handle_user_stream_disconnect(hard=True)
+
+        ex.mark_user_degraded.assert_called()
+        assert mock_engine._record_event.call_count == 1
+        assert mock_engine._record_event.call_args.kwargs["error_code"] == "USER_WS_DEGRADED"
+
+    @pytest.mark.fast
     def test_coupling_guard_falls_back_to_in_place_and_does_not_raise(self, mock_engine, caplog):
         """B-VERIFY-1 guard: if kline and user share a provider, flag ON + degraded
         logs CRITICAL and uses in-place reconnect (hard=False) — and does NOT raise

@@ -842,6 +842,7 @@ class LiveTradingEngine:
         # Consecutive unproductive user-stream reconnects; trips a circuit breaker
         # that stops the futile reconnect loop and runs REST-only (#616).
         self._user_reconnect_failures = 0
+        self._user_degraded_paged = False  # USER_WS_DEGRADED already paged this outage
         # Consecutive unproductive kline reconnects; drives the *recovering* REST
         # fallback (#662) — momentary REST while reconnecting, auto-return to
         # WS-primary the instant a real kline event resumes (never REST-until-restart).
