@@ -168,3 +168,30 @@ class TestMarginRepayAmount:
         provider._client.margin_borrow_repay.return_value = {}
         assert provider.repay_margin_loan("ETH", Decimal("0.0000001")) is True
         assert provider._client.margin_borrow_repay.call_args.kwargs["amount"] == "0.0000001"
+
+
+class TestCreateOrderChokePoint:
+    def test_raw_float_params_are_serialized_fixed_point_and_logged(self, provider, caplog):
+        with caplog.at_level(logging.ERROR, logger="src.data_providers.binance_provider"):
+            provider._call_create_order(
+                symbol="ETHUSDT", side="SELL", quantity=0.00009, price=1648.82, stopPrice=1e-05
+            )
+        sent = _sent(provider)
+        assert sent["quantity"] == "0.00009"
+        assert sent["price"] == "1648.82"
+        assert sent["stopPrice"] == "0.00001"
+        assert any("unserialized" in r.getMessage() for r in caplog.records)
+
+    def test_serialized_params_pass_untouched_and_silent(self, provider, caplog):
+        with caplog.at_level(logging.ERROR, logger="src.data_providers.binance_provider"):
+            provider._call_create_order(symbol="ETHUSDT", side="BUY", quantity="0.0040")
+        assert _sent(provider)["quantity"] == "0.0040"
+        assert not caplog.records
+
+
+class TestMarginRepayFloatAmount:
+    def test_float_amount_is_not_rounded_to_six_places(self, provider):
+        provider._use_margin = True
+        provider._client.margin_borrow_repay.return_value = {}
+        provider.repay_margin_loan("ETH", 0.00282625)  # type: ignore[arg-type]
+        assert provider._client.margin_borrow_repay.call_args.kwargs["amount"] == "0.00282625"

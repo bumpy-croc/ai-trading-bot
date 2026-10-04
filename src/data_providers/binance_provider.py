@@ -993,6 +993,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 symbol_info = self._symbol_info_cache.get(
                     SymbolFactory.to_exchange_symbol(symbol, "binance")
                 )
+        if not symbol_info:
+            logger.warning(
+                "No cached symbol info for %s - order numerics are formatted without "
+                "step/tick conformance",
+                symbol,
+            )
         info = symbol_info or {}
         fields = (
             ("quantity", quantity, info.get("step_size"), format_quantity),
@@ -1032,6 +1038,23 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
     def _call_create_order(self, **params) -> dict:
         """Place order via margin or spot API."""
+        # Choke point: python-binance urlencodes a raw float as repr (artifacts,
+        # scientific notation). A caller that bypassed _conform_order_numerics is
+        # serialized fixed-point here, loudly, rather than sent raw.
+        for key, formatter in (
+            ("quantity", format_quantity),
+            ("price", format_price),
+            ("stopPrice", format_price),
+        ):
+            value = params.get(key)
+            if value is not None and not isinstance(value, str):
+                logger.error(
+                    "Order %s %r reached _call_create_order unserialized - formatting it; "
+                    "the caller skipped _conform_order_numerics",
+                    key,
+                    value,
+                )
+                params[key] = formatter(float(value))
         if self._use_margin:
             # Lazy symbol validation on first margin order per side
             symbol = params.get("symbol", "")
@@ -1329,7 +1352,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return False
         try:
             self._client.margin_borrow_repay(
-                asset=asset, amount=format(amount, "f"), type="REPAY", isIsolated="FALSE"
+                asset=asset, amount=format(Decimal(str(amount)), "f"), type="REPAY", isIsolated="FALSE"
             )
             logger.info("Margin repay submitted: %s %s", amount, asset)
             return True

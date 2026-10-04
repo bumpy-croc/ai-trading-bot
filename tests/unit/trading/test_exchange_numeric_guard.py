@@ -52,19 +52,34 @@ def _contains_division(node: ast.AST) -> bool:
 
 
 def _is_snap_of_division(node: ast.AST) -> bool:
-    """True for `round(a / b)`, `math.floor(a / b)`, `int(a / b)` or `a // b`."""
+    """True for `round(a / b)`, `math.floor(a / b)`, `int(a / b)` or `a // b`.
+
+    `round(a / b, n)` is decimal rounding, not a step snap, so it is not flagged.
+    """
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.FloorDiv):
         return True
+    if (
+        isinstance(node, ast.Call)
+        and _call_name(node) == "round"
+        and (len(node.args) > 1 or node.keywords)
+    ):
+        return False
     return _call_name(node) in _SNAP_FUNCS and _contains_division(node)
 
 
 def find_raw_step_snaps(source: str) -> list[int]:
-    """Line numbers of `<snap of a division> * <anything>` expressions."""
+    """Line numbers of `<snap of a division> * <anything>` expressions.
+
+    A line carrying ``# step-snap-ok`` is exempt (integer bucketing that never
+    reaches an exchange).
+    """
+    lines = source.splitlines()
     hits = []
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
             if _is_snap_of_division(node.left) or _is_snap_of_division(node.right):
-                hits.append(node.lineno)
+                if "step-snap-ok" not in lines[node.lineno - 1]:
+                    hits.append(node.lineno)
     return sorted(hits)
 
 
@@ -175,6 +190,8 @@ def test_detector_flags_known_raw_snap_shapes(snippet):
     [
         "q = snap_to_step(x, step)",
         "pct = round(a / b, 4)",
+        "pct = round(a / b, 4) * 100",
+        "bucket = (ts // n) * n  # step-snap-ok",
         "n = round(x * 100) / 100",
         "area = width * height",
     ],
