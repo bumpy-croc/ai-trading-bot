@@ -13,12 +13,8 @@ becomes a diff or gets a written disposition.
 
 ## Items
 
-_(Cleared by the 2026-09-14 retro. Empty on arrival for the **seventh** consecutive window. This
-retro stopped treating that as a fleet signal and checked the mechanism instead: `git log --follow`
-on this file records exactly **two** non-retro appends since it was created (`aee03a26`;
-`3f667afe`/#1060, which was then lost to a branch) against ~9 retro clears. The intended writers
-file GH issues instead — six `source:automation` issues were opened in this window (#1135, #1136,
-#1138, #1140, #1141, #1142) and none of them came through here. Dispositioned in [D-2026-09-14-01]
-and GH #1144: either wire the standup's sink to append one line here whenever it reports a process
-gap, or retire this file and make the retro sweep `source:automation` issues. Skill input 0 now
-says to sweep both.)_
+_(Cleared by the 2026-09-28 retro. Empty on arrival for the **ninth** consecutive window; the only
+open PR (#1263, last week's retro, superseded by this one) carried nothing new. This window's
+items came from the `source:automation` issue #1265, standup comments on #1127/#1230/#1260, and
+the scheduled-task transcripts. None came through here. #1099 (retire or restructure this file) is
+still open and unowned. See [D-2026-09-28-01].)_

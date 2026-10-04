@@ -49,7 +49,11 @@ checkout off `main`):**
 - l. RUNNING sessions (if session tooling available) + always: open PRs from branches not in
   log.md; `git -C /Users/alex/Sites/ai-trading-bot branch --show-current` MUST print `main`;
   `git -C /Users/alex/Sites/ai-trading-bot worktree list` — unmerged-branch worktrees are
-  someone's active workspace.
+  someone's active workspace. And it must be **current**:
+  `git -C /Users/alex/Sites/ai-trading-bot rev-list --count HEAD..origin/main` should be ~0. This
+  session's LESSONS, skills and commands were loaded from that tree; if it is behind, they are
+  stale, so read any rule you act on from `git show origin/develop:<path>` and say so in the boot
+  summary (LESSONS §3, #1260: frozen 2026-08-24 → 09-21, 772 lines of distillate unloaded).
 
 **Boot additions:**
 - m. **Scheduled-task inventory**: `mcp__scheduled-tasks__list_scheduled_tasks` — **not**

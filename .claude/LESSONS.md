@@ -315,6 +315,26 @@ against itself.
 See 1.1 — fixing quantity precision but not price precision shipped a still-broken bot. Grep the
 whole class.
 
+- **"N more sites" in a PR title means the fix is in the wrong place.** On 2026-09-16 one invariant
+  ("persist the stop price the exchange *achieved*, and only if it is safe to ratify") needed two
+  issues just to find its sites (#1187: 3 sites, #1198: 5 more) and four PRs in one day to reach
+  all 10: #1199 (introduces the ratify guard), #1200 (*"at 5 more SL placement sites"*), #1212
+  (*"extend … to 5 startup reconciler sites"*), #1216 (*"… to move()'s ADOPT branch"*). Grepping
+  the class didn't prevent it. Each PR grepped and still missed sites, because the invariant lived
+  at every call site instead of in one function. Side effects: #1200 merged ~70 min *before* the
+  guard it needed existed, with no review activity of any kind; its five startup-reconciler sites
+  reached production unguarded in promote `9821a660` (12:03Z) until `7831cb82` (16:18Z); and
+  `move()`'s ADOPT branch stayed unguarded in production until #1231 on 09-17. The choke point
+  (#1215, "extract a shared helper, duplicated 8 times") was filed during the chase, labelled
+  `p3 chore`, and is still open, so an 11th site has no protection.
+  - **Rule:** when an invariant has to hold at more than two call sites, the fix is **one choke
+    point plus a test that enumerates the call sites** (an AST or grep assertion that every
+    placement goes through the helper). Ship it first, or with the first patch. Per-site patches
+    are the fallback, not the plan.
+  - **Rule:** the structural fix for a live-money bug class is not a `chore`. Label it at the
+    priority of the defect it prevents, or it will lose to the next per-site patch every time.
+  Earned: #1187/#1198 → #1199/#1200/#1212/#1216 (2026-09-16), #1215 (open, p3).
+
 ### 2.2 "Deduping to a shared helper" can introduce a bug if the helper differs
 I replaced a local `_base_asset_of` (which stripped `USDC`) with a delegate to
 `PositionReconciler._extract_base_asset` (which did **not** strip `USDC`) → `ETHUSDC` mis-grouped →
@@ -488,6 +508,20 @@ recovered them.
   **Corollary:** report a drain by its *composition*, not its count. "7 PRs merged" and "7 PRs merged
   in 25 minutes, two of them past an unresolved blocking review" are different weeks.
   Earned: the 2026-09-13 drain (#1124/#1129/#1133/#1134/#1130/#1137/#1139); §1.16 update; #1135.
+- **Rule (i) — a rule on an open PR binds nobody, and it gets tested before it lands.** The
+  2026-09-21 retro (PR #1263, `CLEAN` at 10:06Z) added a "Record" section to `deploy-prod`: every
+  production promote gets a `log.md` entry. At 14:55Z the same day the PM daemon got a two-word
+  message, "Promote prod", ran the full `deploy-prod` flow for #1264, verified the deploy, and wrote
+  no record. That makes 6 of the last 7 promotes unrecorded. The daemon was not at fault: the rule
+  was on an unmerged branch, and the daemon's skills load from a primary checkout frozen at
+  2026-08-24 (§3, #1260). Two layers of "not loaded" stacked up. #1263 then sat unmerged for the
+  whole following week, the only open PR in the repo, with `develop` getting **zero** merges.
+  **Rule:** when a retro PR adds a rule for a specific recurring action (a promote, a merge, an
+  incident close), the completion summary names that action and says the rule is **not in force**
+  until the PR merges **and** the primary checkout is pulled. The retro cannot make either happen,
+  so it has to say this to the human instead of treating the rule as shipped.
+  Earned: 2026-09-21 → 09-28; PR #1263 (stranded 7 days), promote #1264 (`904e038e`, unrecorded);
+  #1260.
 
 ### 2.10 A monitoring run that writes nothing durable did not happen
 Between 2026-07-20 and 2026-07-27 the scheduled fleet ran ~25 times (`daily-trading-standup` 8/8
@@ -580,6 +614,24 @@ code commit 2f6c1fe8, 2026-07-14 — everything since is docs/state).
     result is re-checked. Put every outstanding pre-merge ask on the next retro's input list and
     verify it against the tree.
   Earned: PR #1130 and #1139, merged 2026-09-13 with unresolved blocking review comments; #1135.
+  - **Correction 2026-09-21 — "submit it as Request changes" cannot be followed here.** Every PR is
+    authored by `alexflorisca`, the `gh` identity all agents use, and GitHub does not let an
+    identity request changes on its own PR. The only other reviewer is the `claude` bot, which only
+    ever posts `COMMENTED`. `develop` has no branch protection. So no actor in this repo can make a
+    finding block a merge. What does exist: every bot finding is an **inline review thread**.
+    Across the 57 PRs merged 09-14 → 09-20, 22 carried 60 threads and **not one was ever
+    resolved**, including #1165's, whose fixes did land. Addressed and ignored findings are
+    therefore indistinguishable after the fact. Three ignored ones shipped live-money defects:
+    #1199 (placement-lock TOCTOU), #1224 (negative-balance close drops the Trade/Position write)
+    and #1221 (reused-session balance). All three merged with every thread open and no commit after
+    the review (#1261).
+    - **Rule:** before merging, **resolve every review thread** with a one-line reply: `fixed in
+      <sha>`, `tracked in #N`, or `won't fix: <reason>`. A thread still open at merge is an
+      unverified finding. The merging actor owns that, whoever wrote the code.
+    - **Rule:** make it mechanical. Branch protection's *"Require conversation resolution before
+      merging"* needs no second identity and would have blocked all three merges. It is a repo
+      setting, so it goes to the human (Board list, 2026-09-21 retro).
+    Earned: #1199, #1224, #1221 (merged 2026-09-16); the 60-thread count; GH #1261.
 
 - **Verify the state, not the issue — a human-only fix can land with the ticket left open.** §2.9
   rule (g) directs the retro to re-escalate #1079's auto-merge checkbox *"every week until it is
@@ -742,6 +794,28 @@ old"*) could not have said anything else, for two independent reasons:
   Earned: the 2026-09-03 `prune-worktrees` session-limit death (masked downstream by 09-04's healthy
   5-worktree cleanup, and invisible to `lastRunAt`, which advanced to 09-04).
 
+- **Two more signatures, and a slow run is not a failed run (2026-09-28 audit).** In the
+  09-21→28 window, runs failed or stretched in three distinguishable ways:
+  - **`401 OAuth access token has expired. Re-authenticate to continue.`** This is a MISS.
+    `prune-worktrees` on 09-25 (transcript `2a1db6fe`, under the `hands-up-education` project dir)
+    retried through sleep for 45 minutes, then died on it with no report. The registry lists it
+    as `succeeded`. Add it to the grep list.
+  - **`Connection lost while your computer was asleep` (`StreamSuspended`).** This is **not** a
+    miss by itself. The 09-24 and 09-26 standups ran 1h54m and 6h06m, retrying every ~15-20 minutes
+    and doing all their work in the last few minutes. Both ended with a complete brief, so both are
+    HIT. They are still findings: the 09-26 brief landed about 8 hours after its slot, and that is
+    detection latency for the only watchdog. Grade by the last message, then report how late it
+    landed.
+  - **Tasks launching within the same second means catch-up, whatever error follows.** On 09-27 the
+    standup and `weekly-model-retrain` launched 221ms apart at 12:31:57Z, 4.5h and 5.3h after their
+    slots, and both died on `ENOTFOUND` (`isNetworkDown: true`) before any tool call. #1265 blamed a
+    DNS outage alone. The fire times had been drifting since 09-24 (08:07 → 08:36 → 10:02 → 12:31),
+    so the machine was asleep first and woke without network second. **No retry follows a failed
+    catch-up:** the slot is gone, and for a weekly task the whole week is gone (no retrain this
+    week). When two tasks share a launch second, look for the sleep drift before accepting a
+    network-only diagnosis.
+  Earned: 2026-09-24/25/26/27 runs; #1265.
+
 ### 2.16 Detection plus escalation, with no scheduled actor, is not a control
 Production latched **close-only** on 2026-08-27 08:35 UTC and was still latched on 2026-08-31 —
 **~96h of blocked entries**, the same duration as #1094, which this whole quarter of work existed to
@@ -900,6 +974,29 @@ difference, because every instrument it owns measures detection.
     considered exception.
     Earned: PM daemon session `b3015dfb`, 2026-09-13 15:37Z → 2026-09-14 06:54Z; the 7-PR drain;
     promote `be451698`; #1127, #1135, #1146.
+
+- **One week later (2026-09-14 → 09-21): every rule above recurred, and none of them had been
+  loaded.** The same PM daemon session made 6 more production promotes after `be451698`, and **5 of
+  the 6 have no `log.md` record** (only `cfc9a506` has one, `[D-2026-09-15-01]`). On 09-16 the
+  new incident file (#1190) labelled `be451698` *"unrelated"*, two days after #1143 corrected that
+  exact word, and recorded `cfc9a506`'s latch clearance as *"a side effect"*, although
+  `[D-2026-09-15-01]` names clearing the latch as one of that restart's two stated purposes. The
+  latch itself re-set on 09-14 20:52Z and cleared ~10h50m later, because a PM session happened to be
+  running. The MTTR is still human attendance (#1127, p0, no owner).
+  None of this is new information. It repeats because the sessions making these calls load their
+  LESSONS and skills from the primary checkout, frozen since 2026-08-24 (§3, #1260). Nothing
+  auto-loaded this section's 09-07 or 09-14 bullets into the daemon. **Rule:** before concluding
+  that a rule "didn't change behaviour", check that the actor could have read it.
+  - **New, the mirror image of "authorized is not asked": asking what you are authorized to do,
+    with no default, parks the work.** In the same week the daemon promoted twice with no human
+    message (`e86ee267`, citing a "standing mandate"; `7831cb82`, from a self-scheduled
+    continuation). Then on 09-20 23:02Z it held a reviewed 16-PR batch, including stop-loss and
+    reconciler safety fixes, behind *"That needs your go-ahead."* It was still unpromoted 35h later.
+    Both choices are inside the charter; the inconsistency is the defect. **Rule:** for an
+    action the charter already permits, either act and record, or ask with a stated default and
+    deadline. `deploy-prod` now says so.
+  Earned: PM session `b3015dfb` 2026-09-14 → 09-20; promotes `3a73bfe5`/`e86ee267`/`9821a660`/
+  `7831cb82`/#1231 (unrecorded); PR #1190; `origin/main..origin/develop` = 16 on 2026-09-21.
 
 ### 2.17 A record on an unmerged branch is not in layer 2 — and layer-2 readers must look in the queue
 The 2026-08-31 retro closed §2.10 by routing P0/P1 findings through `incident-response` §5: incident
@@ -1278,6 +1375,57 @@ right things in the right places, and the writes never reached the branch anyone
     different artifact** (§1.10, applied to environment rather than source).
   Earned: GH #1148; the 2026-09-14 retro's first push from a worktree after installing the hook,
   which set `core.bare=true` on the shared config (restored with `git config core.bare false`).
+
+- **The primary checkout is where every session's distillate is LOADED from, and nothing keeps it
+  current.** At the 2026-09-21 retro the primary checkout was at `8da478a3`: last
+  `pull --ff-only` **2026-08-24 21:48**, 109 commits behind `origin/main`. Three things read it as if
+  it were current:
+  - `session-start-lessons.sh` injects `$CLAUDE_PROJECT_DIR/.claude/LESSONS.md`: **851 lines**,
+    ending at §2.15, against **1448** on `develop`. Every session started there (the PM daemon, all
+    four scheduled tasks) was briefed without §1.13–§1.16 (four money-path bug classes), §2.16,
+    §2.17 or any §3 correction since 08-24.
+  - Skills, `/commands` and agent definitions load from the same tree: **10 `.claude/` files,
+    +772/−37**, i.e. the whole output of the 08-31, 09-07 and 09-14 retros, reached no such session.
+    The retro's own scheduled prompt names the primary path, so the 09-21 retro first read its skill
+    three amendments stale.
+  - `install_git_hooks.py` sources hooks from the primary's `.githooks/`. `--check` reported `DRIFT`
+    against an installed hook byte-identical to `develop`'s (#1150-fixed) copy. Running the installer,
+    as the retro-specific rule above says, would have **downgraded** it to the version that sets
+    `core.bare=true` on every agent push.
+  #1082's guard made the primary write-protected against agents. It did not make it current, and
+  nothing else does.
+  - **Rule:** a distillate write is in effect when the **loader** reads it, not when it merges. The
+    check after any retro is the loaded copy: `git -C <primary> rev-list --count HEAD..origin/main`
+    and `git -C <primary> diff --stat HEAD origin/main -- .claude/ CLAUDE.md CODE.md`. Non-zero
+    outranks everything the retro wrote, because none of it is being read.
+  - **Rule:** anything that uses the primary checkout as a reference (the lessons hook, the hook
+    installer, a skill path in a task prompt) inherits its staleness silently. Read reference content
+    from refs every fetch refreshes (`git show origin/develop:<path>`), not from a working tree
+    nobody updates.
+  - **Rule:** a protected reference needs a **named updater**. Write-protection without one turns
+    "don't corrupt it" into "freeze it."
+  - **Amends the retro-specific rule above:** before running an installer on a `--check` drift, diff
+    the installed artifact against `git show origin/develop:<source>`. A drift report is only as
+    current as the installer's source.
+  Earned: 2026-09-21 retro; GH #1260.
+
+- **In zsh, a command held in a string variable is not word-split, and the error prints the whole
+  string, secrets included.** The 2026-09-21 standup improvised `P="psql $DBURL -X"; $P -c "…" 2>&1`.
+  Bash splits `$P` into words; zsh (this machine's shell) does not, so it looked for a program
+  *named* `psql postgresql://user:pass@host/db -X` and printed
+  `no such file or directory: psql postgresql://…` with the credential in it. `2>&1` put the error
+  in the tool result, and from there in the session transcript. The task prompt's own form,
+  `psql "$DBURL" -c …`, was correct; the shortcut was the agent's.
+  - **Rule:** never embed a secret in a command string held in a variable. Pass it as a quoted
+    argument (`psql "$DBURL"`), through the environment the tool reads (`PGPASSWORD`,
+    `PGSERVICE`), or wrap it in a function. A shell array works in both shells, a plain string only
+    in bash.
+  - **Rule:** don't `2>&1` a command whose *arguments* carry a secret. Failure messages echo
+    arguments, and stderr is where they land.
+  - **Rule:** a secret printed into a transcript is exposed. Say so in the run's final message and
+    leave rotation to the human; don't paste it again to "show" the problem.
+  Earned: `daily-trading-standup` 2026-09-21 (it self-reported the exposure; the mechanism was
+  reconstructed by the 09-21 retro from the transcript with the URL redacted).
 
 ---
 
