@@ -506,18 +506,24 @@ class ExitHandler:
                         scale_basis = _resolve_basis_balance(trade, balance)
                         scale_notional = scale_basis * add_effective
                         side_str = to_side_string(trade.side)
-                        scale_fee, scale_slippage = self.execution_engine.calculate_scale_in_costs(
+                        (
+                            scale_fee,
+                            scale_slippage,
+                            scale_fill_price,
+                        ) = self.execution_engine.calculate_scale_in_costs(
                             price=current_price,
                             notional=scale_notional,
                             side=side_str,
                         )
-                        total_scale_in_fees += scale_fee
 
+                        # Blend before accruing the fee so a rejected blend
+                        # cannot charge a fee for a slice that was never added.
                         self.position_tracker.apply_scale_in(
                             add_effective,
-                            price=current_price,
+                            price=scale_fill_price,
                             max_position_size=self.max_position_size,
                         )
+                        total_scale_in_fees += scale_fee
 
                         scale_ins.append(
                             {

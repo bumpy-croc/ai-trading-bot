@@ -17,6 +17,7 @@ import pandas as pd
 import pytest
 
 from src.engines.backtest.engine import Backtester
+from src.engines.backtest.execution.execution_engine import ExecutionEngine
 from src.engines.backtest.execution.exit_handler import ExitHandler
 from src.engines.backtest.execution.position_tracker import PositionTracker
 from src.engines.backtest.models import ActiveTrade
@@ -27,7 +28,7 @@ from src.engines.shared.partial_operations_manager import PartialOperationsManag
 from src.position_management.partial_manager import PartialExitPolicy
 from src.risk.risk_manager import RiskParameters
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 ENTRY_TIME = datetime(2024, 1, 1, tzinfo=UTC)
 EXIT_TIME = datetime(2024, 1, 3, tzinfo=UTC)
@@ -391,8 +392,7 @@ class TestTriggersStayOnEntryPrice:
         risk_manager = MagicMock()
         risk_manager.params = SimpleNamespace(max_daily_risk=1.0)
         risk_manager.daily_risk_used = 0.0
-        execution_engine = MagicMock()
-        execution_engine.calculate_scale_in_costs.return_value = (0.0, 0.0)
+        execution_engine = ExecutionEngine(fee_rate=0.0, slippage_rate=0.0)
         handler = ExitHandler(
             execution_engine=execution_engine,
             position_tracker=tracker,
@@ -416,3 +416,44 @@ class TestTriggersStayOnEntryPrice:
 
         assert trade.partial_exits_taken == 1
         assert trade.entry_price == 100.0
+
+
+class TestScaleInFillPrice:
+    @pytest.mark.parametrize(
+        ("side", "slipped_fill"),
+        [(PositionSide.LONG, 103.0 * 1.001), (PositionSide.SHORT, 97.0 * 0.999)],
+    )
+    def test_slice_is_costed_from_the_slipped_fill(
+        self, side: PositionSide, slipped_fill: float
+    ) -> None:
+        quote = 103.0 if side == PositionSide.LONG else 97.0
+        policy = PartialExitPolicy(
+            exit_targets=[0.50],
+            exit_sizes=[0.50],
+            scale_in_thresholds=[0.015],
+            scale_in_sizes=[0.50],
+            max_scale_ins=1,
+        )
+        tracker = PositionTracker(fee_rate=0.0, slippage_rate=0.0)
+        risk_manager = MagicMock()
+        risk_manager.params = SimpleNamespace(max_daily_risk=1.0)
+        risk_manager.daily_risk_used = 0.0
+        handler = ExitHandler(
+            execution_engine=ExecutionEngine(fee_rate=0.0, slippage_rate=0.001),
+            position_tracker=tracker,
+            risk_manager=risk_manager,
+            execution_model=ExecutionModel(default_fill_policy()),
+            partial_manager=PartialOperationsManager(policy=policy),
+            max_position_size=0.30,
+        )
+        trade = _open(tracker, side=side)
+        df = pd.DataFrame(
+            {"open": [quote], "high": [quote], "low": [quote], "close": [quote], "volume": [1.0]},
+            index=pd.DatetimeIndex([datetime(2024, 1, 2, tzinfo=UTC)]),
+        )
+
+        handler.check_partial_operations(quote, df, 0, balance=BALANCE)
+
+        assert trade.scale_ins_taken == 1
+        expected = 0.15 / (0.10 / 100.0 + 0.05 / slipped_fill)
+        assert trade.cost_basis_price == pytest.approx(expected)
