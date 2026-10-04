@@ -82,16 +82,19 @@ measures two drawdown legs and acts on the worse one:
   peak nor latch a halt that only an operator restart clears. The first mark after boot or
   after a blind spell stands alone, so a restart mid-drawdown re-trips at once. Giving back
   open profit counts as drawdown, as in the backtest. When the confirmed equity peak rises
-  more than 0.25% above the last persisted one, the engine writes an `account_history`
-  snapshot so a restart re-seeds it instead of the lower hourly row.
+  more than 0.25% above the last persisted one (and live equity is itself at that peak), the
+  loop writes a best-effort `account_history` snapshot so a restart re-seeds it instead of the
+  lower hourly row. A frozen price counts as a new mark after `DRAWDOWN_MARK_MAX_AGE_SECONDS`,
+  and a flat book (equity is realized balance) needs no confirmation.
 
 Breach is `max(balance leg, equity leg) >= cap`, so the guard is never looser than the
 balance-only version. The equity leg is skipped (never guessed) when there is no fresh
 mark — an invalid price, a position recovered from the DB and not yet re-priced, or a mark
 older than `DRAWDOWN_MARK_MAX_AGE_SECONDS`; the guard logs a WARNING and runs on the balance
 leg alone, and pages once (`DRAWDOWN_EQUITY_MARK_UNAVAILABLE`) if it stays blind for that
-long. The cap also runs on the market-data-gap iterations that skip the loop body, so the
-balance leg and the blind-mark page keep working through a data outage.
+long. The cap also runs (balance leg only; marks are not refreshed) on the market-data-gap
+iterations that skip the loop body, so realized losses such as stop fills are still caught
+through a data outage.
 `account_history.drawdown` uses the same worse-of-both basis.
 
 `FEATURE_MAX_DRAWDOWN_RESET_PEAK` re-baselines both peaks to the current balance. It cannot

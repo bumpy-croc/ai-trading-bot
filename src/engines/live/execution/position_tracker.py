@@ -21,6 +21,7 @@ from src.config.constants import (
     DEFAULT_MFE_MAE_PRECISION_DECIMALS,
     DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS,
     DEFAULT_SLIPPAGE_RATE,
+    DRAWDOWN_MARK_MAX_AGE_SECONDS,
 )
 from src.engines.shared.models import (
     BasePosition,
@@ -90,13 +91,16 @@ class MarkReading:
     ``update_pnl`` (invalid price, recovered from persistence and never
     re-marked) or when the last pricing pass is older than the caller's limit.
     ``unrealized_pnl`` is then not a live number and must not be trusted.
-    ``sequence`` advances only when the marking price changes, so callers can
-    tell distinct marks apart from repeated reads of the same one.
+    ``sequence`` advances when the marking price changes (or has been held for
+    ``DRAWDOWN_MARK_MAX_AGE_SECONDS``), so callers can tell distinct marks apart
+    from repeated reads of the same one. ``flat`` means no position is open:
+    the reading then carries no unrealized component to second-guess.
     """
 
     unrealized_pnl: float
     fresh: bool
     sequence: int
+    flat: bool = False
 
 
 class LivePositionTracker:
@@ -141,6 +145,7 @@ class LivePositionTracker:
         # Mark bookkeeping for ``mark_reading``: written only under the lock.
         self._mark_sequence = 0
         self._last_mark_price: float | None = None
+        self._price_held_since: float | None = None
         self._last_mark_monotonic: float | None = None
         self._last_pass_complete = False
         self._recovered_unmarked = False
@@ -621,11 +626,19 @@ class LivePositionTracker:
                 position.unrealized_pnl = cash_pnl(pnl_pct, basis_balance)
                 position.unrealized_pnl_percent = pnl_pct * 100.0
 
-            # A repeated price is the same mark, not a confirmation of itself.
-            if current_price != self._last_mark_price:
+            # A repeated price is the same mark, not a confirmation of itself —
+            # unless it has been held long enough that a frozen price must not
+            # postpone a breach indefinitely.
+            now = time.monotonic()
+            if (
+                current_price != self._last_mark_price
+                or self._price_held_since is None
+                or now - self._price_held_since >= DRAWDOWN_MARK_MAX_AGE_SECONDS
+            ):
                 self._mark_sequence += 1
+                self._price_held_since = now
             self._last_mark_price = current_price
-            self._last_mark_monotonic = time.monotonic()
+            self._last_mark_monotonic = now
             self._last_pass_complete = complete
             if complete:
                 self._recovered_unmarked = False
@@ -641,7 +654,7 @@ class LivePositionTracker:
         with self._positions_lock:
             total = sum(float(p.unrealized_pnl) for p in self._positions.values())
             if not self._positions:
-                return MarkReading(total, True, self._mark_sequence)
+                return MarkReading(total, True, self._mark_sequence, flat=True)
             last = self._last_mark_monotonic
             fresh = (
                 last is not None

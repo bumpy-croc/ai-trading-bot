@@ -190,6 +190,16 @@ def test_first_mark_after_boot_stands_alone_so_restart_mid_breach_retrips():
     assert guard.observe(100.0, equity=79.0, mark_sequence=7).tripped is True
 
 
+def test_flat_reading_needs_no_confirmation():
+    """After a stop-out to flat, equity is realized balance: nothing to second-guess."""
+    guard = _guard(peak=100.0, equity_peak=110.0)
+    guard.observe(100.0, equity=100.0, mark_sequence=1)
+
+    assessment = guard.observe(87.0, equity=87.0, mark_sequence=2, flat=True)
+
+    assert assessment.tripped is True  # 20.9% off the $110 equity peak
+
+
 def test_balance_leg_stays_immediate_without_confirmation():
     guard = _guard(peak=100.0)
     guard.observe(100.0, equity=100.0, mark_sequence=1)
@@ -245,16 +255,17 @@ def test_reset_peak_cannot_clear_a_halt_while_the_position_is_still_that_deep(mo
 class _Marks:
     """Controllable stand-in for LivePositionTracker.mark_reading."""
 
-    def __init__(self, unrealized: float = 0.0, fresh: bool = True) -> None:
+    def __init__(self, unrealized: float = 0.0, fresh: bool = True, flat: bool = False) -> None:
         self.unrealized = unrealized
         self.fresh = fresh
+        self.flat = flat
         self.sequence = 0
         self.raises: Exception | None = None
 
     def __call__(self) -> MarkReading:
         if self.raises is not None:
             raise self.raises
-        return MarkReading(self.unrealized, self.fresh, self.sequence)
+        return MarkReading(self.unrealized, self.fresh, self.sequence, self.flat)
 
     def tick(self, unrealized: float | None = None, fresh: bool | None = None) -> None:
         self.sequence += 1
@@ -603,4 +614,68 @@ def test_data_gap_iterations_still_run_the_drawdown_check():
 
         engine._trading_loop("BTCUSDT", "1h", max_steps=1)
 
-        engine._drawdown_enforcer.check.assert_called_once()
+        engine._drawdown_enforcer.check_during_data_gap.assert_called_once()
+
+
+def test_data_gap_check_runs_the_balance_leg_only():
+    state = _state(balance=78.0, db_peak=100.0)
+    marks = MagicMock()
+    enforcer = _enforcer(state, marks)
+
+    enforcer.check_during_data_gap()
+
+    marks.assert_not_called()  # marks are not refreshed on gap iterations
+    state._enter_close_only_mode.assert_called_once()
+
+
+def test_data_gap_check_does_not_consume_the_seed_budget():
+    state = _state(balance=100.0)
+    state.db_manager.get_session_peak_balance.side_effect = RuntimeError("db down")
+    enforcer = _enforcer(state, _Marks())
+
+    for _ in range(drawdown_guard.MAX_SEED_ATTEMPTS + 5):
+        enforcer.check_during_data_gap()
+
+    assert enforcer.guard.seeded is False  # never self-anchored on the boot balance
+
+
+def test_flat_account_equity_breach_trips_without_a_second_mark():
+    state = _state(balance=87.0, db_peak=100.0, db_equity_peak=110.0)
+    enforcer = _enforcer(state, _Marks(unrealized=0.0, flat=True))
+
+    enforcer.check()
+
+    state._enter_close_only_mode.assert_called_once()
+
+
+def test_peak_snapshot_is_skipped_when_current_equity_is_not_at_the_confirmed_peak():
+    state = _state(balance=100.0)
+    marks = _Marks(unrealized=0.0)
+    writer = MagicMock()
+    enforcer = _enforcer_with_writer(state, marks, writer)
+    enforcer.check()
+    marks.tick(unrealized=6.0)
+    enforcer.check()
+
+    marks.tick(unrealized=6.0)  # confirms $106...
+    enforcer.guard.observe(100.0, 106.0, marks.sequence)
+    enforcer._last_equity = 500.0  # ...but the live mark on the persisting check is a bad tick
+    enforcer._persist_equity_peak()
+
+    writer.assert_not_called()
+
+
+def test_peak_snapshot_is_not_written_from_the_pre_order_gate():
+    state = _state(balance=100.0)
+    marks = _Marks(unrealized=0.0)
+    writer = MagicMock()
+    enforcer = _enforcer_with_writer(state, marks, writer)
+    enforcer.check()
+
+    marks.tick(unrealized=6.0)
+    enforcer.check_before_new_risk()
+    marks.tick(unrealized=6.0)
+    enforcer.check_before_new_risk()
+
+    assert enforcer.guard.equity_peak == pytest.approx(106.0)
+    writer.assert_not_called()

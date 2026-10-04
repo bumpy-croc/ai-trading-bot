@@ -300,6 +300,7 @@ class MaxDrawdownGuard:
         balance: float,
         equity: float | None = None,
         mark_sequence: int | None = None,
+        flat: bool = False,
     ) -> DrawdownAssessment:
         """Record a sample; ratchet the peaks and classify the tier.
 
@@ -310,6 +311,8 @@ class MaxDrawdownGuard:
             mark_sequence: Identifies the price mark ``equity`` was built from;
                 repeated reads of one mark do not count as confirmation of the
                 equity peak. None treats every call as a new mark.
+            flat: No position is open, so ``equity`` is realized balance and
+                needs no two-mark confirmation.
         """
         if not self._seeded:
             self.seed_peak(balance)
@@ -329,6 +332,8 @@ class MaxDrawdownGuard:
             # Without a trustworthy mark nothing may build toward a peak.
             self._prev_equity = self._cur_equity = self._equity_mark_sequence = None
         else:
+            if flat:
+                self._prev_equity = self._cur_equity = self._equity_mark_sequence = None
             self._confirm_equity_peak(valid_equity, mark_sequence)
             peak_equity = self.equity_peak
             if peak_equity > 0:
@@ -498,6 +503,7 @@ class MaxDrawdownEnforcer:
         self._mark_provider = mark_provider
         self._snapshot_writer = snapshot_writer
         self._persisted_equity_peak = 0.0
+        self._last_equity: float | None = None
         self._mark_blind_since: float | None = None
         self._mark_blind_alerted = False
         self._breach_notified = False
@@ -523,6 +529,19 @@ class MaxDrawdownEnforcer:
     def check(self) -> None:
         """Assess current drawdown; enforce the hard cap on breach."""
         self._run_check(count_seed_deferral=True)
+        # After enforcement, and only from the loop: a DB write has no place in
+        # the pre-order gate that runs under the base-asset lock.
+        self._persist_equity_peak()
+
+    def check_during_data_gap(self) -> None:
+        """Realized-balance check for loop iterations that skip the loop body.
+
+        A market-data gap leaves position marks unrefreshed, so the equity leg
+        is not read (and its blind-mark accounting not advanced); the balance
+        leg still catches realized losses such as stop fills. Does not consume
+        the seeding attempt budgets, which a long outage would otherwise burn.
+        """
+        self._run_check(count_seed_deferral=False, use_marks=False)
 
     def check_before_new_risk(self) -> None:
         """In-line pre-order variant of :meth:`check` for exposure chokepoints.
@@ -544,7 +563,7 @@ class MaxDrawdownEnforcer:
         """
         self._run_check(count_seed_deferral=False)
 
-    def _run_check(self, *, count_seed_deferral: bool) -> None:
+    def _run_check(self, *, count_seed_deferral: bool, use_marks: bool = True) -> None:
         state = self._state
         try:
             balance = float(state.current_balance)
@@ -561,9 +580,11 @@ class MaxDrawdownEnforcer:
                 # Armed provisionally from the current balance; keep trying to
                 # ratchet up to the durable peak.
                 self._upgrade_peak_from_history(count_attempt=count_seed_deferral)
-            equity, mark_sequence, unrealized = self._read_equity(balance)
-            assessment = self._guard.observe(balance, equity, mark_sequence)
-            self._persist_equity_peak()
+            equity, mark_sequence, unrealized, flat = (
+                self._read_equity(balance) if use_marks else (None, None, None, False)
+            )
+            self._last_equity = equity
+            assessment = self._guard.observe(balance, equity, mark_sequence, flat=flat)
         except Exception as e:
             # Monitoring must never take down the trading loop.
             logger.error("Max-drawdown check failed: %s", e, exc_info=True)
@@ -643,6 +664,11 @@ class MaxDrawdownEnforcer:
             return
         if peak <= self._persisted_equity_peak * (1 + EQUITY_PEAK_PERSIST_STEP):
             return
+        # The row records the live equity: only write while that is itself at
+        # the confirmed peak, so a bad tick cannot be persisted as the baseline.
+        equity = self._last_equity
+        if equity is None or equity > peak * (1 + EQUITY_PEAK_PERSIST_STEP):
+            return
         try:
             self._snapshot_writer()
         except Exception as e:  # noqa: BLE001 - persistence must never break the check
@@ -650,8 +676,8 @@ class MaxDrawdownEnforcer:
             return
         self._persisted_equity_peak = peak
 
-    def _read_equity(self, balance: float) -> tuple[float | None, int | None, float | None]:
-        """Mark-to-market ``(equity, mark_sequence, unrealized)``, or Nones when blind.
+    def _read_equity(self, balance: float) -> tuple[float | None, int | None, float | None, bool]:
+        """Mark-to-market ``(equity, mark_sequence, unrealized, flat)``; Nones when blind.
 
         Fault-isolated: an unavailable or non-fresh mark degrades the check to
         the balance leg alone (exactly the pre-equity behaviour) with a WARNING
@@ -660,7 +686,7 @@ class MaxDrawdownEnforcer:
         """
         provider = self._mark_provider
         if provider is None:
-            return None, None, None
+            return None, None, None, False
         reason: str | None = None
         reading: MarkReading | None = None
         try:
@@ -677,10 +703,15 @@ class MaxDrawdownEnforcer:
                 logger.info("Drawdown equity leg: fresh position marks restored")
             self._mark_blind_since = None
             self._mark_blind_alerted = False
-            return balance + reading.unrealized_pnl, reading.sequence, reading.unrealized_pnl
+            return (
+                balance + reading.unrealized_pnl,
+                reading.sequence,
+                reading.unrealized_pnl,
+                reading.flat,
+            )
 
         self._note_blind(reason or "unknown")
-        return None, None, None
+        return None, None, None, False
 
     def _note_blind(self, reason: str) -> None:
         """Log the equity-leg blind spot; page the operator once if it persists."""
@@ -881,6 +912,10 @@ class MaxDrawdownEnforcer:
             equity_read_ok, db_equity_peak = self._read_equity_peak(session_id, lineage)
             if equity_read_ok:
                 self._guard.raise_equity_peak(db_equity_peak)
+                # The durable rows already hold it: nothing new to snapshot.
+                self._persisted_equity_peak = max(
+                    self._persisted_equity_peak, self._guard.equity_peak
+                )
             if equity_read_ok or (count_attempt and self._upgrade_attempts >= MAX_SEED_ATTEMPTS):
                 self._history_upgrade_pending = False
             self._peak_seed_provenance = PEAK_SEED_DB_SESSION_MAX

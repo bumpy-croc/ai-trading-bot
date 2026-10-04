@@ -340,3 +340,35 @@ def test_partial_exit_rescales_the_open_mark_immediately() -> None:
     )
 
     assert position.unrealized_pnl == pytest.approx(before / 2)
+
+
+@pytest.mark.fast
+def test_frozen_price_advances_the_sequence_after_the_hold_limit(monkeypatch) -> None:
+    """A price frozen for DRAWDOWN_MARK_MAX_AGE_SECONDS must not postpone
+    two-mark confirmation of a breach indefinitely."""
+    import src.engines.live.execution.position_tracker as module
+    from src.config.constants import DRAWDOWN_MARK_MAX_AGE_SECONDS
+
+    tracker = LivePositionTracker()
+    _open_long(tracker)
+    clock = [1000.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+
+    tracker.update_pnl(current_price=70.0, fallback_balance=1000.0)
+    first = tracker.mark_reading(max_age_seconds=10_000).sequence
+    clock[0] += DRAWDOWN_MARK_MAX_AGE_SECONDS - 1
+    tracker.update_pnl(current_price=70.0, fallback_balance=1000.0)
+    assert tracker.mark_reading(max_age_seconds=10_000).sequence == first
+
+    clock[0] += 2
+    tracker.update_pnl(current_price=70.0, fallback_balance=1000.0)
+    assert tracker.mark_reading(max_age_seconds=10_000).sequence == first + 1
+
+
+@pytest.mark.fast
+def test_mark_reading_flags_a_flat_book() -> None:
+    tracker = LivePositionTracker()
+    assert tracker.mark_reading(max_age_seconds=600).flat is True
+
+    _open_long(tracker)
+    assert tracker.mark_reading(max_age_seconds=600).flat is False

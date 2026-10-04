@@ -2537,12 +2537,11 @@ class LiveTradingEngine:
         """Keep the max-drawdown cap running on iterations that skip the loop body.
 
         A market-data gap `continue`s before ``update_pnl`` and the regular
-        check, so without this the cap — and its stale-mark escalation — would
-        go dark exactly when marks stop refreshing. Realized-balance changes
-        (stop fills) are still caught, and the equity leg degrades loudly as
-        the last mark ages out.
+        check, so without this the cap would go dark during an outage even for
+        realized losses such as stop fills. Marks are not refreshed on these
+        iterations, so only the balance leg is evaluated.
         """
-        self._drawdown_enforcer.check()
+        self._drawdown_enforcer.check_during_data_gap()
 
     def _refresh_drawdown_gate(self) -> bool:
         """Re-assess the max-drawdown hard cap at an exposure-increase chokepoint.
