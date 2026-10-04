@@ -304,3 +304,39 @@ def test_mark_reading_with_no_positions_is_trivially_fresh_and_sequence_advances
 
     tracker.update_pnl(current_price=100.0, fallback_balance=1000.0)
     assert tracker.mark_reading(max_age_seconds=600).sequence == first.sequence + 1
+
+
+@pytest.mark.fast
+def test_mark_sequence_advances_only_when_the_price_changes() -> None:
+    """A stuck feed repeating one price must not look like fresh confirmation."""
+    tracker = LivePositionTracker()
+    _open_long(tracker)
+
+    tracker.update_pnl(current_price=95.0, fallback_balance=1000.0)
+    first = tracker.mark_reading(max_age_seconds=600).sequence
+    tracker.update_pnl(current_price=95.0, fallback_balance=1000.0)
+    assert tracker.mark_reading(max_age_seconds=600).sequence == first
+
+    tracker.update_pnl(current_price=94.0, fallback_balance=1000.0)
+    assert tracker.mark_reading(max_age_seconds=600).sequence == first + 1
+
+
+@pytest.mark.fast
+def test_partial_exit_rescales_the_open_mark_immediately() -> None:
+    """The exited slice is realized, so the remaining unrealized P&L must not
+    keep counting it until the next pricing pass."""
+    tracker = LivePositionTracker()
+    position = _open_long(tracker)  # size 0.2
+    tracker.update_pnl(current_price=90.0, fallback_balance=1000.0)
+    before = position.unrealized_pnl
+    assert before < 0
+
+    tracker.apply_partial_exit(
+        order_id="mark-1",
+        delta_fraction=0.1,
+        price=90.0,
+        target_level=0,
+        basis_balance=1000.0,
+    )
+
+    assert position.unrealized_pnl == pytest.approx(before / 2)

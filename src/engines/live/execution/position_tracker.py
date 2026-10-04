@@ -90,8 +90,8 @@ class MarkReading:
     ``update_pnl`` (invalid price, recovered from persistence and never
     re-marked) or when the last pricing pass is older than the caller's limit.
     ``unrealized_pnl`` is then not a live number and must not be trusted.
-    ``sequence`` increments once per pricing pass so callers can tell distinct
-    marks apart from repeated reads of the same one.
+    ``sequence`` advances only when the marking price changes, so callers can
+    tell distinct marks apart from repeated reads of the same one.
     """
 
     unrealized_pnl: float
@@ -140,6 +140,7 @@ class LivePositionTracker:
         self._positions_lock = threading.Lock()
         # Mark bookkeeping for ``mark_reading``: written only under the lock.
         self._mark_sequence = 0
+        self._last_mark_price: float | None = None
         self._last_mark_monotonic: float | None = None
         self._last_pass_complete = False
         self._recovered_unmarked = False
@@ -620,7 +621,10 @@ class LivePositionTracker:
                 position.unrealized_pnl = cash_pnl(pnl_pct, basis_balance)
                 position.unrealized_pnl_percent = pnl_pct * 100.0
 
-            self._mark_sequence += 1
+            # A repeated price is the same mark, not a confirmation of itself.
+            if current_price != self._last_mark_price:
+                self._mark_sequence += 1
+            self._last_mark_price = current_price
             self._last_mark_monotonic = time.monotonic()
             self._last_pass_complete = complete
             if complete:
@@ -630,8 +634,9 @@ class LivePositionTracker:
         """Unrealized P&L with an explicit freshness verdict (see ``MarkReading``).
 
         ``update_pnl`` silently writes 0.0 for a position it cannot price, which
-        is indistinguishable from a flat position; risk guards must use this
-        instead of ``total_unrealized_pnl`` so a missing mark degrades loudly.
+        is indistinguishable from a flat position; a guard that must not mistake
+        "could not price" for "flat" reads this instead of ``total_unrealized_pnl``
+        so a missing mark degrades loudly.
         """
         with self._positions_lock:
             total = sum(float(p.unrealized_pnl) for p in self._positions.values())
@@ -785,9 +790,16 @@ class LivePositionTracker:
             )
 
             # Update position state - clamp to exactly zero if very close (accumulated rounding)
+            size_before = float(position.current_size)
             position.current_size = max(0.0, float(position.current_size) - float(delta_fraction))
             if abs(position.current_size) < EPSILON:
                 position.current_size = 0.0
+            # The exited slice is realized: rescale the open mark now so risk
+            # guards reading it before the next pricing pass don't double count it.
+            if size_before > 0:
+                remaining = position.current_size / size_before
+                position.unrealized_pnl *= remaining
+                position.unrealized_pnl_percent *= remaining
             position.partial_exits_taken += 1
             position.last_partial_exit_price = price
 

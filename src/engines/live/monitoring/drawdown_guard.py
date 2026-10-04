@@ -10,15 +10,19 @@ cap, CRITICAL at 80%, and a latched BREACH at the cap itself
 - Equity leg: mark-to-market equity (balance + unrealized P&L of open
   positions) vs its own session peak equity, so a position running deep
   underwater trips the cap before it is stopped out. The equity peak is floored
-  at the balance peak, so with no open position the two legs are identical.
+  at the balance peak, so with no open position the legs coincide until equity
+  has set a higher confirmed peak (giving back open profit then counts).
 
 Breach is ``max(balance leg, equity leg) >= cap``: the old balance condition is
 a literal disjunct, so the guard can never be looser than the balance-only
 version. The equity leg is skipped (never guessed) when no trustworthy mark is
 available — invalid price, position recovered but not yet re-marked, or a stale
-price feed — and escalates to a CRITICAL alert if that persists. The equity
-peak only ratchets up once two consecutive distinct marks agree, so a single
-bad tick cannot inflate it into a phantom latch.
+price feed — and escalates to a CRITICAL alert if that persists. Both the equity
+peak and an equity-leg breach need two consecutive distinct marks to agree (the
+peak ratchets to the lower, the drawdown is read off the higher), so a single
+bad tick can neither inflate the peak nor latch a halt that only an operator
+restart clears. The first mark after boot or after a blind spell stands alone,
+so a restart mid-drawdown re-trips immediately.
 
 ``MaxDrawdownEnforcer`` runs the guard on every trading-loop iteration and, on
 breach, trips the EXISTING close-only mode, which gates every exposure
@@ -129,6 +133,11 @@ MAX_SEED_ATTEMPTS = 10
 # Seconds the equity leg may stay blind (no fresh mark) with a position open before the
 # operator is paged: the balance leg alone cannot see the unrealized loss it exists to catch.
 MARK_BLIND_ESCALATE_SECONDS = DRAWDOWN_MARK_MAX_AGE_SECONDS
+
+# A new confirmed equity peak is written to account_history once it exceeds the last
+# persisted one by this fraction: the hourly snapshot would otherwise lose intra-hour
+# highs on restart. Stepped so a rally does not write a row every iteration.
+EQUITY_PEAK_PERSIST_STEP = 0.0025
 
 
 class DrawdownTier(IntEnum):
@@ -323,7 +332,13 @@ class MaxDrawdownGuard:
             self._confirm_equity_peak(valid_equity, mark_sequence)
             peak_equity = self.equity_peak
             if peak_equity > 0:
-                equity_drawdown = max((peak_equity - valid_equity) / peak_equity, 0.0)
+                # Read the drawdown off the better of the last two distinct marks.
+                confirmed = (
+                    valid_equity
+                    if self._prev_equity is None
+                    else max(self._prev_equity, valid_equity)
+                )
+                equity_drawdown = max((peak_equity - confirmed) / peak_equity, 0.0)
         drawdown = max(balance_drawdown, equity_drawdown)
 
         tier = DrawdownTier.NONE
@@ -350,7 +365,7 @@ class MaxDrawdownGuard:
         )
 
     def _confirm_equity_peak(self, equity: float, mark_sequence: int | None) -> None:
-        """Ratchet the equity peak to the lower of the last two distinct marks."""
+        """Track the last two distinct marks; ratchet the peak to the lower of them."""
         if mark_sequence is None or mark_sequence != self._equity_mark_sequence:
             self._prev_equity, self._cur_equity = self._cur_equity, equity
             self._equity_mark_sequence = mark_sequence
@@ -465,6 +480,7 @@ class MaxDrawdownEnforcer:
         guard: MaxDrawdownGuard,
         *,
         mark_provider: Callable[[], MarkReading] | None = None,
+        snapshot_writer: Callable[[], None] | None = None,
     ) -> None:
         """Bind to the engine's live state (see protocol for the surface).
 
@@ -473,10 +489,15 @@ class MaxDrawdownEnforcer:
             guard: The drawdown state machine.
             mark_provider: Returns the open positions' unrealized P&L with a
                 freshness verdict. ``None`` runs the balance leg only.
+            snapshot_writer: Persists an ``account_history`` snapshot (must not
+                raise). Called when the confirmed equity peak rises, so a
+                restart re-seeds from it rather than from a lower hourly row.
         """
         self._state = engine_state
         self._guard = guard
         self._mark_provider = mark_provider
+        self._snapshot_writer = snapshot_writer
+        self._persisted_equity_peak = 0.0
         self._mark_blind_since: float | None = None
         self._mark_blind_alerted = False
         self._breach_notified = False
@@ -542,6 +563,7 @@ class MaxDrawdownEnforcer:
                 self._upgrade_peak_from_history(count_attempt=count_seed_deferral)
             equity, mark_sequence, unrealized = self._read_equity(balance)
             assessment = self._guard.observe(balance, equity, mark_sequence)
+            self._persist_equity_peak()
         except Exception as e:
             # Monitoring must never take down the trading loop.
             logger.error("Max-drawdown check failed: %s", e, exc_info=True)
@@ -610,6 +632,23 @@ class MaxDrawdownEnforcer:
                 e,
                 exc_info=True,
             )
+
+    def _persist_equity_peak(self) -> None:
+        """Snapshot when the confirmed equity peak has risen past what is persisted."""
+        peak = self._guard.equity_peak
+        if self._persisted_equity_peak <= 0:
+            self._persisted_equity_peak = peak  # seeded baseline is already durable
+            return
+        if self._snapshot_writer is None or self._mark_provider is None:
+            return
+        if peak <= self._persisted_equity_peak * (1 + EQUITY_PEAK_PERSIST_STEP):
+            return
+        try:
+            self._snapshot_writer()
+        except Exception as e:  # noqa: BLE001 - persistence must never break the check
+            logger.warning("Could not persist new equity peak snapshot: %s", e)
+            return
+        self._persisted_equity_peak = peak
 
     def _read_equity(self, balance: float) -> tuple[float | None, int | None, float | None]:
         """Mark-to-market ``(equity, mark_sequence, unrealized)``, or Nones when blind.

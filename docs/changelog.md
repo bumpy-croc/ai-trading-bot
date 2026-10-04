@@ -18,7 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   condition (never looser), the equity leg is mark-to-market equity vs its own session peak
   (seeded from `account_history.equity`). The equity leg is skipped with a WARNING (and a page
   after `DRAWDOWN_MARK_MAX_AGE_SECONDS`) when marks are invalid, stale, or not yet re-priced
-  after a restart, and its peak needs two consecutive distinct marks to ratchet.
+  after a restart; its peak and an equity-only breach each need two consecutive distinct marks;
+  new confirmed equity peaks are snapshotted to `account_history`; the cap now also runs on
+  market-data-gap iterations; a partial exit rescales the open mark immediately.
   `account_history.drawdown` now uses the same worse-of-both basis. New
   `LivePositionTracker.mark_reading()` exposes unrealized P&L with an explicit freshness flag.
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).

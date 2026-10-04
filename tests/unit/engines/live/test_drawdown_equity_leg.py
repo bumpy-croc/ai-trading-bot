@@ -61,11 +61,12 @@ def test_balance_only_guard_would_have_stayed_silent():
 
 
 def test_equity_leg_drives_the_tiers_below_the_cap():
-    guard = _guard(peak=100.0)
+    warning = _guard(peak=100.0)
+    critical = _guard(peak=100.0)
 
-    assert guard.observe(100.0, equity=89.0).tier is DrawdownTier.WARNING
-    assert guard.observe(100.0, equity=83.0).tier is DrawdownTier.CRITICAL
-    assert guard.tripped is False
+    assert warning.observe(100.0, equity=89.0).tier is DrawdownTier.WARNING
+    assert critical.observe(100.0, equity=83.0).tier is DrawdownTier.CRITICAL
+    assert warning.tripped is False and critical.tripped is False
 
 
 def test_never_looser_than_balance_only_when_open_profit_masks_a_realized_loss():
@@ -144,10 +145,56 @@ def test_giving_back_confirmed_open_profit_counts_as_drawdown():
     guard = _guard(peak=100.0)
     guard.observe(100.0, equity=110.0, mark_sequence=1)
     guard.observe(100.0, equity=110.0, mark_sequence=2)  # confirmed $110 equity peak
+    guard.observe(100.0, equity=88.0, mark_sequence=3)  # 20% off $110, first low mark
 
-    assessment = guard.observe(100.0, equity=88.0, mark_sequence=3)  # 20% off $110
+    assessment = guard.observe(100.0, equity=88.0, mark_sequence=4)  # confirmed
 
     assert assessment.tripped is True
+
+
+def test_single_low_mark_does_not_latch_the_halt():
+    """One bad kline close must not force an operator restart."""
+    guard = _guard(peak=100.0)
+    guard.observe(100.0, equity=100.0, mark_sequence=1)
+
+    spike = guard.observe(100.0, equity=79.0, mark_sequence=2)
+    recovered = guard.observe(100.0, equity=100.0, mark_sequence=3)
+
+    assert spike.tripped is False
+    assert recovered.tripped is False
+
+
+def test_equity_breach_latches_once_a_second_distinct_mark_agrees():
+    guard = _guard(peak=100.0)
+    guard.observe(100.0, equity=100.0, mark_sequence=1)
+    guard.observe(100.0, equity=79.0, mark_sequence=2)
+
+    assessment = guard.observe(100.0, equity=79.0, mark_sequence=3)
+
+    assert assessment.tripped is True
+
+
+def test_rereading_one_low_mark_is_not_a_second_confirmation():
+    guard = _guard(peak=100.0)
+    guard.observe(100.0, equity=100.0, mark_sequence=1)
+
+    for _ in range(3):
+        assessment = guard.observe(100.0, equity=79.0, mark_sequence=2)
+
+    assert assessment.tripped is False
+
+
+def test_first_mark_after_boot_stands_alone_so_restart_mid_breach_retrips():
+    guard = _guard(peak=100.0)
+
+    assert guard.observe(100.0, equity=79.0, mark_sequence=7).tripped is True
+
+
+def test_balance_leg_stays_immediate_without_confirmation():
+    guard = _guard(peak=100.0)
+    guard.observe(100.0, equity=100.0, mark_sequence=1)
+
+    assert guard.observe(79.0, equity=79.0, mark_sequence=2).tripped is True  # realized loss
 
 
 def test_missing_mark_resets_peak_confirmation():
@@ -177,6 +224,17 @@ def test_reset_peak_flag_rebaselines_both_legs(monkeypatch):
 
     assert guard.peak_balance == pytest.approx(80.0)
     assert guard.equity_peak == pytest.approx(80.0)
+
+
+def test_reset_peak_cannot_clear_a_halt_while_the_position_is_still_that_deep(monkeypatch):
+    """The override re-baselines to the current BALANCE; an open position still
+    >= cap underwater re-trips the equity leg on the first mark (documented: the
+    override works once the position is closed or recovers)."""
+    monkeypatch.setenv("FEATURE_MAX_DRAWDOWN_RESET_PEAK", "true")
+    guard = MaxDrawdownGuard(DEFAULT_MAX_DRAWDOWN)
+    guard.seed_peak(100.0, equity_peak=110.0)
+
+    assert guard.observe(100.0, equity=79.0, mark_sequence=1).tripped is True
 
 
 # ---------------------------------------------------------------------------
@@ -460,3 +518,89 @@ def test_engine_enforcer_reads_marks_from_the_live_position_tracker():
     engine._check_max_drawdown()
 
     assert engine._close_only_mode is True
+
+
+# ---------------------------------------------------------------------------
+# Durable equity peak, data-gap enforcement
+# ---------------------------------------------------------------------------
+
+
+def _enforcer_with_writer(state, marks, writer) -> MaxDrawdownEnforcer:
+    return MaxDrawdownEnforcer(
+        engine_state=state,
+        guard=MaxDrawdownGuard(DEFAULT_MAX_DRAWDOWN),
+        mark_provider=marks,
+        snapshot_writer=writer,
+    )
+
+
+def test_confirmed_new_equity_peak_is_persisted_so_a_restart_can_reseed_it():
+    state = _state(balance=100.0)
+    marks = _Marks(unrealized=0.0)
+    writer = MagicMock()
+    enforcer = _enforcer_with_writer(state, marks, writer)
+    enforcer.check()  # arms; baseline $100 is already durable
+    writer.assert_not_called()
+
+    marks.tick(unrealized=6.0)
+    enforcer.check()
+    writer.assert_not_called()  # one mark is not a confirmed peak
+    marks.tick(unrealized=6.0)  # second distinct mark confirms $106
+    enforcer.check()
+
+    assert enforcer.guard.equity_peak == pytest.approx(106.0)
+    writer.assert_called_once()
+
+
+def test_small_peak_increase_does_not_write_a_snapshot():
+    state = _state(balance=100.0)
+    marks = _Marks(unrealized=0.0)
+    writer = MagicMock()
+    enforcer = _enforcer_with_writer(state, marks, writer)
+    enforcer.check()
+
+    marks.tick(unrealized=0.1)
+    enforcer.check()
+    marks.tick(unrealized=0.1)
+    enforcer.check()
+
+    assert enforcer.guard.equity_peak == pytest.approx(100.1)
+    writer.assert_not_called()
+
+
+def test_snapshot_writer_failure_never_breaks_the_check():
+    state = _state(balance=100.0)
+    marks = _Marks(unrealized=0.0)
+    writer = MagicMock(side_effect=RuntimeError("db down"))
+    enforcer = _enforcer_with_writer(state, marks, writer)
+    enforcer.check()
+    marks.tick(unrealized=8.0)
+    enforcer.check()
+    marks.tick(unrealized=8.0)
+
+    enforcer.check()
+
+    assert writer.call_count >= 1
+    state._enter_close_only_mode.assert_not_called()
+
+
+def test_data_gap_iterations_still_run_the_drawdown_check():
+    """A market-data gap `continue`s before the regular check; the cap (and its
+    blind-mark escalation) must keep running through it."""
+    from tests.unit.engines.live.test_system_halt_gate import _make_engine
+
+    for df_result, fresh in ((None, True), (MagicMock(empty=False), False)):
+        engine = _make_engine()
+        engine._drawdown_enforcer = MagicMock()
+        engine._ensure_ws_health_monitor_alive = MagicMock()
+        engine._drain_pending_fill_exits = MagicMock()
+        engine._get_latest_data = MagicMock(return_value=df_result)
+        engine._is_data_fresh = MagicMock(return_value=fresh)
+        engine._calculate_adaptive_interval = MagicMock(return_value=0)
+        engine._sleep_with_interrupt = MagicMock()
+        engine.stop = MagicMock()
+        engine.is_running = True
+
+        engine._trading_loop("BTCUSDT", "1h", max_steps=1)
+
+        engine._drawdown_enforcer.check.assert_called_once()

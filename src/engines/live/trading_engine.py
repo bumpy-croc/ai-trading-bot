@@ -1149,6 +1149,7 @@ class LiveTradingEngine:
             mark_provider=lambda: self.live_position_tracker.mark_reading(
                 DRAWDOWN_MARK_MAX_AGE_SECONDS
             ),
+            snapshot_writer=self._log_account_snapshot,
         )
         # #807 follow-up: run the account circuit breaker on the loop too —
         # restart-safe daily baseline + drawdown peak (#986 gap B), true-equity
@@ -1783,6 +1784,7 @@ class LiveTradingEngine:
                     log_data_event("no_data", reason="empty_frame")
                     logger.warning("No market data received")
                     self.check_interval = self._calculate_adaptive_interval()
+                    self._enforce_drawdown_through_data_gap()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
 
@@ -1790,6 +1792,7 @@ class LiveTradingEngine:
                 if not self._is_data_fresh(df):
                     logger.debug("Data is not fresh enough, using longer interval")
                     self.check_interval = self._calculate_adaptive_interval()
+                    self._enforce_drawdown_through_data_gap()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
                 # Add sentiment data if available
@@ -1835,6 +1838,7 @@ class LiveTradingEngine:
                         tail_nan_counts,
                     )
                     self.check_interval = self._calculate_adaptive_interval()
+                    self._enforce_drawdown_through_data_gap()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
 
@@ -1844,6 +1848,7 @@ class LiveTradingEngine:
                     logger.error(
                         "DataFrame became empty after readiness check - skipping iteration"
                     )
+                    self._enforce_drawdown_through_data_gap()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
 
@@ -2527,6 +2532,17 @@ class LiveTradingEngine:
         """
         self._drawdown_enforcer.check()
         self._circuit_breaker_enforcer.check()
+
+    def _enforce_drawdown_through_data_gap(self) -> None:
+        """Keep the max-drawdown cap running on iterations that skip the loop body.
+
+        A market-data gap `continue`s before ``update_pnl`` and the regular
+        check, so without this the cap — and its stale-mark escalation — would
+        go dark exactly when marks stop refreshing. Realized-balance changes
+        (stop fills) are still caught, and the equity leg degrades loudly as
+        the last mark ages out.
+        """
+        self._drawdown_enforcer.check()
 
     def _refresh_drawdown_gate(self) -> bool:
         """Re-assess the max-drawdown hard cap at an exposure-increase chokepoint.

@@ -76,17 +76,31 @@ measures two drawdown legs and acts on the worse one:
 - **Equity leg** (#1267): mark-to-market equity (`balance + unrealized P&L`) vs the session
   peak equity, so an open position running deep underwater trips the cap before it is
   stopped out. The equity peak is seeded from `max(account_history.equity)` over the same
-  session lineage, floored at the balance peak (with no open position the legs are
-  identical), and only ratchets up once two consecutive distinct price marks agree so one bad
-  tick cannot inflate it into a phantom latch. Giving back open profit counts as drawdown,
-  as in the backtest.
+  session lineage and floored at the balance peak. It ratchets up only once two consecutive
+  distinct price marks agree, and an equity-leg breach likewise needs two distinct marks (the
+  drawdown is read off the better of the last two), so one bad tick can neither inflate the
+  peak nor latch a halt that only an operator restart clears. The first mark after boot or
+  after a blind spell stands alone, so a restart mid-drawdown re-trips at once. Giving back
+  open profit counts as drawdown, as in the backtest. When the confirmed equity peak rises
+  more than 0.25% above the last persisted one, the engine writes an `account_history`
+  snapshot so a restart re-seeds it instead of the lower hourly row.
 
 Breach is `max(balance leg, equity leg) >= cap`, so the guard is never looser than the
 balance-only version. The equity leg is skipped (never guessed) when there is no fresh
 mark — an invalid price, a position recovered from the DB and not yet re-priced, or a mark
 older than `DRAWDOWN_MARK_MAX_AGE_SECONDS`; the guard logs a WARNING and runs on the balance
 leg alone, and pages once (`DRAWDOWN_EQUITY_MARK_UNAVAILABLE`) if it stays blind for that
-long. `account_history.drawdown` uses the same worse-of-both basis.
+long. The cap also runs on the market-data-gap iterations that skip the loop body, so the
+balance leg and the blind-mark page keep working through a data outage.
+`account_history.drawdown` uses the same worse-of-both basis.
+
+`FEATURE_MAX_DRAWDOWN_RESET_PEAK` re-baselines both peaks to the current balance. It cannot
+clear a halt caused purely by an open position still at or beyond the cap underwater: the
+equity leg re-trips on the first mark, so close the position (or wait for recovery) first.
+
+Before first deploy compare `max(equity)` with `max(balance)` in `account_history` for the
+production session: the equity leg measures from the former, so a large gap means an
+immediate warning or trip.
 
 - **Peak baseline**: the `account_history` session max is **authoritative** — seeded on boot
   from `max(account_history.balance)` for the active session (plus the recovered inactive
