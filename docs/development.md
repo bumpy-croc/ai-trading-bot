@@ -312,7 +312,7 @@ The repository includes a Codex-driven loop that keeps running fast validations,
 
 ```bash
 python -m cli codex auto-review \
-  --plan-path docs/execplans/codex_auto_review.md \
+  --plan-path docs/archive/execplans/codex_auto_review.md \
   --max-iterations 3
 ```
 

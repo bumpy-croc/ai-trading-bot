@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Docs archived and refreshed** (#793). The three `PHASE1_*` docs, all nine ExecPlans and the four
+  `docs/issues/` write-ups moved to `docs/archive/`, each with a header naming the archive date and
+  the doc that supersedes it. `docs/technical_debt.md` is rewritten from measured state (the stale
+  2025-11-21 snapshot is kept in `docs/archive/`). `docs/README.md` indexes every doc and defines the
+  ExecPlan lifecycle (active in `.agents/plans/`, closed in `docs/archive/execplans/`).
+
+### Removed
+- **`Optimizer MVP` workflow** (#793). It ran `scripts/run_optimizer.py`, which was deleted in #335,
+  so every daily scheduled run was failing.
+
 ### Fixed
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in

@@ -1,3 +1,5 @@
+> **Archived 2026-10-04.** Closed: shipped. Superseded by `src/engines/shared/partial_operations_manager.py` and its unit tests.
+
 # PartialOperationsManager Integration - Validation Report
 
 **Date:** 2025-12-25
