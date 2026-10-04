@@ -239,10 +239,8 @@ def pytest_collection_finish(session):  # noqa: D401
 
     This must look at ``session.items`` (what will actually run), not at the list
     ``pytest_collection_modifyitems`` sees: that list still contains tests later removed by
-    ``-m``/``-k``. Counting those made the fast pre-push suite (``-m fast``) start a Postgres
-    container per xdist worker just because some unit-directory test carries the
-    ``integration`` marker; under load the container start blew the 30s per-test timeout
-    inside the session fixture and failed every test on that worker.
+    ``-m``/``-k``, and counting them would start a Postgres container per xdist worker for a
+    run that executes no integration test.
     """
     has_integration = any(
         any(m.name == "integration" for m in item.iter_markers()) for item in session.items

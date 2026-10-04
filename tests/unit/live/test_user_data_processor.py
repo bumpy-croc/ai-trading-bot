@@ -49,7 +49,7 @@ class TestUserDataProcessorEnqueue:
 
         # With no consumer running, a blocking enqueue would hang here; the generous join
         # timeout only guards against that hang and is not a latency budget.
-        producer = threading.Thread(target=enqueue_all)
+        producer = threading.Thread(target=enqueue_all, daemon=True)
         producer.start()
         producer.join(timeout=30)
 

@@ -12,8 +12,10 @@ paths in ``is_data_fresh``.
 from __future__ import annotations
 
 import threading
+import time as real_time
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock, create_autospec, patch
 
 import pandas as pd
@@ -66,7 +68,9 @@ def test_sleep_with_interrupt_breaks_when_stop_event_set():
     state.stop_event.set()  # already stopping -> must return promptly
     coordinator = LiveLoopTimingCoordinator(state)
 
-    with patch("time.sleep") as mock_sleep:
+    mock_sleep = MagicMock()
+    fake_time = SimpleNamespace(time=real_time.time, sleep=mock_sleep)
+    with patch("src.engines.live.loop_timing.time", fake_time):
         coordinator.sleep_with_interrupt(5.0)
 
     mock_sleep.assert_not_called()

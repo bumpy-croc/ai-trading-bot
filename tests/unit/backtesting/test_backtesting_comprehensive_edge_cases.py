@@ -23,10 +23,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.config.constants import DEFAULT_STRATEGY_BASE_FRACTION
 from src.data_providers.data_provider import DataProvider
 from src.engines.backtest.engine import Backtester
 from src.risk.risk_manager import RiskParameters
-from src.strategies.components import Signal, SignalDirection, SignalGenerator
+from src.strategies.components import (
+    FixedFractionSizer,
+    Signal,
+    SignalDirection,
+    SignalGenerator,
+)
 from src.strategies.ml_basic import create_ml_basic_strategy
 
 # ============================================================================
@@ -74,9 +80,11 @@ class _AlternatingSignalGenerator(SignalGenerator):
 
 @pytest.fixture
 def cheap_trading_strategy():
-    """Real engine-side risk and sizing, but cheap deterministic signals and regime detection."""
+    """Real engine-side risk management and ml_basic-sized positions, with cheap deterministic
+    signals and regime detection."""
     strategy = create_ml_basic_strategy(fast_mode=True)
     strategy.signal_generator = _AlternatingSignalGenerator()
+    strategy.position_sizer = FixedFractionSizer(fraction=DEFAULT_STRATEGY_BASE_FRACTION)
     return strategy
 
 
@@ -432,6 +440,7 @@ class TestExtremePriceMovements:
         results = backtester.run("BTCUSDT", "1h", datetime(2022, 11, 1))
 
         assert isinstance(results, dict)
+        assert results["total_trades"] > 0
         assert results["final_balance"] > 0
 
 
@@ -711,8 +720,8 @@ class TestLongRunningBacktests:
         results = backtester.run("BTCUSDT", "1h", datetime(2024, 1, 1))
 
         assert isinstance(results, dict)
-        assert results["total_trades"] >= 0
-        # Should complete in reasonable time (pytest will timeout if too slow)
+        # The alternating strategy trades throughout, so this guards against a silent no-op run
+        assert results["total_trades"] > 100
 
     @pytest.mark.slow
     @pytest.mark.skip(reason="Very slow (>2 min) - run manually for performance testing")
@@ -751,7 +760,7 @@ class TestLongRunningBacktests:
 
         assert isinstance(results, dict)
         # Should handle many trades without issues
-        assert results["total_trades"] >= 0
+        assert results["total_trades"] > 100
         assert results["final_balance"] >= 0
 
 
@@ -1161,6 +1170,7 @@ class TestTimeframeEdgeCases:
         results = backtester.run("BTCUSDT", "1m", datetime(2024, 1, 1))
 
         assert isinstance(results, dict)
+        assert results["total_trades"] > 0
 
     def test_one_day_timeframe(self, mock_data_provider, minimal_strategy):
         """1-day timeframe (very coarse)"""
