@@ -1,6 +1,6 @@
 """Live startup sequencer (#486).
 
-Owns the engine bootstrap sequence: session recovery + creation, #668 open-
+Owns the engine bootstrap sequence: session recovery + creation, #668/#683 open-
 position carry-forward, #657 self-heal, exchange account sync, runtime-service
 startup, and the main trading-loop launch. Extracted verbatim from
 ``LiveTradingEngine.start`` (the public ``start`` stays on the engine and
@@ -16,6 +16,12 @@ import time
 from typing import TYPE_CHECKING, Any, Protocol
 
 from src.database.models import EventType, TradeSource
+from src.engines.live.position_adoption import (
+    AdoptionDecision,
+    AdoptionVerdict,
+    ExchangePositionVerifier,
+)
+from src.engines.live.recovery import position_from_db_row
 from src.infrastructure.live_threads import create_live_thread
 from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import log_engine_event
@@ -200,22 +206,21 @@ class LiveStartupSequencer:
                     "💾 Recovered balance from previous session: $%.2f",
                     recovered_balance,
                 )
-                # Also recover active positions
-                state._recover_active_positions()
+                # OPEN positions are verified against the exchange and loaded by
+                # carry_forward_open_positions once the session is wired (#683).
             elif state.trading_session_id is not None:
                 # #743: an active (crash-recovered) session is reused even when its
                 # balance could not be recovered — _recover_existing_session()
                 # already wired trading_session_id and fired a CRITICAL alert in
                 # that case. current_balance keeps the configured default, but the
                 # session's OPEN positions still belong to this same session id and
-                # must be loaded now, or they stay invisible to both reconcilers
-                # and the engine can double-enter the same symbol.
+                # are loaded by carry_forward_open_positions, or they stay invisible
+                # to both reconcilers and the engine can double-enter the same symbol.
                 logger.warning(
                     "🔁 Reusing active session #%s despite an unrecoverable "
-                    "balance — loading its OPEN positions to avoid orphaning them",
+                    "balance — its OPEN positions are loaded during carry-forward",
                     state.trading_session_id,
                 )
-                state._recover_active_positions()
             else:
                 logger.info("🆕 No existing session found, starting fresh")
 
@@ -272,56 +277,208 @@ class LiveStartupSequencer:
             state.event_logger.set_recovery_session_id(state._recovered_inactive_session_id)
 
     def carry_forward_open_positions(self) -> None:
-        """Carry OPEN positions forward from a recovered inactive session (#668)."""
+        """Adopt the OPEN positions this restart is still exposed to, then load them (#668, #683).
+
+        Live mode verifies every OPEN row for the traded symbol and strategy, in any
+        session, against the exchange before adopting it (``ExchangePositionVerifier``):
+        real inventory is adopted (resized when only part of it remains), a phantom is
+        closed out and paged, and an unconfirmed lookup adopts nothing and closes nothing
+        but pages and latches close-only. Paper mode has no exchange to verify against and
+        carries forward only the previous session's positions. Either way the session's
+        OPEN rows are loaded into the tracker last, so only verified positions are tracked.
+        """
         state = self._state
-        # Carry OPEN positions forward on a clean restart (#668). The inactive
-        # session recovered above (balance only) still owns any OPEN position via
-        # Position.session_id, so _recover_active_positions() at line ~1281 saw a
-        # None session id and loaded nothing — the position would be orphaned.
-        # Re-point those positions onto the new session, then reload them into the
-        # live tracker. Ordering: reassign → recover-into-tracker (which self-heals
-        # first) → the heal + exchange reconciliation below re-verify the position
-        # and its server-side stop-loss against the exchange.
-        if (
-            state._recovered_inactive_session_id is not None
-            and state.trading_session_id is not None
-        ):
+        if state.trading_session_id is None or not state.resume_from_last_balance:
+            return
+        try:
+            if state.enable_live_trading and state.exchange_interface is not None:
+                self._adopt_exchange_verified_positions()
+            else:
+                self._carry_forward_previous_session_positions()
+        except Exception as adoption_err:
+            # A failure here must not abort startup, but a position may be left
+            # untracked: stay close-only and page until an operator verifies.
+            logger.critical(
+                "Position adoption failed for session #%s (positions may be orphaned — "
+                "MANUAL RECONCILIATION REQUIRED): %s",
+                state.trading_session_id,
+                adoption_err,
+                exc_info=True,
+            )
+            self._escalate_unverified_adoption(f"position adoption failed: {adoption_err}")
+        finally:
+            # Clear so a later start()/stop()/start() re-entry cannot re-trigger a
+            # stale-session reassign (#668, P3). The restart-safe risk seeders
+            # must NOT read this field — it is dead by the first loop iteration.
+            # They use the durable `_history_seed_session_id` instead (#1036).
+            state._recovered_inactive_session_id = None
+        # Idempotent: safe when adoption moved nothing or the session is empty.
+        state._recover_active_positions()
+
+    def _carry_forward_previous_session_positions(self) -> None:
+        """Re-point the previous session's OPEN positions onto the new session (paper mode)."""
+        state = self._state
+        if state._recovered_inactive_session_id is None or state.trading_session_id is None:
+            return
+        moved_ids = state.db_manager.reassign_open_positions_to_session(
+            old_session_id=state._recovered_inactive_session_id,
+            new_session_id=state.trading_session_id,
+            symbol=state._active_symbol,
+            strategy_name=state._strategy_name(),
+        )
+        if moved_ids:
+            logger.info(
+                "🔁 Carried %d OPEN position(s) forward from inactive session #%s into "
+                "new session #%s",
+                len(moved_ids),
+                state._recovered_inactive_session_id,
+                state.trading_session_id,
+            )
+
+    def _adopt_exchange_verified_positions(self) -> None:
+        """Verify every OPEN row for this symbol/strategy against the exchange and apply it."""
+        state = self._state
+        if state._active_symbol is None:
+            return
+        rows = state.db_manager.get_open_positions_across_sessions(
+            symbol=state._active_symbol,
+            strategy_name=state._strategy_name(),
+            mode=TradeSource.LIVE,
+        )
+        if not rows:
+            return
+        verifier = ExchangePositionVerifier(
+            state.exchange_interface,
+            use_margin=bool(getattr(state.exchange_interface, "is_margin_mode", False)),
+            price_lookup=state.data_provider.get_current_price,
+        )
+        decisions = verifier.verify(rows)
+        for decision in decisions:
+            logger.info(
+                "Adoption verdict for position #%s (session #%s): %s — %s",
+                decision.position_id,
+                decision.row.get("session_id"),
+                decision.verdict.value,
+                decision.reason,
+            )
+        self._adopt(decisions)
+        self._close_phantoms(decisions)
+        self._escalate_unverifiable(decisions)
+
+    def _adopt(self, decisions: list[AdoptionDecision]) -> None:
+        """Bind verified positions to this session, resizing the partially held ones."""
+        state = self._state
+        adopted = [
+            d
+            for d in decisions
+            if d.verdict in (AdoptionVerdict.ADOPT, AdoptionVerdict.ADOPT_REDUCED)
+        ]
+        if not adopted or state.trading_session_id is None:
+            return
+        resizes = {
+            d.position_id: d.resized_current_size
+            for d in adopted
+            if d.resized_current_size is not None
+        }
+        state.db_manager.adopt_positions_into_session(
+            [d.position_id for d in adopted], state.trading_session_id, resizes
+        )
+        carried = [d for d in adopted if d.row.get("session_id") != state.trading_session_id]
+        if carried:
+            logger.info(
+                "🔁 Adopted %d exchange-verified OPEN position(s) from other sessions into "
+                "session #%s: %s",
+                len(carried),
+                state.trading_session_id,
+                [d.position_id for d in carried],
+            )
+        reduced = [d for d in adopted if d.verdict is AdoptionVerdict.ADOPT_REDUCED]
+        if reduced:
+            state._record_event(
+                EventType.WARNING,
+                "Startup adoption resized OPEN position(s) to the exchange inventory actually "
+                "held: " + self._describe(reduced),
+                severity="warning",
+                component="position_adoption",
+                error_code="POSITION_ADOPTED_REDUCED",
+                alert=True,
+            )
+
+    def _close_phantoms(self, decisions: list[AdoptionDecision]) -> None:
+        """Close rows with no exchange inventory through the reconciler's external-close path."""
+        from src.engines.live.reconciliation import PositionReconciler
+
+        state = self._state
+        phantoms = [d for d in decisions if d.verdict is AdoptionVerdict.PHANTOM]
+        if not phantoms or state.trading_session_id is None:
+            return
+        reconciler = PositionReconciler(
+            exchange_interface=state.exchange_interface,
+            position_tracker=state.live_position_tracker,
+            db_manager=state.db_manager,
+            session_id=state.trading_session_id,
+            max_position_size=state.max_position_size,
+            use_margin=bool(getattr(state.exchange_interface, "is_margin_mode", False)),
+            fee_rate=state.live_execution_engine.fee_rate,
+            data_provider=state.data_provider,
+            on_event=state._record_event,
+            order_tracker=state.order_tracker,
+        )
+        failed: list[AdoptionDecision] = []
+        for decision in phantoms:
             try:
-                moved_ids = state.db_manager.reassign_open_positions_to_session(
-                    old_session_id=state._recovered_inactive_session_id,
-                    new_session_id=state.trading_session_id,
-                    symbol=state._active_symbol,
-                    strategy_name=state._strategy_name(),
-                )
-                if moved_ids:
-                    logger.info(
-                        "🔁 Carried %d OPEN position(s) forward from inactive session "
-                        "#%s into new session #%s; reloading into tracker",
-                        len(moved_ids),
-                        state._recovered_inactive_session_id,
-                        state.trading_session_id,
-                    )
-                    # Reload now that the rows belong to the new session. Safe and
-                    # idempotent if it already ran (empty session ⇒ no-op).
-                    state._recover_active_positions()
-            except Exception as reassign_err:
-                # A failure here must not abort startup, but it is capital-critical
-                # (an OPEN position stays orphaned), so log loudly for alerting.
+                position = position_from_db_row(decision.row, state.current_balance)
+                reconciler.close_untracked_phantom(position)
+            except Exception as close_err:
                 logger.critical(
-                    "Failed to carry OPEN positions forward from inactive session "
-                    "#%s into session #%s (positions may be orphaned — MANUAL "
-                    "RECONCILIATION REQUIRED): %s",
-                    state._recovered_inactive_session_id,
-                    state.trading_session_id,
-                    reassign_err,
+                    "Could not close phantom position #%s: %s",
+                    decision.position_id,
+                    close_err,
                     exc_info=True,
                 )
-            finally:
-                # Clear so a later start()/stop()/start() re-entry cannot re-trigger a
-                # stale-session reassign (#668, P3). The restart-safe risk seeders
-                # must NOT read this field — it is dead by the first loop iteration.
-                # They use the durable `_history_seed_session_id` instead (#1036).
-                state._recovered_inactive_session_id = None
+                failed.append(decision)
+        state._record_event(
+            EventType.ALERT,
+            "Startup adoption found OPEN DB position(s) with no exchange inventory and "
+            "closed them out without adopting: " + self._describe(phantoms),
+            severity="critical",
+            component="position_adoption",
+            error_code="PHANTOM_POSITION_CLOSED",
+            alert=True,
+        )
+        if failed:
+            self._escalate_unverified_adoption(
+                "phantom position(s) could not be closed: " + self._describe(failed)
+            )
+
+    def _escalate_unverifiable(self, decisions: list[AdoptionDecision]) -> None:
+        """Latch close-only and page when a position's exchange holding could not be confirmed."""
+        unverifiable = [d for d in decisions if d.verdict is AdoptionVerdict.UNVERIFIABLE]
+        if unverifiable:
+            self._escalate_unverified_adoption(
+                "OPEN position(s) could not be verified against the exchange, so they were "
+                "neither adopted nor closed: " + self._describe(unverifiable)
+            )
+
+    def _escalate_unverified_adoption(self, reason: str) -> None:
+        """Page and enter close-only: exposure may exist that this process is not managing."""
+        state = self._state
+        state._record_event(
+            EventType.ALERT,
+            f"Startup adoption could not complete safely: {reason}",
+            severity="critical",
+            component="position_adoption",
+            error_code="ADOPTION_UNVERIFIED",
+            alert=True,
+        )
+        state._enter_close_only_mode(f"startup position adoption: {reason}")
+
+    @staticmethod
+    def _describe(decisions: list[AdoptionDecision]) -> str:
+        """One line naming each position, its session and why it got its verdict."""
+        return "; ".join(
+            f"#{d.position_id} (session #{d.row.get('session_id')}): {d.reason}" for d in decisions
+        )
 
     def self_heal_terminal_positions(self) -> None:
         """Close any OPEN position in this session that already has a terminal Trade (#657)."""

@@ -1976,104 +1976,134 @@ class DatabaseManager:
             elif self._current_session_id:
                 query = query.filter(Position.session_id == self._current_session_id)
 
-            positions = query.all()
+            return self._open_positions_as_dicts(session, query.all())
 
-            result = []
-            for p in positions:
-                # Get orders for this position
-                orders = (
-                    session.query(Order)
-                    .filter(Order.position_id == p.id)
-                    .order_by(Order.created_at.asc())
-                    .all()
+    def _open_positions_as_dicts(self, session: Session, positions: list[Position]) -> list[dict]:
+        """Serialize OPEN ``Position`` rows (with their orders) into recovery dicts."""
+        result = []
+        for p in positions:
+            # Get orders for this position
+            orders = (
+                session.query(Order)
+                .filter(Order.position_id == p.id)
+                .order_by(Order.created_at.asc())
+                .all()
+            )
+
+            orders_data = [
+                {
+                    "id": order.id,
+                    "order_type": order.order_type.value,
+                    "status": order.status.value,
+                    "exchange_order_id": order.exchange_order_id,
+                    "internal_order_id": order.internal_order_id,
+                    "side": order.side.value,
+                    "quantity": float(order.quantity),
+                    "price": float(order.price) if order.price else None,
+                    "filled_quantity": (
+                        float(order.filled_quantity) if order.filled_quantity else 0.0
+                    ),
+                    "filled_price": float(order.filled_price) if order.filled_price else None,
+                    "commission": float(order.commission) if order.commission else 0.0,
+                    "created_at": order.created_at,
+                    "filled_at": order.filled_at,
+                    "cancelled_at": order.cancelled_at,
+                    "target_level": order.target_level,
+                    "size_fraction": (float(order.size_fraction) if order.size_fraction else None),
+                }
+                for order in orders
+            ]
+
+            result.append(
+                {
+                    "id": p.id,
+                    "symbol": p.symbol,
+                    "side": p.side.value,
+                    # Numeric(18, 8) columns read back as Decimal. Coerce to float
+                    # at the source (mirroring orders_data above and
+                    # LivePositionTracker.recover_positions) so recovered Position
+                    # objects never mix Decimal with the float constants used in
+                    # downstream arithmetic (e.g. reconciliation's default stop-loss
+                    # branches: entry_price * (1.0 ± DEFAULT_STOP_LOSS_PCT)).
+                    "entry_price": float(p.entry_price),
+                    "current_price": self._to_optional_float(p.current_price),
+                    "size": float(p.size),
+                    "quantity": self._to_optional_float(p.quantity),
+                    "entry_balance": self._to_optional_float(getattr(p, "entry_balance", None)),
+                    "unrealized_pnl": self._to_optional_float(p.unrealized_pnl, 0.0),
+                    "unrealized_pnl_percent": self._to_optional_float(
+                        p.unrealized_pnl_percent, 0.0
+                    ),
+                    "stop_loss": self._to_optional_float(p.stop_loss),
+                    "take_profit": self._to_optional_float(p.take_profit),
+                    "entry_time": p.entry_time,
+                    "strategy": p.strategy_name,
+                    "trailing_stop_activated": getattr(p, "trailing_stop_activated", False),
+                    "trailing_stop_price": self._to_optional_float(
+                        getattr(p, "trailing_stop_price", None)
+                    ),
+                    "breakeven_triggered": getattr(p, "breakeven_triggered", False),
+                    # Prefer the excursion implied by the _price companion:
+                    # pre-2026-07 rows stored sized, fee-netted mfe/mae, so
+                    # the stored column is only a fallback (see
+                    # _excursion_from_price).
+                    "mfe": self.excursion_or_stored(p.entry_price, p.mfe_price, p.mfe, p.side),
+                    "mae": self.excursion_or_stored(p.entry_price, p.mae_price, p.mae, p.side),
+                    "mfe_price": self._to_optional_float(p.mfe_price),
+                    "mae_price": self._to_optional_float(p.mae_price),
+                    "mfe_time": p.mfe_time,
+                    "mae_time": p.mae_time,
+                    # * Include order information for consistency with dashboard
+                    "orders": orders_data,
+                    # * Include partial operations tracking
+                    "original_size": self._to_optional_float(p.original_size),
+                    "current_size": self._to_optional_float(p.current_size),
+                    "partial_exits_taken": p.partial_exits_taken,
+                    "scale_ins_taken": p.scale_ins_taken,
+                    "last_partial_exit_price": self._to_optional_float(p.last_partial_exit_price),
+                    "last_scale_in_price": self._to_optional_float(p.last_scale_in_price),
+                    # * Include exchange order IDs for live trading recovery
+                    "entry_order_id": getattr(p, "entry_order_id", None),
+                    "stop_loss_order_id": getattr(p, "stop_loss_order_id", None),
+                    # Idempotency key; recovery paths (engine and tracker)
+                    # hydrate LivePosition.client_order_id from this.
+                    "client_order_id": getattr(p, "client_order_id", None),
+                    # Owning session: cross-session adoption needs to know where a row lives.
+                    "session_id": p.session_id,
+                }
+            )
+
+        return result
+
+    def get_open_positions_across_sessions(
+        self,
+        *,
+        symbol: str,
+        strategy_name: str,
+        mode: TradeSource,
+    ) -> list[dict]:
+        """OPEN positions for ``symbol``/``strategy_name`` in sessions of ``mode``, any session.
+
+        Feeds exchange-verified adoption (#683): a restart must consider every OPEN row
+        the engine could still be exposed to, not only the current session's. Rows that
+        already have a terminal ``Trade`` are excluded — they are stale-OPEN (#657), not
+        live exposure, and adopting one would claim exchange inventory it does not own.
+        """
+        terminal_position_ids = sa.select(Trade.position_id).where(Trade.position_id.isnot(None))
+        with self.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
+            positions = (
+                session.query(Position)
+                .join(TradingSession, Position.session_id == TradingSession.id)
+                .filter(
+                    Position.status == PositionStatus.OPEN,
+                    Position.symbol == symbol,
+                    Position.strategy_name == strategy_name,
+                    TradingSession.mode == mode,
+                    Position.id.notin_(terminal_position_ids),
                 )
-
-                orders_data = [
-                    {
-                        "id": order.id,
-                        "order_type": order.order_type.value,
-                        "status": order.status.value,
-                        "exchange_order_id": order.exchange_order_id,
-                        "internal_order_id": order.internal_order_id,
-                        "side": order.side.value,
-                        "quantity": float(order.quantity),
-                        "price": float(order.price) if order.price else None,
-                        "filled_quantity": (
-                            float(order.filled_quantity) if order.filled_quantity else 0.0
-                        ),
-                        "filled_price": float(order.filled_price) if order.filled_price else None,
-                        "commission": float(order.commission) if order.commission else 0.0,
-                        "created_at": order.created_at,
-                        "filled_at": order.filled_at,
-                        "cancelled_at": order.cancelled_at,
-                        "target_level": order.target_level,
-                        "size_fraction": (
-                            float(order.size_fraction) if order.size_fraction else None
-                        ),
-                    }
-                    for order in orders
-                ]
-
-                result.append(
-                    {
-                        "id": p.id,
-                        "symbol": p.symbol,
-                        "side": p.side.value,
-                        # Numeric(18, 8) columns read back as Decimal. Coerce to float
-                        # at the source (mirroring orders_data above and
-                        # LivePositionTracker.recover_positions) so recovered Position
-                        # objects never mix Decimal with the float constants used in
-                        # downstream arithmetic (e.g. reconciliation's default stop-loss
-                        # branches: entry_price * (1.0 ± DEFAULT_STOP_LOSS_PCT)).
-                        "entry_price": float(p.entry_price),
-                        "current_price": self._to_optional_float(p.current_price),
-                        "size": float(p.size),
-                        "quantity": self._to_optional_float(p.quantity),
-                        "entry_balance": self._to_optional_float(getattr(p, "entry_balance", None)),
-                        "unrealized_pnl": self._to_optional_float(p.unrealized_pnl, 0.0),
-                        "unrealized_pnl_percent": self._to_optional_float(
-                            p.unrealized_pnl_percent, 0.0
-                        ),
-                        "stop_loss": self._to_optional_float(p.stop_loss),
-                        "take_profit": self._to_optional_float(p.take_profit),
-                        "entry_time": p.entry_time,
-                        "strategy": p.strategy_name,
-                        "trailing_stop_activated": getattr(p, "trailing_stop_activated", False),
-                        "trailing_stop_price": self._to_optional_float(
-                            getattr(p, "trailing_stop_price", None)
-                        ),
-                        "breakeven_triggered": getattr(p, "breakeven_triggered", False),
-                        # Prefer the excursion implied by the _price companion:
-                        # pre-2026-07 rows stored sized, fee-netted mfe/mae, so
-                        # the stored column is only a fallback (see
-                        # _excursion_from_price).
-                        "mfe": self.excursion_or_stored(p.entry_price, p.mfe_price, p.mfe, p.side),
-                        "mae": self.excursion_or_stored(p.entry_price, p.mae_price, p.mae, p.side),
-                        "mfe_price": self._to_optional_float(p.mfe_price),
-                        "mae_price": self._to_optional_float(p.mae_price),
-                        "mfe_time": p.mfe_time,
-                        "mae_time": p.mae_time,
-                        # * Include order information for consistency with dashboard
-                        "orders": orders_data,
-                        # * Include partial operations tracking
-                        "original_size": self._to_optional_float(p.original_size),
-                        "current_size": self._to_optional_float(p.current_size),
-                        "partial_exits_taken": p.partial_exits_taken,
-                        "scale_ins_taken": p.scale_ins_taken,
-                        "last_partial_exit_price": self._to_optional_float(
-                            p.last_partial_exit_price
-                        ),
-                        "last_scale_in_price": self._to_optional_float(p.last_scale_in_price),
-                        # * Include exchange order IDs for live trading recovery
-                        "entry_order_id": getattr(p, "entry_order_id", None),
-                        "stop_loss_order_id": getattr(p, "stop_loss_order_id", None),
-                        # Idempotency key; recovery paths (engine and tracker)
-                        # hydrate LivePosition.client_order_id from this.
-                        "client_order_id": getattr(p, "client_order_id", None),
-                    }
-                )
-
-            return result
+                .all()
+            )
+            return self._open_positions_as_dicts(session, positions)
 
     def reassign_open_positions_to_session(
         self,
@@ -2143,57 +2173,17 @@ class DatabaseManager:
             moved_ids: list[int] = []
             now = datetime.now(UTC)
             for position in positions:
-                # Re-point linked orders first, skipping any that would collide
-                # with an existing (internal_order_id, new_session_id) row.
-                orders = session.query(Order).filter(Order.position_id == position.id).all()
-                for order in orders:
-                    collision = (
-                        session.query(Order.id)
-                        .filter(
-                            Order.internal_order_id == order.internal_order_id,
-                            Order.session_id == new_session_id,
-                            Order.id != order.id,
-                        )
-                        .first()
-                    )
-                    if collision is not None:
-                        # Leave this order under the old session — re-pointing it
-                        # would violate uq_order_internal_session. Linkage to the
-                        # position survives via Order.position_id.
-                        logger.warning(
-                            "Order #%s (internal_id=%s) for position #%s left under "
-                            "session #%s: re-point would collide with uq_order_internal_session "
-                            "in session #%s",
-                            order.id,
-                            order.internal_order_id,
-                            position.id,
-                            old_session_id,
-                            new_session_id,
-                        )
-                        continue
-                    order.session_id = new_session_id
-                    order.last_update = now
-
-                position.session_id = new_session_id
-                position.last_update = now
-                moved_ids.append(position.id)
-
-                # Immutable audit trail under the NEW session (where it now lives).
-                session.add(
-                    ReconciliationAuditEvent(
-                        session_id=new_session_id,
-                        entity_type="position",
-                        entity_id=position.id,
-                        field="session_id",
-                        old_value=str(old_session_id),
-                        new_value=str(new_session_id),
-                        reason=(
-                            f"Carried OPEN {position.symbol} position forward from "
-                            f"inactive session #{old_session_id} on clean restart (#668)"
-                        ),
-                        severity="HIGH",
-                    )
+                self._rebind_position_to_session(
+                    session,
+                    position,
+                    new_session_id,
+                    now,
+                    reason=(
+                        f"Carried OPEN {position.symbol} position forward from "
+                        f"inactive session #{old_session_id} on clean restart (#668)"
+                    ),
                 )
+                moved_ids.append(position.id)
 
             try:
                 session.commit()
@@ -2218,6 +2208,141 @@ class DatabaseManager:
                 moved_ids,
             )
             return moved_ids
+
+    def _rebind_position_to_session(
+        self,
+        session: Session,
+        position: Position,
+        new_session_id: int,
+        now: datetime,
+        *,
+        reason: str,
+    ) -> None:
+        """Re-point ``position`` and its linked orders to ``new_session_id`` (caller commits).
+
+        Orders whose ``(internal_order_id, new_session_id)`` already exists stay under the
+        old session (``uq_order_internal_session``); position linkage survives through
+        ``Order.position_id``. Writes an audit row under the NEW session.
+        """
+        old_session_id = position.session_id
+        orders = session.query(Order).filter(Order.position_id == position.id).all()
+        for order in orders:
+            collision = (
+                session.query(Order.id)
+                .filter(
+                    Order.internal_order_id == order.internal_order_id,
+                    Order.session_id == new_session_id,
+                    Order.id != order.id,
+                )
+                .first()
+            )
+            if collision is not None:
+                logger.warning(
+                    "Order #%s (internal_id=%s) for position #%s left under "
+                    "session #%s: re-point would collide with uq_order_internal_session "
+                    "in session #%s",
+                    order.id,
+                    order.internal_order_id,
+                    position.id,
+                    old_session_id,
+                    new_session_id,
+                )
+                continue
+            order.session_id = new_session_id
+            order.last_update = now
+
+        position.session_id = new_session_id
+        position.last_update = now
+        session.add(
+            ReconciliationAuditEvent(
+                session_id=new_session_id,
+                entity_type="position",
+                entity_id=position.id,
+                field="session_id",
+                old_value=str(old_session_id),
+                new_value=str(new_session_id),
+                reason=reason,
+                severity="HIGH",
+            )
+        )
+
+    def adopt_positions_into_session(
+        self,
+        position_ids: list[int],
+        new_session_id: int,
+        current_size_overrides: dict[int, float] | None = None,
+    ) -> list[int]:
+        """Bind exchange-verified OPEN positions to ``new_session_id`` (#683).
+
+        Positions already under ``new_session_id`` are not moved. ``current_size_overrides``
+        maps a position id to the ``current_size`` that makes its held quantity match the
+        exchange inventory (adoption of a partially-held position); the move and the resize
+        commit in one transaction. Only rows still OPEN are touched.
+
+        Returns:
+            The ids actually adopted (moved or resized), in no particular order.
+        """
+        if not position_ids:
+            return []
+        overrides = current_size_overrides or {}
+        with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
+            positions = (
+                session.query(Position)
+                .filter(Position.id.in_(position_ids), Position.status == PositionStatus.OPEN)
+                .with_for_update()
+                .all()
+            )
+            now = datetime.now(UTC)
+            adopted: list[int] = []
+            for position in positions:
+                old_session_id = position.session_id
+                if old_session_id != new_session_id:
+                    self._rebind_position_to_session(
+                        session,
+                        position,
+                        new_session_id,
+                        now,
+                        reason=(
+                            f"Adopted OPEN {position.symbol} position from session "
+                            f"#{old_session_id} after exchange verification (#683)"
+                        ),
+                    )
+                override = overrides.get(position.id)
+                if override is not None:
+                    previous_size = position.current_size
+                    position.current_size = Decimal(str(override))
+                    if position.original_size is None:
+                        position.original_size = position.size
+                    position.last_update = now
+                    session.add(
+                        ReconciliationAuditEvent(
+                            session_id=new_session_id,
+                            entity_type="position",
+                            entity_id=position.id,
+                            field="current_size",
+                            old_value=str(previous_size),
+                            new_value=str(position.current_size),
+                            reason=(
+                                f"Adopted {position.symbol} position resized to the exchange "
+                                "inventory actually held (#683)"
+                            ),
+                            severity="HIGH",
+                        )
+                    )
+                adopted.append(position.id)
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    "Failed to adopt positions %s into session #%s: %s. Transaction rolled back.",
+                    position_ids,
+                    new_session_id,
+                    e,
+                    exc_info=True,
+                )
+                raise
+            return adopted
 
     def get_recent_trades(self, limit: int = 50, session_id: int | None = None) -> list[dict]:
         """Get recent trades."""
