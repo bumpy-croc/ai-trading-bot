@@ -105,6 +105,9 @@ DEFAULT_MAX_CONSECUTIVE_ERRORS = 10  # Maximum errors before shutdown
 # loop stops opening new positions (close-only) while it keeps retrying, to
 # avoid order churn during a prolonged outage. Exits and server-side stops still run.
 DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS = 1800  # 30 minutes
+# A continuous outage this long pages an operator (well before close-only) so a
+# multi-minute outage is never silent; shorter blips are recorded on recovery.
+DEFAULT_DB_OUTAGE_ALERT_SECONDS = 300  # 5 minutes
 
 # Health Monitor Constants (distinct from CPU optimization intervals)
 DEFAULT_HEALTH_BASE_CHECK_INTERVAL = 60  # Base health check interval in seconds

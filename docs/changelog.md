@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **External write-gap watchdog** (#689, #669). `atb live-control watchdog` (run every 30 minutes
+  by `.github/workflows/heartbeat-monitor.yml`, superseding the account_history-only
+  `scripts/check_heartbeat.py`) pages when
+  `account_history` or the hourly loop-state `system_events` row stops being written. It writes
+  `HEARTBEAT_GAP` / `HEARTBEAT_GAP_CLEARED` rows, pages the webhook, and re-pages on the shared
+  escalating schedule (`src/infrastructure/paging_schedule.py`, now also used by
+  `LatchedConditionMonitor`). See `docs/monitoring.md`.
+- **`AUDIT_WRITE_FAILED`, `DB_UNREACHABLE` and `DB_OUTAGE_RECOVERED` events** (#689, #669).
+  `DatabaseManager.log_audit_event` no longer raises (a failed audit write used to abort the
+  balance heal it documented) and reports failures to the engine; a sustained database outage
+  pages after 5 minutes and leaves a durable recovery row.
+
 ### Fixed
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in

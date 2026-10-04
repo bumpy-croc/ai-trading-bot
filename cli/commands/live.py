@@ -9,6 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from cli.commands.live_halt import ENV_DB_URL_VARS, halt_main, resume_main
+from cli.commands.live_watchdog import add_arguments as add_watchdog_arguments
+from cli.commands.live_watchdog import watchdog_main
 from cli.core.forward import forward_to_module_main
 from src.infrastructure.runtime.paths import get_project_root
 
@@ -377,6 +379,9 @@ def _control(ns: argparse.Namespace) -> int:
     if ns.control_cmd == "resume":
         return resume_main(ns)
 
+    if ns.control_cmd == "watchdog":
+        return watchdog_main(ns)
+
     if ns.control_cmd == "swap-strategy":
         print(
             f"🔄 Strategy swap requested to {ns.strategy} (close_positions={ns.close_positions}) (simulated)"
@@ -459,6 +464,16 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     )
     p_resume.add_argument("--reason", default=None, help="Why trading is resuming (logged)")
     p_resume.set_defaults(func=_control)
+
+    p_watchdog = sub.add_parser(
+        "watchdog",
+        help=(
+            "External dead-man's-switch: page when the engine stops writing "
+            "account_history / loop-state rows (exit 1 while a gap is open)"
+        ),
+    )
+    add_watchdog_arguments(p_watchdog)
+    p_watchdog.set_defaults(func=_control)
 
     p_swap = sub.add_parser("swap-strategy", help="Hot-swap strategy (simulated)")
     p_swap.add_argument("--strategy", required=True)
