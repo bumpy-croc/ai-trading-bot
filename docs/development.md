@@ -159,6 +159,17 @@ worktrees have none of their own), `$VIRTUAL_ENV`, then `python3`/`python` on `P
 **If no such interpreter exists the push fails** — a check that
 cannot run must not report success (GH #1077).
 
+The hook runs **one suite per user at a time** and never outlives the `git push` that started it.
+With many agents pushing at once, parallel `-n 4` suites overload the machine until every run
+times out, and a timed-out push used to leave its pytest running as an orphan, slowing the next
+runs further. Runs now queue on a lock directory (`/tmp/atb-pre-push-<uid>.lock`; a lock whose
+owner is dead, or that is older than `ATB_PREPUSH_LOCK_STALE_SECONDS`, default 1200, is taken over),
+pytest runs in its own process group, and if the `git` process that started the hook disappears
+the group is killed and the lock released. A run that waits longer than
+`ATB_PREPUSH_LOCK_WAIT_SECONDS` (default 1800) **fails the push** — the tests did not run. Keep
+the connection alive while queued, e.g.
+`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=60"`.
+
 To skip deliberately, use git's own escape hatch:
 
 ```bash

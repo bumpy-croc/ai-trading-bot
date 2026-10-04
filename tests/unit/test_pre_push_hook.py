@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -62,6 +64,8 @@ def _run_hook(
     # Do not let the outer run's venv silently rescue a checkout that has none.
     env.pop("VIRTUAL_ENV", None)
     env.pop("ATB_PREPUSH_PYTHON", None)
+    # Never share the machine-wide lock with real pushes or with the other tests in this file.
+    env["ATB_PREPUSH_LOCK_DIR"] = str(cwd.parent / f"{cwd.name}.prepush-lock")
     env.update(env_overrides or {})
     return subprocess.run(
         ["bash", str(HOOK)], cwd=cwd, env=env, capture_output=True, text=True, timeout=300
@@ -260,7 +264,12 @@ def test_installed_hook_survives_pruning_the_worktree_it_was_installed_from(chec
     # And it must still be able to block a push.
     (repo / "tests" / "unit" / "test_sample.py").write_text(FAILING_TEST)
     result = subprocess.run(
-        ["bash", str(installed)], cwd=repo, capture_output=True, text=True, timeout=300
+        ["bash", str(installed)],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        env={**os.environ, "ATB_PREPUSH_LOCK_DIR": str(tmp_path / "installed.prepush-lock")},
     )
     assert result.returncode != 0, f"{result.stdout}\n{result.stderr}"
     assert "fast unit tests failed" in result.stderr
@@ -412,3 +421,143 @@ def test_a_crashing_install_checker_cannot_block_or_pass_the_push(checkout):
     passing = checkout(PASSING_TEST, name="repo2")
     _install_checker_stub(passing, "raise SystemExit('checker exploded')\n")
     assert _run_hook(passing).returncode == 0
+
+
+# --------------------------------------------------------------------------------------
+# Serialisation and cleanup: one run at a time, and never outliving the push that started it
+# --------------------------------------------------------------------------------------
+
+
+def _hold_lock(lock_dir: Path, pid: int, age_seconds: int = 0) -> None:
+    lock_dir.mkdir()
+    (lock_dir / "pid").write_text(str(pid))
+    (lock_dir / "started").write_text(str(int(time.time()) - age_seconds))
+
+
+@pytest.fixture
+def live_process():
+    """A process that stays alive for the test, standing in for another hook run."""
+    proc = subprocess.Popen(["sleep", "300"])
+    yield proc
+    proc.kill()
+    proc.wait()
+
+
+def _dead_pid() -> int:
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+    return proc.pid
+
+
+@pytest.mark.slow
+def test_hook_waits_for_a_live_lock_holder_then_fails_without_running_tests(
+    checkout, tmp_path, live_process
+):
+    """If the suite cannot be run because another run holds the machine, that is a failure."""
+    repo = checkout()
+    lock = tmp_path / "lock"
+    _hold_lock(lock, live_process.pid)
+
+    result = _run_hook(
+        repo, {"ATB_PREPUSH_LOCK_DIR": str(lock), "ATB_PREPUSH_LOCK_WAIT_SECONDS": "5"}
+    )
+    assert result.returncode != 0, f"{result.stdout}\n{result.stderr}"
+    assert "waiting for another pre-push run" in result.stderr
+    assert "The tests were NOT run" in result.stderr
+    assert (lock / "pid").read_text() == str(live_process.pid), "must not steal a live lock"
+
+
+@pytest.mark.slow
+def test_hook_takes_over_a_lock_whose_owner_is_dead(checkout, tmp_path):
+    repo = checkout()
+    lock = tmp_path / "lock"
+    _hold_lock(lock, _dead_pid())
+
+    result = _run_hook(repo, {"ATB_PREPUSH_LOCK_DIR": str(lock)})
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert "taking over the lock left by dead run" in result.stderr
+    assert not lock.exists(), "the lock must be released after the run"
+
+
+@pytest.mark.slow
+def test_hook_takes_over_a_stale_lock_even_if_the_pid_is_alive(checkout, tmp_path, live_process):
+    """A reused pid must not wedge every push forever."""
+    repo = checkout()
+    lock = tmp_path / "lock"
+    _hold_lock(lock, live_process.pid, age_seconds=5000)
+
+    result = _run_hook(
+        repo, {"ATB_PREPUSH_LOCK_DIR": str(lock), "ATB_PREPUSH_LOCK_STALE_SECONDS": "60"}
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert "stale after 60s" in result.stderr
+    assert not lock.exists()
+
+
+@pytest.mark.slow
+def test_lock_is_released_when_the_tests_fail(checkout, tmp_path):
+    repo = checkout(FAILING_TEST)
+    lock = tmp_path / "lock"
+    result = _run_hook(repo, {"ATB_PREPUSH_LOCK_DIR": str(lock)})
+    assert result.returncode != 0
+    assert "fast unit tests failed" in result.stderr
+    assert not lock.exists()
+
+
+HANGING_TEST = (
+    "import os, time\nimport pytest\n\n"
+    "@pytest.mark.fast\n"
+    "def test_hangs():\n"
+    "    with open(os.environ['ATB_TEST_PIDFILE'], 'w') as handle:\n"
+    "        handle.write(str(os.getpid()))\n"
+    "    time.sleep(25)\n"
+)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _wait_for(condition, timeout: float) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if condition():
+            return True
+        time.sleep(0.25)
+    return condition()
+
+
+@pytest.mark.slow
+def test_tests_and_lock_do_not_outlive_the_process_that_started_the_hook(checkout, tmp_path):
+    """The failure that wedged the machine: a timed-out `git push` left pytest running."""
+    repo = checkout(HANGING_TEST)
+    lock = tmp_path / "lock"
+    pidfile = tmp_path / "worker.pid"
+    env = {k: v for k, v in os.environ.items() if k not in {"PYTEST_ADDOPTS", "VIRTUAL_ENV"}}
+    env.pop("ATB_PREPUSH_PYTHON", None)
+    env.update({"ATB_PREPUSH_LOCK_DIR": str(lock), "ATB_TEST_PIDFILE": str(pidfile)})
+    # The trailing `; true` stops bash exec-ing the hook directly, so the hook has a parent.
+    parent = subprocess.Popen(
+        ["bash", "-c", f"bash {HOOK}; true"],
+        cwd=repo,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    worker_pid = None
+    try:
+        assert _wait_for(pidfile.exists, 90), "the test never started"
+        assert lock.exists(), "the run should hold the lock while the tests execute"
+        worker_pid = int(pidfile.read_text())
+        parent.kill()  # SIGKILL: no chance to forward a signal, like a killed `git push`
+        parent.wait()
+
+        assert _wait_for(lambda: not _alive(worker_pid), 20), "pytest outlived its push"
+        assert _wait_for(lambda: not lock.exists(), 20), "the lock leaked"
+    finally:
+        if worker_pid is not None and _alive(worker_pid):
+            os.kill(worker_pid, signal.SIGKILL)

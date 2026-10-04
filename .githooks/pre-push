@@ -13,6 +13,13 @@
 #   1. pytest's own exit status decides the push -- never a pipeline's last stage.
 #   2. Paths resolve from the git checkout being pushed, never from the cwd.
 #   3. If the tests cannot be RUN, the push FAILS. "Unverifiable" is not "passed".
+#   4. At most one run per user executes the suite at a time, and a run never outlives the
+#      `git push` that started it. With a dozen agents pushing, parallel suites (each -n 4)
+#      overload the machine until every run times out, and a timed-out push leaves its pytest
+#      running as an orphan, which makes the next runs slower still. Knobs:
+#        ATB_PREPUSH_LOCK_DIR            lock path (default /tmp/atb-pre-push-<uid>.lock)
+#        ATB_PREPUSH_LOCK_STALE_SECONDS  take over a lock older than this (default 1200)
+#        ATB_PREPUSH_LOCK_WAIT_SECONDS   give up waiting after this; the push FAILS (default 1800)
 
 set -uo pipefail
 
@@ -21,6 +28,82 @@ fail() {
     echo "pre-push: $1" >&2
     echo "pre-push: push aborted. Use 'git push --no-verify' to skip this hook deliberately." >&2
     exit 1
+}
+
+LOCK_DIR="${ATB_PREPUSH_LOCK_DIR:-/tmp/atb-pre-push-$(id -u).lock}"
+LOCK_STALE="${ATB_PREPUSH_LOCK_STALE_SECONDS:-1200}"
+LOCK_WAIT="${ATB_PREPUSH_LOCK_WAIT_SECONDS:-1800}"
+HOOK_PID=$$
+PARENT_PID="${PPID:-}"
+OWN_LOCK=0
+PYTEST_PID=""
+
+# Kill the whole pytest process group (xdist workers included), not just the leader.
+kill_tests() {
+    [ -n "$PYTEST_PID" ] || return 0
+    kill -TERM -- "-$PYTEST_PID" 2>/dev/null || kill -TERM "$PYTEST_PID" 2>/dev/null || true
+    sleep 1
+    kill -KILL -- "-$PYTEST_PID" 2>/dev/null || true
+    PYTEST_PID=""
+}
+
+release_lock() {
+    if [ "$OWN_LOCK" = 1 ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$HOOK_PID" ]; then
+        rm -rf "$LOCK_DIR"
+    fi
+    OWN_LOCK=0
+}
+
+cleanup() {
+    kill_tests
+    release_lock
+}
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
+
+# mkdir is the atomic primitive (macOS has no flock). Best-effort by design: it smooths load,
+# it is not a correctness mechanism, so the worst failure -- two runs at once -- is the old
+# behaviour. A lock whose owner is dead, or that is older than LOCK_STALE, is taken over.
+acquire_lock() {
+    local waited=0 owner started age
+    while :; do
+        if mkdir "$LOCK_DIR" 2>/dev/null; then
+            echo "$HOOK_PID" > "$LOCK_DIR/pid"
+            date +%s > "$LOCK_DIR/started"
+            OWN_LOCK=1
+            return 0
+        fi
+        owner="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+        started="$(cat "$LOCK_DIR/started" 2>/dev/null || true)"
+        age=0
+        case "$started" in ''|*[!0-9]*) ;; *) age=$(( $(date +%s) - started )) ;; esac
+
+        if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+            echo "pre-push: taking over the lock left by dead run (pid $owner)" >&2
+            rm -rf "$LOCK_DIR"
+            continue
+        fi
+        if [ -n "$started" ] && [ "$age" -gt "$LOCK_STALE" ]; then
+            echo "pre-push: taking over a lock held ${age}s by pid ${owner:-?} (stale after ${LOCK_STALE}s)" >&2
+            rm -rf "$LOCK_DIR"
+            continue
+        fi
+        # No owner and no timestamp: the holder died between mkdir and writing them.
+        if [ -z "$owner" ] && [ -z "$started" ] && [ "$waited" -ge 30 ]; then
+            rm -rf "$LOCK_DIR"
+            continue
+        fi
+        if [ "$waited" -ge "$LOCK_WAIT" ]; then
+            return 1
+        fi
+        if [ $(( waited % 30 )) -eq 0 ]; then
+            echo "pre-push: waiting for another pre-push run (pid ${owner:-?}) to finish..." >&2
+        fi
+        sleep 5
+        waited=$(( waited + 5 ))
+    done
 }
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || REPO_ROOT=""
@@ -104,8 +187,28 @@ fi
 # -n 4, not -n auto: measured 48s vs 76s serial, while `auto` (one worker per core) came in
 # at 76s -- per-worker import overhead and CPU contention eat the gain. Same value, and the
 # same reason, as tests/run_tests.py.
-"$PYTHON" -m pytest tests/unit/ -q --timeout=30 -m "fast" -n 4 --dist=loadgroup
+acquire_lock || fail "gave up after ${LOCK_WAIT}s waiting for another pre-push run (lock $LOCK_DIR, held by pid $(cat "$LOCK_DIR/pid" 2>/dev/null || echo '?')). The tests were NOT run."
+
+# pytest runs in the background, in its own process group (job control), so that it can be
+# killed as a unit -- xdist workers included -- if this hook is interrupted or the `git push`
+# that started it is gone. Without that, a push that times out leaves the suite running as an
+# orphan. `wait` still hands back pytest's own status, unfiltered.
+set -m
+"$PYTHON" -m pytest tests/unit/ -q --timeout=30 -m "fast" -n 4 --dist=loadgroup &
+PYTEST_PID=$!
+set +m
+
+while kill -0 "$PYTEST_PID" 2>/dev/null; do
+    if [ -n "$PARENT_PID" ] && ! kill -0 "$PARENT_PID" 2>/dev/null; then
+        echo "pre-push: the git process that started this hook is gone; stopping the tests." >&2
+        exit 1
+    fi
+    sleep 1
+done
+wait "$PYTEST_PID"
 STATUS=$?
+PYTEST_PID=""
+release_lock
 
 # pytest's exit codes are not interchangeable. Reporting "tests failed" for a usage or
 # collection error is the same misdiagnosis that hid the original bug: it sends the developer
