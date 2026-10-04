@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Account sync no longer warns about the bot's own stop-loss order** (#1259). Protective stops
+  are stored on `positions.stop_loss_order_id`, never in `orders`, so the hourly sync logged
+  "New order found on exchange" for every resting stop. `_sync_orders` now skips ids that equal an
+  open position's `stop_loss_order_id`; a genuinely foreign order still warns.
+- **Zero-size BUY/SELL decisions name the component that zeroed them** (#1045). `Strategy` adds
+  `size_zero_reason` (`risk_manager(<name>):<detail>` or `position_sizer(<name>):<detail>`) to the
+  decision metadata and a `ZeroSizeReason:` suffix to the `Decision:` log line.
+  `RiskManager`/`PositionSizer` gained a side-effect-free `explain_zero_size` hook, implemented for
+  `FlatRiskManager` (confidence floor), `ConfidenceWeightedSizer` and `LeveragedPositionSizer`
+  (zero-leverage regime). The live entry coordinator persists the reason and the entry handler's
+  block reasons in `strategy_executions.reasons`, and logs when a downstream gate (correlation,
+  dynamic risk, exposure cap) takes a sized entry to zero.
+- **Regression test for the Decimal load boundary** (#675). A real-database round trip asserts
+  `get_active_positions` and `LivePositionTracker.recover_positions` never yield a `Decimal`.
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
   a 4h run selects a 4h model bundle; a missing bundle aborts the switch instead of using 1h.
