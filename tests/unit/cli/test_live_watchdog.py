@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -323,37 +322,29 @@ class TestWebhookIsNotPostedUnderADatabaseSession:
 
 
 @pytest.fixture
-def sqlite_db():
-    """A DatabaseManager stand-in whose reads run against in-memory SQLite."""
-    engine = create_engine("sqlite:///:memory:")
+def engine():
+    """An in-memory SQLite engine holding only the tables the watchdog touches."""
+    eng = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
-        engine, tables=[AccountHistory.__table__, SystemEvent.__table__, TradingSession.__table__]
+        eng, tables=[AccountHistory.__table__, SystemEvent.__table__, TradingSession.__table__]
     )
-    factory = sessionmaker(bind=engine)
-
-    db = MagicMock()
-
-    @contextmanager
-    def get_session():
-        session = factory()
-        try:
-            yield session
-        finally:
-            session.close()
-
-    db.get_session = get_session
-    db.factory = factory
-    return db
+    yield eng
+    eng.dispose()
 
 
 def _naive(moment: datetime) -> datetime:
     return moment.replace(tzinfo=None)
 
 
-def _add(db, *rows) -> None:
-    with db.factory() as session:
+def _add(eng, *rows) -> None:
+    with sessionmaker(bind=eng)() as session:
         session.add_all(rows)
         session.commit()
+
+
+def _watchdog_rows(eng) -> list:
+    with sessionmaker(bind=eng)() as session:
+        return session.query(SystemEvent).order_by(SystemEvent.id).all()
 
 
 def _event(code: str, when: datetime, *, delivered: bool = False) -> SystemEvent:
@@ -371,9 +362,9 @@ def _account_row(when: datetime) -> AccountHistory:
 
 
 class TestDbWatchdogStore:
-    def test_liveness_reads_the_newest_row_of_each_stream(self, sqlite_db):
+    def test_liveness_reads_the_newest_row_of_each_stream(self, engine):
         _add(
-            sqlite_db,
+            engine,
             _account_row(NOW - timedelta(hours=9)),
             _account_row(NOW - timedelta(hours=3)),
             _event("ENTRIES_ENABLED", NOW - timedelta(hours=8)),
@@ -381,19 +372,19 @@ class TestDbWatchdogStore:
             _event("ORDER_REJECTED", NOW - timedelta(minutes=1)),
         )
 
-        reading = DbWatchdogStore(sqlite_db).read_liveness()
+        reading = DbWatchdogStore(engine).read_liveness()
 
         assert reading.last_account_history == _naive(NOW - timedelta(hours=3))
         assert reading.last_loop_state == _naive(NOW - timedelta(hours=2))
 
-    def test_liveness_is_none_for_a_database_that_never_ran(self, sqlite_db):
-        reading = DbWatchdogStore(sqlite_db).read_liveness()
+    def test_liveness_is_none_for_a_database_that_never_ran(self, engine):
+        reading = DbWatchdogStore(engine).read_liveness()
 
         assert reading == Liveness(None, None, None)
 
-    def test_liveness_names_the_active_session(self, sqlite_db):
+    def test_liveness_names_the_active_session(self, engine):
         _add(
-            sqlite_db,
+            engine,
             TradingSession(
                 id=7,
                 session_name="prod-run",
@@ -407,68 +398,98 @@ class TestDbWatchdogStore:
             ),
         )
 
-        reading = DbWatchdogStore(sqlite_db).read_liveness()
+        reading = DbWatchdogStore(engine).read_liveness()
 
         assert reading.active_session == "session 7 (LIVE) 'prod-run'"
 
-    def test_latch_is_empty_without_watchdog_rows(self, sqlite_db):
-        assert DbWatchdogStore(sqlite_db).read_latch() == Latch()
+    def test_latch_is_empty_without_watchdog_rows(self, engine):
+        assert DbWatchdogStore(engine).read_latch() == Latch()
 
-    def test_latch_counts_gap_rows_since_the_last_clear(self, sqlite_db):
+    def test_latch_counts_gap_rows_since_the_last_clear(self, engine):
         _add(
-            sqlite_db,
+            engine,
             _event("HEARTBEAT_GAP", NOW - timedelta(days=5), delivered=True),
             _event("HEARTBEAT_GAP_CLEARED", NOW - timedelta(days=4)),
             _event("HEARTBEAT_GAP", NOW - timedelta(hours=6), delivered=True),
             _event("HEARTBEAT_GAP", NOW - timedelta(hours=5), delivered=False),
         )
 
-        latch = DbWatchdogStore(sqlite_db).read_latch()
+        latch = DbWatchdogStore(engine).read_latch()
 
         assert latch.started_at == _naive(NOW - timedelta(hours=6))
         assert latch.announcements == 2
         assert latch.last_delivered is False
 
-    def test_latch_is_closed_once_the_newest_watchdog_row_is_a_clear(self, sqlite_db):
+    def test_latch_is_closed_once_the_newest_watchdog_row_is_a_clear(self, engine):
         _add(
-            sqlite_db,
+            engine,
             _event("HEARTBEAT_GAP", NOW - timedelta(hours=6), delivered=True),
             _event("HEARTBEAT_GAP_CLEARED", NOW - timedelta(hours=1)),
         )
 
-        assert DbWatchdogStore(sqlite_db).read_latch() == Latch()
+        assert DbWatchdogStore(engine).read_latch() == Latch()
 
-    def test_record_gap_writes_a_critical_alert_event_with_the_real_outcome(self):
-        db = MagicMock()
+    def test_record_gap_writes_a_critical_alert_event_with_the_real_outcome(self, engine):
+        DbWatchdogStore(engine).record_gap("gap", delivered=True)
 
-        DbWatchdogStore(db).record_gap("gap", delivered=True)
+        (row,) = _watchdog_rows(engine)
+        assert row.event_type == EventType.ALERT
+        assert row.severity == "critical"
+        assert row.component == "watchdog"
+        assert row.error_code == "HEARTBEAT_GAP"
+        assert row.message == "gap"
+        assert row.alert_sent is True
+        assert row.alert_method == "webhook"
+        assert row.timestamp is not None
 
-        kwargs = db.log_event.call_args.kwargs
-        assert kwargs["event_type"] == EventType.ALERT
-        assert kwargs["severity"] == "critical"
-        assert kwargs["component"] == "watchdog"
-        assert kwargs["error_code"] == "HEARTBEAT_GAP"
-        assert kwargs["alert_sent"] is True
-        assert kwargs["alert_method"] == "webhook"
+    def test_record_gap_with_failed_delivery_records_no_alert_method(self, engine):
+        DbWatchdogStore(engine).record_gap("gap", delivered=False)
 
-    def test_record_gap_with_failed_delivery_records_no_alert_method(self):
-        db = MagicMock()
+        (row,) = _watchdog_rows(engine)
+        assert row.alert_sent is False
+        assert row.alert_method is None
 
-        DbWatchdogStore(db).record_gap("gap", delivered=False)
+    def test_record_cleared_writes_an_info_row_that_pages_nobody(self, engine):
+        DbWatchdogStore(engine).record_cleared("resumed")
 
-        kwargs = db.log_event.call_args.kwargs
-        assert kwargs["alert_sent"] is False
-        assert kwargs["alert_method"] is None
+        (row,) = _watchdog_rows(engine)
+        assert row.event_type == EventType.WARNING
+        assert row.severity == "info"
+        assert row.error_code == "HEARTBEAT_GAP_CLEARED"
+        assert row.alert_sent is False
 
-    def test_record_cleared_writes_an_info_row_that_pages_nobody(self):
-        db = MagicMock()
+    def test_written_rows_round_trip_through_the_latch(self, engine):
+        store = DbWatchdogStore(engine)
 
-        DbWatchdogStore(db).record_cleared("resumed")
+        store.record_gap("first", delivered=True)
+        store.record_gap("second", delivered=False)
+        latch = store.read_latch()
 
-        kwargs = db.log_event.call_args.kwargs
-        assert kwargs["severity"] == "info"
-        assert kwargs["error_code"] == "HEARTBEAT_GAP_CLEARED"
-        assert "alert_sent" not in kwargs
+        assert latch.announcements == 2
+        assert latch.last_delivered is False
+
+        store.record_cleared("resumed")
+
+        assert store.read_latch() == Latch()
+
+
+class TestConnect:
+    def test_postgres_connections_are_bounded_by_connect_and_statement_timeouts(self):
+        with patch.object(wd, "create_engine") as create:
+            wd.connect("postgresql://u:p@host/db")
+
+        connect_args = create.call_args.kwargs["connect_args"]
+        assert connect_args["connect_timeout"] == wd.DB_TIMEOUT_SECONDS
+        assert connect_args["options"] == f"-c statement_timeout={wd.DB_TIMEOUT_SECONDS * 1000}"
+
+    def test_non_postgres_urls_get_no_driver_options(self):
+        with patch.object(wd, "create_engine") as create:
+            wd.connect("sqlite:///:memory:")
+
+        assert create.call_args.kwargs["connect_args"] == {}
+
+    def test_never_builds_a_database_manager_that_would_create_tables(self):
+        assert not hasattr(wd, "DatabaseManager")
 
 
 def _ns(env: str = "all", threshold_minutes: int | None = None) -> argparse.Namespace:
@@ -498,20 +519,19 @@ def patched_check(clean_env):
         return outcome["result"]
 
     with (
-        patch.object(wd, "DatabaseManager") as manager_cls,
+        patch.object(wd, "connect") as connect,
         patch.object(wd, "check_environment", side_effect=fake_check),
     ):
-        manager_cls.return_value.engine = MagicMock()
-        yield calls, outcome, manager_cls
+        yield calls, outcome, connect
 
 
 class TestWatchdogMain:
     def test_no_configured_targets_is_a_clean_no_op(self, patched_check, capsys):
-        calls, _, manager_cls = patched_check
+        calls, _, connect = patched_check
 
         assert watchdog_main(_ns()) == 0
 
-        manager_cls.assert_not_called()
+        connect.assert_not_called()
         assert calls == []
         assert "nothing to check" in capsys.readouterr().out
 
@@ -533,11 +553,11 @@ class TestWatchdogMain:
         assert [c["env"] for c in calls] == ["production"]
 
     def test_explicit_env_without_a_url_is_an_error(self, patched_check, capsys):
-        _, _, manager_cls = patched_check
+        _, _, connect = patched_check
 
         assert watchdog_main(_ns(env="production")) == 1
 
-        manager_cls.assert_not_called()
+        connect.assert_not_called()
         assert "RAILWAY_PRODUCTION_DATABASE_URL" in capsys.readouterr().out
 
     def test_open_gap_exits_non_zero(self, patched_check, monkeypatch):
@@ -561,25 +581,25 @@ class TestWatchdogMain:
     ):
         monkeypatch.setenv("RAILWAY_STAGING_DATABASE_URL", "postgresql://staging/db")
         monkeypatch.setenv("RAILWAY_PRODUCTION_DATABASE_URL", "postgresql://prod/db")
-        managers = [ConnectionError("prod unreachable"), MagicMock()]
+        engines = [ConnectionError("prod unreachable"), MagicMock()]
         with (
-            patch.object(wd, "DatabaseManager", side_effect=managers) as manager_cls,
+            patch.object(wd, "connect", side_effect=engines) as connect,
             patch.object(wd, "check_environment", return_value=EnvResult(gap_open=False)) as check,
         ):
             result = watchdog_main(_ns())
 
         assert result == 1
-        assert manager_cls.call_count == 2
+        assert connect.call_count == 2
         assert check.call_count == 1
         assert "prod unreachable" in capsys.readouterr().out
 
     def test_engine_pool_is_disposed_after_the_check(self, patched_check, monkeypatch):
-        _, _, manager_cls = patched_check
+        _, _, connect = patched_check
         monkeypatch.setenv("RAILWAY_PRODUCTION_DATABASE_URL", "postgresql://prod/db")
 
         watchdog_main(_ns())
 
-        manager_cls.return_value.engine.dispose.assert_called_once()
+        connect.return_value.dispose.assert_called_once()
 
     def test_threshold_defaults_to_two_hours(self, patched_check, monkeypatch):
         calls, _, _ = patched_check

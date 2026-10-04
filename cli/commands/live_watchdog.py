@@ -19,6 +19,10 @@ it holds, then writes ``HEARTBEAT_GAP_CLEARED`` once writes resume. The job is
 stateless between runs, so the latch is reconstructed from the watchdog's own
 ``system_events`` rows.
 
+The only writes are the watchdog's own ``HEARTBEAT_GAP`` / ``HEARTBEAT_GAP_CLEARED``
+rows. It connects with a bare engine rather than ``DatabaseManager`` so it never runs
+``create_all`` against production from whatever branch the scheduler checked out.
+
 The command exits non-zero whenever a gap is open or a check could not be
 completed, so the scheduler's own failure notification is a second channel
 beside the webhook.
@@ -38,10 +42,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from sqlalchemy import func
+from sqlalchemy import create_engine, func, insert
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import sessionmaker
 
 from cli.commands.live_halt import ENV_DB_URL_VARS, _line, _send_webhook_alert
-from src.database.manager import DatabaseManager
 from src.database.models import AccountHistory, EventType, SystemEvent, TradingSession
 from src.infrastructure.paging_schedule import format_elapsed, repage_offset
 
@@ -52,6 +57,9 @@ WATCHDOG_COMPONENT = "watchdog"
 # slow iteration without waiting out a long outage.
 DEFAULT_THRESHOLD_MINUTES = 120
 THRESHOLD_ENV_VAR = "HEARTBEAT_THRESHOLD_MINUTES"
+# Bound on connecting and on any single query, so an unreachable or wedged
+# database fails the job instead of hanging it until the CI timeout.
+DB_TIMEOUT_SECONDS = 15
 # ``--env all`` checks the deployed environments only; development is opt-in.
 DEPLOYED_ENVS = ("production", "staging")
 # error_codes ``LatchedConditionMonitor`` writes once per hour while the loop runs.
@@ -104,14 +112,22 @@ class EnvResult:
 
 
 class DbWatchdogStore:
-    """`WatchdogStore` over the target environment's database."""
+    """`WatchdogStore` over the target environment's database.
 
-    def __init__(self, db: DatabaseManager) -> None:
-        self._db = db
+    Talks to the database through a bare engine, not ``DatabaseManager``: that
+    class runs ``create_all`` on construction, which this unattended job (running
+    the default branch's models against production) must never do. Writes name
+    their columns explicitly for the same reason — a model column production has
+    not migrated yet cannot break the insert.
+    """
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+        self._sessions = sessionmaker(bind=engine)
 
     def read_liveness(self) -> Liveness:
         """Newest ``account_history`` and loop-state timestamps, plus session context."""
-        with self._db.get_session() as session:
+        with self._sessions() as session:
             last_account = session.query(func.max(AccountHistory.timestamp)).scalar()
             last_loop = (
                 session.query(func.max(SystemEvent.timestamp))
@@ -132,7 +148,7 @@ class DbWatchdogStore:
 
     def read_latch(self) -> Latch:
         """Reconstruct the open gap from watchdog rows written since the last clear."""
-        with self._db.get_session() as session:
+        with self._sessions() as session:
             cleared_at = (
                 session.query(func.max(SystemEvent.timestamp))
                 .filter(SystemEvent.error_code == CLEARED_CODE)
@@ -154,11 +170,10 @@ class DbWatchdogStore:
 
     def record_gap(self, message: str, *, delivered: bool) -> None:
         """Write the critical ``HEARTBEAT_GAP`` row, recording the real page outcome."""
-        self._db.log_event(
-            event_type=EventType.ALERT,
-            message=message,
+        self._insert_event(
+            EventType.ALERT,
+            message,
             severity="critical",
-            component=WATCHDOG_COMPONENT,
             error_code=GAP_CODE,
             alert_sent=delivered,
             alert_method="webhook" if delivered else None,
@@ -166,13 +181,49 @@ class DbWatchdogStore:
 
     def record_cleared(self, message: str) -> None:
         """Write the durable resolution row (no page: a resolution is for monitors)."""
-        self._db.log_event(
-            event_type=EventType.WARNING,
-            message=message,
+        self._insert_event(
+            EventType.WARNING,
+            message,
             severity="info",
-            component=WATCHDOG_COMPONENT,
             error_code=CLEARED_CODE,
+            alert_sent=False,
+            alert_method=None,
         )
+
+    def _insert_event(
+        self,
+        event_type: EventType,
+        message: str,
+        *,
+        severity: str,
+        error_code: str,
+        alert_sent: bool,
+        alert_method: str | None,
+    ) -> None:
+        """Insert one ``system_events`` row naming exactly the columns it sets."""
+        statement = insert(SystemEvent.__table__).values(
+            timestamp=datetime.now(UTC),
+            event_type=event_type,
+            severity=severity,
+            message=message,
+            component=WATCHDOG_COMPONENT,
+            error_code=error_code,
+            alert_sent=alert_sent,
+            alert_method=alert_method,
+        )
+        with self._engine.begin() as connection:
+            connection.execute(statement)
+
+
+def connect(url: str) -> Engine:
+    """A timeout-bounded engine for ``url`` (no schema creation, no migration)."""
+    connect_args: dict[str, object] = {}
+    if url.startswith("postgresql"):
+        connect_args = {
+            "connect_timeout": DB_TIMEOUT_SECONDS,
+            "options": f"-c statement_timeout={DB_TIMEOUT_SECONDS * 1000}",
+        }
+    return create_engine(url, pool_pre_ping=True, connect_args=connect_args)
 
 
 def _as_aware(moment: datetime) -> datetime:
@@ -228,12 +279,12 @@ def _gap_message(
     # A day-4 page that reads like the day-0 one is easy to scroll past twice.
     prefix = f"STILL DOWN — DAY {days}: " if days >= 1 else ""
     context = reading.active_session or "no active session (clean stop?)"
+    held = f" Announced {format_elapsed(held_seconds)} ago." if latch.started_at else ""
     return (
         f"{prefix}HEARTBEAT GAP [{env}]: {'; '.join(gaps)} "
-        f"(threshold {format_elapsed(threshold.total_seconds())}). Open gap held "
-        f"{format_elapsed(held_seconds)}; {context}. The engine may be dead or wedged "
-        "with positions unmanaged — check the service logs. Re-announced on an escalating "
-        "schedule until writes resume."
+        f"(threshold {format_elapsed(threshold.total_seconds())}).{held} {context}. "
+        "The engine may be dead or wedged with positions unmanaged — check the service "
+        "logs. Re-announced on an escalating schedule until writes resume."
     )
 
 
@@ -338,19 +389,18 @@ def watchdog_main(ns: argparse.Namespace) -> int:
             return 1
         checked += 1
         try:
-            db = DatabaseManager(url)
+            engine = connect(url)
             try:
                 result = check_environment(
                     env,
-                    DbWatchdogStore(db),
+                    DbWatchdogStore(engine),
                     now=datetime.now(UTC),
                     threshold=threshold,
                     notify=_send_webhook_alert,
                     webhook_configured=webhook_configured,
                 )
             finally:
-                if db.engine is not None:
-                    db.engine.dispose()
+                engine.dispose()
         except Exception as e:
             # Could not confirm liveness — that is itself alert-worthy.
             _line(f"ERROR: [{env}] failed to check ({type(e).__name__}: {e})")
