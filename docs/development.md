@@ -102,10 +102,10 @@ The regime regression test (`tests/integration/backtesting/test_regime_regressio
 - `atb dev quality` – run Black formatting, Ruff linting, MyPy type checks, and Bandit security scans.
 - `atb dev clean` – remove caches and build artifacts.
 - `black .` and `ruff check . --fix` – apply formatting and lint fixes manually.
-- `python bin/run_mypy.py` – strict type checking without formatting.
+- `python bin/run_mypy.py` – type-check `src/` and `cli/` in a single mypy run (CI runs exactly this as the `type-check` job; add `--targets <files>` to check specific files).
 - `bandit -c pyproject.toml -r src` – security audit focusing on runtime code.
 
-The repository enforces Ruff/Black style in CI, so commit formatted code to avoid failures.
+CI enforces pytest and mypy (`type-check` job in `.github/workflows/tests.yml`). Black, Ruff and Bandit run only locally through `atb dev quality`, so run it before pushing.
 
 ## Git hooks
 

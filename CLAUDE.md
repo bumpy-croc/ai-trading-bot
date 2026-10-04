@@ -101,6 +101,10 @@ atb dev quality     # Run all: black + ruff + mypy + bandit
 atb dev clean       # Remove .pytest_cache, .ruff_cache, etc.
 ```
 
+**What CI enforces**: pytest (`unit-tests`, `integration-tests`) and mypy over `src/` and `cli/`
+(`type-check` job in `.github/workflows/tests.yml`, via `python bin/run_mypy.py`). black, ruff and bandit are
+local-only: CI does not run them.
+
 ### Backtesting & Live Trading
 ```bash
 atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 30

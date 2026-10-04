@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Script to run mypy on all Python files in the src directory.
-This handles the project structure issues that prevent direct mypy usage.
+Script to run mypy on all Python files in the src and cli directories.
+This handles the project structure issues that prevent direct mypy usage
+(the repository root is itself a package with a non-identifier name).
 
 Supports:
-- Running on all src/ files (default)
+- Running on all src/ and cli/ files (default)
 - Running on specific files via --targets flag
 """
 
@@ -66,39 +67,20 @@ def filter_target_files(targets: list[str], base_dir: str) -> list[str]:
 
 
 def run_mypy_on_files(files: list[str], config_file: str) -> int:
-    """Run mypy on a list of files and return exit code."""
+    """Run mypy once over all files and return its exit code.
+
+    A single invocation shares one parse/analysis of the import graph; a
+    process per file re-analyses it hundreds of times.
+    """
     print(f"Running mypy on {len(files)} Python files...")
-
-    total_errors = 0
-    files_with_errors = 0
-
-    for file in files:
-        print(f"Checking {file}...", end=" ")
-
-        # Run mypy on individual file
-        cmd = ["mypy", "--config-file", config_file, file]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-
-        if result.returncode == 0:
-            print("✅")
-        else:
-            print("❌")
-            files_with_errors += 1
-            if result.stdout:
-                print(result.stdout)
-            if result.stderr:
-                print(result.stderr)
-            total_errors += 1
-
-    print(f"\nSummary: {files_with_errors} files with errors out of {len(files)} files checked")
-
-    return 1 if total_errors > 0 else 0
+    cmd = [sys.executable, "-m", "mypy", "--config-file", config_file, *files]
+    return 0 if subprocess.run(cmd).returncode == 0 else 1
 
 
 def main():
-    """Main function to run mypy on all src files or specific targets."""
+    """Main function to run mypy on all src and cli files or specific targets."""
     parser = argparse.ArgumentParser(
-        description="Run mypy type checking on src files or specific targets."
+        description="Run mypy type checking on src and cli files or specific targets."
     )
     parser.add_argument(
         "--targets",
@@ -153,12 +135,9 @@ def main():
                     else:
                         print(f"Warning: File not found in temp structure: {f}")
             else:
-                # Change to src directory within temp directory
-                os.chdir("src")
-                python_files = find_python_files(".")
-                # Prepend "src/" prefix for proper config reference
-                python_files = [os.path.join("src", f) for f in python_files]
-                os.chdir("..")  # Back to temp root for config access
+                python_files = [
+                    f for d in ("src", "cli") if os.path.isdir(d) for f in find_python_files(d)
+                ]
 
             if not python_files:
                 print("No Python files to check")

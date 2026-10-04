@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **mypy now runs in CI** (#1111). New `type-check` job in `.github/workflows/tests.yml` runs
+  `python bin/run_mypy.py` over `src/` and `cli/`. Measured backlog on `develop` is zero errors
+  across 358 files, so the whole tree is gated. `bin/run_mypy.py` now makes a single mypy
+  invocation instead of one process per file, and `tests/unit/test_run_mypy.py` proves it fails on a
+  type error.
+
 ### Fixed
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
