@@ -46,8 +46,15 @@ def _make(
 
 
 def _env(path: str, **extra: str) -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if k not in {"VIRTUAL_ENV", "PY", "MAKEFLAGS"}}
+    """Scrubbed environment: no inherited venv, GIT_* (e.g. from a push hook) or git config."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in {"VIRTUAL_ENV", "PY", "MAKEFLAGS"} and not k.startswith("GIT_")
+    }
     env["PATH"] = path
+    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+    env["GIT_CONFIG_SYSTEM"] = "/dev/null"
     env.update(extra)
     return env
 
@@ -84,7 +91,7 @@ def test_makefile_never_invokes_bare_python(isolated_make_dir):
     assert result.returncode == 0, result.stderr
     lines = _tool_lines(result.stdout)
     assert len(lines) == len(TOOL_TARGETS) + 1
-    assert all(line.startswith("/opt/venv/bin/python ") for line in lines), lines
+    assert all(line.startswith('"/opt/venv/bin/python" ') for line in lines), lines
     assert not re.search(r"^(python|pip)\s", result.stdout, re.MULTILINE), result.stdout
 
 
@@ -94,7 +101,7 @@ def test_makefile_resolves_python3_when_there_is_no_venv_and_no_python(isolated_
     python3 = _executable(bin_dir / "python3")
     result = _make("hooks-check", cwd=isolated_make_dir, env=_env(str(bin_dir)), dry_run=True)
     assert result.returncode == 0, result.stderr
-    assert f"{python3} tools/install_git_hooks.py --check" in result.stdout
+    assert f'"{python3}" tools/install_git_hooks.py --check' in result.stdout
 
 
 def test_makefile_prefers_the_active_venv_over_python3(isolated_make_dir, tmp_path):
@@ -107,7 +114,7 @@ def test_makefile_prefers_the_active_venv_over_python3(isolated_make_dir, tmp_pa
         env=_env(str(bin_dir), VIRTUAL_ENV=str(tmp_path / "venv")),
         dry_run=True,
     )
-    assert f"{venv_python} tools/install_worktree_shim.py --check" in result.stdout
+    assert f'"{venv_python}" tools/install_worktree_shim.py --check' in result.stdout
 
 
 def test_makefile_prefers_the_checkouts_own_venv(isolated_make_dir, tmp_path):
@@ -117,9 +124,17 @@ def test_makefile_prefers_the_checkouts_own_venv(isolated_make_dir, tmp_path):
     result = _make(
         "merge-drivers-check", cwd=isolated_make_dir, env=_env(str(bin_dir)), dry_run=True
     )
-    assert f"{isolated_make_dir / '.venv' / 'bin' / 'python'} tools/install_merge_drivers.py" in (
-        result.stdout
-    )
+    venv_python = isolated_make_dir / ".venv" / "bin" / "python"
+    assert f'"{venv_python}" tools/install_merge_drivers.py' in result.stdout
+
+
+def test_a_checkout_path_with_a_space_does_not_split_the_interpreter(tmp_path):
+    workdir = tmp_path / "dir with space"
+    workdir.mkdir()
+    shutil.copy(MAKEFILE, workdir / "Makefile")
+    venv_python = _executable(workdir / ".venv" / "bin" / "python")
+    result = _make("hooks-check", cwd=workdir, env=_env(os.defpath), dry_run=True)
+    assert f'"{venv_python}" tools/install_git_hooks.py --check' in result.stdout
 
 
 def test_a_linked_worktree_resolves_the_primarys_venv(tmp_path):
@@ -129,7 +144,7 @@ def test_a_linked_worktree_resolves_the_primarys_venv(tmp_path):
     primary = tmp_path / "primary"
     primary.mkdir()
     shutil.copy(MAKEFILE, primary / "Makefile")
-    git_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    git_env = _env(os.environ["PATH"])
     for args in (
         ["init", "-q", "-b", "main"],
         ["-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"],
@@ -154,7 +169,7 @@ def test_a_linked_worktree_resolves_the_primarys_venv(tmp_path):
         dry_run=True,
     )
     assert result.returncode == 0, result.stderr
-    match = re.search(r"^(\S+) tools/install_worktree_shim\.py$", result.stdout, re.MULTILINE)
+    match = re.search(r'^"([^"]+)" tools/install_worktree_shim\.py$', result.stdout, re.MULTILINE)
     assert match is not None, result.stdout
     # git reports the realpath; tmp_path may sit behind a symlink (macOS /var -> /private/var).
     assert Path(match.group(1)).resolve() == venv_python.resolve()

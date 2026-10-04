@@ -21,10 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs the shim, hook and merge-driver `--check`s together, and `.githooks/pre-push` runs it on
   every push as a non-blocking warning. `tools/primary_checkout_guard.py` no longer treats a
   redirect (`2>/dev/null`) as a relative operand, and now also pins a session by the worktree its
-  calls touch (`cd <worktree>`, `git -C`, an `Edit` inside one), so a session whose shell cwd
+  calls touch (`cd <worktree>`, a mutating `git -C`, an `Edit` inside one), so a session whose shell cwd
   resets to the primary on every call is guarded. That inferred pin refuses writes to the primary
-  but leaves `.claude/state/` writable and skips the relative-read check, because the PM daemon has
-  the same shape.
+  but leaves `.claude/state/`, standup briefs and the retro agenda writable and skips the
+  relative-read check, because the PM daemon has the same shape.
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
   a 4h run selects a 4h model bundle; a missing bundle aborts the switch instead of using 1h.

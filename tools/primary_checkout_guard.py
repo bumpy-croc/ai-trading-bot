@@ -66,8 +66,13 @@ ALLOW_SENTINEL = Path.home() / ".claude" / "atb-allow-primary-write"
 PIN_DIR = Path.home() / ".cache" / "atb-primary-guard"
 PIN_INFERRED_MARKER = "inferred"
 # What an *inferred* pin still lets through: the PM daemon runs in the primary, may `cd` into a
-# worktree to inspect it, and must keep appending to the tracked state record.
-INFERRED_PIN_UNPROTECTED_PREFIXES = (".claude/state",)
+# worktree to inspect it, and must keep writing its tracked state record, standup briefs and
+# the weekly-retro agenda.
+INFERRED_PIN_UNPROTECTED_PREFIXES = (
+    ".claude/state",
+    ".claude/skills/weekly-retro/AGENDA.md",
+    "docs/research/daily-briefs",
+)
 # A pin older than this is assumed to belong to a finished session that reused the id
 # (`--resume`/`--continue` keep it), so it must not guard a fresh one forever.
 PIN_MAX_AGE_SECONDS = 12 * 60 * 60
@@ -700,7 +705,7 @@ def _inferred_worktree(
     through unrefused. What such a session does have is the worktree in its arguments:
 
     * an ``Edit``/``Write`` whose ``file_path`` lies inside a linked worktree, or
-    * a shell command that ``cd``s into one, or runs ``git -C`` against one.
+    * a shell command that ``cd``s into one, or runs a mutating ``git -C`` against one.
 
     Read-only commands that merely *mention* a worktree path (``cat <worktree>/x``) do not
     count: the PM daemon inspects worktrees from the primary all the time.
@@ -721,7 +726,11 @@ def _inferred_worktree(
                 return None
             effective_cwd = moved
             found = _linked_worktree_of(moved, primary)
-        elif Path(tokens[0]).name == "git" and "-C" in tokens:
+        elif (
+            Path(tokens[0]).name == "git"
+            and "-C" in tokens
+            and _git_subcommand(tokens) in _GIT_MUTATORS
+        ):
             git_cwd = _git_cwd(tokens, effective_cwd)
             found = _linked_worktree_of(git_cwd, primary) if git_cwd is not None else None
         else:
@@ -780,9 +789,16 @@ def evaluate(payload: dict) -> str | None:
         # cwd is inside a linked worktree: remember it, so a later cwd reset is detectable.
         _write_pin(session_id, root)
     else:
-        working_in = _inferred_worktree(tool_name, tool_input, cwd, primary, segments)
-        if working_in is not None:
-            _write_pin(session_id, working_in, inferred=True)
+        existing = _read_pin(session_id)
+        # A cwd-derived pin already outranks anything inferred, so a failure while inferring
+        # must not be able to make a session that was already guarded unguarded.
+        if existing is None or existing[1]:
+            try:
+                working_in = _inferred_worktree(tool_name, tool_input, cwd, primary, segments)
+            except Exception:  # noqa: BLE001 - inference is best-effort; fail open
+                working_in = None
+            if working_in is not None:
+                _write_pin(session_id, working_in, inferred=True)
 
     pin = _read_pin(session_id)
     if pin is None or pin[0] == primary:

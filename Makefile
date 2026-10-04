@@ -47,7 +47,7 @@ require-python:
 	@[ -n "$(PY)" ] || { echo "make: no Python interpreter found (no active venv, no .venv, no python3 on PATH). Activate a venv or run: make PY=/path/to/python $(MAKECMDGOALS)" >&2; exit 1; }
 
 install: require-python
-	$(PY) -m pip install -e .
+	"$(PY)" -m pip install -e .
 	$(MAKE) shim
 	$(MAKE) hooks
 	$(MAKE) merge-drivers
@@ -56,41 +56,41 @@ install: require-python
 # silently serves that checkout's code to every git worktree. The shim re-points src/cli at
 # the checkout enclosing the cwd. Cheap, idempotent, no rebuild.
 shim: require-python
-	$(PY) tools/install_worktree_shim.py
+	"$(PY)" tools/install_worktree_shim.py
 
 shim-check: require-python
-	$(PY) tools/install_worktree_shim.py --check
+	"$(PY)" tools/install_worktree_shim.py --check
 
 # GH #1077: hooks used to live untracked in .git/hooks, so an inert pre-push hook went
 # unreviewed for months. The source is tracked in .githooks/; this copies it into place.
 hooks: require-python
-	$(PY) tools/install_git_hooks.py
+	"$(PY)" tools/install_git_hooks.py
 
 hooks-check: require-python
-	$(PY) tools/install_git_hooks.py --check
+	"$(PY)" tools/install_git_hooks.py --check
 
 # GH #1079: `merge.<name>.driver` cannot be version-controlled, so an unregistered driver
 # makes .gitattributes silently inert and append-only files conflict by hand on every PR.
 merge-drivers: require-python
-	$(PY) tools/install_merge_drivers.py
+	"$(PY)" tools/install_merge_drivers.py
 
 merge-drivers-check: require-python
-	$(PY) tools/install_merge_drivers.py --check
+	"$(PY)" tools/install_merge_drivers.py --check
 
 # GH #1147: all three install-required artifacts in one command, so a scheduled caller (the
 # pre-push hook, a standup) has a single thing to run. Exits non-zero if any has drifted.
 install-check: require-python
-	$(PY) tools/check_install_state.py
+	"$(PY)" tools/check_install_state.py
 
 deps-dev: install
-	$(PY) -m pip install -r requirements.txt
+	"$(PY)" -m pip install -r requirements.txt
 
 deps-server: install
-	$(PY) -m pip install -r requirements-server.txt
+	"$(PY)" -m pip install -r requirements-server.txt
 
 clean:
 	rm -rf .pytest_cache .ruff_cache .mypy_cache build dist *.egg-info
 	find . -name "__pycache__" -type d -prune -exec rm -rf {} +
 
 build: install
-	$(PY) -m build
+	"$(PY)" -m build

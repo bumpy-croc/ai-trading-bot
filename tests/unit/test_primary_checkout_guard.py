@@ -621,7 +621,7 @@ def _edit(path: Path | str, cwd: Path, session_id: str, tool: str = "Edit") -> d
     [
         "cd {worktree} && ls",
         "cd {worktree}\nls",
-        "git -C {worktree} status --porcelain",
+        "git -C {worktree} commit -qm wip",
     ],
 )
 def test_bash_only_session_is_pinned_by_the_worktree_it_cds_into(checkouts, command):
@@ -655,6 +655,8 @@ def test_inferred_pin_refuses_bash_writes_to_the_primary_too(checkouts):
         ("Bash", {"command": "echo '- entry' >> .claude/state/log.md"}),
         ("Write", {"file_path": ".claude/state/incidents/x.md"}),
         ("Edit", {"file_path": ".claude/state/log.md"}),
+        ("Write", {"file_path": "docs/research/daily-briefs/2026-10-04-0900.md"}),
+        ("Bash", {"command": "echo x >> .claude/skills/weekly-retro/AGENDA.md"}),
     ],
 )
 def test_inferred_pin_leaves_the_pm_state_record_writable(checkouts, tool, tool_input):
@@ -690,6 +692,19 @@ def test_inferred_pin_never_downgrades_a_cwd_pin(checkouts, _isolated_home):
     assert result.returncode == 2, "the cwd-reset detector must survive an inferred observation"
 
 
+def test_inference_cannot_loosen_a_cwd_pinned_session(checkouts):
+    """A path that makes inference blow up (name too long) must not unguard a pinned session."""
+    primary, worktree = checkouts
+    _pin(worktree, "s-long")
+    long_dir = "/tmp/" + "x" * 300
+    for command in (
+        f"cd {long_dir} ; rm {primary}/CLAUDE.md",
+        f"git -C {long_dir} commit -qm x ; rm {primary}/CLAUDE.md",
+    ):
+        result = _run_hook(_bash(command, primary, "s-long"))
+        assert result.returncode == 2, command
+
+
 def test_cwd_pin_replaces_an_inferred_one(checkouts, _isolated_home):
     primary, worktree = checkouts
     _run_hook(_bash(f"cd {worktree} && ls", primary, "s-up"))
@@ -707,6 +722,9 @@ def test_cwd_pin_replaces_an_inferred_one(checkouts, _isolated_home):
         "cd $SOME_WORKTREE && ls",
         "cd {primary}/.claude/worktrees && ls",
         "git -C {primary} status",
+        "git -C {worktree} status --porcelain",
+        "git -C {worktree} log --oneline -5",
+        "git -C {worktree} diff",
     ],
 )
 def test_merely_mentioning_a_worktree_does_not_pin(checkouts, command):
