@@ -231,6 +231,9 @@ class CorrelationEngine:
         """
         if not candidate_symbol or candidate_fraction <= 0:
             return 1.0
+        # A non-finite size cannot be proven to fit under the cap: size it to zero.
+        if not math.isfinite(candidate_fraction):
+            return 0.0
         groups = self.get_correlation_groups(corr_matrix)
         if not groups:
             return 1.0
@@ -244,6 +247,8 @@ class CorrelationEngine:
             if max_exposure_override is not None
             else self.config.max_correlated_exposure
         )
+        if not math.isfinite(max_allowed):
+            return 0.0
         factor = 1.0
         for g in affected_groups:
             current = 0.0

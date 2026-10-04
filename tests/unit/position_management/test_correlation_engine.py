@@ -69,6 +69,27 @@ def test_size_reduction_never_exceeds_cap(cap, existing, candidate):
         assert factor == 0.0
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_size_reduction_non_finite_candidate_is_sized_to_zero(bad):
+    engine = CorrelationEngine(CorrelationConfig(max_correlated_exposure=0.1, sample_min_size=5))
+    a = _series(np.linspace(100, 120, 40))
+    corr = engine.calculate_position_correlations({"A": a, "B": a * 1.02})
+
+    assert engine.compute_size_reduction_factor({}, corr, "B", bad) == 0.0
+
+
+def test_size_reduction_non_finite_cap_is_sized_to_zero():
+    engine = CorrelationEngine(CorrelationConfig(max_correlated_exposure=0.1, sample_min_size=5))
+    a = _series(np.linspace(100, 120, 40))
+    corr = engine.calculate_position_correlations({"A": a, "B": a * 1.02})
+
+    factor = engine.compute_size_reduction_factor(
+        {}, corr, "B", 0.05, max_exposure_override=float("nan")
+    )
+
+    assert factor == 0.0
+
+
 def test_size_reduction_group_already_at_cap_blocks_candidate():
     engine = CorrelationEngine(CorrelationConfig(max_correlated_exposure=0.1, sample_min_size=5))
     a = _series(np.linspace(100, 120, 40))
