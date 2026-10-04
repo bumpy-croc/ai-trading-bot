@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **Stale migration backup directory under `migrations/`** (#791). 15 pre-baseline migrations,
+  including a duplicate `0001_initial_schema`, are gone from the tree (still in git history).
+  Nothing referenced the directory; `alembic heads` still returns the single head
+  `0015_balance_session_id_idx`.
+  `docs/database.md` now documents the migration workflow.
+
 ### Fixed
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
