@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for the first ~2 minutes of each hour and the loop `continue`d past entries AND in-engine
   exits (trailing stops, strategy/time exits) the rest of the time, with only a debug line. The
   limit is now `interval + 120s` (a tail bar older than that still means the current candle is
-  missing; unknown timeframe keeps the strict 120s), and a gate failing for over 5 minutes
+  missing; unknown timeframe keeps the strict 120s), and a gate failing for over 10 minutes
   latches a `MARKET_DATA_STALE` row/page through the latched-condition monitor until it clears.
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in

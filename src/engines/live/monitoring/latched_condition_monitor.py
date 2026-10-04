@@ -181,7 +181,7 @@ CONDITIONS: tuple[_Condition, ...] = (
         component="data",
         latched_code="MARKET_DATA_STALE",
         cleared_code="MARKET_DATA_STALE_CLEARED",
-        label="Market-data freshness gate",
+        label="Stale market data",
         predicate=lambda monitor: monitor.observe_stale_market_data(),
         consequence=(
             "The trading loop is skipping new entries AND in-engine exits (trailing "

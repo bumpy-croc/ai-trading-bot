@@ -34,8 +34,8 @@ logger = logging.getLogger(__name__)
 # A freshness gate that has been failing this long is no longer a blip: the loop
 # is skipping entries AND in-engine exits for the whole streak, so it is
 # announced as a latched condition instead of a debug line. Long enough to ride
-# out a WebSocket reconnect, short enough to beat the shortest candle.
-STALE_DATA_LATCH_SECONDS = 300.0
+# out a WebSocket reconnect, longer than the largest poll interval so one slow sample cannot latch.
+STALE_DATA_LATCH_SECONDS = 600.0
 
 if TYPE_CHECKING:
     from src.engines.live.execution.position_tracker import LivePositionTracker
