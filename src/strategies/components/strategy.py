@@ -373,6 +373,16 @@ class Strategy:
                 validated_position_size,
             )
 
+            if signal.direction != SignalDirection.HOLD and validated_position_size <= 0:
+                metadata["size_zero_reason"] = self._explain_zero_size(
+                    signal,
+                    balance,
+                    risk_position_size,
+                    final_position_size,
+                    regime,
+                    risk_context,
+                )
+
             policies = None
             try:
                 policy_kwargs = self._prepare_risk_kwargs(
@@ -857,6 +867,36 @@ class Strategy:
             self.logger.exception("Final position size calculation failed")
             return risk_amount  # Fallback to risk manager's calculation
 
+    def _explain_zero_size(
+        self,
+        signal: Signal,
+        balance: float,
+        risk_position_size: float,
+        final_position_size: float,
+        regime: RegimeContext | None,
+        context: dict[str, Any],
+    ) -> str:
+        """Name the component that zeroed a BUY/SELL size, as ``component:detail``.
+
+        Never raises: this is observability for a decision already made.
+        """
+        try:
+            if risk_position_size <= 0:
+                component = f"risk_manager({self.risk_manager.name})"
+                filtered = self._prepare_risk_kwargs(self.risk_manager.explain_zero_size, context)
+                detail = self.risk_manager.explain_zero_size(signal, balance, regime, **filtered)
+            elif final_position_size <= 0:
+                component = f"position_sizer({self.position_sizer.name})"
+                detail = self.position_sizer.explain_zero_size(
+                    signal, balance, risk_position_size, regime
+                )
+            else:
+                component, detail = "bounds", None
+        except Exception as e:
+            self.logger.debug("Zero-size explanation failed: %s", e)
+            return "unknown"
+        return f"{component}:{detail or 'returned_zero'}"
+
     def _validate_position_size(
         self,
         position_size: float,
@@ -1027,6 +1067,11 @@ class Strategy:
         if decision.regime:
             regime_str = f" | Regime: {decision.regime.trend.value}/{decision.regime.volatility.value} (conf: {decision.regime.confidence:.2f})"
 
+        zero_size_str = ""
+        zero_size_reason = decision.metadata.get("size_zero_reason")
+        if zero_size_reason:
+            zero_size_str = f" | ZeroSizeReason: {zero_size_reason}"
+
         self.logger.info(
             f"Decision: {decision.signal.direction.value.upper()} "
             f"| Size: {decision.position_size:.2f} "
@@ -1034,6 +1079,7 @@ class Strategy:
             f"| Strength: {decision.signal.strength:.2f} "
             f"| Time: {decision.execution_time_ms:.1f}ms"
             f"{regime_str}"
+            f"{zero_size_str}"
         )
 
     def __str__(self) -> str:

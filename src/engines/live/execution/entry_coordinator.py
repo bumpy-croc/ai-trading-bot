@@ -325,6 +325,7 @@ class LiveEntryCoordinator:
         stop_loss = None
         take_profit = None
         overrides = None
+        entry_block_reasons: list[str] = []
 
         indicators = state._extract_indicators(df, current_index)
         sentiment_data = state._extract_sentiment_data(df, current_index)
@@ -366,6 +367,15 @@ class LiveEntryCoordinator:
                 runtime_strength = entry_signal_result.signal_strength
                 runtime_confidence = entry_signal_result.signal_confidence
             else:
+                entry_block_reasons = list(entry_signal_result.reasons or [])
+                # The strategy sized this entry above zero and a downstream gate
+                # (correlation, dynamic risk, exposure cap) took it to zero.
+                if "size_reduced_to_zero" in entry_block_reasons:
+                    logger.info(
+                        "Entry size reduced to zero for %s: %s",
+                        symbol,
+                        ", ".join(entry_block_reasons),
+                    )
                 # Long-only shadow observability (#1020 C6): a SELL the
                 # strategy sized but config suppressed becomes a DB-durable
                 # would-have-entered-short event. Never affects the decision.
@@ -463,6 +473,13 @@ class LiveEntryCoordinator:
                     else "enter_short_n/a"
                 ),
             ]
+
+            log_reasons.extend(entry_block_reasons)
+            zero_size_reason = (getattr(runtime_decision, "metadata", None) or {}).get(
+                "size_zero_reason"
+            )
+            if isinstance(zero_size_reason, str):
+                log_reasons.append(f"size_zero_{zero_size_reason}")
 
             # Add regime context if available from TradingDecision
             if runtime_decision and hasattr(runtime_decision, "regime") and runtime_decision.regime:
