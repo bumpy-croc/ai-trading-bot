@@ -1,5 +1,6 @@
 """Tests covering single prediction flows for PredictionEngine."""
 
+import threading
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -401,7 +402,21 @@ class TestLiveInferenceTimeoutAccounting:
             }
         )
 
-    def _make_engine_with_slow_model(self, config: PredictionConfig, sleep_seconds: float):
+    @pytest.fixture(autouse=True)
+    def _release_hung_models(self):
+        """Unblock any model call left hanging by a timeout test once the test is over."""
+        self._hung_calls = threading.Event()
+        yield
+        self._hung_calls.set()
+
+    def _make_engine_with_slow_model(
+        self, config: PredictionConfig, sleep_seconds: float, hang: bool = False
+    ):
+        """Build an engine whose model takes ``sleep_seconds``, or never returns if ``hang``.
+
+        A hung model makes a timeout deterministic: the call cannot finish inside the
+        budget however long the test thread is starved of CPU.
+        """
         with (
             patch("src.prediction.engine.PredictionModelRegistry"),
             patch("src.prediction.engine.FeaturePipeline"),
@@ -415,7 +430,10 @@ class TestLiveInferenceTimeoutAccounting:
         def slow_predict(features):
             import time
 
-            time.sleep(sleep_seconds)
+            if hang:
+                self._hung_calls.wait(timeout=30)
+            else:
+                time.sleep(sleep_seconds)
             return ModelPrediction(
                 price=105.5,
                 confidence=0.85,
@@ -438,7 +456,7 @@ class TestLiveInferenceTimeoutAccounting:
         set_inference_context(InferenceContext.LIVE)
         config = PredictionConfig()
         config.live_inference_timeout = 0.05
-        engine = self._make_engine_with_slow_model(config, sleep_seconds=0.5)
+        engine = self._make_engine_with_slow_model(config, sleep_seconds=0.0, hang=True)
 
         with caplog.at_level(logging.WARNING, logger="src.prediction.engine"):
             result = engine.predict(self.create_test_data())

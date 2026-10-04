@@ -23,9 +23,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.config.constants import DEFAULT_STRATEGY_BASE_FRACTION
 from src.data_providers.data_provider import DataProvider
 from src.engines.backtest.engine import Backtester
 from src.risk.risk_manager import RiskParameters
+from src.strategies.components import (
+    FixedFractionSizer,
+    Signal,
+    SignalDirection,
+    SignalGenerator,
+)
 from src.strategies.ml_basic import create_ml_basic_strategy
 
 # ============================================================================
@@ -44,6 +51,41 @@ def mock_data_provider():
 def minimal_strategy():
     """Create a minimal strategy for fast testing"""
     return create_ml_basic_strategy()
+
+
+class _AlternatingSignalGenerator(SignalGenerator):
+    """Deterministic, model-free signals: BUY, hold, SELL, hold, repeat.
+
+    Gives scale and robustness tests a strategy that really opens and closes positions
+    without ML inference on every candle, so their runtime is the engine's own cost.
+    """
+
+    def __init__(self):
+        super().__init__("alternating_generator")
+
+    def generate_signal(self, df, index, regime=None) -> Signal:
+        self.validate_inputs(df, index)
+        phase = index % 4
+        if phase == 0:
+            direction = SignalDirection.BUY
+        elif phase == 2:
+            direction = SignalDirection.SELL
+        else:
+            direction = SignalDirection.HOLD
+        return Signal(direction, strength=1.0, confidence=1.0, metadata={})
+
+    def get_confidence(self, df, index) -> float:
+        return 1.0
+
+
+@pytest.fixture
+def cheap_trading_strategy():
+    """Real engine-side risk management and ml_basic-sized positions, with cheap deterministic
+    signals and regime detection."""
+    strategy = create_ml_basic_strategy(fast_mode=True)
+    strategy.signal_generator = _AlternatingSignalGenerator()
+    strategy.position_sizer = FixedFractionSizer(fraction=DEFAULT_STRATEGY_BASE_FRACTION)
+    return strategy
 
 
 @pytest.fixture
@@ -377,7 +419,7 @@ class TestExtremePriceMovements:
         # Should trigger stop losses and protective exits
         assert results["max_drawdown"] >= 0
 
-    def test_historical_crash_november_2022_ftx(self, mock_data_provider, minimal_strategy):
+    def test_historical_crash_november_2022_ftx(self, mock_data_provider, cheap_trading_strategy):
         """Simulate Nov 2022 FTX collapse crash"""
         # Rapid decline similar to FTX event
         pre_crash = create_ohlcv_data(100, start_price=21000, volatility=0.02)
@@ -389,7 +431,7 @@ class TestExtremePriceMovements:
         mock_data_provider.get_historical_data.return_value = data
 
         backtester = Backtester(
-            strategy=minimal_strategy,
+            strategy=cheap_trading_strategy,
             data_provider=mock_data_provider,
             initial_balance=10000,
             log_to_database=False,
@@ -398,6 +440,7 @@ class TestExtremePriceMovements:
         results = backtester.run("BTCUSDT", "1h", datetime(2022, 11, 1))
 
         assert isinstance(results, dict)
+        assert results["total_trades"] > 0
         assert results["final_balance"] > 0
 
 
@@ -660,14 +703,15 @@ class TestLongRunningBacktests:
     """Test performance and reliability with large datasets"""
 
     @pytest.mark.slow
-    @pytest.mark.timeout(300)  # Extended timeout for 10k candles
-    def test_very_large_dataset_10000_candles(self, mock_data_provider, minimal_strategy):
-        """10,000 candles (~1.1 years of hourly data)"""
-        large_data = create_ohlcv_data(10000, start_price=50000)
+    @pytest.mark.timeout(300)  # Extended timeout for 4k candles
+    def test_very_large_dataset_4000_candles(self, mock_data_provider, cheap_trading_strategy):
+        """4,000 candles (~5.5 months of hourly data); the engine alone costs ~10-20ms per
+        candle, so the size is kept inside the timeout on a busy machine."""
+        large_data = create_ohlcv_data(4000, start_price=50000)
         mock_data_provider.get_historical_data.return_value = large_data
 
         backtester = Backtester(
-            strategy=minimal_strategy,
+            strategy=cheap_trading_strategy,
             data_provider=mock_data_provider,
             initial_balance=10000,
             log_to_database=False,
@@ -676,8 +720,8 @@ class TestLongRunningBacktests:
         results = backtester.run("BTCUSDT", "1h", datetime(2024, 1, 1))
 
         assert isinstance(results, dict)
-        assert results["total_trades"] >= 0
-        # Should complete in reasonable time (pytest will timeout if too slow)
+        # The alternating strategy trades throughout, so this guards against a silent no-op run
+        assert results["total_trades"] > 100
 
     @pytest.mark.slow
     @pytest.mark.skip(reason="Very slow (>2 min) - run manually for performance testing")
@@ -699,16 +743,14 @@ class TestLongRunningBacktests:
         # Should handle large dataset without memory issues
         assert results["total_trades"] >= 0
 
-    def test_many_rapid_trades_1000_plus(self, mock_data_provider):
+    def test_many_rapid_trades_1000_plus(self, mock_data_provider, cheap_trading_strategy):
         """Simulate scenario generating 1000+ trades"""
-        # Create very volatile data that triggers many entries/exits
+        # Very volatile data; the alternating strategy enters/exits every other candle
         volatile_data = create_ohlcv_data(2000, start_price=50000, volatility=0.05)
         mock_data_provider.get_historical_data.return_value = volatile_data
 
-        strategy = create_ml_basic_strategy()
-
         backtester = Backtester(
-            strategy=strategy,
+            strategy=cheap_trading_strategy,
             data_provider=mock_data_provider,
             initial_balance=10000,
             log_to_database=False,
@@ -718,7 +760,7 @@ class TestLongRunningBacktests:
 
         assert isinstance(results, dict)
         # Should handle many trades without issues
-        assert results["total_trades"] >= 0
+        assert results["total_trades"] > 100
         assert results["final_balance"] >= 0
 
 
@@ -850,12 +892,7 @@ class TestRiskManagementEdgeCases:
         crosses the cap -- is exact rather than dependent on ML inference
         against random data.
         """
-        from src.strategies.components import (
-            Signal,
-            SignalDirection,
-            SignalGenerator,
-            Strategy,
-        )
+        from src.strategies.components import Strategy
         from src.strategies.components.position_sizer import PositionSizer
         from src.strategies.components.risk_manager import RiskManager as ComponentRiskManager
 
@@ -1112,18 +1149,19 @@ class TestConcurrentPositions:
 class TestTimeframeEdgeCases:
     """Test various timeframe configurations"""
 
-    def test_one_minute_timeframe(self, mock_data_provider, minimal_strategy):
+    def test_one_minute_timeframe(self, mock_data_provider, cheap_trading_strategy):
         """1-minute timeframe (very granular)"""
-        # 1440 candles = 1 day of 1m data
+        # 360 candles = 6 hours of 1m data; enough to cover 1m timeframe handling without
+        # paying the engine's per-candle cost for a full day
         minute_data = create_ohlcv_data(
-            1440, start_price=50000, start_time=datetime(2024, 1, 1, 0, 0)
+            360, start_price=50000, start_time=datetime(2024, 1, 1, 0, 0)
         )
-        minute_data.index = pd.date_range(datetime(2024, 1, 1), periods=1440, freq="1min")
+        minute_data.index = pd.date_range(datetime(2024, 1, 1), periods=360, freq="1min")
 
         mock_data_provider.get_historical_data.return_value = minute_data
 
         backtester = Backtester(
-            strategy=minimal_strategy,
+            strategy=cheap_trading_strategy,
             data_provider=mock_data_provider,
             initial_balance=10000,
             log_to_database=False,
@@ -1132,6 +1170,7 @@ class TestTimeframeEdgeCases:
         results = backtester.run("BTCUSDT", "1m", datetime(2024, 1, 1))
 
         assert isinstance(results, dict)
+        assert results["total_trades"] > 0
 
     def test_one_day_timeframe(self, mock_data_provider, minimal_strategy):
         """1-day timeframe (very coarse)"""

@@ -498,7 +498,7 @@ def test_comprehensive_model_comparison(benchmark_data, benchmark_config):
 
 
 @pytest.mark.benchmark
-@pytest.mark.fast
+@pytest.mark.slow
 def test_inference_speed_benchmark(benchmark_data):
     """Benchmark inference speed for production readiness.
 

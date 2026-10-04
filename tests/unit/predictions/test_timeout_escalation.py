@@ -8,7 +8,7 @@ reports itself degraded past a configurable threshold. This is an
 observability escalation, never a trading halt.
 """
 
-import time
+import threading
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -34,8 +34,24 @@ def _make_engine(config: PredictionConfig | None = None) -> PredictionEngine:
         return PredictionEngine(config or PredictionConfig())
 
 
+# Set once a test is over so calls hung by the timeout tests can finish.
+_hung_calls = threading.Event()
+
+
+@pytest.fixture(autouse=True)
+def _release_hung_calls():
+    _hung_calls.clear()
+    yield
+    _hung_calls.set()
+
+
+def _hang(seconds: float = 30.0) -> None:
+    """Block until the test ends, so a timeout cannot be beaten by a starved test thread."""
+    _hung_calls.wait(timeout=seconds)
+
+
 def _slow(features):
-    time.sleep(0.2)
+    _hang()
     return "late"
 
 
@@ -193,7 +209,7 @@ class TestHealthCheckConsultsTimeouts:
         default_bundle = engine.model_registry.get_default_bundle.return_value
 
         def slow_predict(features):
-            time.sleep(0.2)
+            _hang()
             return ModelPrediction(
                 price=105.5,
                 confidence=0.85,

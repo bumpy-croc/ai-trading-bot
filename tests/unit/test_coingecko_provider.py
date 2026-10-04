@@ -1,6 +1,7 @@
 """Unit tests for CoinGecko data provider."""
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pandas as pd
@@ -387,17 +388,28 @@ class TestCoinGeckoProviderMocked:
         mock_response.raise_for_status = Mock()
         mock_response.json.return_value = {"bitcoin": {"usd": 42000.0}}
 
-        # Act - make two requests and measure time
-        import time
+        # Act - a virtual clock that only advances when the provider sleeps, so the
+        # assertion is about the delay the provider asks for and not about how fast
+        # a loaded machine wakes up from a real sleep.
+        clock = {"now": 1_000_000.0}
+        sleeps: list[float] = []
 
-        with patch.object(mock_provider._session, "get", return_value=mock_response):
-            start_time = time.time()
-            mock_provider._request("/simple/price", {"ids": "bitcoin", "vs_currencies": "usd"})
-            mock_provider._request("/simple/price", {"ids": "bitcoin", "vs_currencies": "usd"})
-            elapsed = time.time() - start_time
+        def fake_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            clock["now"] += seconds
 
-            # Assert - should have waited at least RATE_LIMIT_DELAY_SECONDS
-            assert elapsed >= mock_provider.RATE_LIMIT_DELAY_SECONDS
+        fake_time = SimpleNamespace(time=lambda: clock["now"], sleep=fake_sleep)
+
+        with (
+            patch("src.data_providers.coingecko_provider.time", fake_time),
+            patch.object(mock_provider._session, "get", return_value=mock_response),
+        ):
+            mock_provider._request("/simple/price", {"ids": "bitcoin", "vs_currencies": "usd"})
+            assert sleeps == []  # first request is never throttled
+            mock_provider._request("/simple/price", {"ids": "bitcoin", "vs_currencies": "usd"})
+
+        # Assert - the second request waited the full RATE_LIMIT_DELAY_SECONDS
+        assert sleeps == [pytest.approx(mock_provider.RATE_LIMIT_DELAY_SECONDS)]
 
     def test_close_handles_none_session(self):
         """Test that close() handles None session gracefully."""

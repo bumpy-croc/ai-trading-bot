@@ -1,6 +1,7 @@
 """Tests for UserDataProcessor — dedicated thread for WebSocket user data events."""
 
 import logging
+import threading
 import time
 from unittest.mock import MagicMock
 
@@ -42,13 +43,18 @@ class TestUserDataProcessorEnqueue:
         processor = UserDataProcessor(order_tracker=tracker)
         # Don't start the processor — queue will fill but enqueue should not block
 
-        start = time.monotonic()
-        for _ in range(100):
-            processor.enqueue({"e": "executionReport", "s": "BTCUSDT"})
-        elapsed = time.monotonic() - start
+        def enqueue_all() -> None:
+            for _ in range(100):
+                processor.enqueue({"e": "executionReport", "s": "BTCUSDT"})
 
-        # 100 enqueues should take well under 1 second
-        assert elapsed < 1.0
+        # With no consumer running, a blocking enqueue would hang here; the generous join
+        # timeout only guards against that hang and is not a latency budget.
+        producer = threading.Thread(target=enqueue_all, daemon=True)
+        producer.start()
+        producer.join(timeout=30)
+
+        assert not producer.is_alive()
+        assert processor.queue_size == 100
 
     def test_queue_size_reflects_depth(self):
         """queue_size property returns current queue depth."""
