@@ -2081,11 +2081,14 @@ class DatabaseManager:
         symbol: str,
         strategy_name: str,
         mode: TradeSource,
+        current_session_id: int,
     ) -> list[dict]:
-        """OPEN positions for ``symbol``/``strategy_name`` in sessions of ``mode``, any session.
+        """OPEN positions for ``symbol``/``strategy_name`` in ``current_session_id`` or any ended session.
 
         Feeds exchange-verified adoption (#683): a restart must consider every OPEN row
-        the engine could still be exposed to, not only the current session's. Rows that
+        the engine could still be exposed to, not only the current session's. Rows in
+        another session that is still active are excluded: they may belong to a live
+        engine running concurrently, and taking them would strip it of its position. Rows that
         already have a terminal ``Trade`` are excluded — they are stale-OPEN (#657), not
         live exposure, and adopting one would claim exchange inventory it does not own.
         """
@@ -2099,6 +2102,10 @@ class DatabaseManager:
                     Position.symbol == symbol,
                     Position.strategy_name == strategy_name,
                     TradingSession.mode == mode,
+                    sa.or_(
+                        Position.session_id == current_session_id,
+                        sa.not_(TradingSession.is_active),
+                    ),
                     Position.id.notin_(terminal_position_ids),
                 )
                 .all()

@@ -251,7 +251,10 @@ class TestCleanRestartCarriesOpenPositionForward:
         _run_start_with_mocked_runtime(engine, reconciler_cls)
 
         engine.db_manager.get_open_positions_across_sessions.assert_called_once_with(
-            symbol=SYMBOL, strategy_name=STRATEGY_NAME, mode=TradeSource.LIVE
+            symbol=SYMBOL,
+            strategy_name=STRATEGY_NAME,
+            mode=TradeSource.LIVE,
+            current_session_id=engine.trading_session_id,
         )
 
 

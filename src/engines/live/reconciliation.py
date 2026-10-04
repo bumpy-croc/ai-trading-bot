@@ -4096,25 +4096,26 @@ class PositionReconciler:
         except Exception as e:
             logger.warning("Margin position check failed for %s: %s — position retained", symbol, e)
 
-    def close_untracked_phantom(self, position: Any) -> ReconciliationResult:
+    def close_untracked_phantom(self, position: Any) -> bool:
         """Close a phantom OPEN row that was never loaded into the tracker (#683).
 
         Runs the same external-close path as a tracked phantom (stop-loss cancel, DB close,
         balance-neutral audit Trade row, audit event), for a row the startup adoption check
-        found has no exchange inventory behind it.
+        found has no exchange inventory behind it. Returns True only when the DB row closed.
         """
         result = ReconciliationResult(
             entity_type="position",
             entity_id=getattr(position, "db_position_id", None),
             status="verified",
         )
-        self._remove_phantom_position(position, result, tracked=False)
-        return result
+        return self._remove_phantom_position(position, result, tracked=False)
 
     def _remove_phantom_position(
         self, position: Any, result: ReconciliationResult, *, tracked: bool = True
-    ) -> None:
+    ) -> bool:
         """Remove a phantom position from tracker and DB, cancel its exchange SL.
+
+        Returns whether the DB row closed.
 
         ``tracked=False`` is for a row that was never in the tracker: there is nothing to pop,
         and the close still counts as ours.
@@ -4189,6 +4190,7 @@ class PositionReconciler:
         result.corrections.append(audit)
         result.status = "corrected"
         result.severity = Severity.HIGH
+        return db_closed
 
     def _estimate_position_notional(self) -> float:
         """Estimate total notional value of open positions using entry prices.

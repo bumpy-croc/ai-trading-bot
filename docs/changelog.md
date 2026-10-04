@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Restart adopts OPEN positions only after exchange verification** (#683). In live mode
   `carry_forward_open_positions` now checks every OPEN DB row for the traded symbol, strategy
-  and mode, in any session, against the exchange before loading it
+  and mode, in the current session or any ended session, against the exchange before loading it
   (`ExchangePositionVerifier`, `src/engines/live/position_adoption.py`). The base-asset
   holding (margin long `netAsset`, margin short borrowed, spot wallet total) is allocated
   across the rows newest first, so two same-symbol rows can no longer both be backed by one

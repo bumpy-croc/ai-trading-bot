@@ -24,6 +24,8 @@ from src.database.models import (
     Trade,
     TradeSource,
 )
+from src.engines.live.position_adoption import AdoptionDecision, AdoptionVerdict
+from src.engines.live.startup import ADOPTION_MESSAGE_MAX_POSITIONS, LiveStartupSequencer
 from src.engines.live.trading_engine import LiveTradingEngine
 from src.strategies.ml_basic import create_ml_basic_strategy
 from tests.unit.engines.live.adoption_fakes import StubMarginExchange
@@ -256,6 +258,20 @@ class TestPhantomIsClosedNotAdopted:
             trades = s.query(Trade).filter(Trade.position_id == position_id).all()
         assert [t.order_id for t in trades] == [f"reconcile_ext_{position_id}"]
 
+    def test_phantom_whose_db_close_fails_is_not_reported_closed_and_latches_close_only(self, db):
+        old = _seed_session(db)
+        position_id = _seed_position(db, old)
+        db.close_position = MagicMock(return_value=False)
+        engine = _make_engine(db, StubMarginExchange({"BTC": 0.0}))
+
+        snapshot = _start(engine)
+
+        assert snapshot.tracked == {}
+        assert _row(db, position_id).status == PositionStatus.OPEN
+        assert not _paged(snapshot, "PHANTOM_POSITION_CLOSED")
+        assert _paged(snapshot, "ADOPTION_UNVERIFIED")
+        assert snapshot.close_only is True
+
     def test_phantom_next_to_a_real_position_only_the_real_one_is_adopted(self, db):
         """#683: both rows used to pass because the aggregate balance exceeded each half-qty."""
         old = _seed_session(db)
@@ -389,6 +405,18 @@ class TestScopeOfCandidates:
             assert row.status == PositionStatus.OPEN
             assert row.session_id == session_id
 
+    def test_row_of_another_still_active_session_is_not_taken(self, db):
+        concurrent = _seed_session(db, active=True)
+        concurrent_id = _seed_position(db, concurrent, suffix="concurrent")
+        active = _seed_session(db, active=True)
+        engine = _make_engine(db, StubMarginExchange({"BTC": 1.0}))
+
+        snapshot = _start(engine)
+
+        assert engine.trading_session_id == active
+        assert snapshot.tracked == {}
+        assert _row(db, concurrent_id).session_id == concurrent
+
     def test_stale_open_row_with_a_terminal_trade_is_not_adopted(self, db):
         old = _seed_session(db)
         position_id = _seed_position(db, old)
@@ -436,3 +464,16 @@ class TestPaperModeKeepsPreviousSessionCarryForward:
 
         assert _row(db, position_id).session_id == engine.trading_session_id
         assert [p.db_position_id for p in snapshot.tracked.values()] == [position_id]
+
+
+class TestAlertMessageIsBounded:
+    def test_long_lists_are_truncated_with_a_count(self):
+        decisions = [
+            AdoptionDecision({"id": i, "session_id": 1}, AdoptionVerdict.PHANTOM, "no inventory")
+            for i in range(ADOPTION_MESSAGE_MAX_POSITIONS + 3)
+        ]
+
+        text = LiveStartupSequencer._describe(decisions)
+
+        assert text.count("no inventory") == ADOPTION_MESSAGE_MAX_POSITIONS
+        assert text.endswith("and 3 more")

@@ -7,6 +7,7 @@ expect fails loudly instead of returning a truthy auto-attribute.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 import pytest
@@ -218,6 +219,18 @@ class TestSharedInventoryAcrossSameSymbolRows:
 
         assert decisions[13].verdict is AdoptionVerdict.ADOPT
         assert decisions[12].verdict is AdoptionVerdict.PHANTOM
+
+    def test_newest_entry_time_claims_first_even_with_a_lower_id(self):
+        exchange = StubExchange(net_asset=1.0)
+        older_but_higher_id = {**_row(20, quantity=1.0), "entry_time": datetime(2026, 1, 1)}
+        newer_but_lower_id = {**_row(10, quantity=1.0), "entry_time": datetime(2026, 2, 1)}
+
+        decisions = {
+            d.position_id: d for d in _verify(exchange, [older_but_higher_id, newer_but_lower_id])
+        }
+
+        assert decisions[10].verdict is AdoptionVerdict.ADOPT
+        assert decisions[20].verdict is AdoptionVerdict.PHANTOM
 
     def test_decisions_come_back_in_the_order_rows_were_given(self):
         exchange = StubExchange(net_asset=0.0037)

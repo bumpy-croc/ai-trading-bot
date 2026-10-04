@@ -21,14 +21,19 @@ def db() -> DatabaseManager:
     return DatabaseManager("sqlite:///:memory:")
 
 
-def _session(db: DatabaseManager, mode: TradeSource = TradeSource.LIVE) -> int:
-    return db.create_trading_session(
+def _session(
+    db: DatabaseManager, mode: TradeSource = TradeSource.LIVE, *, active: bool = False
+) -> int:
+    session_id = db.create_trading_session(
         strategy_name=STRATEGY,
         symbol=SYMBOL,
         timeframe="1h",
         mode=mode,
         initial_balance=1000.0,
     )
+    if not active:
+        db.end_trading_session(session_id=session_id, final_balance=1000.0)
+    return session_id
 
 
 _entry_counter = itertools.count()
@@ -50,8 +55,14 @@ def _position(
     )
 
 
-def _find(db: DatabaseManager, mode: TradeSource = TradeSource.LIVE) -> list[dict]:
-    return db.get_open_positions_across_sessions(symbol=SYMBOL, strategy_name=STRATEGY, mode=mode)
+def _find(db: DatabaseManager, current_session_id: int | None = None) -> list[dict]:
+    current = current_session_id if current_session_id is not None else _session(db, active=True)
+    return db.get_open_positions_across_sessions(
+        symbol=SYMBOL,
+        strategy_name=STRATEGY,
+        mode=TradeSource.LIVE,
+        current_session_id=current,
+    )
 
 
 class TestGetOpenPositionsAcrossSessions:
@@ -64,6 +75,21 @@ class TestGetOpenPositionsAcrossSessions:
         assert set(rows) == {a, b}
         assert rows[a]["session_id"] == first
         assert rows[b]["session_id"] == second
+
+    def test_includes_the_current_active_sessions_own_rows(self, db):
+        current = _session(db, active=True)
+        own = _position(db, current)
+
+        assert [r["id"] for r in _find(db, current)] == [own]
+
+    def test_excludes_rows_of_another_still_active_session(self, db):
+        current = _session(db, active=True)
+        concurrent = _session(db, active=True)
+        _position(db, concurrent)
+        ended = _session(db)
+        stranded = _position(db, ended)
+
+        assert [r["id"] for r in _find(db, current)] == [stranded]
 
     def test_excludes_closed_rows(self, db):
         session = _session(db)

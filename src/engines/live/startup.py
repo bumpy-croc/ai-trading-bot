@@ -39,6 +39,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Positions named in one adoption alert; the rest are counted, and each has its own log line.
+ADOPTION_MESSAGE_MAX_POSITIONS = 5
+
 
 class LiveStartupEngineState(Protocol):
     """Engine state the startup sequencer reads and mutates at call time."""
@@ -338,12 +341,13 @@ class LiveStartupSequencer:
     def _adopt_exchange_verified_positions(self) -> None:
         """Verify every OPEN row for this symbol/strategy against the exchange and apply it."""
         state = self._state
-        if state._active_symbol is None:
+        if state._active_symbol is None or state.trading_session_id is None:
             return
         rows = state.db_manager.get_open_positions_across_sessions(
             symbol=state._active_symbol,
             strategy_name=state._strategy_name(),
             mode=TradeSource.LIVE,
+            current_session_id=state.trading_session_id,
         )
         if not rows:
             return
@@ -424,11 +428,12 @@ class LiveStartupSequencer:
             on_event=state._record_event,
             order_tracker=state.order_tracker,
         )
+        closed: list[AdoptionDecision] = []
         failed: list[AdoptionDecision] = []
         for decision in phantoms:
             try:
                 position = position_from_db_row(decision.row, state.current_balance)
-                reconciler.close_untracked_phantom(position)
+                db_closed = reconciler.close_untracked_phantom(position)
             except Exception as close_err:
                 logger.critical(
                     "Could not close phantom position #%s: %s",
@@ -436,19 +441,21 @@ class LiveStartupSequencer:
                     close_err,
                     exc_info=True,
                 )
-                failed.append(decision)
-        state._record_event(
-            EventType.ALERT,
-            "Startup adoption found OPEN DB position(s) with no exchange inventory and "
-            "closed them out without adopting: " + self._describe(phantoms),
-            severity="critical",
-            component="position_adoption",
-            error_code="PHANTOM_POSITION_CLOSED",
-            alert=True,
-        )
+                db_closed = False
+            (closed if db_closed else failed).append(decision)
+        if closed:
+            state._record_event(
+                EventType.ALERT,
+                "Startup adoption found OPEN DB position(s) with no exchange inventory and "
+                "closed them out without adopting: " + self._describe(closed),
+                severity="critical",
+                component="position_adoption",
+                error_code="PHANTOM_POSITION_CLOSED",
+                alert=True,
+            )
         if failed:
             self._escalate_unverified_adoption(
-                "phantom position(s) could not be closed: " + self._describe(failed)
+                "phantom position(s) could not be closed in the DB: " + self._describe(failed)
             )
 
     def _escalate_unverifiable(self, decisions: list[AdoptionDecision]) -> None:
@@ -475,10 +482,16 @@ class LiveStartupSequencer:
 
     @staticmethod
     def _describe(decisions: list[AdoptionDecision]) -> str:
-        """One line naming each position, its session and why it got its verdict."""
-        return "; ".join(
-            f"#{d.position_id} (session #{d.row.get('session_id')}): {d.reason}" for d in decisions
+        """One line naming each position, its session and why it got its verdict.
+
+        Capped so a first run over a long history of stale rows still fits one page.
+        """
+        shown = decisions[:ADOPTION_MESSAGE_MAX_POSITIONS]
+        text = "; ".join(
+            f"#{d.position_id} (session #{d.row.get('session_id')}): {d.reason}" for d in shown
         )
+        hidden = len(decisions) - len(shown)
+        return f"{text}; and {hidden} more" if hidden > 0 else text
 
     def self_heal_terminal_positions(self) -> None:
         """Close any OPEN position in this session that already has a terminal Trade (#657)."""

@@ -67,8 +67,8 @@ call sites and test mock points are stable while the implementations live in the
 ## Restart position adoption (exchange-verified)
 
 On every live start, `LiveStartupSequencer.carry_forward_open_positions` verifies each OPEN DB
-position for the traded symbol, strategy and mode (any session, rows with a terminal trade
-excluded) against the exchange before loading it. The base-asset holding is allocated across
+position for the traded symbol, strategy and mode (the current session and ended
+sessions; other still-active sessions and rows with a terminal trade excluded) against the exchange before loading it. The base-asset holding is allocated across
 the rows newest first (margin long: `netAsset`; margin short: borrowed; spot: wallet total).
 
 | Exchange evidence for the row | Action |

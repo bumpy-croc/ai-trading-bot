@@ -21,6 +21,7 @@ import logging
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -137,12 +138,17 @@ class ExchangePositionVerifier:
             ]
         remaining = pool
         decisions: list[AdoptionDecision] = []
-        for row in sorted(group, key=lambda r: int(r["id"]), reverse=True):
+        for row in sorted(group, key=self._recency, reverse=True):
             decision = self._decide(row, base_asset, remaining)
             if decision.held_share is not None:
                 remaining = max(0.0, remaining - decision.held_share)
             decisions.append(decision)
         return decisions
+
+    @staticmethod
+    def _recency(row: dict[str, Any]) -> tuple[datetime, int]:
+        """Sort key placing the most recently opened row last (id breaks entry-time ties)."""
+        return row.get("entry_time") or datetime.min, int(row["id"])
 
     def _read_pool(self, base_asset: str, is_short: bool) -> float | None:
         """Exchange quantity backing positions in ``base_asset``; None when unconfirmed.
