@@ -114,19 +114,33 @@ Hook **sources are tracked in `.githooks/`** and are installed by `make install`
 own:
 
 ```bash
-make hooks          # symlink .githooks/* into the active hooks directory
+make hooks          # copy .githooks/* into the active hooks directory
 make hooks-check    # report drift; non-zero exit if not installed
+make install-check  # the shim, the hooks and the merge driver, all three --checks at once
 ```
+
+Every `make` target here runs the interpreter in `$VIRTUAL_ENV`, else `.venv`, else the primary
+checkout's `.venv`, else `python3` — never bare `python`, which does not exist outside an
+activated venv. If none exists the target fails with an error naming `make PY=/path/to/python`.
+
+`make install-check` runs on a schedule you do not have to remember: the pre-push hook runs it on
+every push and prints a warning (the push still proceeds) when the worktree shim, the installed
+hooks or the merge driver have drifted. A `--check` nobody invokes is documentation; the 2026-08-24
+hook fix sat unapplied for 21 days with its checker already merged (GH #1138, #1147).
 
 The installer respects `core.hooksPath` when set and otherwise targets `$GIT_COMMON_DIR/hooks`,
 which is **shared by every linked worktree** of a checkout — install once per clone, not once
 per worktree. Hooks that this repo does not ship are left untouched.
 
-Hooks are **copied, not symlinked**, and the source is read from the primary checkout when it
-has a `.githooks/`. Both rules exist because the hooks directory is shared while `make install`
-often runs inside an ephemeral agent worktree: a symlink into such a worktree dangles as soon
-as it is pruned, and **git skips a dangling hook silently, exiting 0** — reintroducing GH #1077
-through its own remedy. The cost of copying is drift, which `make hooks-check` detects — comparing **content and
+Hooks are **copied, not symlinked**, and the source is `origin/develop`'s `.githooks/` (the
+primary checkout's, then the invoking checkout's, only if that ref has none — a fresh clone). The
+hooks directory is shared while `make install` often runs inside an ephemeral agent worktree: a
+symlink into such a worktree dangles as soon as it is pruned, and **git skips a dangling hook
+silently, exiting 0** — reintroducing GH #1077 through its own remedy. The primary checkout is
+not a source because it is held on `main`, which trails `develop` between promotes: installing
+from it downgraded a fixed hook, and `--check` reported drift against a copy that matched
+`develop` exactly. The ref is read locally (no fetch), so run `git fetch` first if `develop` has
+moved. The cost of copying is drift, which `make hooks-check` detects — comparing **content and
 the executable bit**, because git ignores a non-executable hook and lets the push through —
 and `make install` repairs.
 

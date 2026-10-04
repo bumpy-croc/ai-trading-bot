@@ -309,3 +309,106 @@ def test_check_reports_a_non_executable_hook_as_drift(checkout):
     assert installed.read_bytes() == (repo / ".githooks" / "pre-push").read_bytes()
     assert not (repo / ".git" / "hooks" / "pre-push.bak").exists(), "no backup churn for a chmod"
     assert _run_installer(repo, "--check").returncode == 0
+
+
+NEWER_HOOK = "#!/usr/bin/env bash\n# the version develop already fixed\nexit 0\n"
+STALE_HOOK = "#!/usr/bin/env bash\n# what main still carries\nexit 0\n"
+
+
+def _checkout_with_main_behind_develop(checkout) -> Path:
+    """Primary working tree on a stale ``main``; ``origin/develop`` already has the fix."""
+    repo = checkout()
+    (repo / ".githooks").mkdir()
+    (repo / ".githooks" / "pre-push").write_text(STALE_HOOK)
+    _git("add", "-A", "--", ".githooks", cwd=repo)
+    _git("commit", "-q", "-m", "stale hook on main", cwd=repo)
+    _git("checkout", "-q", "-b", "develop", cwd=repo)
+    (repo / ".githooks" / "pre-push").write_text(NEWER_HOOK)
+    _git("commit", "-q", "-am", "fixed hook on develop", cwd=repo)
+    _git("update-ref", "refs/remotes/origin/develop", "develop", cwd=repo)
+    _git("checkout", "-q", "main", cwd=repo)
+    assert (repo / ".githooks" / "pre-push").read_text() == STALE_HOOK
+    return repo
+
+
+@pytest.mark.fast
+def test_installer_sources_from_origin_develop_not_a_stale_primary(checkout):
+    """GH #1138/#1260: installing from the primary (held on main) downgraded a fixed hook."""
+    repo = _checkout_with_main_behind_develop(checkout)
+
+    assert _run_installer(repo).returncode == 0
+    installed = repo / ".git" / "hooks" / "pre-push"
+    assert installed.read_text() == NEWER_HOOK
+    assert os.access(installed, os.X_OK)
+    assert _run_installer(repo, "--check").returncode == 0
+
+
+@pytest.mark.fast
+def test_check_does_not_report_drift_for_an_install_that_matches_develop(checkout):
+    """The false DRIFT that made a scheduled check worthless until the next promote."""
+    repo = _checkout_with_main_behind_develop(checkout)
+    installed = repo / ".git" / "hooks" / "pre-push"
+    installed.write_text(NEWER_HOOK)
+    installed.chmod(0o755)
+
+    assert _run_installer(repo, "--check").returncode == 0
+
+
+@pytest.mark.fast
+def test_check_reports_drift_when_the_install_is_older_than_develop(checkout):
+    repo = _checkout_with_main_behind_develop(checkout)
+    installed = repo / ".git" / "hooks" / "pre-push"
+    installed.write_text(STALE_HOOK)
+    installed.chmod(0o755)
+
+    drifted = _run_installer(repo, "--check")
+    assert drifted.returncode == 1
+    assert "DRIFT" in drifted.stderr
+
+
+@pytest.mark.fast
+def test_installer_check_names_the_tracked_path_it_wants(checkout):
+    repo = checkout()
+    shutil.copytree(REPO_ROOT / ".githooks", repo / ".githooks")
+    drifted = _run_installer(repo, "--check")
+    assert "want an executable copy of .githooks/pre-push" in drifted.stderr
+
+
+def _install_checker_stub(repo: Path, body: str) -> None:
+    (repo / "tools").mkdir(exist_ok=True)
+    (repo / "tools" / "check_install_state.py").write_text(body)
+
+
+@pytest.mark.slow
+def test_hook_warns_but_does_not_block_when_an_install_has_drifted(checkout):
+    """GH #1147: every push is the scheduled assertion; stale installs must be loud, not fatal."""
+    repo = checkout()
+    _install_checker_stub(repo, "import sys\nprint('DRIFT git hooks')\nsys.exit(1)\n")
+    result = _run_hook(repo)
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert "install-required artifacts are out of date" in result.stderr
+    assert "DRIFT git hooks" in result.stderr
+    assert "fast unit tests passed" in result.stdout
+
+
+@pytest.mark.slow
+def test_hook_is_silent_about_installs_when_they_are_current(checkout):
+    repo = checkout()
+    _install_checker_stub(repo, "print('ok')\n")
+    result = _run_hook(repo)
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert "out of date" not in result.stderr
+
+
+@pytest.mark.slow
+def test_a_crashing_install_checker_cannot_block_or_pass_the_push(checkout):
+    """The checker is advisory in both directions: a crash must not decide the push."""
+    repo = checkout(FAILING_TEST)
+    _install_checker_stub(repo, "raise SystemExit('checker exploded')\n")
+    result = _run_hook(repo)
+    assert result.returncode != 0, "a broken checker must not rescue a failing suite"
+    assert "fast unit tests failed" in result.stderr
+
+    passing = checkout(PASSING_TEST, name="repo2")
+    _install_checker_stub(passing, "raise SystemExit('checker exploded')\n")
+    assert _run_hook(passing).returncode == 0

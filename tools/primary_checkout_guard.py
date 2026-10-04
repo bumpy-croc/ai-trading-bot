@@ -64,6 +64,10 @@ __all__ = [
 ALLOW_ENV = "ATB_ALLOW_PRIMARY_WRITE"
 ALLOW_SENTINEL = Path.home() / ".claude" / "atb-allow-primary-write"
 PIN_DIR = Path.home() / ".cache" / "atb-primary-guard"
+PIN_INFERRED_MARKER = "inferred"
+# What an *inferred* pin still lets through: the PM daemon runs in the primary, may `cd` into a
+# worktree to inspect it, and must keep appending to the tracked state record.
+INFERRED_PIN_UNPROTECTED_PREFIXES = (".claude/state",)
 # A pin older than this is assumed to belong to a finished session that reused the id
 # (`--resume`/`--continue` keep it), so it must not guard a fresh one forever.
 PIN_MAX_AGE_SECONDS = 12 * 60 * 60
@@ -235,7 +239,7 @@ def _git_ignores(primary: Path, path: Path) -> bool:
     return result.returncode == 0
 
 
-def is_protected(path: Path, primary: Path) -> bool:
+def is_protected(path: Path, primary: Path, *, extra_unprotected: tuple[str, ...] = ()) -> bool:
     """True when ``path`` is inside the primary checkout's protected working tree."""
     try:
         relative = path.resolve().relative_to(primary.resolve())
@@ -248,7 +252,7 @@ def is_protected(path: Path, primary: Path) -> bool:
     if rel_posix == ".":
         # The checkout root itself — what a `git checkout`/`git reset` in the primary targets.
         return True
-    for prefix in (*UNPROTECTED_PREFIXES, *ALWAYS_IGNORED_PREFIXES):
+    for prefix in (*UNPROTECTED_PREFIXES, *ALWAYS_IGNORED_PREFIXES, *extra_unprotected):
         if rel_posix == prefix or rel_posix.startswith(prefix + "/"):
             return False
     return not _git_ignores(primary, primary / relative)
@@ -334,9 +338,17 @@ def _split_segments(command: str) -> list[str]:
     return [segment for segment in segments if segment.strip()]
 
 
-def _redirect_targets(segment: str) -> list[str]:
-    """Output-redirection targets in one segment, quote-aware."""
+def _split_redirections(segment: str) -> tuple[str, list[str]]:
+    """Separate a segment into its command words and its output-redirection targets.
+
+    Returns ``(segment without redirections, targets)``. Quote-aware, so ``grep ">" f`` keeps
+    both of its operands. A redirection is the operator, any file-descriptor digits before it
+    (``2>``) and its target. Left in the word list they are not operands at all, yet
+    ``cat /abs/file 2>/dev/null`` classified ``2>/dev/null`` as a relative path and refused an
+    absolute-path read.
+    """
     targets: list[str] = []
+    kept: list[str] = []
     quote: str | None = None
     escaped = False
     index = 0
@@ -352,6 +364,14 @@ def _redirect_targets(segment: str) -> list[str]:
         elif char in "'\"":
             quote = char
         elif char == ">":
+            # `2>` / `&>`: the fd belongs to the operator, but only as a standalone word
+            # (`file2>x` redirects `file2`'s output, not fd 2).
+            tail = "".join(kept)
+            stripped_tail = tail.rstrip("0123456789")
+            if len(stripped_tail) != len(tail) and (
+                not stripped_tail or stripped_tail[-1] in " \t"
+            ):
+                kept = list(stripped_tail)
             index += 1
             if index < len(segment) and segment[index] == ">":
                 index += 1
@@ -364,8 +384,14 @@ def _redirect_targets(segment: str) -> list[str]:
             if token and not token.startswith("&"):
                 targets.append(token)
             continue
+        kept.append(char)
         index += 1
-    return targets
+    return "".join(kept), targets
+
+
+def _redirect_targets(segment: str) -> list[str]:
+    """Output-redirection targets in one segment, quote-aware."""
+    return _split_redirections(segment)[1]
 
 
 def _tokenize(segment: str) -> list[str]:
@@ -604,13 +630,16 @@ def _pin_path(session_id: str) -> Path:
     return PIN_DIR / f"{safe}.worktree"
 
 
-def _read_pin(session_id: str | None) -> Path | None:
-    """The worktree this session is working in, or None.
+def _read_pin(session_id: str | None) -> tuple[Path, bool] | None:
+    """``(worktree, inferred)`` this session is working in, or None.
 
     A pin is discarded when it is stale — the worktree was deleted (the nightly pruner does
     this routinely) or the pin is old enough that it likely belongs to an earlier run of a
     resumed session id. A stale pin used to refuse reads forever with the un-followable
     remedy ``cd <deleted path>``.
+
+    ``inferred`` marks a pin made from what a tool call *touched* rather than from the cwd it
+    ran in (see ``_inferred_worktree``).
     """
     if not session_id:
         return None
@@ -619,29 +648,87 @@ def _read_pin(session_id: str | None) -> Path | None:
         if time.time() - path.stat().st_mtime > PIN_MAX_AGE_SECONDS:
             path.unlink(missing_ok=True)
             return None
-        text = path.read_text(encoding="utf-8").strip()
+        lines = path.read_text(encoding="utf-8").strip().splitlines()
     except OSError:
         return None
-    if not text:
+    if not lines or not lines[0].strip():
         return None
-    pinned = Path(text)
+    pinned = Path(lines[0].strip())
     if not pinned.is_dir():
         try:
             path.unlink(missing_ok=True)
         except OSError:  # pragma: no cover - defensive
             pass
         return None
-    return pinned
+    return pinned, len(lines) > 1 and lines[1].strip() == PIN_INFERRED_MARKER
 
 
-def _write_pin(session_id: str | None, worktree: Path) -> None:
+def _write_pin(session_id: str | None, worktree: Path, *, inferred: bool = False) -> None:
+    """Record the pin. An inferred pin never downgrades a cwd-derived one."""
     if not session_id:
         return
+    if inferred:
+        existing = _read_pin(session_id)
+        if existing is not None and not existing[1]:
+            return
+    text = f"{worktree}\n{PIN_INFERRED_MARKER}" if inferred else str(worktree)
     try:
         PIN_DIR.mkdir(parents=True, exist_ok=True)
-        _pin_path(session_id).write_text(str(worktree), encoding="utf-8")
+        _pin_path(session_id).write_text(text, encoding="utf-8")
     except OSError:  # pragma: no cover - defensive
         pass
+
+
+def _linked_worktree_of(path: Path, primary: Path) -> Path | None:
+    """The linked worktree of ``primary`` that contains ``path``, or None."""
+    root = find_repo_root(path)
+    if root is None or root.resolve() == primary.resolve():
+        return None
+    if find_primary_checkout(root) != primary:
+        return None
+    return root
+
+
+def _inferred_worktree(
+    tool_name: str, tool_input: dict, cwd: Path, primary: Path, command_segments: list[str]
+) -> Path | None:
+    """The linked worktree this call is *working in* even though its cwd is not inside one.
+
+    GH #1151: the pin used to key on the call's own cwd alone. A session whose shell cwd is
+    reset to the primary before every call (every ``cd`` is forgotten, so work is done as
+    ``cd <worktree> && …``) was never pinned, and its ``Edit`` calls into the primary went
+    through unrefused. What such a session does have is the worktree in its arguments:
+
+    * an ``Edit``/``Write`` whose ``file_path`` lies inside a linked worktree, or
+    * a shell command that ``cd``s into one, or runs ``git -C`` against one.
+
+    Read-only commands that merely *mention* a worktree path (``cat <worktree>/x``) do not
+    count: the PM daemon inspects worktrees from the primary all the time.
+    """
+    if tool_name in FILE_TOOLS:
+        target = tool_input.get("file_path") or tool_input.get("notebook_path")
+        resolved = _resolve(str(target), cwd) if target else None
+        return _linked_worktree_of(resolved, primary) if resolved is not None else None
+
+    effective_cwd = cwd
+    for segment in command_segments:
+        tokens = _strip_env_prefix(_tokenize(_split_redirections(segment)[0]))
+        if not tokens:
+            continue
+        if tokens[0] == "cd":
+            moved = _cd_target(tokens, effective_cwd)
+            if moved is None:
+                return None
+            effective_cwd = moved
+            found = _linked_worktree_of(moved, primary)
+        elif Path(tokens[0]).name == "git" and "-C" in tokens:
+            git_cwd = _git_cwd(tokens, effective_cwd)
+            found = _linked_worktree_of(git_cwd, primary) if git_cwd is not None else None
+        else:
+            continue
+        if found is not None:
+            return found
+    return None
 
 
 def evaluate(payload: dict) -> str | None:
@@ -666,6 +753,13 @@ def evaluate(payload: dict) -> str | None:
 
     The cost is a cross-checkout write issued before a session's first worktree-cwd tool call,
     which is no longer caught. That window is narrow and traded against two guaranteed breakages.
+
+    A cwd-derived pin is not the only one (GH #1151). A session whose cwd is reset to the
+    primary before every call never has a worktree cwd, so it is also pinned by what its calls
+    touch — see ``_inferred_worktree``. That pin is *inferred*, and weaker on purpose: it
+    refuses writes to the primary but leaves ``.claude/state/`` writable and skips the
+    relative-read detector, because the PM daemon looks identical (cwd is the primary, and it
+    may ``cd`` into a worktree to inspect it).
     """
     tool_name = payload.get("tool_name") or ""
     tool_input = payload.get("tool_input") or {}
@@ -679,33 +773,40 @@ def evaluate(payload: dict) -> str | None:
     if primary is None:
         return None
 
+    command = (tool_input.get("command") or "") if tool_name == "Bash" else ""
+    segments = _split_segments(_strip_heredoc_bodies(command)) if command.strip() else []
+
     if root != primary:
         # cwd is inside a linked worktree: remember it, so a later cwd reset is detectable.
         _write_pin(session_id, root)
+    else:
+        working_in = _inferred_worktree(tool_name, tool_input, cwd, primary, segments)
+        if working_in is not None:
+            _write_pin(session_id, working_in, inferred=True)
 
-    pinned = _read_pin(session_id)
-    if pinned is None or pinned == primary:
+    pin = _read_pin(session_id)
+    if pin is None or pin[0] == primary:
         return None
+    pinned, inferred = pin
+    # An inferred pin is the PM daemon's shape as much as a worktree agent's, and the daemon
+    # must keep writing its state record and reading the primary relatively.
+    unprotected = INFERRED_PIN_UNPROTECTED_PREFIXES if inferred else ()
 
     if tool_name in FILE_TOOLS:
         target = tool_input.get("file_path") or tool_input.get("notebook_path")
         if not target:
             return None
         resolved = _resolve(str(target), cwd)
-        if resolved is not None and is_protected(resolved, primary):
+        if resolved is not None and is_protected(resolved, primary, extra_unprotected=unprotected):
             return _write_banner(resolved, primary, cwd, f"{tool_name} tool")
         return None
 
-    if tool_name != "Bash":
-        return None
-
-    command = tool_input.get("command") or ""
-    if not command.strip():
+    if tool_name != "Bash" or not segments:
         return None
 
     effective_cwd = cwd
-    for segment in _split_segments(_strip_heredoc_bodies(command)):
-        tokens = _strip_env_prefix(_tokenize(segment))
+    for segment in segments:
+        tokens = _strip_env_prefix(_tokenize(_split_redirections(segment)[0]))
         if tokens and tokens[0] == "cd":
             moved = _cd_target(tokens, effective_cwd)
             if moved is None:
@@ -716,12 +817,12 @@ def evaluate(payload: dict) -> str | None:
             continue
 
         for target in _write_targets(segment, tokens, effective_cwd):
-            if is_protected(target, primary):
+            if is_protected(target, primary, extra_unprotected=unprotected):
                 return _write_banner(
                     target, primary, effective_cwd, f"shell command `{segment.strip()}`"
                 )
 
-        if effective_cwd == primary:
+        if effective_cwd == primary and not inferred:
             operands = _relative_read_operands(tokens, effective_cwd)
             if operands:
                 return _cwd_reset_banner(pinned, primary, operands)

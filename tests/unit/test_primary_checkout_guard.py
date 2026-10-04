@@ -12,6 +12,7 @@ a subprocess over the actual hook stdin/exit-code protocol.
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -526,3 +527,230 @@ def test_guard_reuses_the_shim_root_finder():
 )
 def test_redirect_detection_is_quote_aware(command, expected):
     assert guard._redirect_targets(command) == expected
+
+
+# --------------------------------------------------------------------------------------
+# GH #1136: a redirect is not an operand
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    ["2>/dev/null", "2> /dev/null", "2>&1", ">/dev/null 2>&1", "&>/dev/null", "> /dev/null"],
+)
+def test_redirects_are_not_relative_operands(checkouts, suffix):
+    """Every real operand is absolute, so the cwd-reset detector has nothing to flag."""
+    primary, worktree = checkouts
+    _pin(worktree)
+    command = f"wc -l {worktree}/CLAUDE.md {suffix}"
+    result = _run_hook(_payload("Bash", {"command": command}, cwd=primary))
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_real_relative_operand_is_still_flagged_next_to_a_redirect(checkouts):
+    primary, worktree = checkouts
+    _pin(worktree)
+    result = _run_hook(_payload("Bash", {"command": "wc -l CLAUDE.md 2>/dev/null"}, cwd=primary))
+    assert result.returncode == 2
+    operands_row = next(line for line in result.stderr.splitlines() if "relative operands" in line)
+    assert operands_row.endswith(": CLAUDE.md")
+
+
+def test_a_quoted_angle_bracket_does_not_swallow_the_file_operand(checkouts):
+    """`grep ">" CLAUDE.md` has two operands; treating `">"` as a redirect would drop the file."""
+    primary, worktree = checkouts
+    _pin(worktree)
+    result = _run_hook(_payload("Bash", {"command": 'grep ">" CLAUDE.md'}, cwd=primary))
+    assert result.returncode == 2
+
+
+def test_write_command_with_stderr_redirect_names_the_real_target(checkouts, tmp_path):
+    """`cp a b 2>/dev/null` used to treat the redirect as cp's destination."""
+    primary, worktree = checkouts
+    _pin(worktree)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    allowed = f"cp {worktree}/CLAUDE.md {scratch}/copy.md 2>/dev/null"
+    assert _run_hook(_payload("Bash", {"command": allowed}, cwd=primary)).returncode == 0
+    refused = f"cp {worktree}/CLAUDE.md {primary}/copy.md 2>/dev/null"
+    assert _run_hook(_payload("Bash", {"command": refused}, cwd=primary)).returncode == 2
+
+
+def test_redirect_into_the_primary_is_still_refused_with_an_fd_prefix(checkouts):
+    primary, worktree = checkouts
+    _pin(worktree)
+    result = _run_hook(_payload("Bash", {"command": "echo hi 2> CLAUDE.md"}, cwd=primary))
+    assert result.returncode == 2
+
+
+@pytest.mark.parametrize(
+    ("command", "words", "targets"),
+    [
+        ("cat /a 2>/dev/null", "cat /a ", ["/dev/null"]),
+        ("cat /a 2> /dev/null", "cat /a ", ["/dev/null"]),
+        ("cat /a >> out", "cat /a ", ["out"]),
+        ("cat file2>x", "cat file2", ["x"]),
+        ("cat /a 2>", "cat /a ", []),
+        ('grep ">" f', 'grep ">" f', []),
+    ],
+)
+def test_split_redirections(command, words, targets):
+    assert guard._split_redirections(command) == (words, targets)
+
+
+# --------------------------------------------------------------------------------------
+# GH #1151: a session whose cwd is reset on every call must still be pinned
+# --------------------------------------------------------------------------------------
+
+
+def _is_inferred_pin(home: Path, session_id: str) -> bool:
+    text = (home / ".cache" / "atb-primary-guard" / f"{session_id}.worktree").read_text()
+    return text.splitlines()[1:] == [guard.PIN_INFERRED_MARKER]
+
+
+def _bash(command: str, cwd: Path, session_id: str) -> dict:
+    return _payload("Bash", {"command": command}, cwd=cwd, session_id=session_id)
+
+
+def _edit(path: Path | str, cwd: Path, session_id: str, tool: str = "Edit") -> dict:
+    return _payload(tool, {"file_path": str(path)}, cwd=cwd, session_id=session_id)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd {worktree} && ls",
+        "cd {worktree}\nls",
+        "git -C {worktree} status --porcelain",
+    ],
+)
+def test_bash_only_session_is_pinned_by_the_worktree_it_cds_into(checkouts, command):
+    """cwd is the primary on every call; the worktree only appears inside the command."""
+    primary, worktree = checkouts
+    first = _run_hook(_bash(command.format(worktree=worktree), primary, "s-bash"))
+    assert first.returncode == 0, first.stderr
+    edit = _run_hook(_edit(primary / "CLAUDE.md", primary, "s-bash"))
+    assert edit.returncode == 2, "an Edit into the primary went through for an unpinned session"
+    assert "WRITE REFUSED" in edit.stderr
+
+
+def test_edit_tool_only_session_is_pinned_by_the_worktree_file_it_edits(checkouts):
+    primary, worktree = checkouts
+    first = _run_hook(_edit(worktree / "new.py", primary, "s-edit", tool="Write"))
+    assert first.returncode == 0, first.stderr
+    second = _run_hook(_edit(primary / "CLAUDE.md", primary, "s-edit"))
+    assert second.returncode == 2
+
+
+def test_inferred_pin_refuses_bash_writes_to_the_primary_too(checkouts):
+    primary, worktree = checkouts
+    _run_hook(_bash(f"cd {worktree} && ls", primary, "s-inf"))
+    result = _run_hook(_bash("echo hi > CLAUDE.md", primary, "s-inf"))
+    assert result.returncode == 2
+
+
+@pytest.mark.parametrize(
+    ("tool", "tool_input"),
+    [
+        ("Bash", {"command": "echo '- entry' >> .claude/state/log.md"}),
+        ("Write", {"file_path": ".claude/state/incidents/x.md"}),
+        ("Edit", {"file_path": ".claude/state/log.md"}),
+    ],
+)
+def test_inferred_pin_leaves_the_pm_state_record_writable(checkouts, tool, tool_input):
+    """The daemon cds into worktrees to inspect them, then appends to its log in the primary."""
+    primary, worktree = checkouts
+    _run_hook(_bash(f"cd {worktree} && ls", primary, "s-pm2"))
+    result = _run_hook(_payload(tool, tool_input, cwd=primary, session_id="s-pm2"))
+    assert result.returncode == 0, result.stderr
+
+
+def test_inferred_pin_does_not_flag_relative_reads_in_the_primary(checkouts):
+    """The daemon's cwd *is* the primary, so a relative read there is not a cwd reset."""
+    primary, worktree = checkouts
+    _run_hook(_bash(f"cd {worktree} && ls", primary, "s-pm3"))
+    result = _run_hook(_bash("wc -l CLAUDE.md", primary, "s-pm3"))
+    assert result.returncode == 0, result.stderr
+
+
+def test_state_dir_is_still_protected_for_a_cwd_pinned_session(checkouts):
+    """The carve-out belongs to the inferred pin only; it must not loosen the original one."""
+    primary, worktree = checkouts
+    _pin(worktree, "s-hard")
+    result = _run_hook(_edit(".claude/state/log.md", primary, "s-hard"))
+    assert result.returncode == 2
+
+
+def test_inferred_pin_never_downgrades_a_cwd_pin(checkouts, _isolated_home):
+    primary, worktree = checkouts
+    _pin(worktree, "s-keep")
+    _run_hook(_bash(f"cd {worktree} && ls", primary, "s-keep"))
+    assert not _is_inferred_pin(_isolated_home, "s-keep")
+    result = _run_hook(_bash("wc -l CLAUDE.md", primary, "s-keep"))
+    assert result.returncode == 2, "the cwd-reset detector must survive an inferred observation"
+
+
+def test_cwd_pin_replaces_an_inferred_one(checkouts, _isolated_home):
+    primary, worktree = checkouts
+    _run_hook(_bash(f"cd {worktree} && ls", primary, "s-up"))
+    assert _is_inferred_pin(_isolated_home, "s-up")
+    _pin(worktree, "s-up")
+    assert not _is_inferred_pin(_isolated_home, "s-up")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat {worktree}/CLAUDE.md",
+        "ls {worktree}",
+        "cd {primary} && ls",
+        "cd $SOME_WORKTREE && ls",
+        "cd {primary}/.claude/worktrees && ls",
+        "git -C {primary} status",
+    ],
+)
+def test_merely_mentioning_a_worktree_does_not_pin(checkouts, command):
+    """Inspecting worktrees from the primary is the daemon's normal job."""
+    primary, worktree = checkouts
+    first = _run_hook(_bash(command.format(worktree=worktree, primary=primary), primary, "s-look"))
+    assert first.returncode == 0, first.stderr
+    edit = _run_hook(_edit(primary / "CLAUDE.md", primary, "s-look"))
+    assert edit.returncode == 0, edit.stderr
+
+
+def test_single_clone_is_never_pinned_by_inference(single_clone):
+    """No linked worktree exists, so nothing can be inferred and nothing is refused."""
+    first = _run_hook(_bash(f"cd {single_clone} && ls", single_clone, "s-one"))
+    assert first.returncode == 0, first.stderr
+    edit = _run_hook(_edit(single_clone / "CLAUDE.md", single_clone, "s-one"))
+    assert edit.returncode == 0, edit.stderr
+
+
+def test_a_foreign_checkouts_worktree_does_not_pin(checkouts, tmp_path):
+    """A worktree of some other repo is not 'this primary's worktree'."""
+    primary, _ = checkouts
+    other = tmp_path / "other-repo"
+    other.mkdir()
+    _make_checkout(other)
+    _git(other, "init", "-q", "-b", "main")
+    _git(other, "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A")
+    _git(other, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    foreign = other / ".claude" / "worktrees" / "x"
+    _git(other, "worktree", "add", "-q", "--detach", str(foreign))
+
+    _run_hook(_bash(f"cd {foreign} && ls", primary, "s-for"))
+    edit = _run_hook(_edit(primary / "CLAUDE.md", primary, "s-for"))
+    assert edit.returncode == 0, edit.stderr
+
+
+def test_inference_failure_fails_open(checkouts, monkeypatch):
+    """An exception while inferring must allow the call, like every other failure path."""
+    primary, _ = checkouts
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(guard, "_inferred_worktree", boom)
+    payload = _edit(primary / "CLAUDE.md", primary, "s-boom")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    assert guard.main() == 0

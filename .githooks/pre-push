@@ -77,6 +77,23 @@ export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 # fixtures and made every push fail with a false "tests failed" (GH #1148).
 unset "${!GIT_@}"
 
+# GH #1147: the shim, the installed hooks and the merge driver cannot be version-controlled, so
+# "merged" and "in effect" diverge silently unless something runs their --checks. Every push by
+# every human and agent is the one trigger nobody has to remember. Advisory on purpose: a stale
+# install must be loud, but it must not block an emergency push. It runs after the `unset`
+# above so the checker's own `git` calls discover the repo from the cwd, not from git's env.
+CHECKER="$REPO_ROOT/tools/check_install_state.py"
+if [ -f "$CHECKER" ]; then
+    if ! INSTALL_REPORT="$("$PYTHON" "$CHECKER" 2>&1)"; then
+        {
+            echo ""
+            echo "pre-push: WARNING -- install-required artifacts are out of date (push continues):"
+            echo "$INSTALL_REPORT"
+            echo ""
+        } >&2
+    fi
+fi
+
 # No pipe: pytest's status must reach $? unfiltered. (`set -o pipefail` plus ${PIPESTATUS[0]}
 # would work too, but not piping at all leaves nothing to get wrong.) No -p no:randomly:
 # pytest.ini's addopts pass --randomly-seed, which is unparseable once the plugin is

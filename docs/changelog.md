@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Developer-tooling guards no longer fail silently** (#1138, #1147, #1136, #1151).
+  The Makefile resolves its interpreter (`$VIRTUAL_ENV`, `.venv`, the primary's `.venv`, then
+  `python3`) instead of invoking bare `python`, so `make hooks` runs in a fresh shell, and fails
+  loudly when none exists. `tools/install_git_hooks.py` installs and checks against
+  `origin/develop` rather than the primary checkout (held on `main`), which used to downgrade a
+  fixed hook and report false drift. New `tools/check_install_state.py` / `make install-check`
+  runs the shim, hook and merge-driver `--check`s together, and `.githooks/pre-push` runs it on
+  every push as a non-blocking warning. `tools/primary_checkout_guard.py` no longer treats a
+  redirect (`2>/dev/null`) as a relative operand, and now also pins a session by the worktree its
+  calls touch (`cd <worktree>`, `git -C`, an `Edit` inside one), so a session whose shell cwd
+  resets to the primary on every call is guarded. That inferred pin refuses writes to the primary
+  but leaves `.claude/state/` writable and skips the relative-read check, because the PM daemon has
+  the same shape.
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
   a 4h run selects a 4h model bundle; a missing bundle aborts the switch instead of using 1h.
