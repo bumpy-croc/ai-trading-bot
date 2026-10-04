@@ -1,12 +1,11 @@
 """Crash-window regression tests for the reconciler's offline-exit closes (#1223).
 
-``_close_position_from_filled_sl`` and ``_reconcile_filled_exit`` used to close the
-position row in a separate upfront transaction before the atomic balance+trade write.
-A crash between the two left the position CLOSED with no Trade and no balance change —
-a PnL that was dropped and never recovered, because a CLOSED position is never
-re-picked-up. The close now commits inside the same transaction as the Trade insert and
-the balance delta, so these tests run against a real in-memory database and fail the
-commit to prove the all-or-nothing behavior.
+``_close_position_from_filled_sl`` and ``_reconcile_filled_exit`` commit the position
+close inside the same transaction as the Trade insert and the balance delta. A separate
+earlier close would leave the position CLOSED with no Trade and no balance change if the
+process died in between — a PnL that is never recovered, because a CLOSED position is
+never re-picked-up. These tests run against a real in-memory database and fail the write
+to prove the all-or-nothing behavior.
 """
 
 from __future__ import annotations
@@ -78,6 +77,7 @@ def env() -> _Env:
         _positions=positions,
         _positions_lock=threading.Lock(),
         remove_position=Mock(side_effect=lambda oid: positions.pop(oid, None)),
+        get_position=lambda oid: positions.get(oid),
     )
     reconciler = PositionReconciler(
         exchange_interface=Mock(),
@@ -118,8 +118,8 @@ def fail_next_commit(request, monkeypatch, env):
     """Arm a one-shot failure of the close's DB write.
 
     ``commit_fails``: the next ``Session.commit`` raises (connection lost mid-transaction).
-    ``trade_write_fails``: the next ``log_trade`` call raises. In the old two-step design the
-    position row had already been closed by then, so this is the dropped-PnL crash window.
+    ``trade_write_fails``: the next ``log_trade`` call raises, i.e. the process dies between
+    deciding to close and recording the PnL.
     """
     armed = {"on": False}
 
@@ -165,9 +165,8 @@ def test_offline_sl_close_commits_position_trade_and_balance_together(env):
 def test_offline_sl_crash_mid_close_leaves_position_open_and_retry_realizes_pnl_once(
     env, fail_next_commit
 ):
-    """The crash lands between 'flip the position' and 'record the PnL' in the old design.
-    Now nothing commits, the position stays OPEN and tracked, and the retry books the PnL
-    exactly once."""
+    """A crash before the PnL is recorded commits nothing: the position stays OPEN and
+    tracked, and the retry books the PnL exactly once."""
     fail_next_commit()
     env.reconciler._close_position_from_filled_sl(env.position, _sl_order())
 
@@ -213,9 +212,12 @@ def test_filled_exit_crash_mid_close_raises_leaves_position_open_and_retry_reali
     assert env.position.order_id not in env.tracker._positions
 
 
-def test_dedup_collision_closes_position_without_reapplying_pnl(env):
+def test_position_with_a_linked_trade_is_closed_by_the_upfront_guard_without_reapplying_pnl(
+    env,
+):
     """A trade linked to this position already exists (an earlier pass booked it) but the
-    row is still OPEN: the close must still close the row, and must not re-book the PnL."""
+    row is still OPEN: the upfront terminal-trade guard closes the row and does not re-book
+    the PnL."""
     env.db.log_trade(
         symbol="BTCUSDT",
         side="long",
@@ -336,6 +338,43 @@ def test_ledger_rejection_does_not_block_the_offline_close(env):
     assert env.position.order_id not in env.tracker._positions
     # The refused delta moved nothing, so no balance-change audit row may claim it did.
     assert env.db.get_audit_events(env.session_id, severity="MEDIUM") == []
+    # ...and the refusal is queued for escalation to close-only mode.
+    assert len(env.reconciler.take_ledger_rejections()) == 1
+    assert env.reconciler.take_ledger_rejections() == []
+
+
+def test_periodic_cycle_escalates_a_ledger_refused_stop_loss_close(env):
+    """The periodic wrapper carries the refusal to the cycle so close-only is latched."""
+    from src.engines.live.reconciliation import PeriodicReconciler
+
+    env.db.update_balance(5.0, "shrunk", "test", env.session_id)
+    periodic = PeriodicReconciler(
+        exchange_interface=Mock(),
+        position_tracker=env.tracker,
+        db_manager=env.db,
+        session_id=env.session_id,
+    )
+
+    closed = periodic._close_position_from_filled_sl(
+        env.position.order_id, env.position, _sl_order()
+    )
+
+    assert closed is True
+    assert len(periodic._ledger_rejection_findings) == 1
+    assert "ledger refused" in periodic._ledger_rejection_findings[0]
+
+
+def test_startup_reconcile_reports_a_ledger_refusal_as_critical(env, monkeypatch):
+    from src.engines.live.reconciliation import Severity
+
+    monkeypatch.setattr(env.reconciler, "resolve_pending_orders", lambda: [])
+    monkeypatch.setattr(env.reconciler, "_reconcile_balance", Mock())
+    env.reconciler._ledger_rejections.append("BTCUSDT stop_loss_filled_offline: refused")
+
+    results = env.reconciler.reconcile_startup({})
+
+    assert results[-1].severity == Severity.CRITICAL
+    assert results[-1].entity_type == "balance"
 
 
 def test_session_less_reconciler_still_closes_the_row(env):

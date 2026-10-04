@@ -499,8 +499,8 @@ def test_execute_exit_locked_falls_back_to_delta_when_balance_reread_fails():
 def test_execute_exit_locked_persists_close_when_ledger_rejects_negative_balance(caplog):
     """#1261: the exchange close already filled, so a realized loss that would
     take the ledger negative must not abort the Trade insert / Position CLOSED
-    flip (the old abort left the DB position OPEN while the exchange position
-    was gone). Runs against a real DatabaseManager so the whole atomic write is
+    flip, which would leave the DB position OPEN while the exchange position is
+    gone. Runs against a real DatabaseManager so the whole atomic write is
     exercised, not a mock."""
     from src.database.manager import DatabaseManager
     from src.database.models import Position, PositionStatus, Trade, TradeSource
@@ -605,3 +605,32 @@ def test_ledger_rejected_close_does_not_apply_the_refused_delta_in_memory(caplog
     )
 
     assert state.current_balance == pytest.approx(10.0)
+
+
+def test_execute_exit_locked_tolerates_a_close_already_booked_by_another_closer(caplog):
+    """When the reconciler booked the position first, the engine's trade write is refused
+    with DuplicateCloseError: no failure is logged, and the in-memory balance follows the
+    ledger the other closer moved."""
+    from src.database.manager import DuplicateCloseError
+
+    position = _make_closable_position()
+    state = _make_closing_state(position)
+    state.live_exit_handler.execute_filled_exit.return_value = LiveExitResult(
+        success=True,
+        realized_pnl=-10.0,
+        realized_pnl_percent=-1.0,
+        exit_price=49000.0,
+        exit_fee=0.05,
+        slippage_cost=0.0,
+    )
+    state.db_manager.log_trade.side_effect = DuplicateCloseError("already booked")
+    state.db_manager.get_current_balance.return_value = 989.95
+
+    with caplog.at_level("WARNING"):
+        LiveExitCoordinator(engine_state=state).execute_exit_locked(
+            position, "stop_loss", None, 49000.0, None, None, None, skip_live_close=True
+        )
+
+    assert state.current_balance == pytest.approx(989.95)
+    assert "already booked by another closer" in caplog.text
+    assert "Failed to close position" not in caplog.text

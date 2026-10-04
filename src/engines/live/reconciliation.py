@@ -1244,12 +1244,15 @@ class ReconciliationTradeOutcome:
     write (the atomic write committed, or a dedup collision showed an earlier
     pass already recorded the trade and the row was closed idempotently), False
     when nothing was committed and the position must stay tracked for a retry.
-    ``balance`` is the post-commit ``{"old_balance", "new_balance", "change"}``
-    snapshot, set only when a balance delta was committed by this call.
+    ``balance`` is the ``{"old_balance", "new_balance", "change"}`` snapshot, set only
+    when a balance delta was committed by this call. ``ledger_rejected`` is True when the
+    close committed but the ledger refused the delta, leaving it out of step with the
+    exchange.
     """
 
     position_closed: bool
     balance: dict[str, float] | None = None
+    ledger_rejected: bool = False
 
 
 # ---------- Startup Reconciliation ----------
@@ -1416,6 +1419,15 @@ class PositionReconciler:
         # future min-fee/maker-taker change applies to reconciler-logged trades too.
         self._fee_rate = fee_rate
         self._cost_calc = CostCalculator(fee_rate=fee_rate)
+        # Closes whose realized PnL the balance ledger refused. Recorded here (not paged
+        # from inside the close, which may run under the base-asset lock) and drained by the
+        # caller, which latches close-only mode.
+        self._ledger_rejections: list[str] = []
+
+    def take_ledger_rejections(self) -> list[str]:
+        """Return and clear the descriptions of closes the balance ledger refused."""
+        rejections, self._ledger_rejections = self._ledger_rejections, []
+        return rejections
 
     def _track_stop_loss(self, order_id: str, symbol: str) -> None:
         """Register a stop-loss this reconciler placed or adopted with the OrderTracker.
@@ -1452,6 +1464,18 @@ class PositionReconciler:
 
         # Step C: Verify balance consistency
         results.append(self._reconcile_balance())
+
+        # A close whose realized PnL the ledger refused leaves the balance out of step with
+        # the exchange: surface it as CRITICAL so the engine latches close-only mode.
+        if self.take_ledger_rejections():
+            results.append(
+                ReconciliationResult(
+                    entity_type="balance",
+                    entity_id=None,
+                    status="unresolved",
+                    severity=Severity.CRITICAL,
+                )
+            )
 
         return results
 
@@ -4558,6 +4582,11 @@ class PositionReconciler:
                     exit_category=exit_category,
                     balance_delta=net_delta,
                 )
+                if outcome.ledger_rejected:
+                    self._ledger_rejections.append(
+                        f"{getattr(position, 'symbol', '?')} {reason}: the ledger refused the "
+                        f"realized PnL {net_delta:+.2f}"
+                    )
                 if outcome.balance is None:
                     return outcome.position_closed
                 balance_result = outcome.balance
@@ -4810,10 +4839,22 @@ class PositionReconciler:
                 )
             return ReconciliationTradeOutcome(position_closed=False)
 
-        if balance_delta is None or "rejected_reason" in ledger_result:
+        if balance_delta is None:
+            return ReconciliationTradeOutcome(position_closed=position_closed)
+        if "rejected_reason" in ledger_result:
             # A refused delta moved nothing: there is no balance change to audit (the
             # ledger anomaly was recorded CRITICAL inside log_trade's transaction).
-            return ReconciliationTradeOutcome(position_closed=position_closed)
+            return ReconciliationTradeOutcome(position_closed=position_closed, ledger_rejected=True)
+        if "new_balance" in ledger_result:
+            # The exact before/after read inside the commit's own transaction.
+            return ReconciliationTradeOutcome(
+                position_closed=position_closed,
+                balance={
+                    "old_balance": ledger_result["old_balance"],
+                    "new_balance": ledger_result["new_balance"],
+                    "change": balance_delta,
+                },
+            )
         # log_trade already committed the atomic balance+trade+close write; this is a
         # post-commit read for the caller's audit trail only (not used for any further
         # ledger arithmetic), so "old_balance" is reconstructed by subtracting our own
@@ -5039,6 +5080,9 @@ class PeriodicReconciler:
             on_event=on_event,
             order_tracker=order_tracker,
         )
+        # Ledger-refused closes found mid-cycle, escalated once the cycle's locks are
+        # released (step 5).
+        self._ledger_rejection_findings: list[str] = []
 
     def start(self) -> None:
         """Start the periodic reconciliation daemon thread."""
@@ -5108,11 +5152,9 @@ class PeriodicReconciler:
         periodic path books money identically: the DB close, the realized P&L
         in the session balance (commission normalized to USD) and a
         deduplicated ``trades`` row commit in one atomic write (a failed write
-        leaves the position tracked for re-reconciliation). The periodic path previously closed
-        the DB row with NO balance update and no trade record, so every SL
-        loss the reconciler detected before the engine's deferred-exit drain
-        silently never hit tracked capital → overstated balance → oversized
-        subsequent positions.
+        leaves the position tracked for re-reconciliation). Booking the realized P&L here
+        keeps every SL loss the reconciler detects before the engine's deferred-exit drain
+        in tracked capital, so later entries are not sized off an overstated balance.
 
         Skips when the position is no longer tracked — the engine's
         deferred SL-exit drain already processed this fill — so the P&L is
@@ -5130,6 +5172,7 @@ class PeriodicReconciler:
             return False
 
         self._position_reconciler._close_position_from_filled_sl(position, sl_order)
+        self._ledger_rejection_findings.extend(self._position_reconciler.take_ledger_rejections())
 
         if self.position_tracker.get_position(order_key) is not None:
             # DB close failed inside the handler — position intentionally left
@@ -5735,6 +5778,13 @@ class PeriodicReconciler:
         if self._reconcile_spot_balance():
             max_severity = Severity.CRITICAL
             findings.append("spot balance corrected beyond tolerance")
+
+        # A close whose realized PnL the ledger refused leaves the balance out of step
+        # with the exchange: escalate so new entries stop sizing off it.
+        if self._ledger_rejection_findings:
+            findings.extend(self._ledger_rejection_findings)
+            self._ledger_rejection_findings = []
+            max_severity = Severity.CRITICAL
 
         # 5. Trigger close-only mode on CRITICAL
         if max_severity == Severity.CRITICAL:
