@@ -30,6 +30,11 @@ REGIME_LOOKBACK_BUFFER = DEFAULT_REGIME_LOOKBACK_BUFFER
 REGIME_CHECK_FREQUENCY = DEFAULT_REGIME_CHECK_FREQUENCY
 REGIME_WARMUP_CANDLES = DEFAULT_REGIME_WARMUP_CANDLES
 
+# Switch targets that load no ML model when built with factory defaults (the
+# handler never overrides ``signal_source``), so a model pin has nothing to
+# apply to and must not block the switch.
+MODEL_FREE_SWITCH_TARGETS = frozenset({"momentum_leverage", "leveraged_regime"})
+
 
 def compute_regime_lookback(regime_switcher: Any) -> int:
     """Determine how many candles are needed for regime analysis.
@@ -109,6 +114,10 @@ class RegimeHandler:
         self._current_strategy_name = initial_strategy_name
         # Loads that failed for a (name, symbol, timeframe); not retried every check.
         self._failed_loads: set[tuple[str, str | None, str | None]] = set()
+        # Switches the regime switcher asked for that could not be built, so a
+        # refused switch is visible in the results instead of reading as
+        # "the regime never triggered".
+        self.failed_switches: list[dict] = []
 
     @property
     def current_strategy_name(self) -> str:
@@ -196,6 +205,15 @@ class RegimeHandler:
             )
             if new_strategy is None:
                 logger.warning("Failed to load strategy %s", new_strategy_name)
+                self.failed_switches.append(
+                    {
+                        "timestamp": current_time,
+                        "candle_index": candle_index,
+                        "target_strategy": new_strategy_name,
+                        "regime": switch_decision["new_regime"],
+                        "model_version": self.model_version,
+                    }
+                )
                 return None, False, None
 
             self.strategy_switches.append(switch_info)
@@ -289,9 +307,10 @@ class RegimeHandler:
         rather than falling back to the factory's 1h/default-symbol model.
 
         Under a model pin the same version is requested from the factory, and
-        a factory that cannot honor it (no ``model_version`` parameter) fails
-        the load too: the alternative is a switched-in strategy that silently
-        scores with ``latest`` inside a "pinned" run.
+        an ML factory that cannot honor it (no ``model_version`` parameter)
+        fails the load too: the alternative is a switched-in strategy that
+        silently scores with ``latest`` inside a "pinned" run. Model-free
+        targets (``MODEL_FREE_SWITCH_TARGETS``) are built without the pin.
 
         Args:
             strategy_name: Name of strategy to load.
@@ -331,11 +350,9 @@ class RegimeHandler:
             module_path, factory_name = strategy_factories[strategy_name]
             module = __import__(module_path, fromlist=[factory_name])
             factory_function = getattr(module, factory_name)
+            pin = None if strategy_name in MODEL_FREE_SWITCH_TARGETS else self.model_version
             return call_strategy_factory(
-                factory_function,
-                symbol=symbol,
-                model_version=self.model_version,
-                timeframe=timeframe,
+                factory_function, symbol=symbol, model_version=pin, timeframe=timeframe
             )
         except Exception as e:
             logger.error(
@@ -383,6 +400,7 @@ class RegimeHandler:
             "final_strategy": self._current_strategy_name,
             "initial_strategy": self.initial_strategy_name,
             "total_strategy_switches": len(self.strategy_switches),
+            "failed_switches": self.failed_switches,
         }
 
     @staticmethod
@@ -397,4 +415,5 @@ class RegimeHandler:
             "strategy_switches": [],
             "regime_history": [],
             "total_strategy_switches": 0,
+            "failed_switches": [],
         }

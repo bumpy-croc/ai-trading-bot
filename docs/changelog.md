@@ -13,11 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Regime switches in a pinned backtest honor the model pin** (#1258). `Backtester` takes a
-  `model_version` (`atb backtest --model-version/--model-as-of` passes it) and hands it to
-  `RegimeHandler`, which threads it through `call_strategy_factory`. A switched-in ML strategy
-  scores with the pinned version, and a switch target whose factory cannot honor the pin
-  (`ml_adaptive`, `ml_sentiment`, `ensemble_weighted`, `momentum_leverage`, `leveraged_regime`) is
-  refused with an error log instead of silently resolving `latest`.
+  `model_version` (`atb backtest` passes the resolved pin) and hands it to `RegimeHandler`, which
+  threads it through `call_strategy_factory`. A switched-in `ml_basic` scores with the pinned
+  version; an ML target whose factory cannot honor the pin (`ml_adaptive`, `ml_sentiment`,
+  `ensemble_weighted`) is refused with an error log instead of silently resolving `latest`, and
+  the refusal is listed under `failed_switches` in the regime results. `momentum_leverage` and
+  `leveraged_regime` (momentum mode) load no model and switch normally. The CLI does not enable
+  regime switching today, so this applies to programmatic `Backtester(enable_regime_switching=True)`.
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
   a 4h run selects a 4h model bundle; a missing bundle aborts the switch instead of using 1h.

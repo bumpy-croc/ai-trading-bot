@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.engines.backtest.engine import Backtester
-from src.engines.backtest.regime.regime_handler import RegimeHandler
+from src.engines.backtest.regime.regime_handler import MODEL_FREE_SWITCH_TARGETS, RegimeHandler
 from src.strategies.components import (
     FixedFractionSizer,
     FixedRiskManager,
@@ -41,9 +41,11 @@ _SWITCH_TARGET_FACTORIES = {
 _FACTORIES_WITHOUT_PIN_SUPPORT = [
     name
     for name, (module, factory) in _SWITCH_TARGET_FACTORIES.items()
-    if "model_version"
+    if name not in MODEL_FREE_SWITCH_TARGETS
+    and "model_version"
     not in inspect.signature(getattr(importlib.import_module(module), factory)).parameters
 ]
+assert _FACTORIES_WITHOUT_PIN_SUPPORT, "refusal check would silently skip every factory"
 
 
 def _handler(model_version=None):
@@ -128,6 +130,61 @@ class TestHandlerAppliesPin:
 
         assert result is None
         assert "does not support model_version pinning" in str(log.error.call_args)
+
+    @pytest.mark.parametrize("name", sorted(MODEL_FREE_SWITCH_TARGETS))
+    def test_model_free_targets_build_under_a_pin(self, name):
+        """No model is loaded, so there is nothing for the pin to apply to."""
+        with patch(ENGINE_PATH) as engine_cls:
+            result = _handler(PIN)._load_strategy(name, symbol="ETHUSDT", timeframe="1h")
+
+        assert result is not None
+        engine_cls.assert_not_called()
+
+    def test_refused_switch_is_reported_and_leaves_state_untouched(self):
+        import pandas as pd
+
+        handler = _handler(PIN)
+        handler.regime_switcher = SimpleNamespace(
+            analyze_market_regime=lambda _d: {
+                "consensus_regime": {
+                    "regime_label": "bull",
+                    "confidence": 0.9,
+                    "agreement_score": 1,
+                }
+            },
+            should_switch_strategy=lambda _a, current_candle_index: {
+                "should_switch": True,
+                "optimal_strategy": "ml_adaptive",
+                "new_regime": "bull",
+                "confidence": 0.9,
+                "reason": "test",
+            },
+            strategy_manager=None,
+        )
+
+        with patch(HANDLER_LOGGER):
+            outcome = handler.analyze_and_switch_if_needed(
+                df=pd.DataFrame({"close": [1.0] * 10}),
+                candle_index=5,
+                current_time="t5",
+                timeframe="1h",
+                balance=1000.0,
+                current_strategy=SimpleNamespace(name="old"),
+                symbol="ETHUSDT",
+            )
+
+        assert outcome == (None, False, None)
+        assert handler.strategy_switches == []
+        assert handler.current_strategy_name == "ml_basic"
+        assert handler.get_results()["failed_switches"] == [
+            {
+                "timestamp": "t5",
+                "candle_index": 5,
+                "target_strategy": "ml_adaptive",
+                "regime": "bull",
+                "model_version": PIN,
+            }
+        ]
 
     def test_failed_pinned_load_is_not_retried(self):
         handler = _handler(PIN)
