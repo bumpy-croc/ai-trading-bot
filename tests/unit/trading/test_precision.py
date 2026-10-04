@@ -87,6 +87,15 @@ def test_snap_to_step_floor_never_rounds_up(value, step, expected):
     assert snap_to_step(value, step, "floor") == expected
 
 
+def test_snap_to_step_floor_tolerates_one_ulp_low_at_large_ratio():
+    """0.19999999999999998 is 0.2 stored one ULP low; at ratio 2e7 it must not lose a step."""
+    assert snap_to_step(0.19999999999999998, 1e-8, "floor") == 0.2
+
+
+def test_conform_relative_tolerance_at_large_ratio():
+    assert conform_to_step(1648.8200000000001, 1e-8) == (1648.82, True)
+
+
 def test_snap_to_step_floor_never_exceeds_input():
     rng = random.Random(789)
     for _ in range(2000):

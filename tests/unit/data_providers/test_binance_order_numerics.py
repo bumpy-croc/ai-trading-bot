@@ -195,3 +195,13 @@ class TestMarginRepayFloatAmount:
         provider._client.margin_borrow_repay.return_value = {}
         provider.repay_margin_loan("ETH", 0.00282625)  # type: ignore[arg-type]
         assert provider._client.margin_borrow_repay.call_args.kwargs["amount"] == "0.00282625"
+
+
+class TestNonFiniteRefused:
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+    def test_place_order_refuses_non_finite_quantity(self, provider, bad):
+        provider.get_symbol_info("ETHUSDT")
+        with patch.object(provider, "validate_order_parameters", return_value=(True, None)):
+            result = provider.place_order("ETHUSDT", OrderSide.BUY, OrderType.MARKET, quantity=bad)
+        assert result is None
+        provider._client.create_order.assert_not_called()

@@ -1010,6 +1010,8 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             if raw is None:
                 continue
             value = float(raw)
+            if not math.isfinite(value):
+                raise ValueError(f"Refusing to send non-finite order {field}: {raw!r}")
             step = float(step_raw) if isinstance(step_raw, int | float) else None
             conformed, on_step = conform_to_step(value, step)
             if not on_step:
@@ -1020,6 +1022,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     value,
                     symbol,
                     step,
+                    stack_info=True,
                 )
             elif conformed != value:
                 logger.warning(
@@ -1030,6 +1033,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     symbol,
                     conformed,
                     step,
+                    stack_info=True,
                 )
             # Off-step values keep their own precision: formatting to the step's
             # decimal count would silently truncate them.
@@ -1352,7 +1356,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return False
         try:
             self._client.margin_borrow_repay(
-                asset=asset, amount=format(Decimal(str(amount)), "f"), type="REPAY", isIsolated="FALSE"
+                asset=asset,
+                amount=format(Decimal(str(amount)), "f"),
+                type="REPAY",
+                isIsolated="FALSE",
             )
             logger.info("Margin repay submitted: %s %s", amount, asset)
             return True

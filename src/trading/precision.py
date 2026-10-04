@@ -59,7 +59,8 @@ def snap_to_step(
     in `Decimal` on the shortest decimal strings, so the result is the exact
     decimal multiple: ``snap_to_step(1648.82, 0.01) == 1648.82`` where the float
     form gives ``1648.8200000000001``. ``mode="floor"`` never rounds up (with a
-    1e-9 step tolerance for exact multiples stored a hair low). Returns ``value``
+    tolerance of 1e-9 steps, or 1e-12 relative at large ratios, for exact multiples
+    stored a hair low). Returns ``value``
     unchanged for a non-positive or non-finite step, or a non-finite value.
     """
     if not _is_usable_step(step_size) or not math.isfinite(value):
@@ -67,7 +68,8 @@ def snap_to_step(
     decimal_step = Decimal(str(step_size))
     ratio = Decimal(str(value)) / decimal_step
     if mode == "floor":
-        units = (ratio + _FLOOR_NOISE_TOLERANCE).to_integral_value(rounding=ROUND_FLOOR)
+        tolerance = max(_FLOOR_NOISE_TOLERANCE, abs(ratio) * _ON_STEP_REL_TOLERANCE)
+        units = (ratio + tolerance).to_integral_value(rounding=ROUND_FLOOR)
     else:
         units = ratio.to_integral_value(rounding=ROUND_HALF_UP)
     return float(units * decimal_step)
