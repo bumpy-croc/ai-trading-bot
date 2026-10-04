@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Margin user-data WebSocket now actually re-establishes without a restart** (#723, #616, #729).
+  Root cause, reproduced against the real python-binance stack with a fake ws-api server: an
+  in-place re-subscribe reuses one cached `KeepAliveWebsocket`, so the previous listener's exit
+  unsubscribes the NEW subscription; the first margin socket's key is `None` so `stop_socket`
+  was never called for it; and a subscribe racing the ws-api reconnect times out and kills the
+  listener silently while a ws-api ping (the #907 liveness check) keeps passing. Recovery now
+  rebuilds the stream on a fresh TWM by default (`FEATURE_WS_USER_HARD_RECONNECT` default on),
+  a failed subscribe flags RESYNCING immediately, RESYNCING recovery shares the circuit breaker
+  and backoff instead of rebuilding every cycle, and teardown is clean: the ws-api is quiesced
+  before `twm.stop()` (no `Error stopping client`), the loop is drained before closing (no
+  `Task was destroyed but it is pending`), listener keys of dead tasks are released so the
+  manager thread exits, and the TWM thread is a daemon. `stop_streams()` and rebuilds are
+  serialised so a shutdown can no longer be followed by a stray rebuilt TWM.
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
   a 4h run selects a 4h model bundle; a missing bundle aborts the switch instead of using 1h.

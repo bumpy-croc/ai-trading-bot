@@ -507,6 +507,12 @@ DEFAULT_WS_HEALTH_CHECK_INTERVAL = 30  # Seconds between health monitor checks
 # keepalive traffic on the ws-api TCP path (~1 ping per staleness window).
 DEFAULT_WS_USER_LIVENESS_PROBE_TIMEOUT = 10
 DEFAULT_WS_RECONNECT_MAX_RETRIES = 3  # Maximum reconnect attempts before REST_DEGRADED
+# TWM teardown bounds (#729). The transport-close timeout caps closing the ws-api
+# socket from the loop side; the join timeout covers the listeners' 3 s recv poll
+# plus the loop's exit after ``stop()``, and is applied twice when a dead listener
+# pins the manager thread.
+DEFAULT_WS_TWM_TRANSPORT_CLOSE_TIMEOUT = 2
+DEFAULT_WS_TWM_JOIN_TIMEOUT = 4
 # Consecutive unproductive user-stream reconnects (stale again with no real event)
 # before the watchdog opens a circuit breaker: stop the futile ~2-min reconnect loop
 # and run REST-polling-only. python-binance's start_margin_socket is fire-and-forget
