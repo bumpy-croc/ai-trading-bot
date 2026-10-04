@@ -39,11 +39,67 @@ def test_size_reduction_when_exceeding_limit():
     b = a * 1.02
     corr = engine.calculate_position_correlations({"A": a, "B": b})
     positions = {"A": {"size": 0.06}}
-    # Candidate B wants 0.08; projected group = 0.14 > 0.1, so factor ~ 0.1/0.14
+    # Candidate B wants 0.08; only 0.1 - 0.06 = 0.04 of headroom remains, so factor = 0.5
     factor = engine.compute_size_reduction_factor(positions, corr, "B", 0.08)
-    assert 0.6 < factor < 0.8
-    reduced = 0.08 * factor
-    assert reduced <= 0.1
+    assert factor == pytest.approx(0.5)
+    assert 0.06 + 0.08 * factor <= 0.1 + 1e-12
+
+
+@pytest.mark.parametrize("cap", [0.05, 0.1, 0.25])
+@pytest.mark.parametrize("existing", [0.0, 0.02, 0.05, 0.1, 0.12, 0.3])
+@pytest.mark.parametrize("candidate", [0.01, 0.05, 0.1, 0.2, 0.5])
+def test_size_reduction_never_exceeds_cap(cap, existing, candidate):
+    engine = CorrelationEngine(CorrelationConfig(max_correlated_exposure=cap, sample_min_size=5))
+    a = _series(np.linspace(100, 120, 40))
+    corr = engine.calculate_position_correlations({"A": a, "B": a * 1.02})
+    positions = {"A": {"size": existing}}
+
+    factor = engine.compute_size_reduction_factor(positions, corr, "B", candidate)
+
+    assert 0.0 <= factor <= 1.0
+    headroom = max(0.0, cap - existing)
+    final_added = candidate * factor
+    assert final_added <= headroom + 1e-12
+    if existing + candidate <= cap:
+        assert factor == 1.0
+    elif existing < cap:
+        # Binds exactly: fills the remaining headroom, no more and no less
+        assert existing + final_added == pytest.approx(cap)
+    else:
+        assert factor == 0.0
+
+
+def test_size_reduction_group_already_at_cap_blocks_candidate():
+    engine = CorrelationEngine(CorrelationConfig(max_correlated_exposure=0.1, sample_min_size=5))
+    a = _series(np.linspace(100, 120, 40))
+    corr = engine.calculate_position_correlations({"A": a, "B": a * 1.02})
+
+    factor = engine.compute_size_reduction_factor({"A": {"size": 0.1}}, corr, "B", 0.1)
+
+    assert factor == 0.0
+
+
+def test_size_reduction_counts_candidate_symbol_existing_position():
+    engine = CorrelationEngine(CorrelationConfig(max_correlated_exposure=0.1, sample_min_size=5))
+    a = _series(np.linspace(100, 120, 40))
+    corr = engine.calculate_position_correlations({"A": a, "B": a * 1.02})
+    positions = {"A": {"size": 0.03}, "B": {"size": 0.03}}
+
+    factor = engine.compute_size_reduction_factor(positions, corr, "B", 0.08)
+
+    assert 0.06 + 0.08 * factor == pytest.approx(0.1)
+
+
+def test_size_reduction_honours_override_cap():
+    engine = CorrelationEngine(CorrelationConfig(max_correlated_exposure=0.5, sample_min_size=5))
+    a = _series(np.linspace(100, 120, 40))
+    corr = engine.calculate_position_correlations({"A": a, "B": a * 1.02})
+
+    factor = engine.compute_size_reduction_factor(
+        {"A": {"size": 0.04}}, corr, "B", 0.08, max_exposure_override=0.08
+    )
+
+    assert factor == pytest.approx(0.5)
 
 
 class TestCorrelationEngineEdgeCases:

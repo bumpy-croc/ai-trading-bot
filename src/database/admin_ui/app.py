@@ -2,6 +2,7 @@ import hmac
 import logging
 import os
 from typing import TYPE_CHECKING
+from urllib.parse import unquote, urlparse
 
 import sqlalchemy.exc
 from sqlalchemy.orm import scoped_session  # type: ignore
@@ -56,6 +57,37 @@ if TYPE_CHECKING:  # pragma: no cover - type checking only
     from flask import Flask
 
 logger = logging.getLogger(__name__)
+
+
+# Percent-decoding rounds applied before inspecting a redirect target; enough to unwrap
+# double-encoded separators (%255C) without looping on attacker-controlled input.
+_REDIRECT_DECODE_ROUNDS = 3
+
+
+def is_safe_redirect_url(target: str | None) -> bool:
+    """Return True only for a same-origin relative path (e.g. "/admin/user/?page=2").
+
+    Allow-list check: the target must start with a single "/" and, in raw and
+    percent-decoded form, contain no backslash, control character, or leading "//".
+    Browsers normalise "\\" to "/" and strip tab/newline inside Location headers, so
+    "/\\evil.com" or "/\t/evil.com" would otherwise become the off-origin "//evil.com".
+    """
+    if not isinstance(target, str) or not target:
+        return False
+    candidate = target
+    for _ in range(_REDIRECT_DECODE_ROUNDS + 1):
+        if any(ch == "\\" or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in candidate):
+            return False
+        if not candidate.startswith("/") or candidate.startswith("//"):
+            return False
+        decoded = unquote(candidate)
+        if decoded == candidate:
+            break
+        candidate = decoded
+    else:
+        return False  # still decoding after the round limit: reject rather than guess
+    url_parts = urlparse(target)
+    return not url_parts.netloc and not url_parts.scheme
 
 
 def _ensure_secret_key() -> str:
@@ -129,8 +161,6 @@ def create_app() -> "Flask":
     that deployment health checks can continue to function while signalling a
     500 status to callers.
     """
-
-    from urllib.parse import urlparse
 
     from flask import (
         Flask,
@@ -243,20 +273,6 @@ def create_app() -> "Flask":
         if user_id == ADMIN_USERNAME:
             return AdminUser(user_id)
         return None
-
-    def is_safe_redirect_url(target: str | None) -> bool:
-        """
-        Validate that redirect URL is safe (same-origin) to prevent open redirect attacks.
-
-        Returns True only if target is a relative path on the same host.
-        """
-        if not target:
-            return False
-        # Parse the target URL
-        url_parts = urlparse(target)
-        # Reject absolute URLs with scheme or netloc (external redirects)
-        # Only allow relative paths like "/admin" or "/dashboard"
-        return not url_parts.netloc and not url_parts.scheme
 
     @app.route("/login", methods=["GET", "POST"])
     @limiter.limit("5 per minute")  # SEC-009: Rate limit login attempts

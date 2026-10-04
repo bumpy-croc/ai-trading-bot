@@ -219,7 +219,8 @@ class CorrelationEngine:
         """Return factor in [0,1] to reduce candidate_fraction if group exposure exceeds max.
         - Find candidate's correlated group
         - Compute projected exposure with candidate included
-        - If projected > max_correlated_exposure, scale down proportionally
+        - If projected > max_correlated_exposure, shrink the candidate to the remaining
+          headroom (max - current) so existing + scaled candidate never exceeds the cap
 
         Args:
                 positions: Current positions dict
@@ -250,8 +251,9 @@ class CorrelationEngine:
                 size = positions.get(sym, {}).get("size", 0.0)
                 current = self._safe_size_add(current, size)
             projected = current + candidate_fraction
-            if projected > max_allowed and projected > 0:
-                factor = min(factor, max(0.0, max_allowed / projected))
+            if projected > max_allowed:
+                headroom = max(0.0, max_allowed - current)
+                factor = min(factor, headroom / candidate_fraction)
         return factor
 
 

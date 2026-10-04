@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Correlated-exposure cap now binds in `compute_size_reduction_factor`; admin login rejects
+  backslash open redirects** (#750). The old `max / projected` scaling only enforced the cap
+  when the group was empty (group at the 0.10 cap + candidate 0.10 left 0.15). The candidate
+  now shrinks to the remaining headroom `(max - current) / candidate`, so existing + new never
+  exceeds the cap, including for callers that skip the later clamp
+  (`calculate_position_fraction`). Backtests with correlated groups size more conservatively
+  as a result. The admin `is_safe_redirect_url` is a module-level allow-list check (single
+  leading `/`, no backslash or control characters, no `//`, also after percent-decoding), so
+  `/\evil.com` and encoded variants fall back to the admin index.
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
   a 4h run selects a 4h model bundle; a missing bundle aborts the switch instead of using 1h.
