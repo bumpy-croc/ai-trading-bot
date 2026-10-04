@@ -4,6 +4,7 @@ import argparse
 import json
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import mock_open, patch
 
 import pytest
@@ -308,6 +309,68 @@ class TestControlTrain:
 
             # Assert
             assert result == 1
+
+
+class TestControlTrainPromotion:
+    """GH #1242: `live-control train` moves ``latest`` only under --auto-deploy."""
+
+    @staticmethod
+    def _args(sentiment: bool, auto_deploy: bool):
+        return argparse.Namespace(
+            control_cmd="train",
+            symbol="BTCUSDT",
+            sentiment=sentiment,
+            days=365,
+            epochs=50,
+            auto_deploy=auto_deploy,
+        )
+
+    @pytest.mark.parametrize(
+        ("sentiment", "trainer"),
+        [(False, "train_price_model_main"), (True, "train_model_main")],
+    )
+    @pytest.mark.parametrize("auto_deploy", [False, True])
+    def test_training_gets_set_latest_only_for_auto_deploy(self, sentiment, trainer, auto_deploy):
+        decision = SimpleNamespace(promoted=True, reason="ok", audit_path=None)
+        with (
+            patch(f"cli.commands.live.{trainer}", return_value=0) as mock_train,
+            patch("cli.commands.live._gate_and_promote", return_value=decision),
+            patch("src.ml.validation.gate.default_resolve_latest", return_value=Path("/m/v1")),
+        ):
+            assert _control(self._args(sentiment, auto_deploy)) == 0
+
+        assert mock_train.call_args.args[0].set_latest is auto_deploy
+
+    def test_without_auto_deploy_the_gate_does_not_run(self):
+        with (
+            patch("cli.commands.live.train_price_model_main", return_value=0),
+            patch("cli.commands.live._gate_and_promote") as gate,
+        ):
+            assert _control(self._args(False, False)) == 0
+
+        gate.assert_not_called()
+
+    def test_auto_deploy_gates_with_the_pre_training_target_for_rollback(self):
+        previous, trained = Path("/m/v1"), Path("/m/v2")
+        decision = SimpleNamespace(promoted=True, reason="ok", audit_path=None)
+        with (
+            patch("cli.commands.live.train_price_model_main", return_value=0),
+            patch("src.ml.validation.gate.default_resolve_latest", side_effect=[previous, trained]),
+            patch("cli.commands.live._gate_and_promote", return_value=decision) as gate,
+        ):
+            assert _control(self._args(False, True)) == 0
+
+        assert gate.call_args.args[0] == trained
+        assert gate.call_args.kwargs["known_prev_target"] == previous
+
+    def test_auto_deploy_blocked_by_gate_returns_error(self):
+        decision = SimpleNamespace(promoted=False, reason="failed", audit_path=None)
+        with (
+            patch("cli.commands.live.train_price_model_main", return_value=0),
+            patch("src.ml.validation.gate.default_resolve_latest", return_value=Path("/m/v1")),
+            patch("cli.commands.live._gate_and_promote", return_value=decision),
+        ):
+            assert _control(self._args(False, True)) == 1
 
 
 class TestControlDeployModel:

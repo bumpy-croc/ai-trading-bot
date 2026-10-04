@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Local training no longer promotes a model as a side effect** (#1242). `save_artifacts`, the
+  meta-label export and the legacy price trainer used to point `{symbol}/{type}/latest` at every
+  trained bundle, so any local run (and `atb train cloud --provider local`) published a candidate to
+  the registry, which serves every `latest` as production. `TrainingConfig.set_latest` (default
+  off) now gates the symlink; opt in with `atb train model|price --set-latest`, or
+  `atb live-control train --auto-deploy`, which still validates through the #801 gate and rolls back
+  on failure. `atb train cloud --set-latest` now also covers the local provider. A bare
+  `live-control train` no longer leaves an unvalidated `latest` behind; promote with `deploy-model`.
+  A new `model-promotion-check` workflow (`tools/check_promotion_log.py`) fails a PR whose
+  `docs/research/model-promotions.md` adds a `NO CHANGE` entry while a `src/ml/models/**/latest`
+  pointer also changes.
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
   a 4h run selects a 4h model bundle; a missing bundle aborts the switch instead of using 1h.

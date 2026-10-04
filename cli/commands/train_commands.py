@@ -53,6 +53,17 @@ def _diagnostics_from_args(args) -> DiagnosticsOptions:
     )
 
 
+def _print_promotion_status(version_dir, set_latest: bool) -> None:
+    """Tell the operator whether the trained bundle took the production pointer."""
+    if set_latest:
+        print(f"'latest' now points to {version_dir.name}.")
+        return
+    print(
+        f"'latest' was NOT changed; {version_dir.name} is not served. Promote with: "
+        f"atb live-control deploy-model --model-path {version_dir}"
+    )
+
+
 def train_model_main(args) -> int:
     """Train a combined model."""
     if not _TENSORFLOW_AVAILABLE:
@@ -82,6 +93,7 @@ def train_model_main(args) -> int:
         target_type=getattr(args, "target_type", "regression"),
         target_horizon=getattr(args, "target_horizon", 1),
         primary_model_type=getattr(args, "primary_model_type", None),
+        set_latest=getattr(args, "set_latest", False),
     )
 
     ctx = TrainingContext(config=config)
@@ -114,6 +126,7 @@ def train_model_main(args) -> int:
         print(f"Metadata: {artifacts.metadata_path}")
         if artifacts.plot_path:
             print(f"Training plot: {artifacts.plot_path}")
+        _print_promotion_status(artifacts.directory, config.set_latest)
     return 0
 
 
@@ -309,7 +322,7 @@ def train_price_model_main(args) -> int:
     bundle_dir.mkdir(parents=True, exist_ok=True)
     model.save(bundle_dir / "model.keras")
 
-    from src.ml.training_pipeline.artifacts import convert_to_onnx
+    from src.ml.training_pipeline.artifacts import convert_to_onnx, point_latest_at
 
     convert_to_onnx(model, bundle_dir / "model.onnx")
 
@@ -323,15 +336,12 @@ def train_price_model_main(args) -> int:
     with open(bundle_dir / "feature_schema.json", "w", encoding="utf-8") as f:
         json.dump(schema, f, indent=2)
 
-    latest_link = bundle_dir.parent / "latest"
-    if latest_link.exists() or latest_link.is_symlink():
-        try:
-            latest_link.unlink()
-        except OSError:
-            pass
-    latest_link.symlink_to(version_id)
+    set_latest = getattr(args, "set_latest", False)
+    if set_latest:
+        point_latest_at(bundle_dir)
 
     print(f"✅ Saved bundle to {bundle_dir}")
+    _print_promotion_status(bundle_dir, set_latest)
     return 0
 
 

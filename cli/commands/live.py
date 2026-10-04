@@ -257,9 +257,9 @@ def _control(ns: argparse.Namespace) -> int:
 
         start_date, end_date = _date_range(ns.days)
         model_type = "sentiment" if ns.sentiment else "basic"
-        # Capture the currently-live version BEFORE training. Training promotes
-        # the freshly trained version to ``latest``; if it later fails the #801
-        # gate we roll ``latest`` back to this pre-training target.
+        # Training only moves ``latest`` under --auto-deploy. Capture the
+        # currently-live version BEFORE training so that, if the freshly trained
+        # version then fails the #801 gate, we roll ``latest`` back to it.
         prev_target = default_resolve_latest(_type_dir(ns.symbol, model_type))
 
         if ns.sentiment:
@@ -277,6 +277,7 @@ def _control(ns: argparse.Namespace) -> int:
                 skip_robustness=False,
                 skip_onnx=False,
                 disable_mixed_precision=False,
+                set_latest=ns.auto_deploy,
             )
             code = train_model_main(args)
         else:
@@ -288,6 +289,7 @@ def _control(ns: argparse.Namespace) -> int:
                 epochs=ns.epochs,
                 batch_size=256,
                 sequence_length=120,
+                set_latest=ns.auto_deploy,
             )
             code = train_price_model_main(args)
 
@@ -296,10 +298,9 @@ def _control(ns: argparse.Namespace) -> int:
             return code
 
         print("✅ Model training complete")
-        # Training just flipped ``latest`` to the new version; resolve it.
-        candidate = default_resolve_latest(_type_dir(ns.symbol, model_type))
-
         if ns.auto_deploy:
+            # Training flipped ``latest`` to the new version; resolve it.
+            candidate = default_resolve_latest(_type_dir(ns.symbol, model_type))
             # #801: gate the just-promoted model. If it fails, roll ``latest``
             # back to the pre-training target so a bad model does not stay live.
             if candidate is None:
@@ -318,14 +319,6 @@ def _control(ns: argparse.Namespace) -> int:
                     print(f"   Audit: {decision.audit_path}")
                 return 1
             print(f"✅ Auto-deploy: kept as latest after validation ({decision.reason})")
-        else:
-            # No auto-deploy: training already set ``latest``. Warn the operator
-            # it is UNVALIDATED and show how to validate it.
-            if candidate is not None:
-                print(f"   ⚠️ '{candidate.name}' is now 'latest' but UNVALIDATED.")
-                print(
-                    "   Validate with: atb live-control validate-model " f"--model-path {candidate}"
-                )
         return 0
 
     if ns.control_cmd == "deploy-model":
