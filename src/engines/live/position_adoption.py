@@ -9,7 +9,14 @@ A restart must tell two things apart that look identical in the database:
 Adopting every OPEN row resurrected phantoms (#679), and adopting only the last
 session's rows stranded real positions (#677). This module decides per row by
 allocating the exchange's actual holdings of the base asset across the rows that
-claim it, newest first, so two rows can never both be backed by one balance.
+claim it, so two rows can never both be backed by one balance. Rows are ranked by
+order evidence first (a resting stop proves a live position), then newest first.
+
+A balance snapshot cannot see exits whose fills the order journal has not booked yet
+(an offline stop fill, a partial or full exit filled just before a crash). A row with
+such activity is handed to the startup reconciler unchanged (``RECONCILE``) instead of
+being closed or resized here, because the reconciler books the real fill price, fee
+and P&L and a second resize would apply the same delta twice.
 
 The verifier only reads the exchange; applying a verdict (DB moves, closes, alerts)
 belongs to the caller.
@@ -25,7 +32,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from src.engines.live.reconciliation import _margin_net_asset
+from src.engines.live.reconciliation import _margin_net_asset, lookup_order_fail_closed
 from src.engines.live.trade_close_accounting import held_base_quantity
 from src.engines.shared.commission import split_base_quote
 
@@ -36,14 +43,31 @@ logger = logging.getLogger(__name__)
 # recorded fill, and re-sizing them on every restart would be churn.
 FULL_ADOPTION_TOLERANCE = 0.99
 
+# DB order types that change the inventory a position holds, and the DB statuses that mean
+# the exchange outcome has not been booked yet.
+_INVENTORY_ORDER_TYPES = frozenset({"PARTIAL_EXIT", "FULL_EXIT", "SCALE_IN"})
+_UNRESOLVED_ORDER_STATUSES = frozenset(
+    {"PENDING", "OPEN", "PENDING_SUBMIT", "SUBMITTED", "UNKNOWN", "UNRESOLVED"}
+)
+
 
 class AdoptionVerdict(str, Enum):
     """What a restart does with one OPEN DB position."""
 
     ADOPT = "adopt"
     ADOPT_REDUCED = "adopt_reduced"
+    RECONCILE = "reconcile"
     PHANTOM = "phantom"
     UNVERIFIABLE = "unverifiable"
+
+
+class _StopEvidence(Enum):
+    """What the exchange says about a position's stop-loss order."""
+
+    NONE = "none"
+    RESTING = "resting"
+    EXECUTED = "executed"
+    UNCONFIRMED = "unconfirmed"
 
 
 @dataclass(frozen=True)
@@ -71,7 +95,8 @@ class AdoptionDecision:
         """
         if (
             self.verdict is not AdoptionVerdict.ADOPT_REDUCED
-            or not self.expected_quantity
+            or self.expected_quantity is None
+            or self.expected_quantity <= 0
             or self.held_share is None
         ):
             return None
@@ -97,13 +122,13 @@ class ExchangePositionVerifier:
         self._exchange = exchange
         self._use_margin = use_margin
         self._price_lookup = price_lookup
+        self._stop_evidence_cache: dict[int, _StopEvidence] = {}
 
     def verify(self, rows: list[dict[str, Any]]) -> list[AdoptionDecision]:
         """Classify every row; one decision per row, in the order given.
 
-        Rows are grouped by base asset and side. Within a group the newest row claims
-        the exchange holding first, because phantoms are stale rows and the live
-        position is the recent one. A group whose holding cannot be read is
+        Rows are grouped by base asset and side and each group shares one exchange
+        holding. A group whose holding (or whose stop evidence) cannot be confirmed is
         ``UNVERIFIABLE`` as a whole: nothing is adopted and nothing is closed blind.
         """
         groups: dict[tuple[str, bool], list[dict[str, Any]]] = {}
@@ -125,30 +150,48 @@ class ExchangePositionVerifier:
     def _verify_group(
         self, base_asset: str, is_short: bool, group: list[dict[str, Any]]
     ) -> list[AdoptionDecision]:
-        """Allocate one asset-and-side holding across ``group``, newest row first."""
+        """Allocate one asset-and-side holding across ``group``, best-evidenced row first."""
         pool = self._read_pool(base_asset, is_short)
         if pool is None:
-            return [
-                AdoptionDecision(
-                    row,
-                    AdoptionVerdict.UNVERIFIABLE,
-                    f"exchange holding of {base_asset} could not be confirmed",
-                )
-                for row in group
-            ]
+            return self._all_unverifiable(
+                group, f"exchange holding of {base_asset} could not be confirmed"
+            )
+        if len(group) > 1:
+            # Several rows compete for one balance: a resting stop is the strongest proof of
+            # which row is live, so it needs a confirmed answer for every row.
+            for row in group:
+                if self._stop_evidence(row) is _StopEvidence.UNCONFIRMED:
+                    return self._all_unverifiable(
+                        group, "a stop-loss order could not be looked up to rank the rows"
+                    )
         remaining = pool
         decisions: list[AdoptionDecision] = []
-        for row in sorted(group, key=self._recency, reverse=True):
-            decision = self._decide(row, base_asset, remaining)
+        ranked = sorted(group, key=self._rank, reverse=True) if len(group) > 1 else group
+        for row in ranked:
+            decision = self._decide(row, base_asset, pool, remaining)
             if decision.held_share is not None:
                 remaining = max(0.0, remaining - decision.held_share)
             decisions.append(decision)
+        if len(group) > 1 and any(d.verdict is AdoptionVerdict.UNVERIFIABLE for d in decisions):
+            # A row of unknown size may own part of the balance, so no other row's share is
+            # trustworthy.
+            return self._all_unverifiable(group, "a row in the group has no usable quantity")
         return decisions
 
     @staticmethod
-    def _recency(row: dict[str, Any]) -> tuple[datetime, int]:
-        """Sort key placing the most recently opened row last (id breaks entry-time ties)."""
-        return row.get("entry_time") or datetime.min, int(row["id"])
+    def _all_unverifiable(group: list[dict[str, Any]], reason: str) -> list[AdoptionDecision]:
+        """``UNVERIFIABLE`` for every row of ``group``."""
+        return [AdoptionDecision(row, AdoptionVerdict.UNVERIFIABLE, reason) for row in group]
+
+    def _rank(self, row: dict[str, Any]) -> tuple[bool, datetime, int]:
+        """Sort key; the caller sorts descending so the highest key claims inventory first.
+
+        A row whose stop is resting on the exchange is live; ties go to the most recently
+        opened row (id breaks entry-time ties). The engine opens one position per symbol,
+        so a newer row exists only after the older one left the exchange.
+        """
+        resting = self._stop_evidence(row) is _StopEvidence.RESTING
+        return resting, row.get("entry_time") or datetime.min, int(row["id"])
 
     def _read_pool(self, base_asset: str, is_short: bool) -> float | None:
         """Exchange quantity backing positions in ``base_asset``; None when unconfirmed.
@@ -176,50 +219,144 @@ class ExchangePositionVerifier:
             return None
         return max(0.0, pool)
 
-    def _decide(self, row: dict[str, Any], base_asset: str, remaining: float) -> AdoptionDecision:
-        """Verdict for ``row`` given the exchange quantity still unclaimed."""
+    def _decide(
+        self, row: dict[str, Any], base_asset: str, pool: float, remaining: float
+    ) -> AdoptionDecision:
+        """Verdict for ``row`` given the pool and the exchange quantity still unclaimed."""
         expected = self._expected_quantity(row)
         if expected is None:
+            if pool <= 0:
+                return self._phantom_or_reconcile(
+                    row, f"no {base_asset} on the exchange", expected, 0.0
+                )
             return AdoptionDecision(
                 row, AdoptionVerdict.UNVERIFIABLE, "tracked quantity is missing or invalid"
             )
         if expected <= 0:
-            return AdoptionDecision(
-                row,
-                AdoptionVerdict.PHANTOM,
-                "position was fully exited; nothing is expected on the exchange",
-                expected_quantity=expected,
-                held_share=0.0,
+            return self._phantom_or_reconcile(
+                row, "position was fully exited; nothing is expected on the exchange", expected, 0.0
             )
         share = min(expected, remaining)
         if share <= 0:
-            return AdoptionDecision(
-                row,
-                AdoptionVerdict.PHANTOM,
-                f"no unclaimed {base_asset} on the exchange",
-                expected_quantity=expected,
-                held_share=0.0,
+            return self._phantom_or_reconcile(
+                row, f"no unclaimed {base_asset} on the exchange", expected, 0.0
             )
         if self._is_dust(row, share):
-            return AdoptionDecision(
+            return self._phantom_or_reconcile(
                 row,
-                AdoptionVerdict.PHANTOM,
                 f"only {share:.8f} {base_asset} remains, below the exchange minimum order",
-                expected_quantity=expected,
-                held_share=share,
+                expected,
+                share,
             )
-        verdict = (
-            AdoptionVerdict.ADOPT
-            if share >= expected * FULL_ADOPTION_TOLERANCE
-            else AdoptionVerdict.ADOPT_REDUCED
+        reason = f"exchange holds {share:.8f} of the tracked {expected:.8f} {base_asset}"
+        if share >= expected * FULL_ADOPTION_TOLERANCE:
+            return AdoptionDecision(
+                row, AdoptionVerdict.ADOPT, reason, expected_quantity=expected, held_share=share
+            )
+        return self._reduced_or_reconcile(row, reason, expected, share)
+
+    def _phantom_or_reconcile(
+        self, row: dict[str, Any], reason: str, expected: float | None, share: float
+    ) -> AdoptionDecision:
+        """``PHANTOM`` unless unbooked exit activity explains the missing inventory."""
+        override = self._exit_activity_override(row, reason, expected, share)
+        if override is not None:
+            return override
+        return AdoptionDecision(
+            row, AdoptionVerdict.PHANTOM, reason, expected_quantity=expected, held_share=share
         )
+
+    def _reduced_or_reconcile(
+        self, row: dict[str, Any], reason: str, expected: float, share: float
+    ) -> AdoptionDecision:
+        """``ADOPT_REDUCED`` unless unbooked exit activity explains the missing inventory."""
+        override = self._exit_activity_override(row, reason, expected, share)
+        if override is not None:
+            return override
         return AdoptionDecision(
             row,
-            verdict,
-            f"exchange holds {share:.8f} of the tracked {expected:.8f} {base_asset}",
+            AdoptionVerdict.ADOPT_REDUCED,
+            reason,
             expected_quantity=expected,
             held_share=share,
         )
+
+    def _exit_activity_override(
+        self, row: dict[str, Any], reason: str, expected: float | None, share: float
+    ) -> AdoptionDecision | None:
+        """``RECONCILE``/``UNVERIFIABLE`` when the shortfall may be an unbooked exit fill.
+
+        None means nothing explains the shortfall, so the caller may close or resize.
+        """
+        if self._has_unresolved_inventory_order(row):
+            return AdoptionDecision(
+                row,
+                AdoptionVerdict.RECONCILE,
+                f"{reason}; an exit/scale-in order is unresolved, left to the startup reconciler",
+                expected_quantity=expected,
+                held_share=share,
+            )
+        evidence = self._stop_evidence(row)
+        if evidence is _StopEvidence.EXECUTED:
+            return AdoptionDecision(
+                row,
+                AdoptionVerdict.RECONCILE,
+                f"{reason}; its stop-loss executed, left to the startup reconciler to book",
+                expected_quantity=expected,
+                held_share=share,
+            )
+        if evidence is _StopEvidence.UNCONFIRMED:
+            return AdoptionDecision(
+                row,
+                AdoptionVerdict.UNVERIFIABLE,
+                f"{reason}; its stop-loss order could not be looked up",
+            )
+        return None
+
+    @staticmethod
+    def _has_unresolved_inventory_order(row: dict[str, Any]) -> bool:
+        """True when the DB holds an exit or scale-in order whose outcome is not booked."""
+        for order in row.get("orders") or []:
+            if (
+                str(order.get("order_type")).upper() in _INVENTORY_ORDER_TYPES
+                and str(order.get("status")).upper() in _UNRESOLVED_ORDER_STATUSES
+            ):
+                return True
+        return False
+
+    def _stop_evidence(self, row: dict[str, Any]) -> _StopEvidence:
+        """What the exchange says about the row's stop-loss order (cached per row)."""
+        position_id = int(row["id"])
+        cached = self._stop_evidence_cache.get(position_id)
+        if cached is not None:
+            return cached
+        evidence = self._lookup_stop_evidence(row)
+        self._stop_evidence_cache[position_id] = evidence
+        return evidence
+
+    def _lookup_stop_evidence(self, row: dict[str, Any]) -> _StopEvidence:
+        """Classify the row's stop-loss order; ``UNCONFIRMED`` when the lookup fails."""
+        stop_id = row.get("stop_loss_order_id")
+        if not stop_id:
+            return _StopEvidence.NONE
+        try:
+            order, confirmed = lookup_order_fail_closed(
+                self._exchange, str(stop_id), str(row["symbol"])
+            )
+        except Exception as e:  # noqa: BLE001 - any lookup failure means "unconfirmed"
+            logger.warning("Stop-loss %s lookup failed during adoption: %s", stop_id, e)
+            return _StopEvidence.UNCONFIRMED
+        if not confirmed:
+            return _StopEvidence.UNCONFIRMED
+        if order is None:
+            return _StopEvidence.NONE
+        status = str(getattr(getattr(order, "status", None), "value", "")).upper()
+        filled = _positive_float(getattr(order, "filled_quantity", None))
+        if status in ("FILLED", "PARTIALLY_FILLED") or filled is not None:
+            return _StopEvidence.EXECUTED
+        if status == "PENDING":
+            return _StopEvidence.RESTING
+        return _StopEvidence.NONE
 
     @staticmethod
     def _expected_quantity(row: dict[str, Any]) -> float | None:

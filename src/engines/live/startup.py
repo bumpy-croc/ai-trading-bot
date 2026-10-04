@@ -42,6 +42,12 @@ logger = logging.getLogger(__name__)
 # Positions named in one adoption alert; the rest are counted, and each has its own log line.
 ADOPTION_MESSAGE_MAX_POSITIONS = 5
 
+# Verdicts that bind the row to this session; RECONCILE rows arrive unchanged so the
+# startup reconciler books their unresolved exit fills.
+_ADOPTED_VERDICTS = frozenset(
+    {AdoptionVerdict.ADOPT, AdoptionVerdict.ADOPT_REDUCED, AdoptionVerdict.RECONCILE}
+)
+
 
 class LiveStartupEngineState(Protocol):
     """Engine state the startup sequencer reads and mutates at call time."""
@@ -288,7 +294,8 @@ class LiveStartupSequencer:
         closed out and paged, and an unconfirmed lookup adopts nothing and closes nothing
         but pages and latches close-only. Paper mode has no exchange to verify against and
         carries forward only the previous session's positions. Either way the session's
-        OPEN rows are loaded into the tracker last, so only verified positions are tracked.
+        OPEN rows are loaded into the tracker last; rows of the current session are loaded
+        even when verification fails, because they are restored state, not adoptions.
         """
         state = self._state
         if state.trading_session_id is None or not state.resume_from_last_balance:
@@ -372,11 +379,7 @@ class LiveStartupSequencer:
     def _adopt(self, decisions: list[AdoptionDecision]) -> None:
         """Bind verified positions to this session, resizing the partially held ones."""
         state = self._state
-        adopted = [
-            d
-            for d in decisions
-            if d.verdict in (AdoptionVerdict.ADOPT, AdoptionVerdict.ADOPT_REDUCED)
-        ]
+        adopted = [d for d in decisions if d.verdict in _ADOPTED_VERDICTS]
         if not adopted or state.trading_session_id is None:
             return
         resizes = {
@@ -384,9 +387,12 @@ class LiveStartupSequencer:
             for d in adopted
             if d.resized_current_size is not None
         }
-        state.db_manager.adopt_positions_into_session(
+        adopted_ids = state.db_manager.adopt_positions_into_session(
             [d.position_id for d in adopted], state.trading_session_id, resizes
         )
+        skipped = {d.position_id for d in adopted} - set(adopted_ids)
+        if skipped:
+            logger.warning("Positions %s were no longer OPEN when adoption ran", sorted(skipped))
         carried = [d for d in adopted if d.row.get("session_id") != state.trading_session_id]
         if carried:
             logger.info(
@@ -433,7 +439,11 @@ class LiveStartupSequencer:
         for decision in phantoms:
             try:
                 position = position_from_db_row(decision.row, state.current_balance)
-                db_closed = reconciler.close_untracked_phantom(position)
+                # Rows of earlier sessions get no audit Trade: marking a stale entry to
+                # today's price would invent P&L that feeds the performance metrics.
+                db_closed = reconciler.close_untracked_phantom(
+                    position, log_trade=decision.row.get("session_id") == state.trading_session_id
+                )
             except Exception as close_err:
                 logger.critical(
                     "Could not close phantom position #%s: %s",

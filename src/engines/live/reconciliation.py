@@ -4096,22 +4096,30 @@ class PositionReconciler:
         except Exception as e:
             logger.warning("Margin position check failed for %s: %s — position retained", symbol, e)
 
-    def close_untracked_phantom(self, position: Any) -> bool:
+    def close_untracked_phantom(self, position: Any, *, log_trade: bool = True) -> bool:
         """Close a phantom OPEN row that was never loaded into the tracker (#683).
 
         Runs the same external-close path as a tracked phantom (stop-loss cancel, DB close,
         balance-neutral audit Trade row, audit event), for a row the startup adoption check
-        found has no exchange inventory behind it. Returns True only when the DB row closed.
+        found has no exchange inventory behind it. ``log_trade=False`` skips the audit Trade
+        row: its P&L is marked to the current price, which means nothing for a row opened
+        sessions ago and would feed performance metrics. Returns True only when the DB row
+        closed.
         """
         result = ReconciliationResult(
             entity_type="position",
             entity_id=getattr(position, "db_position_id", None),
             status="verified",
         )
-        return self._remove_phantom_position(position, result, tracked=False)
+        return self._remove_phantom_position(position, result, tracked=False, log_trade=log_trade)
 
     def _remove_phantom_position(
-        self, position: Any, result: ReconciliationResult, *, tracked: bool = True
+        self,
+        position: Any,
+        result: ReconciliationResult,
+        *,
+        tracked: bool = True,
+        log_trade: bool = True,
     ) -> bool:
         """Remove a phantom position from tracker and DB, cancel its exchange SL.
 
@@ -4166,7 +4174,8 @@ class PositionReconciler:
         # closed a still-tracked position (pop returned it) and the DB row actually closed —
         # avoids a duplicate when an earlier pass already handled it.
         if db_closed and removed is not None:
-            self._log_external_close_trade(position)
+            if log_trade:
+                self._log_external_close_trade(position)
         elif db_pos_id and removed is not None and not db_closed:
             # Popped from the in-memory tracker but the DB row did NOT close — memory/DB divergence
             # (CODE.md: no silent divergence). The phantom is gone on the exchange, so do not

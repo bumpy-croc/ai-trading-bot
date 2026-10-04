@@ -2292,6 +2292,9 @@ class DatabaseManager:
         if not position_ids:
             return []
         overrides = current_size_overrides or {}
+        for position_id, size in overrides.items():
+            if not math.isfinite(size) or size < 0:
+                raise ValueError(f"current_size override for #{position_id} invalid: {size}")
         with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
             positions = (
                 session.query(Position)

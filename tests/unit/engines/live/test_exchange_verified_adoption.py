@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.data_providers.exchange_interface import OrderStatus
 from src.database.manager import DatabaseManager
 from src.database.models import (
     Position,
@@ -28,7 +29,7 @@ from src.engines.live.position_adoption import AdoptionDecision, AdoptionVerdict
 from src.engines.live.startup import ADOPTION_MESSAGE_MAX_POSITIONS, LiveStartupSequencer
 from src.engines.live.trading_engine import LiveTradingEngine
 from src.strategies.ml_basic import create_ml_basic_strategy
-from tests.unit.engines.live.adoption_fakes import StubMarginExchange
+from tests.unit.engines.live.adoption_fakes import StubMarginExchange, make_stop_order
 
 pytestmark = pytest.mark.fast
 
@@ -245,18 +246,38 @@ class TestPhantomIsClosedNotAdopted:
 
         assert _paged(snapshot, "PHANTOM_POSITION_CLOSED")
 
-    def test_phantom_close_is_balance_neutral_and_leaves_an_audit_trade(self, db):
+    def test_phantom_close_is_balance_neutral(self, db):
         old = _seed_session(db)
-        position_id = _seed_position(db, old)
+        _seed_position(db, old)
         engine = _make_engine(db, StubMarginExchange({"BTC": 0.0}))
 
         snapshot = _start(engine)
 
         assert snapshot.balance == pytest.approx(1000.0)
         assert db.get_current_balance(engine.trading_session_id) == pytest.approx(1000.0)
+
+    def test_phantom_of_an_earlier_session_writes_no_trade(self, db):
+        """A stale entry marked to today's price would invent P&L for the sizing metrics."""
+        old = _seed_session(db)
+        position_id = _seed_position(db, old)
+        engine = _make_engine(db, StubMarginExchange({"BTC": 0.0}))
+
+        _start(engine)
+
+        with db.get_session() as s:
+            assert s.query(Trade).filter(Trade.position_id == position_id).count() == 0
+
+    def test_phantom_of_the_reused_session_leaves_a_balance_neutral_audit_trade(self, db):
+        active = _seed_session(db, active=True)
+        position_id = _seed_position(db, active)
+        engine = _make_engine(db, StubMarginExchange({"BTC": 0.0}))
+
+        _start(engine)
+
         with db.get_session() as s:
             trades = s.query(Trade).filter(Trade.position_id == position_id).all()
         assert [t.order_id for t in trades] == [f"reconcile_ext_{position_id}"]
+        assert db.get_current_balance(active) == pytest.approx(1000.0)
 
     def test_phantom_whose_db_close_fails_is_not_reported_closed_and_latches_close_only(self, db):
         old = _seed_session(db)
@@ -299,6 +320,44 @@ class TestPhantomIsClosedNotAdopted:
         assert snapshot.tracked == {}
         assert _row(db, position_id).status == PositionStatus.CLOSED
         assert _paged(snapshot, "PHANTOM_POSITION_CLOSED")
+
+
+class TestUnbookedExitsAreLeftToTheReconciler:
+    def test_row_whose_stop_filled_offline_is_adopted_unchanged_not_closed_as_phantom(self, db):
+        old = _seed_session(db)
+        position_id = _seed_position(db, old, stop_loss_order_id="sl-filled")
+        stop = make_stop_order("sl-filled", SYMBOL, OrderStatus.FILLED, filled_quantity=1.0)
+        exchange = StubMarginExchange({"BTC": 0.0}, orders={"sl-filled": stop})
+        engine = _make_engine(db, exchange)
+
+        snapshot = _start(engine)
+
+        assert exchange.cancelled_orders == []
+        assert not _paged(snapshot, "PHANTOM_POSITION_CLOSED")
+        assert _row(db, position_id).session_id == engine.trading_session_id
+        assert [p.db_position_id for p in snapshot.tracked.values()] == [position_id]
+
+    def test_unresolved_partial_exit_order_blocks_the_resize(self, db):
+        old = _seed_session(db)
+        position_id = _seed_position(db, old, quantity=1.0)
+        db.create_order(
+            position_id=position_id,
+            order_type="PARTIAL_EXIT",
+            symbol=SYMBOL,
+            side="long",
+            quantity=0.5,
+            strategy_name=STRATEGY_NAME,
+            session_id=old,
+            exchange_order_id="exit-1",
+        )
+        engine = _make_engine(db, StubMarginExchange({"BTC": 0.5}))
+
+        snapshot = _start(engine)
+
+        row = _row(db, position_id)
+        assert row.session_id == engine.trading_session_id
+        assert row.current_size is None
+        assert not _paged(snapshot, "POSITION_ADOPTED_REDUCED")
 
 
 class TestPartialInventory:
@@ -441,6 +500,7 @@ class TestScopeOfCandidates:
         snapshot = _start(engine)
 
         assert snapshot.tracked == {}
+        assert _row(db, position_id).session_id == old
 
     def test_no_open_rows_means_no_exchange_lookup(self, db):
         _seed_session(db)

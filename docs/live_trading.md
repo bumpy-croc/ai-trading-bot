@@ -69,17 +69,18 @@ call sites and test mock points are stable while the implementations live in the
 On every live start, `LiveStartupSequencer.carry_forward_open_positions` verifies each OPEN DB
 position for the traded symbol, strategy and mode (the current session and ended
 sessions; other still-active sessions and rows with a terminal trade excluded) against the exchange before loading it. The base-asset holding is allocated across
-the rows newest first (margin long: `netAsset`; margin short: borrowed; spot: wallet total).
+the rows (margin long: `netAsset`; margin short: borrowed; spot: wallet total).
 
 | Exchange evidence for the row | Action |
 |---|---|
 | Holds at least 99% of the tracked quantity | Adopt unchanged; the startup reconciler ensures its stop |
 | Holds part of it (above dust) | Adopt with `current_size` scaled to what is held; paged as `POSITION_ADOPTED_REDUCED` |
-| Nothing unclaimed, fully exited row, or remainder below min qty / min notional | Phantom: close through the reconciler's external-close path (balance-neutral Trade row, stop cancelled); paged as `PHANTOM_POSITION_CLOSED` |
-| Lookup failed, quantity unknown, or spot short | Neither adopt nor close; page `ADOPTION_UNVERIFIED` and enter close-only |
+| Short of inventory, but its stop filled (or part-filled), or an exit/scale-in order is unresolved | Adopt unchanged (`RECONCILE`): the startup reconciler books the real fill price, fee and P&L, so nothing is resized or closed here |
+| Nothing unclaimed, fully exited row, or remainder below min qty / min notional | Phantom: close through the reconciler's external-close path (stop cancelled; audit Trade row only for the reused session's rows, since an old entry marked to today's price would invent P&L); paged as `PHANTOM_POSITION_CLOSED` |
+| Lookup failed (holding or stop order), quantity unknown with inventory present, or spot short | Neither adopt nor close; page `ADOPTION_UNVERIFIED` and enter close-only |
 
-Newest-first allocation is sound because the engine opens one position per symbol: a newer row
-exists only after the older one left the exchange. Paper mode has no exchange and carries
+Rows sharing a symbol are ranked by a resting stop first, then newest first (the engine opens one
+position per symbol, so a newer row exists only after the older one left the exchange). Paper mode has no exchange and carries
 forward only the previous session's positions.
 
 ## Max-drawdown hard cap (close-only halt)

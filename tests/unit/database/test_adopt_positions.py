@@ -182,5 +182,16 @@ class TestAdoptPositionsIntoSession:
             assert row.session_id == old
             assert row.status == PositionStatus.CLOSED
 
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -0.01])
+    def test_invalid_current_size_override_is_rejected_before_any_write(self, db, bad):
+        old, new = _session(db), _session(db)
+        position_id = _position(db, old)
+
+        with pytest.raises(ValueError, match="current_size override"):
+            db.adopt_positions_into_session([position_id], new, {position_id: bad})
+
+        with db.get_session() as s:
+            assert s.query(Position).one().session_id == old
+
     def test_empty_list_is_a_noop(self, db):
         assert db.adopt_positions_into_session([], _session(db)) == []
