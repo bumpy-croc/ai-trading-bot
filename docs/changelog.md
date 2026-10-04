@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Model artifact retention policy and `atb models cleanup`** (#792). Lists old version
+  directories under `src/ml/models/` that no `latest` symlink, config, `docs/research` note, or
+  newest-N rule protects, with the bytes each frees. Dry run by default; deletes only with
+  `--apply`; aborts on a dangling or out-of-tree symlink; never touches a symlink. Policy documented
+  in `docs/prediction.md`.
+
 ### Fixed
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
