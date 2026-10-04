@@ -91,6 +91,33 @@ except ImportError as e:
 # an in-memory DB for unit tests, or start a Postgres container / use external DB
 
 
+def _docker_daemon_responds(timeout: float = 3.0) -> bool:
+    """Ping the local Docker socket so a hung daemon fails fast instead of hanging setup.
+
+    testcontainers blocks indefinitely on an unresponsive daemon, which no pytest-timeout can
+    interrupt. A non-unix DOCKER_HOST is not probed (the container start reports its own error).
+    """
+    import socket
+
+    host = os.getenv("DOCKER_HOST", "")
+    if host and not host.startswith("unix://"):
+        return True
+    candidates = [host[len("unix://") :]] if host else []
+    candidates += ["/var/run/docker.sock", str(Path.home() / ".docker/run/docker.sock")]
+    for path in dict.fromkeys(os.path.realpath(p) for p in candidates):
+        if not os.path.exists(path):
+            continue
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(timeout)
+                sock.connect(path)
+                sock.sendall(b"GET /_ping HTTP/1.0\r\n\r\n")
+                return sock.recv(16).startswith(b"HTTP/")
+        except OSError:
+            continue
+    return False
+
+
 @pytest.fixture(scope="session", autouse=True)
 def maybe_setup_database(pytestconfig):
     """Configure test database per run mode.
@@ -131,6 +158,9 @@ def maybe_setup_database(pytestconfig):
         # Local development - try to start a container, fallback to SQLite if not available
         try:
             from testcontainers.postgres import PostgresContainer  # type: ignore
+
+            if not _docker_daemon_responds():
+                raise RuntimeError("Docker daemon did not answer a ping within 3s")
 
             print(
                 f"\n[Database Setup] Starting PostgreSQL container at {datetime.now(UTC).strftime('%H:%M:%S')}"
