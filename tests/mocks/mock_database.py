@@ -137,6 +137,10 @@ class MockDatabaseManager:
 
         return session_id
 
+    def get_open_positions_in_ended_sessions(self, session_id: int | None = None) -> list[dict]:
+        """No OPEN position belongs to an ended session in the mock."""
+        return []
+
     def end_trading_session(
         self,
         session_id: int | None = None,

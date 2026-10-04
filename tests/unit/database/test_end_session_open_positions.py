@@ -4,6 +4,8 @@ Uses a real in-memory SQLite database so the end-of-session transaction, the aud
 rows and the emitted events are checked end to end.
 """
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from src.database.manager import DatabaseManager
@@ -16,6 +18,7 @@ from src.database.models import (
     SystemEvent,
     Trade,
     TradeSource,
+    TradingSession,
 )
 
 pytestmark = pytest.mark.unit
@@ -71,6 +74,14 @@ def _audit_rows(db: DatabaseManager) -> list[ReconciliationAuditEvent]:
         rows = session.query(ReconciliationAuditEvent).all()
         session.expunge_all()
         return rows
+
+
+def _age_session(db: DatabaseManager, session_id: int, hours: int = 200) -> None:
+    """Move a session's start back beyond the 7-day recovery window."""
+    with db.get_session() as session:
+        trading_session = session.query(TradingSession).filter_by(id=session_id).one()
+        trading_session.start_time = datetime.now(UTC) - timedelta(hours=hours)
+        session.commit()
 
 
 def _count(db: DatabaseManager, model: type) -> int:
@@ -209,6 +220,7 @@ class TestOpenPositionsInEndedSessionsCheck:
         second_id = _open_position(db, second, "b")
         db.end_trading_session(first, carry_forward_open_positions=True)
         db.end_trading_session(second, carry_forward_open_positions=True)
+        _age_session(db, second)
 
         rows = db.get_open_positions_in_ended_sessions(session_id=second)
 
@@ -220,12 +232,30 @@ class TestOpenPositionsInEndedSessionsCheck:
 
         assert db.get_open_positions_in_ended_sessions() == []
 
+    def test_recent_ended_session_without_successor_awaits_carry_forward(self, db):
+        ended = _new_session(db)
+        _open_position(db, ended)
+        db.end_trading_session(ended, carry_forward_open_positions=True)
+
+        assert db.get_open_positions_in_ended_sessions() == []
+
+    def test_ended_session_older_than_recovery_window_is_stale(self, db):
+        ended = _new_session(db)
+        position_id = _open_position(db, ended)
+        db.end_trading_session(ended, carry_forward_open_positions=True)
+        _age_session(db, ended)
+
+        rows = db.get_open_positions_in_ended_sessions()
+
+        assert [r["position_id"] for r in rows] == [position_id]
+
 
 class TestCloseOpenPositionsInEndedSessions:
     def test_closes_paper_rows_with_audit_and_no_ledger_writes(self, db):
         ended = _new_session(db)
         position_id = _open_position(db, ended)
         db.end_trading_session(ended, carry_forward_open_positions=True)
+        _age_session(db, ended)
         balances_before = _count(db, AccountBalance)
 
         closed = db.close_open_positions_in_ended_sessions([position_id], reason="cleanup note")
@@ -241,6 +271,7 @@ class TestCloseOpenPositionsInEndedSessions:
         ended = _new_session(db, TradeSource.LIVE)
         position_id = _open_position(db, ended)
         db.end_trading_session(ended)
+        _age_session(db, ended)
 
         closed = db.close_open_positions_in_ended_sessions([position_id], reason="x")
 
@@ -267,3 +298,79 @@ class TestCloseOpenPositionsInEndedSessions:
 
     def test_empty_id_list_is_a_noop(self, db):
         assert db.close_open_positions_in_ended_sessions([], reason="x") == []
+
+    def test_mixed_id_list_closes_only_eligible_rows(self, db):
+        paper_ended = _new_session(db)
+        live_ended = _new_session(db, TradeSource.LIVE)
+        active = _new_session(db)
+        paper_id = _open_position(db, paper_ended, "p")
+        live_id = _open_position(db, live_ended, "l")
+        active_id = _open_position(db, active, "a")
+        db.end_trading_session(paper_ended, carry_forward_open_positions=True)
+        db.end_trading_session(live_ended)
+
+        closed = db.close_open_positions_in_ended_sessions(
+            [paper_id, live_id, active_id], reason="x"
+        )
+
+        assert closed == [paper_id]
+        assert _status(db, live_id) == PositionStatus.OPEN
+        assert _status(db, active_id) == PositionStatus.OPEN
+
+
+class TestSupersededSessions:
+    def test_active_session_replaced_by_newer_one_is_stale(self, db):
+        crashed = _new_session(db)
+        position_id = _open_position(db, crashed)
+        newest = _new_session(db)
+        _open_position(db, newest, "newest-1")
+
+        rows = db.get_open_positions_in_ended_sessions()
+
+        assert [r["position_id"] for r in rows] == [position_id]
+        assert db.close_open_positions_in_ended_sessions([position_id], reason="x") == [position_id]
+
+    def test_newest_active_session_is_not_stale(self, db):
+        _new_session(db)
+        newest = _new_session(db)
+        _open_position(db, newest)
+
+        assert db.get_open_positions_in_ended_sessions() == []
+
+    def test_newer_session_for_other_symbol_does_not_supersede(self, db):
+        first = _new_session(db)
+        _open_position(db, first)
+        db.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="ETHUSDT",
+            timeframe="1h",
+            mode=TradeSource.PAPER,
+            initial_balance=1000.0,
+        )
+
+        assert db.get_open_positions_in_ended_sessions() == []
+
+
+class TestEndSessionDispositionDetails:
+    def test_closed_disposition_recorded_on_engine_stop_event(self, db):
+        session_id = _new_session(db)
+        first = _open_position(db, session_id, "a")
+        second = _open_position(db, session_id, "b")
+
+        db.end_trading_session(session_id, final_balance=1000.0)
+
+        stop_event = [e for e in _events(db) if e.event_type == EventType.ENGINE_STOP][0]
+        recorded = stop_event.details["open_positions"]
+        assert recorded["disposition"] == "closed"
+        assert sorted(p["position_id"] for p in recorded["positions"]) == [first, second]
+        assert _status(db, first) == PositionStatus.CLOSED
+        assert _status(db, second) == PositionStatus.CLOSED
+        assert len(_audit_rows(db)) == 2
+
+    def test_backtest_session_closes_positions(self, db):
+        session_id = _new_session(db, TradeSource.BACKTEST)
+        position_id = _open_position(db, session_id)
+
+        db.end_trading_session(session_id, final_balance=1000.0)
+
+        assert _status(db, position_id) == PositionStatus.CLOSED

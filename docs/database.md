@@ -61,13 +61,10 @@ The manager falls back to creating tables automatically when connecting to an em
 | LIVE | any | never touched; critical `LIVE_SESSION_ENDED_WITH_OPEN_POSITIONS` event |
 
 Positive-state check for monitoring: `DatabaseManager.get_open_positions_in_ended_sessions()` must return nothing once
-restarts have carried positions forward. The equivalent SQL:
-
-```sql
-SELECT p.id, p.session_id, s.mode, p.symbol FROM positions p
-JOIN trading_sessions s ON s.id = p.session_id
-WHERE p.status = 'OPEN' AND NOT s.is_active;
-```
+restarts have carried positions forward. A session counts as over when a newer session exists for the same symbol and
+strategy (this includes a crashed session that is still flagged active but was replaced), or when it is ended and started
+more than 7 days ago (`SESSION_RECOVERY_WINDOW_HOURS`, the clean-restart recovery window). An ended session inside the
+window with no successor is not reported: its paper positions wait for the next start's carry-forward.
 
 The engine runs the check at startup and records an `OPEN_POSITIONS_IN_ENDED_SESSIONS` event when it finds rows.
 

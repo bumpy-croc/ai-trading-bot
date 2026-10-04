@@ -338,7 +338,7 @@ class LiveStartupSequencer:
         except Exception as check_err:
             logger.warning("Ended-session OPEN position check failed: %s", check_err)
             return
-        if not stale:
+        if not isinstance(stale, list) or not stale:
             return
         session_ids = sorted({row["session_id"] for row in stale})
         logger.warning(
@@ -347,6 +347,20 @@ class LiveStartupSequencer:
             len(stale),
             session_ids,
         )
+        live_rows = [row for row in stale if row["session_mode"] == "LIVE"]
+        if live_rows:
+            # A LIVE row may mirror a real exchange position no reconciler sees, and
+            # the cleanup command refuses it: page for a manual exchange check.
+            state._record_event(
+                EventType.ALERT,
+                f"{len(live_rows)} OPEN LIVE position row(s) belong to ended session(s) "
+                f"{sorted({row['session_id'] for row in live_rows})} and were not carried "
+                "forward — verify against the exchange",
+                severity="critical",
+                component="session_recovery",
+                error_code="LIVE_OPEN_POSITIONS_IN_ENDED_SESSIONS",
+                alert=True,
+            )
         state._record_event(
             EventType.WARNING,
             f"{len(stale)} OPEN position row(s) belong to ended session(s) {session_ids}; "

@@ -89,9 +89,9 @@ def test_report_open_positions_in_ended_sessions_records_event():
     """Rows left OPEN in ended sessions after carry-forward land in system_events (#1044)."""
     state = _make_state()
     state.db_manager.get_open_positions_in_ended_sessions.return_value = [
-        {"position_id": 1, "session_id": 4},
-        {"position_id": 2, "session_id": 4},
-        {"position_id": 3, "session_id": 9},
+        {"position_id": 1, "session_id": 4, "session_mode": "PAPER"},
+        {"position_id": 2, "session_id": 4, "session_mode": "PAPER"},
+        {"position_id": 3, "session_id": 9, "session_mode": "PAPER"},
     ]
 
     LiveStartupSequencer(engine_state=state).report_open_positions_in_ended_sessions()
@@ -102,6 +102,26 @@ def test_report_open_positions_in_ended_sessions_records_event():
     assert "[4, 9]" in args[1]
     assert kwargs["error_code"] == "OPEN_POSITIONS_IN_ENDED_SESSIONS"
     assert kwargs["severity"] == "warning"
+
+
+def test_report_live_rows_in_ended_sessions_pages_critical():
+    state = _make_state()
+    state.db_manager.get_open_positions_in_ended_sessions.return_value = [
+        {"position_id": 1, "session_id": 4, "session_mode": "LIVE"},
+        {"position_id": 2, "session_id": 9, "session_mode": "PAPER"},
+    ]
+
+    LiveStartupSequencer(engine_state=state).report_open_positions_in_ended_sessions()
+
+    calls = state._record_event.call_args_list
+    assert [c.kwargs["error_code"] for c in calls] == [
+        "LIVE_OPEN_POSITIONS_IN_ENDED_SESSIONS",
+        "OPEN_POSITIONS_IN_ENDED_SESSIONS",
+    ]
+    assert calls[0].args[0] == EventType.ALERT
+    assert calls[0].kwargs["alert"] is True
+    assert calls[0].kwargs["severity"] == "critical"
+    assert "[4]" in calls[0].args[1]
 
 
 def test_report_open_positions_in_ended_sessions_silent_when_clean():

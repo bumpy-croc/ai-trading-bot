@@ -71,6 +71,13 @@ class QueryTimeout:
 # This cap indicates "extremely profitable" while remaining storable in Numeric(18, 8).
 MAX_PROFIT_FACTOR = 999999.99
 
+# A clean restart re-adopts the previous session only if it started within this window
+# (covers long-running paper sessions); older sessions' open rows are never carried forward.
+SESSION_RECOVERY_WINDOW_HOURS = 168  # 7 days
+
+# Session modes whose position rows are simulated and may be closed without an exchange check.
+SIMULATED_SESSION_MODES = (TradeSource.PAPER, TradeSource.BACKTEST)
+
 
 @dataclass(frozen=True)
 class SystemHaltStatus:
@@ -810,9 +817,11 @@ class DatabaseManager:
                 .with_for_update()
                 .all()
             )
-            is_live_session = trading_session.mode == TradeSource.LIVE
-            close_positions = bool(open_positions) and not (
-                is_live_session or carry_forward_open_positions
+            # Allowlist: only a mode known to be simulated may have rows closed.
+            is_simulated = trading_session.mode in SIMULATED_SESSION_MODES
+            is_live_session = not is_simulated
+            close_positions = (
+                bool(open_positions) and is_simulated and not carry_forward_open_positions
             )
             open_position_summaries = [_position_summary(p) for p in open_positions]
             if close_positions:
@@ -839,7 +848,11 @@ class DatabaseManager:
             }
             if open_position_summaries:
                 end_details["open_positions"] = {
-                    "disposition": "closed" if close_positions else "preserved",
+                    "disposition": (
+                        "closed"
+                        if close_positions
+                        else "preserved" if is_simulated else "left_open_for_manual_review"
+                    ),
                     "positions": open_position_summaries,
                 }
             self.log_event(
@@ -873,6 +886,12 @@ class DatabaseManager:
         if not summaries:
             return
         if is_live_session:
+            logger.critical(
+                "LIVE session #%s ended with %d OPEN position row(s) still recorded: %s",
+                session_id,
+                len(summaries),
+                summaries,
+            )
             self.log_event(
                 event_type=EventType.ALERT,
                 message=(
@@ -925,8 +944,30 @@ class DatabaseManager:
                 )
             )
 
+    @staticmethod
+    def _session_is_over() -> Any:
+        """SQL predicate: no engine start will ever re-adopt the in-scope session's rows.
+
+        True when a newer session exists for the same symbol and strategy (this covers a
+        crashed session that is still flagged active but was replaced), or when the
+        session is ended and older than the recovery window. An ended session inside the
+        window with no successor is excluded: its paper positions wait for the next
+        start's carry-forward.
+        """
+        newer = sa.orm.aliased(TradingSession)
+        superseded = sa.exists().where(
+            newer.symbol == TradingSession.symbol,
+            newer.strategy_name == TradingSession.strategy_name,
+            newer.start_time > TradingSession.start_time,
+        )
+        window_cutoff = datetime.now(UTC) - timedelta(hours=SESSION_RECOVERY_WINDOW_HOURS)
+        return sa.or_(
+            superseded,
+            sa.and_(~TradingSession.is_active, TradingSession.start_time < window_cutoff),
+        )
+
     def get_open_positions_in_ended_sessions(self, session_id: int | None = None) -> list[dict]:
-        """List OPEN positions whose trading session has ended (#1044).
+        """List OPEN positions whose trading session has ended or been superseded (#1044).
 
         The positive-state check for monitoring: the result must be empty once
         every restart has carried its positions forward. A non-empty result is a
@@ -940,13 +981,13 @@ class DatabaseManager:
             One dict per row (position id, session id/mode/end time, symbol, side,
             strategy, entry time, entry price, quantity), oldest session first.
         """
-        with self.get_session_with_timeout(QueryTimeout.ANALYTICS) as db:
+        with self.get_session_with_timeout(QueryTimeout.DEFAULT) as db:
             query = (
                 db.query(Position, TradingSession)
                 .join(TradingSession, Position.session_id == TradingSession.id)
                 .filter(
                     Position.status == PositionStatus.OPEN,
-                    ~TradingSession.is_active,
+                    self._session_is_over(),
                 )
                 .order_by(Position.session_id, Position.id)
             )
@@ -957,7 +998,9 @@ class DatabaseManager:
                     **_position_summary(position),
                     "session_id": ended_session.id,
                     "session_mode": ended_session.mode.value,
-                    "session_end_time": ended_session.end_time,
+                    "session_end_time": (
+                        ended_session.end_time.isoformat() if ended_session.end_time else None
+                    ),
                     "entry_price": float(position.entry_price),
                     "quantity": float(position.quantity) if position.quantity is not None else None,
                 }
@@ -991,8 +1034,8 @@ class DatabaseManager:
                 .filter(
                     Position.id.in_(position_ids),
                     Position.status == PositionStatus.OPEN,
-                    ~TradingSession.is_active,
-                    TradingSession.mode != TradeSource.LIVE,
+                    self._session_is_over(),
+                    TradingSession.mode.in_(SIMULATED_SESSION_MODES),
                 )
                 .with_for_update(of=Position)
                 .all()

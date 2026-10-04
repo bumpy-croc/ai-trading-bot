@@ -1,13 +1,20 @@
 """``atb db close-stale-positions``: dry run by default, --apply closes balance-neutrally (#1044)."""
 
 import argparse
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
 
 from cli.commands.db import _close_stale_positions
 from src.database.manager import DatabaseManager
-from src.database.models import Position, PositionStatus, ReconciliationAuditEvent, TradeSource
+from src.database.models import (
+    Position,
+    PositionStatus,
+    ReconciliationAuditEvent,
+    TradeSource,
+    TradingSession,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -39,6 +46,11 @@ def _ended_session_with_open_position(
         session_id=session_id,
     )
     db.end_trading_session(session_id, carry_forward_open_positions=True)
+    # Beyond the 7-day recovery window, so no restart will re-adopt the row.
+    with db.get_session() as session:
+        trading_session = session.query(TradingSession).filter_by(id=session_id).one()
+        trading_session.start_time = datetime.now(UTC) - timedelta(hours=200)
+        session.commit()
     return session_id, position_id
 
 
@@ -121,3 +133,19 @@ def test_returns_error_when_database_cannot_be_read(capsys):
 
     assert exit_code == 1
     assert "no url" in capsys.readouterr().out
+
+
+def test_apply_failure_returns_error(db, capsys):
+    _ended_session_with_open_position(db)
+    ns = argparse.Namespace(apply=True, session_id=None, env=None)
+    with (
+        patch("src.database.manager.DatabaseManager", return_value=db),
+        patch("cli.commands.db._get_database_url_for_env", return_value="sqlite:///:memory:"),
+        patch.object(
+            db, "close_open_positions_in_ended_sessions", side_effect=RuntimeError("boom")
+        ),
+    ):
+        exit_code = _close_stale_positions(ns)
+
+    assert exit_code == 1
+    assert "boom" in capsys.readouterr().out

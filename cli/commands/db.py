@@ -1056,7 +1056,7 @@ def _nuke(ns: argparse.Namespace) -> int:
 
 def _close_stale_positions(ns: argparse.Namespace) -> int:
     """List OPEN positions that belong to ended sessions; close them only with --apply (#1044)."""
-    from src.database.manager import DatabaseManager
+    from src.database.manager import SIMULATED_SESSION_MODES, DatabaseManager
 
     apply = bool(getattr(ns, "apply", False))
     session_id = getattr(ns, "session_id", None)
@@ -1073,10 +1073,11 @@ def _close_stale_positions(ns: argparse.Namespace) -> int:
         print("✅ None found")
         return 0
 
-    closable = [row for row in stale if row["session_mode"] != "LIVE"]
-    live_rows = [row for row in stale if row["session_mode"] == "LIVE"]
+    simulated_modes = {mode.value for mode in SIMULATED_SESSION_MODES}
+    closable = [row for row in stale if row["session_mode"] in simulated_modes]
+    live_rows = [row for row in stale if row["session_mode"] not in simulated_modes]
     for row in stale:
-        action = "manual" if row["session_mode"] == "LIVE" else "closable"
+        action = "closable" if row["session_mode"] in simulated_modes else "manual"
         print(
             f"  position #{row['position_id']} session #{row['session_id']} "
             f"({row['session_mode']}) {row['symbol']} {row['side']} "
@@ -1091,6 +1092,10 @@ def _close_stale_positions(ns: argparse.Namespace) -> int:
 
     if not apply:
         print("\nDry run — nothing changed. Re-run with --apply to close the closable rows.")
+        print(
+            "Rows of a recent session with no newer session are not listed: the next engine "
+            "start re-adopts them."
+        )
         return 0
 
     try:
