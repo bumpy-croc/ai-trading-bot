@@ -4,6 +4,7 @@ Tests for prediction engine model components.
 
 import json
 import threading
+from types import SimpleNamespace
 from unittest.mock import Mock, mock_open, patch
 
 import numpy as np
@@ -89,19 +90,20 @@ class TestModelCache:
 
     def test_cache_expiration(self):
         """Test cache TTL expiration"""
-        import time
+        now = {"t": 1_000_000.0}
 
-        cache = ModelCache(ttl=0.1)  # 100ms TTL
-        cache.set("key1", "value1")
+        with patch("src.prediction.utils.caching.time", SimpleNamespace(time=lambda: now["t"])):
+            cache = ModelCache(ttl=0.1)  # 100ms TTL
+            cache.set("key1", "value1")
 
-        # Should be available immediately
-        assert cache.get("key1") == "value1"
+            # Should be available immediately
+            assert cache.get("key1") == "value1"
 
-        # Wait for expiration
-        time.sleep(0.2)
+            # Move the clock past the TTL
+            now["t"] += 0.2
 
-        # Should be expired
-        assert cache.get("key1") is None
+            # Should be expired
+            assert cache.get("key1") is None
 
     def test_cache_decorator(self):
         """Test cache decorator functionality"""

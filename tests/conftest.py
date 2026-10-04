@@ -184,13 +184,11 @@ def maybe_setup_database(pytestconfig):
 
 
 def pytest_collection_modifyitems(config, items):  # noqa: D401
-    """Auto-mark integration and unit tests and record if any are selected.
+    """Auto-mark integration and unit tests by their location.
 
     - Any test under tests/integration is marked as `integration`.
     - Any test under tests/unit is marked as `unit`.
-    - A flag is stored indicating whether any integration tests are part of this run.
     """
-    has_integration = False
     for item in items:
         try:
             node_path = str(item.fspath)
@@ -205,14 +203,24 @@ def pytest_collection_modifyitems(config, items):  # noqa: D401
             # Ensure the unit marker is present
             item.add_marker(pytest.mark.unit)
 
-        if any(m.name == "integration" for m in item.iter_markers()):
-            has_integration = True
 
-    # Stash the presence of integration tests for session-scoped fixtures
+def pytest_collection_finish(session):  # noqa: D401
+    """Record whether any integration test is in the run, for session-scoped fixtures.
+
+    This must look at ``session.items`` (what will actually run), not at the list
+    ``pytest_collection_modifyitems`` sees: that list still contains tests later removed by
+    ``-m``/``-k``. Counting those made the fast pre-push suite (``-m fast``) start a Postgres
+    container per xdist worker just because some unit-directory test carries the
+    ``integration`` marker; under load the container start blew the 30s per-test timeout
+    inside the session fixture and failed every test on that worker.
+    """
+    has_integration = any(
+        any(m.name == "integration" for m in item.iter_markers()) for item in session.items
+    )
     try:
-        config.stash[("integration", "selected")] = has_integration
+        session.config.stash[("integration", "selected")] = has_integration
     except Exception:
-        config._has_integration_selected = has_integration
+        session.config._has_integration_selected = has_integration
 
 
 @pytest.fixture(autouse=True)

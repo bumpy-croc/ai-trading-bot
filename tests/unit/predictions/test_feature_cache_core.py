@@ -1,13 +1,34 @@
 """Core behaviour tests for the FeatureCache implementation."""
 
 import threading
-import time
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from src.prediction.utils.caching import FeatureCache
+
+
+class _FakeClock:
+    """Manually advanced wall clock for cache entry expiry."""
+
+    def __init__(self) -> None:
+        self.now = 1_000_000.0
+
+    def time(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """Replace the cache module's ``time`` so TTL expiry is driven by the test."""
+    fake = _FakeClock()
+    monkeypatch.setattr("src.prediction.utils.caching.time", SimpleNamespace(time=fake.time))
+    return fake
 
 
 class TestFeatureCache:
@@ -118,7 +139,7 @@ class TestFeatureCache:
 
         assert cache.has(sample_data, extractor_name, config)
 
-    def test_cache_expiration(self, sample_data, sample_result):
+    def test_cache_expiration(self, sample_data, sample_result, clock):
         cache = FeatureCache(default_ttl=1)
         extractor_name = "test_extractor"
         config = {"param": "value"}
@@ -127,7 +148,7 @@ class TestFeatureCache:
 
         assert cache.has(sample_data, extractor_name, config)
 
-        time.sleep(1.1)
+        clock.advance(1.1)  # past the 1s TTL
 
         assert not cache.has(sample_data, extractor_name, config)
 
@@ -157,7 +178,7 @@ class TestFeatureCache:
         assert stats["evictions"] == 0
         assert stats["quick_hash_matches"] == 0
 
-    def test_cache_cleanup_expired(self, sample_data, sample_result):
+    def test_cache_cleanup_expired(self, sample_data, sample_result, clock):
         cache = FeatureCache(default_ttl=1)
         extractor_name = "test_extractor"
         config = {"param": "value"}
@@ -166,7 +187,7 @@ class TestFeatureCache:
 
         assert len(cache._cache) == 1
 
-        time.sleep(1.1)
+        clock.advance(1.1)  # past the 1s TTL
 
         removed_count = cache.cleanup_expired()
         assert removed_count == 1

@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Pre-push fast suite no longer fails under machine load.** The session DB fixture decided
+  whether to start a Postgres container from the list *before* `-m`/`-k` deselection, so
+  `-m fast` over `tests/unit` started one container per xdist worker and the 30s per-test
+  timeout failed the first test on each worker. It now looks at the tests that will actually run.
+  Wall-clock tests (rate limit, circuit breaker, WS filter, feature/model caches, live-timeout
+  escalation) use injected clocks or hung-until-teardown calls instead of real sleeps; the
+  backtest scale tests use a model-free strategy and smaller datasets; `tests/benchmark` is
+  skipped unless requested (`pytest tests/benchmark`, `-m benchmark`, or `ATB_RUN_BENCHMARKS=1`).
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
   a 4h run selects a 4h model bundle; a missing bundle aborts the switch instead of using 1h.
