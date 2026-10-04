@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Drained positions no longer read back as full size in the DB** (#734). `apply_partial_exit_update`
+  and `apply_scale_in_update` used `position.current_size or position.size`, so a `current_size` of
+  0.0 (fully consumed by partial exits) was treated as the full `size` on the next update. They now
+  fall back to `size` only when the column is NULL.
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
   a 4h run selects a 4h model bundle; a missing bundle aborts the switch instead of using 1h.
