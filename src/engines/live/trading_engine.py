@@ -40,6 +40,7 @@ from src.config.constants import (
     DEFAULT_TAKE_PROFIT_PCT,
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
+    DRAWDOWN_MARK_MAX_AGE_SECONDS,
 )
 from src.config.feature_flags import get_flag, is_enabled
 from src.data_providers.binance_provider import BinanceProvider
@@ -1145,6 +1146,9 @@ class LiveTradingEngine:
         self._drawdown_enforcer = MaxDrawdownEnforcer(
             engine_state=self,
             guard=MaxDrawdownGuard(self.risk_manager.params.max_drawdown),
+            mark_provider=lambda: self.live_position_tracker.mark_reading(
+                DRAWDOWN_MARK_MAX_AGE_SECONDS
+            ),
         )
         # #807 follow-up: run the account circuit breaker on the loop too —
         # restart-safe daily baseline + drawdown peak (#986 gap B), true-equity
@@ -2539,6 +2543,14 @@ class LiveTradingEngine:
         """
         self._drawdown_enforcer.check_before_new_risk()
         return self._close_only_mode
+
+    def _durable_peak_equity(self) -> float:
+        """Peak mark-to-market equity the max-drawdown guard measures from.
+
+        Zero until the guard seeds. Feeds the stored ``account_history.drawdown``
+        so the column shares the hard cap's basis.
+        """
+        return self._drawdown_enforcer.guard.equity_peak
 
     def _durable_peak_balance(self) -> float:
         """Peak balance for drawdown-based risk throttling, durable across restarts.

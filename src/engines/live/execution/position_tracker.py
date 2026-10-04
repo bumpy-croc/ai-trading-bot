@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -81,6 +82,23 @@ class PositionCloseResult:
     mfe_mae_metrics: MFEMetrics | None = None
 
 
+@dataclass(frozen=True)
+class MarkReading:
+    """Aggregate unrealized P&L plus whether it can be trusted as a live mark.
+
+    ``fresh`` is False when any open position was not priced by the latest
+    ``update_pnl`` (invalid price, recovered from persistence and never
+    re-marked) or when the last pricing pass is older than the caller's limit.
+    ``unrealized_pnl`` is then not a live number and must not be trusted.
+    ``sequence`` increments once per pricing pass so callers can tell distinct
+    marks apart from repeated reads of the same one.
+    """
+
+    unrealized_pnl: float
+    fresh: bool
+    sequence: int
+
+
 class LivePositionTracker:
     """Tracks active position state, partial operations, and MFE/MAE metrics.
 
@@ -120,6 +138,11 @@ class LivePositionTracker:
         self._position_db_ids: dict[str, int | None] = {}
         # Protects concurrent access from OrderTracker callbacks and main trading loop
         self._positions_lock = threading.Lock()
+        # Mark bookkeeping for ``mark_reading``: written only under the lock.
+        self._mark_sequence = 0
+        self._last_mark_monotonic: float | None = None
+        self._last_pass_complete = False
+        self._recovered_unmarked = False
         self.db_manager = db_manager
         self.mfe_mae_tracker = MFEMAETracker(precision_decimals=mfe_mae_precision)
         self._mfe_mae_update_frequency = mfe_mae_update_frequency
@@ -286,6 +309,8 @@ class LivePositionTracker:
         with self._positions_lock:
             self._positions[order_id] = position
             self._position_db_ids[order_id] = db_id
+            # Its unrealized_pnl is the persisted value, not a live mark.
+            self._recovered_unmarked = True
 
     @staticmethod
     def _optional_float(value: Any) -> float | None:
@@ -551,6 +576,7 @@ class LivePositionTracker:
         """
         with self._positions_lock:
             # Perform all mutations inside the lock to prevent race conditions
+            complete = True
             for position in self._positions.values():
                 fraction = float(
                     position.current_size if position.current_size is not None else position.size
@@ -573,6 +599,7 @@ class LivePositionTracker:
                         position.entry_price,
                         position.symbol,
                     )
+                    complete = False
                     position.unrealized_pnl = 0.0
                     position.unrealized_pnl_percent = 0.0
                     continue
@@ -580,6 +607,7 @@ class LivePositionTracker:
                     logger.error(
                         "Invalid current_price %.8f for position %s", current_price, position.symbol
                     )
+                    complete = False
                     position.unrealized_pnl = 0.0
                     position.unrealized_pnl_percent = 0.0
                     continue
@@ -591,6 +619,32 @@ class LivePositionTracker:
 
                 position.unrealized_pnl = cash_pnl(pnl_pct, basis_balance)
                 position.unrealized_pnl_percent = pnl_pct * 100.0
+
+            self._mark_sequence += 1
+            self._last_mark_monotonic = time.monotonic()
+            self._last_pass_complete = complete
+            if complete:
+                self._recovered_unmarked = False
+
+    def mark_reading(self, max_age_seconds: float) -> MarkReading:
+        """Unrealized P&L with an explicit freshness verdict (see ``MarkReading``).
+
+        ``update_pnl`` silently writes 0.0 for a position it cannot price, which
+        is indistinguishable from a flat position; risk guards must use this
+        instead of ``total_unrealized_pnl`` so a missing mark degrades loudly.
+        """
+        with self._positions_lock:
+            total = sum(float(p.unrealized_pnl) for p in self._positions.values())
+            if not self._positions:
+                return MarkReading(total, True, self._mark_sequence)
+            last = self._last_mark_monotonic
+            fresh = (
+                last is not None
+                and self._last_pass_complete
+                and not self._recovered_unmarked
+                and time.monotonic() - last <= max_age_seconds
+            )
+            return MarkReading(total, fresh, self._mark_sequence)
 
     def total_unrealized_pnl(self) -> float:
         """Sum of unrealized P&L across all open positions, in cash terms.

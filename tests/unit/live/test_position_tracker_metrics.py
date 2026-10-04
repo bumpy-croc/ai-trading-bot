@@ -208,3 +208,99 @@ def test_total_unrealized_pnl_sums_open_positions() -> None:
     # so also assert the per-position marks are non-zero (the sum is real).
     assert any(p.unrealized_pnl != 0.0 for p in positions.values())
     assert tracker.total_unrealized_pnl() == pytest.approx(expected)
+
+
+def _open_long(tracker: LivePositionTracker, order_id: str = "mark-1") -> LivePosition:
+    position = LivePosition(
+        symbol="ETHUSDT",
+        side=PositionSide.LONG,
+        size=0.2,
+        entry_price=100.0,
+        entry_time=datetime.now(UTC),
+        entry_balance=1000.0,
+        order_id=order_id,
+    )
+    tracker.open_position(position)
+    return position
+
+
+@pytest.mark.fast
+def test_mark_reading_is_fresh_after_a_valid_pricing_pass() -> None:
+    tracker = LivePositionTracker()
+    _open_long(tracker)
+
+    tracker.update_pnl(current_price=90.0, fallback_balance=1000.0)
+    reading = tracker.mark_reading(max_age_seconds=600)
+
+    assert reading.fresh is True
+    assert reading.unrealized_pnl == pytest.approx(tracker.total_unrealized_pnl())
+    assert reading.unrealized_pnl < 0
+
+
+@pytest.mark.fast
+def test_mark_reading_not_fresh_before_any_pricing_pass() -> None:
+    tracker = LivePositionTracker()
+    _open_long(tracker)
+
+    assert tracker.mark_reading(max_age_seconds=600).fresh is False
+
+
+@pytest.mark.fast
+def test_mark_reading_not_fresh_when_price_is_invalid() -> None:
+    """update_pnl writes 0.0 for an unpriceable position; that must read as unknown."""
+    tracker = LivePositionTracker()
+    _open_long(tracker)
+
+    tracker.update_pnl(current_price=float("nan"), fallback_balance=1000.0)
+
+    reading = tracker.mark_reading(max_age_seconds=600)
+    assert reading.fresh is False
+    assert reading.unrealized_pnl == 0.0
+
+
+@pytest.mark.fast
+def test_mark_reading_not_fresh_when_the_mark_is_too_old(monkeypatch) -> None:
+    import src.engines.live.execution.position_tracker as module
+
+    tracker = LivePositionTracker()
+    _open_long(tracker)
+    clock = [1000.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    tracker.update_pnl(current_price=95.0, fallback_balance=1000.0)
+
+    clock[0] += 599
+    assert tracker.mark_reading(max_age_seconds=600).fresh is True
+    clock[0] += 2
+    assert tracker.mark_reading(max_age_seconds=600).fresh is False
+
+
+@pytest.mark.fast
+def test_mark_reading_recovered_position_is_unmarked_until_repriced() -> None:
+    tracker = LivePositionTracker()
+    tracker.update_pnl(current_price=100.0, fallback_balance=1000.0)  # empty book, fresh pass
+    recovered = LivePosition(
+        symbol="ETHUSDT",
+        side=PositionSide.LONG,
+        size=0.2,
+        entry_price=100.0,
+        entry_time=datetime.now(UTC),
+        entry_balance=1000.0,
+        order_id="recovered-1",
+        unrealized_pnl=-5.0,
+    )
+    tracker.track_recovered_position(recovered, db_id=1)
+
+    assert tracker.mark_reading(max_age_seconds=600).fresh is False
+
+    tracker.update_pnl(current_price=90.0, fallback_balance=1000.0)
+    assert tracker.mark_reading(max_age_seconds=600).fresh is True
+
+
+@pytest.mark.fast
+def test_mark_reading_with_no_positions_is_trivially_fresh_and_sequence_advances() -> None:
+    tracker = LivePositionTracker()
+    first = tracker.mark_reading(max_age_seconds=600)
+    assert first.fresh is True and first.unrealized_pnl == 0.0
+
+    tracker.update_pnl(current_price=100.0, fallback_balance=1000.0)
+    assert tracker.mark_reading(max_age_seconds=600).sequence == first.sequence + 1
