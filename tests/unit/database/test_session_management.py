@@ -42,6 +42,7 @@ class TestSessionManagement:
         mock_query = Mock()
         mock_query.filter_by.return_value.first.return_value = mock_session_obj
         mock_query.filter_by.return_value.all.return_value = []
+        mock_query.filter.return_value.with_for_update.return_value.all.return_value = []
         mock_postgresql_db._mock_session.query.return_value = mock_query
 
         mock_postgresql_db._current_session_id = 123

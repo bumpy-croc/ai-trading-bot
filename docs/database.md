@@ -45,7 +45,31 @@ The manager falls back to creating tables automatically when connecting to an em
 - `atb db migrate` – runs Alembic migrations using the repository’s migration scripts.
 - `atb db backup` – dumps data using `pg_dump` with safe defaults (see Backups & recovery for scheduling tips).
 - `atb db reset-railway` / `setup-railway` – remote administration helpers for Railway deployments.
+- `atb db close-stale-positions` – lists OPEN positions whose trading session has ended (dry run by default). `--apply`
+  closes the non-LIVE rows balance-neutrally with an audit row each; LIVE rows are only listed, because they may mirror a
+  real exchange position. `--session-id` narrows it to one session.
 - `atb db nuke` – drops all objects (including enums) and recreates the schema; intended for local resets only.
+
+## Ended sessions and OPEN positions
+
+`DatabaseManager.end_trading_session` decides what happens to the session's OPEN `positions` rows, by session mode:
+
+| Session | Caller | Rows |
+|---------|--------|------|
+| PAPER | engine `stop()` (`carry_forward_open_positions=True`) | stay OPEN; the next start re-adopts them via `reassign_open_positions_to_session` |
+| PAPER / BACKTEST | anything else | closed balance-neutrally (audit row, no trade, no balance write) |
+| LIVE | any | never touched; critical `LIVE_SESSION_ENDED_WITH_OPEN_POSITIONS` event |
+
+Positive-state check for monitoring: `DatabaseManager.get_open_positions_in_ended_sessions()` must return nothing once
+restarts have carried positions forward. The equivalent SQL:
+
+```sql
+SELECT p.id, p.session_id, s.mode, p.symbol FROM positions p
+JOIN trading_sessions s ON s.id = p.session_id
+WHERE p.status = 'OPEN' AND NOT s.is_active;
+```
+
+The engine runs the check at startup and records an `OPEN_POSITIONS_IN_ENDED_SESSIONS` event when it finds rows.
 
 ## Backups & recovery
 

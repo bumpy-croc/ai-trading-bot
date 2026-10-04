@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **An ended trading session no longer leaves OPEN position rows silently** (#1044, #1232).
+  `DatabaseManager.end_trading_session` now handles the session's OPEN rows in the same
+  transaction: PAPER sessions the engine stops keep them for restart carry-forward (listed on the
+  `ENGINE_STOP` event); PAPER/BACKTEST sessions ended without carry-forward close them
+  balance-neutrally (no trade row, no ledger write, one `reconciliation_audit_events` row each,
+  `SESSION_ENDED_OPEN_POSITIONS_CLOSED` event); LIVE sessions never touch the rows and record a
+  critical `LIVE_SESSION_ENDED_WITH_OPEN_POSITIONS` event. New
+  `get_open_positions_in_ended_sessions()` is the monitoring check, run at engine startup
+  (`OPEN_POSITIONS_IN_ENDED_SESSIONS` event). New `atb db close-stale-positions` lists such rows
+  and, only with `--apply`, closes the non-LIVE ones balance-neutrally.
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
   a 4h run selects a 4h model bundle; a missing bundle aborts the switch instead of using 1h.

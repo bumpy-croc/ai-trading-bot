@@ -135,6 +135,7 @@ class LiveStartupSequencer:
         # on every startup instead of being silent (P0 observability hardening).
         state._warn_if_no_alert_channel()
         self.carry_forward_open_positions()
+        self.report_open_positions_in_ended_sessions()
         self.self_heal_terminal_positions()
         self.synchronize_account_on_start()
 
@@ -322,6 +323,38 @@ class LiveStartupSequencer:
                 # must NOT read this field — it is dead by the first loop iteration.
                 # They use the durable `_history_seed_session_id` instead (#1036).
                 state._recovered_inactive_session_id = None
+
+    def report_open_positions_in_ended_sessions(self) -> None:
+        """Record a durable event if any OPEN position belongs to an ended session (#1044).
+
+        Runs after carry-forward, so anything still found was not re-adopted:
+        another strategy/symbol, or older than the recovery window. The engine
+        never sees such rows, so this is the only place they surface at runtime.
+        Clear them with ``atb db close-stale-positions``.
+        """
+        state = self._state
+        try:
+            stale = state.db_manager.get_open_positions_in_ended_sessions()
+        except Exception as check_err:
+            logger.warning("Ended-session OPEN position check failed: %s", check_err)
+            return
+        if not stale:
+            return
+        session_ids = sorted({row["session_id"] for row in stale})
+        logger.warning(
+            "%d OPEN position row(s) belong to ended session(s) %s and are invisible to "
+            "the engine — review with `atb db close-stale-positions`",
+            len(stale),
+            session_ids,
+        )
+        state._record_event(
+            EventType.WARNING,
+            f"{len(stale)} OPEN position row(s) belong to ended session(s) {session_ids}; "
+            "run `atb db close-stale-positions` to review",
+            severity="warning",
+            component="session_recovery",
+            error_code="OPEN_POSITIONS_IN_ENDED_SESSIONS",
+        )
 
     def self_heal_terminal_positions(self) -> None:
         """Close any OPEN position in this session that already has a terminal Trade (#657)."""

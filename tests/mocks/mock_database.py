@@ -138,7 +138,10 @@ class MockDatabaseManager:
         return session_id
 
     def end_trading_session(
-        self, session_id: int | None = None, final_balance: float | None = None
+        self,
+        session_id: int | None = None,
+        final_balance: float | None = None,
+        carry_forward_open_positions: bool = False,
     ):
         """End a trading session"""
         if session_id is None:
