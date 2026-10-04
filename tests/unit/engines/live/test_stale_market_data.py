@@ -123,6 +123,15 @@ class TestStaleStreak:
         assert "timeframe 1h" in (observation.reason or "")
         assert "skipping entries and in-engine exits" in (observation.reason or "")
 
+    def test_missing_frame_counts_toward_the_streak(self):
+        """A REST failure / RESYNCING returns None; it freezes the loop just the same."""
+        clock = _Clock()
+        coordinator = _coordinator("1h", clock)
+        assert coordinator.is_data_fresh(None) is False  # type: ignore[arg-type]
+        clock.now += STALE_DATA_LATCH_SECONDS + 1
+        assert coordinator.is_data_fresh(None) is False  # type: ignore[arg-type]
+        assert coordinator.stale_data_observation().stale is True
+
     def test_fresh_frame_ends_the_streak(self):
         clock = _Clock()
         coordinator = _coordinator("1h", clock)
@@ -185,6 +194,8 @@ class TestLatchedCondition:
         latched = [e for e in state.events if e["error_code"] == "MARKET_DATA_STALE"]
         assert len(latched) == 1
         assert latched[0]["component"] == "data"
+        # An exit freeze is paged at once, not an hour later.
+        assert latched[0]["alert"] is True
         assert "in-engine exits" in latched[0]["message"]
         assert "until a human clears it" not in latched[0]["message"]
         assert [e for e in state.events if e["error_code"] == "ENTRIES_ENABLED"] == []

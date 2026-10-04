@@ -121,6 +121,9 @@ class _Condition:
     # What the latch costs and how it ends differs per condition: a human clears
     # close-only, but stale market data clears itself and also freezes exits.
     consequence: str = _HUMAN_CLEARED_CONSEQUENCE
+    # Page at the moment of latching instead of waiting PAGE_SCHEDULE_SECONDS[0]:
+    # for a condition that freezes exits, an hour of silence is too long.
+    page_on_latch: bool = False
     resolution: str = _HUMAN_CLEARED_RESOLUTION
 
 
@@ -183,9 +186,10 @@ CONDITIONS: tuple[_Condition, ...] = (
         consequence=(
             "The trading loop is skipping new entries AND in-engine exits (trailing "
             "stops, strategy/time exits) until fresh data returns on its own; "
-            "exchange-side stop-losses and reconciliation continue."
+            "reconciliation, and exchange-side stop-losses in live mode, continue."
         ),
         resolution="the trading loop is processing market data again.",
+        page_on_latch=True,
     ),
     _Condition(
         key="entry_pause",
@@ -377,7 +381,7 @@ class LatchedConditionMonitor:
             record = _LatchRecord(
                 since=now,
                 reason=observation.reason,
-                next_page_at=now + PAGE_SCHEDULE_SECONDS[0],
+                next_page_at=now if condition.page_on_latch else now + PAGE_SCHEDULE_SECONDS[0],
                 started_at=observation.started_at,
             )
             self._bookkeeping.latched[condition.key] = record
