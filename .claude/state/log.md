@@ -1824,3 +1824,25 @@ decision, not bundled with #1165's urgency.
 Ref: #1165 (PR #1165, merged), #1166 (PR #1183), #1167 (PR #1179), #1168 (PR #1177), #1169 (PR
 #1176), #1121 (closed), #1127 (open, unchanged), #1170/#1171/#1172/#1173/#1174/#1181/#1184;
 promote `cfc9a506`; PM session `6ee0f9`.
+
+## 2026-10-04 08:15 · incident · daily-trading-standup
+Severity: P1  Top finding: the prod DB credential rotation escalated on 2026-09-21 is still
+unrotated 13 days later, and until this entry had **no durable record anywhere** — only a line
+in the "Needs a human" section of unmerged PR #1266. Given this repo's own history (PR #1026's
+distillate was lost the same way after being closed unmerged), that was one `gh pr close` away
+from disappearing. Did not attempt to locate or reproduce the credential value; recorded the
+escalation and its non-response, opened an incident file and a GH issue, PR'd both to `develop`.
+Prod health otherwise clean today: equity $88.70 (session DD 0.67% vs CAP 20%, nowhere near any
+tripwire), entries enabled (`ENTRIES_ENABLED` newest `system_events` row), stop-loss present on
+the one open position, no unresolved CRITICAL events in 7d, heartbeat ~1min old. Staging green
+($1024.15 equity, no cap-clamps/breaker-trips/errors). Scheduled tasks firing and finishing
+cleanly in the 48h window (the lone miss, 09-27 ENOTFOUND, is outside the window and already
+tracked in #1265). Secondary findings, both already-tracked and reconfirmed rather than
+re-escalated fresh: #1260 (primary checkout still frozen, now 116 commits / unchanged since
+2026-08-24 = day 41) and #1261 (three money-path fixes merged-unresolved, P1, zero comments in
+13 days — flagged as a non-response, not a new finding). Two stale-but-harmless weekly-retro PRs
+(#1266 supersedes #1263, both CI-green, no conflicts, just unmerged) and one 24-day-old
+`claude --allow-dangerously-skip-permissions` process noted for context, not escalated — plausibly
+the repo's own intended persistent daemon per this CLAUDE.md's daemon-mode design, not a zombie.
+Ref: PR #1266 (body, prior record), #1260, #1261, #1265; incident
+`.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`.
