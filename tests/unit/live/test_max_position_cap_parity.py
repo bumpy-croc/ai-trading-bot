@@ -170,7 +170,7 @@ class TestBacktestMaxPositionCap:
         tracker = PositionTracker(fee_rate=0.0, slippage_rate=0.0)
         trade = _open_backtest_long(tracker, size=0.10)
 
-        tracker.apply_scale_in(0.05, max_position_size=0.05)
+        tracker.apply_scale_in(0.05, price=100.0, max_position_size=0.05)
 
         assert trade.current_size == pytest.approx(0.10)
         assert trade.size == pytest.approx(0.10)
