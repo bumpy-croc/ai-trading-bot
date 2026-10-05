@@ -2134,3 +2134,90 @@ comment. Every other finding is an existing open issue (#1260, #1261, #1262, #12
 6. #1261 (p1): three money-path findings in production, unowned for 7 days.
 Ref: PR #1263, #1264 (`904e038e`), #1265, #1260, #1261, #1262, #1233, #1127, #1230, #1099;
 [D-2026-09-21-01], [D-2026-09-15-01]; LESSONS §2.9(i)/§2.15.
+
+## [D-2026-10-05-01] 2026-10-05 ~10:50 · note · daemon(weekly-retro)
+**Weekly retro, window 2026-09-28 → 2026-10-05. Distillate-only PR to `develop`.**
+
+**Headline: finished work is stuck on the local disk.** A ~20-agent fix burst on 2026-10-04 left
+**20 local branches ahead of `origin/develop` with no remote and no PR**, including the money-path
+fixes for #1261, #1267 and #683. Docker Desktop is hung (`docker info` never returns), and with
+Docker hung the pre-push hook fails every push with setup timeouts reported as "tests failed".
+21 `pytest`/`pre-push` processes from the burst were still alive 15h later. `gh pr list` shows
+three PRs. → LESSONS **§3** (new entry), issue **#1273**.
+
+**Input 0 / 0b / 0c.** AGENDA empty for the tenth window. #1266 (last retro) **merged
+2026-10-04 17:02Z, 6d 7h after it opened**, zero reviews, by the human; it was the only merge to
+`develop` in the window. #1263 closed as superseded. Primary checkout is still `8da478a3`,
+**42 days** frozen, 127 behind `origin/main` (#1260): nothing distilled since 08-24 is loaded.
+Install checks: merge driver `ok`, shim `ok`, hooks `DRIFT`, which is false again (installed hook is
+byte-identical to `origin/develop:.githooks/pre-push`). Installer not run.
+
+**Input 1: log coverage.** `develop`'s log has **no entry between [D-2026-09-28-01] and this
+one**. Seven standup slots ran. Two entries exist for the credential P1 (10-04, 10-05), both on
+unmerged branches (PR #1268 `DIRTY`; `rebase-1268` local only).
+
+**Input 2: incidents.** One opened: **P1 #1269**, prod DB credential printed 09-21 and not rotated.
+For 13 days its only record was a "Needs a human" line in the retro PR bodies #1263/#1266; both
+retros also said "no issues filed, every finding maps to an existing issue". Six standups reported
+NOMINAL across that stretch. → LESSONS **§2.17 amendment 2026-10-05**; `weekly-retro` Output
+section now requires an issue number on every human ask. #1230 (stale `status: open` on the
+08-24 incident file) re-sighted a fifth time, unowned.
+
+**Input 3: agent failures.** The stranded-branch burst above. The 10-05 standup's subagent rebased
+#1268, hit the hook failure, and declined both `--no-verify` and a Docker restart: correct. The
+10-04 issue sweep closed ~20 issues, each with a file:line verification on `origin/develop`
+(not graded further here). `weekly-retro` input 3 now counts local-only branches.
+
+**Input 4: prediction vs outcome / calibration.**
+- 09-28 retro, "the 10-04 retrain will block on the stale ECR image (#1233)": **correct**. It did.
+- 09-28 retro, "if #1266 sits it is the second stranded retro PR": merged on day 6. Not stranded,
+  late.
+- `daily-trading-standup`: **over-confident NOMINAL, 6 of 7 runs.** Two conditions were open the
+  whole time and outside what it reads or computes: the unrotated credential, and prod position
+  id 33, whose stop-out is ~20.3% of balance (the full drawdown cap in one trade). Every run passed
+  it on "stop_loss set". The 10-05 run computed it and filed #1272. → LESSONS **§5.8** (new).
+  Its #1265 comments on 10-01/02/03 were day-count repeats with no new information; it said so
+  itself on 10-03 and stopped.
+- `weekly-model-retrain` 10-04: correctly refused to train on a stale image, but logged the block
+  on #1265 (the ENOTFOUND issue) instead of #1233. The 10-05 standup put it on #1233.
+
+**Input 5: experiments.** No new preregistered experiment. #1081 step-2 revalidation batch 2 ran
+(note on local branch `research/1081-revalidation`, unpushed): item 7 reproduced exactly, items
+3a/3b moved in point value with the conclusion unchanged, item 2 not re-run.
+
+**Input 6: scheduled-task audit (registry + slots + endings).** 22 directories, 16 registered,
+4 enabled; no change from last week. **14 slots: 13 fired with a report, 1 is this session.**
+- Standup 7/7 (09-29 → 10-05). Artifacts: comments on #1127, #1265, #1260, #1261, #1269, #1233,
+  #1230; issues #1267, #1269, #1272. 09-29 was NOMINAL with no artifact (none required).
+- `prune-worktrees` 5/5 fired (09-28 → 10-02). Endings not read individually; effect taken from
+  the standups' worktree counts (1-2 through 10-03). Count is 22 today, all from the 10-04 burst,
+  after the last slot.
+- `weekly-model-retrain` 1/1 fired and reported BLOCKED (#1233). **No retrain has completed since
+  at least 2026-09-20**, and the 10-11 slot will block the same way.
+- No catch-up batches, no ENOTFOUND, no quota or OAuth deaths in the window.
+
+**Input 7 / 8: models and earlier asks.** No `latest` symlink changed. `ETHUSDT/price/latest` is
+gone from both `origin/main` and `origin/develop` (asked for by the 09-07 retro; fixed by #1241).
+No promotion row to append.
+
+**Diffs in this PR.**
+- `.claude/LESSONS.md` §2.17 amendment (PR body is not a record); §3 hung-Docker / stranded-branch
+  entry; new §5.8 (loss at the stop as % of equity).
+- `.claude/skills/weekly-retro/SKILL.md` input 3 (local-only branch count) and Output (issue number
+  on every human ask).
+- `.claude/skills/weekly-retro/AGENDA.md` cleared.
+- Issue filed: #1273. Comment: #1272 (standup prompt needs the risk-at-stop line; it lives outside
+  the repo).
+
+**Not in force until this PR merges and the primary checkout is pulled** (§2.9 rule (i)).
+
+**Needs a human** (each with its issue):
+1. #1273: restart Docker, kill the orphaned test processes, push the 20 local branches.
+2. #1269: rotate the prod DB credential (day 14), then merge #1268.
+3. #1260: `git -C /Users/alex/Sites/ai-trading-bot pull --ff-only` (42 days frozen).
+4. #1272 / #1267: is ~20% risk on one trade intended at this balance; drawdown guard reads realized
+   balance (fix is on local branch `fix/1267-drawdown-equity`).
+5. #1233: rebuild the ECR training image before the 10-11 retrain.
+6. #1127 (p0, 35 days, no owner) and #1230, #1099: decide or close.
+Ref: PR #1266, #1263, #1268, #1270, #1271; #1273, #1272, #1269, #1267, #1265, #1261, #1260, #1233,
+#1230, #1127, #1099; [D-2026-09-28-01]; LESSONS §2.17/§3/§5.8.

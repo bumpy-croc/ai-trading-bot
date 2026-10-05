@@ -83,6 +83,10 @@ checklist line, a new tripwire.
    — that's the pipeline working as designed.
 3. **Agent failures** — stalls, wake-losses, kills, review collisions, fabricated/wrong relayed
    claims (`agent-fleet-health` findings; the 2026-07-05 ml-engineer session-integrity note).
+   **Count local-only work, not just PRs:**
+   `git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads | grep ahead`, plus
+   `pgrep -fl 'pytest|pre-push'` for pushes that never returned. On 2026-10-05 `gh pr list` showed
+   3 open PRs while 20 finished branches sat unpushed behind a hung Docker (LESSONS §3, #1273).
 4. **Prediction-vs-outcome record** — every dated prediction made in the log (deploy will be
    healthy, model will beat incumbent, "no midnight heroics" calls) vs what happened. Agents'
    calibration is a charter review item (monthly: "review calibration of each agent"); the
@@ -199,6 +203,11 @@ A log.md entry (kind `note`, via `decision-record`) listing, as diffs:
 - calibration verdicts per agent (over/under-confident, with the week's examples);
 - scheduled-task audit result (fired/missed);
 - process changes proposed to the Board (anything touching layer 1 → `risk-ratification`).
+
+**Every "Needs a human" line in the PR body and completion summary cites an open issue number.** An
+ask with no issue gets one filed in this run; do not close with "every finding maps to an existing
+issue" without checking each line. Earned: the prod DB credential rotation rode two retro PR bodies
+(#1263, #1266) for 13 days with no issue until #1269 (LESSONS §2.17, 2026-10-05 amendment).
 
 Zero diffs is a legitimate outcome for a quiet week — say so explicitly rather than
 manufacturing lessons.

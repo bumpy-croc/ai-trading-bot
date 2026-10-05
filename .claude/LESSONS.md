@@ -1051,6 +1051,23 @@ right things in the right places, and the writes never reached the branch anyone
   Earned: `daily-trading-standup` 09-08 / 09-12 / 09-13 comment-only sinks; `log.md` on `develop`
   ending 2026-09-11 during a live P0 that closed 2026-09-14.
 
+- **Amendment 2026-10-05 — a PR *body* is not layer 2 either, and the retro itself did it twice.**
+  The 2026-09-21 standup printed the prod DB credential (§3). The 09-21 and 09-28 retros each
+  escalated the rotation as one line under "Needs a human" in their PR bodies (#1263, #1266) and
+  each closed with "no issues filed; every finding maps to an existing open issue." That was false
+  for the credential: no issue, no incident file, no `log.md` line. Six standups (09-28 → 10-03)
+  then reported NOMINAL with a P1 open, because nothing they read mentioned it. The 10-04 standup
+  found it only while asking why #1266 was unmerged, and filed #1269 + PR #1268 on **day 13**.
+  #1268 went `DIRTY` within a day and its rebase could not be pushed (§3, hung Docker entry), so on day 14
+  `develop` still has no record.
+  - **Rule:** a PR body, a completion summary and a "Needs a human" list are transport, not record.
+    Every ask in one must cite an open issue number; an ask with no issue gets one filed in the same
+    run. "Maps to an existing issue" is a claim to check per line, not a sentence to close with.
+  - **Rule:** a monitor's NOMINAL is scoped to what it read. A P1 that exists only in prose it does
+    not read is invisible to it by construction, so the writer owns putting it where monitors look
+    (`gh issue list --label type:incident`).
+  Earned: prod DB credential unrotated 2026-09-21 → (still open 10-05); #1269, PR #1268.
+
 ---
 
 ## 3. Operational / tooling gotchas
@@ -1427,6 +1444,38 @@ right things in the right places, and the writes never reached the branch anyone
   Earned: `daily-trading-standup` 2026-09-21 (it self-reported the exposure; the mechanism was
   reconstructed by the 09-21 retro from the transcript with the URL redacted).
 
+- **A hung Docker daemon fails the pre-push hook with a false "tests failed"; an absent one does
+  not.** The fast unit suite selects `tests/unit/database/test_balance_ledger_concurrency.py`, which
+  carries `pytest.mark.integration`. One integration-marked item flips `tests/conftest.py`'s session
+  fixture onto the Postgres-testcontainer path. With Docker *absent* that raises and falls back to
+  SQLite. With Docker *hung* (Docker Desktop up since 2026-09-16, `docker info` never returns)
+  `container.start()` blocks, every test errors at setup with `Failed: Timeout >30.0s`, and the hook
+  exits 2 after ~70s reporting "fast unit tests failed" for a diff that touched no code. Reproduced
+  at the 10-05 retro: 12 setup errors, then `stopping after 5 failures`.
+  On 2026-10-04 a ~20-agent burst pushed through that hook: load average 35-48, a 365d backtest at
+  2.6 bars/s, and at the 10-05 retro **21 `pytest`/`pre-push` processes were still alive after 15h**.
+  Result: **20 local branches of finished, reviewed work** (including the money-path fixes for #1261,
+  #1267 and #683) sat ahead of `origin/develop` with no remote branch and no PR, while `gh pr list`
+  showed a queue of three. The 10-05 standup hit the same wall rebasing #1268 and correctly declined
+  `--no-verify`, so a P1's record stayed off `develop`.
+  - **Rule:** when the hook fails with setup `Timeout` errors rather than assertion failures, probe
+    Docker with a bound before reading a single test:
+    `docker info >/dev/null 2>&1 & p=$!; sleep 10; kill -0 $p 2>/dev/null && echo HUNG`. A hung
+    daemon is a different state from a stopped one and needs a human restart.
+  - **Rule:** with Docker hung, push with `TEST_TYPE=unit git push ...`. That is the conftest's own
+    documented unit mode (in-memory SQLite), it runs the same selection (2985 passed in 68s on
+    2026-10-05), and the hook still gates on pytest's exit status. It is not `--no-verify`, which
+    stays a human call.
+  - **Rule:** the suite takes about a minute. A push that has not returned in 5 is not "in
+    progress". Check it before the next agent pushes on top of it: N agents x one 4-worker suite is
+    the load, not the tests.
+  - **Rule (reader):** `gh pr list` is a lower bound on finished work. Any sweep of in-flight work
+    also runs `git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads | grep ahead`
+    and counts branches with no remote. Local-only commits are invisible to every reviewer and
+    monitor.
+  Earned: 2026-10-04 parallel fix burst; #1269 comment 2026-10-05 08:28Z; structural fix tracked in
+  #1273.
+
 ---
 
 ## 4. Patterns that worked for risk-critical (money-moving) changes
@@ -1594,3 +1643,21 @@ stream — so *silence read as health*. It was caught only by a manual status sw
   tracked in **GH #1038**; until it lands, treat every safety-relevant one-shot as best-effort and
   assert its resulting state in the sweep. Earned: 2026-07-17 stuck-entry-pause (log 2026-07-17
   ~11:35), #1038.
+
+### 5.8 "Stop-loss set" is a presence check — report the loss AT the stop as a % of equity
+Every standup from 2026-09-28 to 10-04 passed prod position id 33 (ETHUSDT LONG, entry $2717.50,
+stop $2444.92, size 0.06598536, ~2.02x) on the tripwire line "open position missing stop_loss:
+PASS". The stop was there. Nobody multiplied it out: a stop-out realizes about **$17.99 on an $88.75
+balance, 20.3%**, which is the whole 20% `max_drawdown_pct` cap in one trade and 6-7x
+`max_risk_per_trade_pct` (3%). `leveraged_fixed_fraction` sizes on capital x leverage, not on stop
+distance, so the per-trade limit is assumed rather than enforced. The same week #1267 found the
+drawdown guard reads realized balance, so the guard would also stay silent on the way down. The
+10-05 standup computed the number and filed #1272, seven days into the position.
+- **Rule:** for each OPEN position compute `abs(entry - stop) * size / balance` and print it next to
+  the ladder. Compare it to `max_risk_per_trade_pct` and to the remaining distance to the next
+  tripwire tier. A position whose stop-out alone crosses a tier is a finding on the day it opens,
+  whatever today's drawdown reads.
+- **Rule:** "stop present" and "risk bounded" are separate assertions (§5.7: assert the state you
+  need, not the absence of the alarm you have). Whether 20% per trade is intended at this balance
+  is a risk-officer / Board call (#1272); reporting the number is not optional either way.
+  Earned: prod position id 33, 2026-09-28 → 10-05; #1272, #1267.
