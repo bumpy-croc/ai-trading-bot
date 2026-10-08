@@ -2134,3 +2134,80 @@ comment. Every other finding is an existing open issue (#1260, #1261, #1262, #12
 6. #1261 (p1): three money-path findings in production, unowned for 7 days.
 Ref: PR #1263, #1264 (`904e038e`), #1265, #1260, #1261, #1262, #1233, #1127, #1230, #1099;
 [D-2026-09-21-01], [D-2026-09-15-01]; LESSONS §2.9(i)/§2.15.
+
+## [D-2026-10-08-01] 2026-10-08 08:10 · escalation · daily-trading-standup
+Prod DB credential (#1269/incident `2026-10-04T0915-P1-prod-db-credential-unrotated`) is now
+**17 days** unrotated (escalated 09-21) and **4 days** since the GH issue/incident/PR were
+opened (10-04), with **6 escalations and zero recorded human action**. The finding today is the
+non-response itself, not the condition: PR #1268 is byte-identical to its 10-04-08:22 state
+(still CONFLICTING, tip `09d19327`), and the prepared fix (`rebase-1268` branch, tip `ee483d28`,
+"PR #1268 rebased") has never been pushed — confirmed via `git ls-remote --heads origin
+rebase-1268` (empty) and `git branch -r --contains ee483d28` (empty). Root cause: GH #1273 (hung
+Docker on this host → pre-push hook fails fast-unit tests against a dead daemon), open since
+10-05, still P1, still unfixed.
+Rationale: ΔP=5 (unrotated prod-DB secret, 17 days exposed; non-response pattern itself is a
+control failure) C=5 (direct `git`/`gh` verification, not inference) E=1 (comment + this record)
+→ hard veto class, escalate regardless of score. Per this task's own rule ("from the 3rd
+unanswered escalation, change the channel or change the ask"): today's GH comment on #1269
+asks a single yes/no decision (authorize pushing `rebase-1268` from a healthy host to unblock
+PR #1268, independent of rotating the credential itself) rather than repeating the status, and
+a push notification is sent alongside it.
+Ref: #1269, #1268, #1273, incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md.
+
+## [D-2026-10-08-02] 2026-10-08 08:10 · note · daily-trading-standup
+GH #1273 (hung Docker / false pre-push failures, opened 10-05, P1) is worse than its title
+("20 finished branches unpushed since 2026-10-04") suggests 4 days later: of the 20 worktrees
+under `.claude/worktrees/agent-*` plus `rebase-1268`, **17 branches are still fully local-only**
+(no remote ref, no PR) and hold 1-3 commits each not on `origin/develop` — confirmed via
+`git branch -r --contains <tip>` per branch, all empty. None are stale/superseded (their source
+issues are still open); all are genuine unlanded work. Two concrete costs newly observed today:
+(1) the complete, reviewed fix for #1267 (`fix/1267-drawdown-equity`, 3 commits, +1490/-34,
+~680 lines of new tests) cannot land; (2) the 2026-10-05 `weekly-retro` slot died mid
+`git push -u origin retro/2026-10-05` with no PR landed (transcript
+`c99d88dc-fa34-407e-becd-869f7cad9625.jsonl` ends on the unresolved tool_use) — a second
+scheduled-task casualty of the same root cause, beyond the credential-rotation rebase in D-01.
+`prune-worktrees` (fired clean both 10-06 and 10-07) correctly leaves all 20 untouched since
+their work is unpushed and real, not stale — but that means the pile cannot shrink until #1273
+is fixed. Separately, confirmed today: the primary checkout (`/Users/alex/Sites/ai-trading-bot`,
+branch `main`) is 127 commits behind `origin/main` — same recurring staleness class as #1075,
+not a new issue.
+Ref: #1273, #1267, #1269, #1045(unrelated); weekly-retro transcript
+`c99d88dc-fa34-407e-becd-869f7cad9625.jsonl`.
+
+## [D-2026-10-08-03] 2026-10-08 08:10 · note · daily-trading-standup
+New evidence added to #1267 (prod `account_history.drawdown` column integrity, open, P2):
+the column has been frozen at the exact value `0.00673593` for **8 consecutive days**
+(2026-10-01 through 2026-10-08), sampled across every row each day, while `equity` moved
+normally throughout (e.g. 2026-10-07 equity ranged $88.40-$88.70). The existing issue (filed
+10-01) documented only 7 distinct values across ~1000 rows and a 0.0-at-session-minimum case;
+this is a sharper, directly-dated instance of the same defect. The unpushed `fix/1267-drawdown-equity`
+branch (blocked by #1273, see D-02) changes `event_logger.py` to store the worse of the balance
+and equity legs, which would address this specific freeze — not independently verified by this
+run. The live drawdown GUARD itself was not affected: today's tripwire ladder was computed from
+raw `equity`/session-peak (peak $88.89367342, current DD ~0.51%), not from the stale column.
+Ref: #1267, fix/1267-drawdown-equity (local, unpushed).
+
+## [D-2026-10-08-04] 2026-10-08 08:10 · note · daily-trading-standup
+PRs #1270 (`fix/1259-1045-675-sl-order-sync-float-coercion`) and #1271
+(`fix/deflake-load-sensitive-tests`) are MERGEABLE/CLEAN with every check SUCCESS and zero
+reviews/requested-changes, idle since 2026-10-04 (4 days, no repo-wide CI blocker — these are
+the only two non-conflicting open PRs). Flagging rather than merging (outside this task's
+read-only scope): **#1270's local worktree carries one additional unpushed commit**
+("address architecture and code review on own-stop skip and zero-size reasons") not present on
+the PR's remote head — merging #1270 as-is would ship it without that review fix. Recommend a
+human or a dedicated session push the extra commit before merging #1270, and merge #1271 as-is.
+Ref: PR #1270, #1271.
+
+## [D-2026-10-08-05] 2026-10-08 08:10 · track-record · daily-trading-standup
+Prod: equity $88.44, session-peak-relative drawdown ~0.51-0.55% (SOFT/WARNING/CRITICAL/BREACH
+tripwires at 5/10/16/20% of $88.89 peak — all PASS). 1 open position (ETHUSDT LONG, stop_loss
+set). Last 6 closed trades all positive P&L (no losing streak). Heartbeat 17 min old. All
+positive-state assertions PASS: `FEATURE_ENTRY_PAUSE=false`; latch state `ENTRIES_ENABLED`
+(newest system_events row, 07:48:09Z); no unresolved CRITICAL system_events in 7d; `Decision:`
+lines flowing at 60s cadence; no unexplained flatness (1 position open). Staging cohort healthy:
+balance $1025.07, equity $1021.73, 90% win rate, decision loop alive, no breaker/circuit/governor
+trips in the tail. `weekly-model-retrain` 10-04 slot fired clean but trained nothing (stale ECR
+image since 08-13, already tracked #1265) — second consecutive blocked week. See D-01..D-04 for
+the standup's non-PASS findings (credential-rotation non-response, #1273 fallout, #1267 new
+evidence, #1270/#1271 merge-readiness).
+Ref: #1265, #1267, #1269, #1270, #1271, #1273; [D-2026-10-08-01..04].
