@@ -2204,10 +2204,26 @@ tripwires at 5/10/16/20% of $88.89 peak — all PASS). 1 open position (ETHUSDT 
 set). Last 6 closed trades all positive P&L (no losing streak). Heartbeat 17 min old. All
 positive-state assertions PASS: `FEATURE_ENTRY_PAUSE=false`; latch state `ENTRIES_ENABLED`
 (newest system_events row, 07:48:09Z); no unresolved CRITICAL system_events in 7d; `Decision:`
-lines flowing at 60s cadence; no unexplained flatness (1 position open). Staging cohort healthy:
+lines flowing at 60s cadence; no unexplained flatness (1 position open). D-01's own push (this
+branch) succeeded cleanly against a currently-responsive Docker — see D-06 correction. Staging cohort healthy:
 balance $1025.07, equity $1021.73, 90% win rate, decision loop alive, no breaker/circuit/governor
 trips in the tail. `weekly-model-retrain` 10-04 slot fired clean but trained nothing (stale ECR
 image since 08-13, already tracked #1265) — second consecutive blocked week. See D-01..D-04 for
 the standup's non-PASS findings (credential-rotation non-response, #1273 fallout, #1267 new
 evidence, #1270/#1271 merge-readiness).
 Ref: #1265, #1267, #1269, #1270, #1271, #1273; [D-2026-10-08-01..04].
+
+## [D-2026-10-08-06] 2026-10-08 08:25 · correction · daily-trading-standup
+Corrects [D-2026-10-08-01]/[D-2026-10-08-02] (same run, same hour): both state GH #1273 (hung
+Docker / false pre-push failures) as the still-active reason `rebase-1268` and the 17 other
+branches remain unpushed. Landing this very PR's branch (`standup/1008-credential-rotation-followup`)
+disproves the "still hung" half of that claim: `docker info` responded, the fast unit suite
+passed pre-push (2985 passed, 58.07s), and `git push` succeeded on the first try, no retry. #1273
+is not currently blocking pushes on this host. Still standing: the credential is still 17 days
+unrotated, PR #1268 is still CONFLICTING, and `rebase-1268`/the other 16 branches are still
+sitting unpushed as of this run — only the "why" changes, from "blocked" to "nobody has retried
+since 10-04." This is now the more actionable framing: pushing `rebase-1268` right now would very
+likely unblock PR #1268 immediately. Not done by this agent — out of scope for a read-only
+standup (this run's one authorized write is this record itself) — recommended as the next
+concrete action for whoever picks up #1269/#1273 next.
+Ref: #1273, #1269, #1268; [D-2026-10-08-01], [D-2026-10-08-02].

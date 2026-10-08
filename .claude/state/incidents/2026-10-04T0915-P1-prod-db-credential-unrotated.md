@@ -90,6 +90,17 @@ Treating this as capital-risk-adjacent rather than cosmetic.
                          fresh branch** (`standup/1008-credential-rotation-followup`) rather than
                          by amending PR #1268 or `rebase-1268`, specifically so it does not also
                          depend on #1273 being fixed to land.
+2026-10-08 08:2x UTC   — [correction] that branch's own push just succeeded cleanly: `docker info`
+                         responds, the fast unit suite ran and passed pre-push (2985 passed,
+                         58s), and `git push` went through with no retry needed. GH #1273's
+                         premise (Docker hung on this host) does not hold right now — whether it
+                         recovered on its own or the 10-04/10-05 hang was transient, #1273 is not
+                         currently blocking a push. That means `rebase-1268` (and the other 17
+                         branches tracked by #1273) are pushable right now by anyone who runs it;
+                         the 4-day gap since 10-04 looks like "nobody has tried since," not
+                         necessarily "still broken." Not independently re-verified for the other
+                         worktrees — flagged as the actionable next step, not an assumption that
+                         the whole backlog is clear.
 ```
 
 ## Actions taken
