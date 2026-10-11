@@ -2134,3 +2134,52 @@ comment. Every other finding is an existing open issue (#1260, #1261, #1262, #12
 6. #1261 (p1): three money-path findings in production, unowned for 7 days.
 Ref: PR #1263, #1264 (`904e038e`), #1265, #1260, #1261, #1262, #1233, #1127, #1230, #1099;
 [D-2026-09-21-01], [D-2026-09-15-01]; LESSONS §2.9(i)/§2.15.
+
+## 2026-10-10/11 · daily-trading-standup · live-ops
+Severity: amber  Top anomaly: P1 credential-rotation incident (2026-10-04T0915, GH #1269) reaches
+8 escalations / 3 push notifications with zero recorded human action, and `origin/develop` has had
+zero merges in the 6 days since 2026-10-04 (#1266) despite #1270/#1271/#1275 all green+mergeable —
+this is now a stalled-queue problem, not only a stuck credential. The 10-09 run skipped the
+branch-commit discipline (GH comment only) — restored here.
+
+**PROD**: equity $88.14 (session peak $88.89, 2026-09-23), DD 0.84% equity-based / 0.69% balance-
+based (both agree once `account_history.drawdown`'s percent-units are applied per #1084 — not a
+new defect, column is frozen-looking day-to-day because balance barely moves, then jumps when it
+does; verified, not a bug). All tripwires PASS (cap 20%, warning 10%, critical 16%, breach 20% —
+current DD 7-20x below SOFT). 1 open position (ETHUSDT LONG, stop_loss set, protected). Latch
+state: newest `system_events` row is `ENTRIES_ENABLED` (13:17:05 UTC) — entries live, #1103's
+detection is deployed and working. Heartbeat fresh (<1h). No 4+ loss streak (last close was a
+~breakeven emergency-close win). FEATURE_ENTRY_PAUSE=false.
+
+**New finding (GH #1276, p2)**: 2026-10-09 10:40 UTC prod emergency-closed an ETHUSDT position
+after 3x stop-loss placement rejections (`code=-1013` NOTIONAL filter) — breakeven, no capital
+lost, but root-caused to a real gap: `stop_loss_manager.py` has no min-notional pre-check at all,
+and the one guard that exists (`execution_engine.py:1391`) is dead code because #1062 (stale
+`MIN_NOTIONAL` vs `NOTIONAL` filter key) was closed `COMPLETED` on 2026-09-20 with **zero comments
+and no code change** — confirmed still present verbatim in current `develop`. Recommend reopening
+#1062 alongside #1276.
+
+**New finding (GH #1277, p3)**: `prune-worktrees` fired all 5 scheduled weekday slots 10-05→10-09
+(confirmed via dated transcripts) but `ai-trading-bot` worktree count is 22, up from the 7→9 the
+2026-08-24 retro already flagged (#1142/#1125, both closed). Slot-hit, effect-miss.
+
+**STAGING**: paper balance $1020.06/equity $1020.17, healthy, 1 open position, no gate_reason/
+circuit-breaker signals in the last 40 log lines, last 4 trades 1W-3L-mixed with no streak, no
+regime mismatch observed.
+
+**CROSS-SESSION**: `origin/develop` stalled 6 days (see above) — #1270/#1271 green+idle 4+ days,
+#1275 (this incident's own prior record) green+idle 2 days, #1268 CONFLICTING+stale since 10-04
+(superseded by #1275). Primary checkout on `main`, correct. Worktree count 22 (#1277). One
+long-running process flagged: PID 90785, externally-managed session (`--resume`, slock transport),
+etime 1d11h — not a Claude.app session, likely a separate active client; named, not actioned.
+
+**Scheduled-task audit**: `prune-worktrees` 5/5 weekday slots hit, effect failed (#1277, above).
+`weekly-model-retrain` 1/1 slot (10-04) hit. `weekly-retro` 1/1 slot (10-05) hit. This task's own
+uptime is not self-auditable (LESSONS §2.15) — not asserted here.
+
+**Market**: BTC $82,951 (+0.36% 24h), ETH $2,507.38 (+0.57% 24h) — live quote, CoinGecko.
+
+Ref: GH #1269 (credential P1, 8th escalation), #1276 (stop-loss notional, new), #1277 (worktree
+prune ineffective, new), #1273, #1268, #1275, #1270, #1271, #1266, #1062, #1084, #1142, #1125;
+incident `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`;
+.claude/LESSONS.md §5.2/§5.7/§2.15/§2.17.
