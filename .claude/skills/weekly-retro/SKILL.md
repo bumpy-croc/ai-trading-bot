@@ -50,6 +50,10 @@ checklist line, a new tripwire.
    primary checkout, and on 2026-09-21 a false `DRIFT` would have downgraded the fixed hook (#1260).
    Earned: #1026
    closed unmerged 2026-07-21 after the 07-20 retro deliberately did not reproduce it; LESSONS §2.9.
+   **Also look for a retro that never became a PR:** `git branch --list '*retro*'` and
+   `git worktree list | grep -i retro`. If one is ahead of `origin/develop`, `git reset --hard` onto
+   it and re-land it. The 2026-10-05 retro committed a full distillate and died on the push hook;
+   `gh pr list` showed nothing for 7 days (LESSONS §2.9 rule (j)).
    **If that PR is still open: `git reset --hard origin/<its-branch>` and build this retro on top of
    it** — this PR then supersedes it and merges whether or not the old one lands, instead of adding a
    second stranded PR to the queue. And **if this is the second consecutive stranded retro PR, the
@@ -161,6 +165,13 @@ checklist line, a new tripwire.
    (`git ls-tree origin/main <path>`), never the review thread — a plain comment is not a gate and
    merges past one routinely. On 2026-09-13 PR #1130 merged with the `ETHUSDT/price/latest` symlink
    the 09-07 retro had asked it to drop; it is now in production (LESSONS §1.16 update, §2.11).
+
+## First action
+
+After creating the worktree, push the branch and open a **draft PR** (header only) before reading
+any input; update it as you go. Probe Docker with a bound first (`docker info` can hang, LESSONS §3)
+and use `TEST_TYPE=unit git push` if it does. A push not back in 5 minutes is dead: stop and report.
+A retro with no remote artifact is invisible to every reader (LESSONS §2.9 rule (j)).
 
 ## The distillation pass
 

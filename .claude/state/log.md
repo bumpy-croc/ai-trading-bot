@@ -2221,3 +2221,70 @@ No promotion row to append.
 6. #1127 (p0, 35 days, no owner) and #1230, #1099: decide or close.
 Ref: PR #1266, #1263, #1268, #1270, #1271; #1273, #1272, #1269, #1267, #1265, #1261, #1260, #1233,
 #1230, #1127, #1099; [D-2026-09-28-01]; LESSONS §2.17/§3/§5.8.
+
+## [D-2026-10-12-01] 2026-10-12 ~10:50 · note · daemon(weekly-retro)
+**Weekly retro, window 2026-10-05 → 2026-10-12. Distillate-only PR to `develop`; builds on the
+unpushed 2026-10-05 retro commit `8de92056`, so it supersedes [D-2026-10-05-01].**
+
+**Headline: the 10-05 retro never reached a PR.** It committed a full distillate and died inside
+`git push` on the pre-push hook (hung Docker, #1273). No remote branch, no PR, found only because
+this retro listed local retro worktrees. `origin/develop` has had **zero merges since 2026-10-04
+(8 days)**. Six PRs are open: #1268 (`DIRTY`), #1270, #1271, and three daily credential-incident
+record PRs #1275, #1278, #1280. Local branches ahead of `origin/develop`: **31** (was 20 on 10-05).
+Docker answered `docker info` today, so the hang is intermittent.
+
+**Input 0 / 0b.** AGENDA empty, eleventh window. Last merged retro #1266 (10-04) landed; 0b's
+real finding was the 10-05 retro above. → LESSONS **§2.9 rule (j)**, `weekly-retro` SKILL
+(0b local-branch check, new "First action": draft PR before analysis).
+
+**Input 1: log coverage.** `develop`'s log has no entry after [D-2026-09-28-01]. The week's entries
+exist only on the unmerged PRs above. → LESSONS **§2.17 amendment 2026-10-12**: at most one open
+record PR per incident; a repeat escalation updates it, it does not open another.
+
+**Input 2: incidents.** #1269 (prod DB credential unrotated since 2026-09-21): **21 days**, 9
+standup escalations, 4 push notifications, zero human response. Escalation behaved as designed;
+the record mechanism did not (above). New issues this week: #1274 (HyperGrowth time-exit; **duplicate
+of #1083**, same defect, open since 08-24; position 33 now 26.7h past the 336h limit), #1276
+(no min-notional pre-check on SL; forced an emergency close 10-09), #1277 (worktree growth),
+#1279 (staging Postgres stuck in recovery ~5.8h). All unassigned.
+
+**Input 3: agent failures.** The 10-05 retro (above). The 10-08 standup "correction" that Docker was
+responsive was right for that moment and still consistent with #1273: the hang is intermittent.
+
+**Input 4: calibration.** Standup: the 10-08 decision to change the ask each run rather than repeat
+status was sound but produced no response; the channel, not the content, is the limit. The earlier
+NOMINAL-with-P1-open failure (09-28→10-03) did not recur. Retro: the 10-05 run's own "Not in force"
+caveat held trivially, because the PR never existed.
+
+**Input 6: scheduled tasks (registry vs directory: 22 directories, 5 enabled-or-recurring entries;
+enabled recurring = standup, weekly-model-retrain, weekly-retro, prune-worktrees).**
+- `daily-trading-standup` 09:07: 9/9 slots 10-04→10-12 have a transcript. 0 misses.
+- `weekly-model-retrain` Sun 08:14: 10-04 and 10-11 fired; both ended `BLOCKED-stale-training-image`
+  (#1233). No retrain has completed since 09-20.
+- `prune-worktrees` Mon-Fri 23:10: 5/5 fired (transcripts under the `hands-up-education` project
+  dir). Cleaned the sibling repos; deliberately skipped this one. Worktrees here 22 → 25 (#1277).
+- `weekly-retro`: 10-05 fired and died on push; 10-12 is this run.
+→ LESSONS **§2.15 addition**: read what an effectful job declined.
+
+**Input 5 / 7.** No experiments concluded this window. No `latest` symlink changed; no promotion
+row.
+
+**Diffs in this PR.** On top of `8de92056` (§2.17 amendment 10-05, §3 hung-Docker entry, §5.8):
+LESSONS §2.9(j), §2.17 amendment 2026-10-12, §2.15 addition; `weekly-retro/SKILL.md` input 0b and
+"First action"; AGENDA cleared. Dispositions: no new issue (every finding maps to an open issue,
+checked per line below). Comments added on #1273, #1127, #1083.
+
+**Not in force until this PR merges and the primary checkout is pulled** (§2.9 rule (i)).
+
+**Needs a human** (each with its issue):
+1. #1269: rotate the prod DB credential (day 21), then merge #1268/#1275/#1278/#1280 (or close the
+   three later ones as superseded by #1268).
+2. #1127 (p0, 42 days): no scheduled agent can merge; `develop` is at 0 merges in 8 days. Merge
+   #1270, #1271 and this PR.
+3. #1273: push the 31 local-only branches (Docker currently responsive; `TEST_TYPE=unit git push`
+   otherwise).
+4. #1233: rebuild the ECR training image; 4 weekly retrains blocked.
+5. #1279: staging Postgres stuck in recovery.
+6. #1260: pull the primary checkout (frozen since 08-24).
+Ref: #1266, #1268, #1270, #1271, #1275, #1278, #1280; #1269, #1273, #1274, #1276, #1277, #1279,
+#1083, #1127, #1233, #1260, #1099; LESSONS §2.9(j)/§2.15/§2.17.

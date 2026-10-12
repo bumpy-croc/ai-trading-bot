@@ -523,6 +523,21 @@ recovered them.
   Earned: 2026-09-21 → 09-28; PR #1263 (stranded 7 days), promote #1264 (`904e038e`, unrecorded);
   #1260.
 
+- **Rule (j) — a retro that dies before it pushes leaves no trace; open the PR first.** The
+  2026-10-05 retro committed a complete distillate (`8de92056`: §2.17 amendment, §3, §5.8, skill
+  fixes, log entry) and then died inside `git push` on the pre-push hook (§3, hung Docker). No branch
+  on the remote, no PR, nothing in `gh pr list`; the only evidence was a local worktree and a
+  standup comment on #1273 a day later. `develop` took **zero merges for 8 days** and a week of
+  lessons sat on disk. Input 0b only looked at PRs, so a retro that never became one was invisible.
+  **Rule:** (1) the retro's first push is the branch plus a draft PR carrying the header and a
+  "work in progress" body, before any analysis; later commits update it. If the run dies, a PR
+  exists to find. (2) Input 0b also lists local retro branches and worktrees
+  (`git branch --list '*retro*'`, `git worktree list | grep -i retro`) and, if one is ahead of
+  `origin/develop`, resets onto it and re-lands it. (3) Probe Docker with a bound before the first
+  push (§3) and use `TEST_TYPE=unit git push` if it hangs. A push that has not returned in 5 minutes
+  is dead; stop and report, don't wait.
+  Earned: 2026-10-05 retro run (died on push); recovered by the 2026-10-12 retro; #1273.
+
 ### 2.10 A monitoring run that writes nothing durable did not happen
 Between 2026-07-20 and 2026-07-27 the scheduled fleet ran ~25 times (`daily-trading-standup` 8/8
 days, `alert-monitor` 6-hourly, `staging-cohort-observer` 1–3x/day) and `log.md` gained **zero**
@@ -793,6 +808,20 @@ old"*) could not have said anything else, for two independent reasons:
     not when the string appears anywhere in the file.
   Earned: the 2026-09-03 `prune-worktrees` session-limit death (masked downstream by 09-04's healthy
   5-worktree cleanup, and invisible to `lastRunAt`, which advanced to 09-04).
+
+- **A job can fire, work, and still do nothing to this repo — read what it declined (2026-10-12
+  audit).** `prune-worktrees` fired 5/5 slots (10-05→10-09; transcripts are under the
+  `hands-up-education` project dir, not this repo's) and cleaned 18 + 9 worktrees in the sibling
+  repos, while this repo went 22 → 25 worktrees (#1277). The transcripts say why: it deliberately
+  left `ai-trading-bot` alone because its branches were "not safely mergeable yet". Those are the
+  31 finished branches stuck behind the push problem (§3, #1273). So the growing count is a
+  symptom of the stranded work, and the fix is to push the branches, not to touch the pruner.
+  The same window's `weekly-model-retrain` fired 2/2 (10-04, 10-11) and 2/2 ended `BLOCKED-stale-
+  training-image` (#1233, open since 09-20, p1, unassigned). No retrain has completed since
+  2026-09-20: four consecutive weekly slots with no artifact.
+  - **Rule:** for an effectful task, the last assistant message names what it *skipped* as well as
+    what it did. A repo that a cleanup job skips on purpose is a finding about the repo.
+  Earned: prune-worktrees 10-05→10-09 vs #1277; retrain 10-04/10-11 vs #1233.
 
 - **Two more signatures, and a slow run is not a failed run (2026-09-28 audit).** In the
   09-21→28 window, runs failed or stretched in three distinguishable ways:
@@ -1067,6 +1096,18 @@ right things in the right places, and the writes never reached the branch anyone
     not read is invisible to it by construction, so the writer owns putting it where monitors look
     (`gh issue list --label type:incident`).
   Earned: prod DB credential unrotated 2026-09-21 → (still open 10-05); #1269, PR #1268.
+
+- **Amendment 2026-10-12 — a daily escalation that opens a new PR per day builds the queue it is
+  complaining about.** After #1269 (credential P1) the standup wrote a record PR on 10-04 (#1268),
+  10-08 (#1275), 10-11 (#1278) and 10-12 (#1280): four open, `CLEAN` bar the first, none merged,
+  each adding another `log.md` tail and incident-file edit that will collide with the next. The
+  escalation itself was right (9 issue comments, 4 push notifications, ask changed each time); the
+  record mechanism was wrong. `develop` had **0 merges in 8 days**; the human, the only actor who can
+  merge (#1127), saw a queue growing by one per day.
+  **Rule:** at most one open record PR per incident. A repeat escalation updates it (new commit, or
+  a comment on the incident issue) and does not open another. The issue is the per-day record; the
+  `log.md` line is written once, when the PR can actually land.
+  Earned: #1268, #1275, #1278, #1280; #1269; #1127.
 
 ---
 
