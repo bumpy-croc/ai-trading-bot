@@ -2256,8 +2256,8 @@ status was sound but produced no response; the channel, not the content, is the 
 NOMINAL-with-P1-open failure (09-28→10-03) did not recur. Retro: the 10-05 run's own "Not in force"
 caveat held trivially, because the PR never existed.
 
-**Input 6: scheduled tasks (registry vs directory: 22 directories, 5 enabled-or-recurring entries;
-enabled recurring = standup, weekly-model-retrain, weekly-retro, prune-worktrees).**
+**Input 6: scheduled tasks (registry vs directory: 22 directories, 17 registered, 4 enabled:
+standup, weekly-model-retrain, weekly-retro, prune-worktrees).**
 - `daily-trading-standup` 09:07: 9/9 slots 10-04→10-12 have a transcript. 0 misses.
 - `weekly-model-retrain` Sun 08:14: 10-04 and 10-11 fired; both ended `BLOCKED-stale-training-image`
   (#1233). No retrain has completed since 09-20.
