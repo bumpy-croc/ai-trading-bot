@@ -2134,3 +2134,54 @@ comment. Every other finding is an existing open issue (#1260, #1261, #1262, #12
 6. #1261 (p1): three money-path findings in production, unowned for 7 days.
 Ref: PR #1263, #1264 (`904e038e`), #1265, #1260, #1261, #1262, #1233, #1127, #1230, #1099;
 [D-2026-09-21-01], [D-2026-09-15-01]; LESSONS §2.9(i)/§2.15.
+
+## [D-2026-10-12-01] 2026-10-12 ~08:20 · incident-escalate · daily-trading-standup
+Severity: amber  Top anomaly: P1 credential-rotation incident (2026-10-04T0915, GH #1269) reaches
+9 escalations / 4 push-notification attempts (all 4 failed — `Remote Control inactive`, confirming
+the channel itself is non-functional on this host, not merely unanswered) with zero recorded human
+action. `origin/develop` has had ZERO merges in 8 days (still pinned at `812b5701`, 2026-10-04); a
+THIRD unmerged PR (#1278) joined this incident's own backlog yesterday instead of clearing it —
+#1268 (CONFLICTING, 8d), #1275 (MERGEABLE, 4d), #1278 (MERGEABLE, 1d) — plus unrelated #1270/#1271
+(MERGEABLE, 8d/4d) also idle. This is a stalled-PR-queue problem independent of the credential.
+
+**PROD**: equity $88.34 (balance $88.14), 30d-window peak equity $88.89 → DD 0.69% (matches
+`account_history.drawdown` directly). All tripwires PASS (cap 20%, warning 10%=$8.89, critical
+16%=$14.22, breach 20%=$17.78 at today's peak — current DD 7-29x below SOFT). 1 open position
+(ETHUSDT LONG #35, entry 2493.70, stop_loss 2540.38, protected). Latch state: newest
+`system_events` row is `ENTRIES_ENABLED` (07:31:13 UTC) — entries live. Heartbeat fresh (38min).
+`Decision:` lines flowing every ~60-70s through 08:09 UTC. No 4+ loss streak (last 4 trades:
++0.0009/-0.588/+0.286/+0.451). No weekly DD-rate regime shift (7d-ago DD 0.67% vs today 0.69%).
+FEATURE_ENTRY_PAUSE=false, no macro window active regardless (Oct 14 CPI window not yet open).
+4 CRITICAL `system_events` in the last 7d, all 2026-10-09 stop-loss-notional failures — already
+tracked at GH #1276 (p2, filed 10-11), no new occurrence since; treated as actioned, not re-filed.
+
+**STAGING (GH #1279, escalated to p1)**: Postgres still in recovery mode, confirmed via a fresh
+`ERRO Database session error ... SSL SYSCALL error` at 08:10:49 UTC today in live `railway logs`.
+Outage has now run ~30h (since 2026-10-11 02:24 UTC), not the ~5.8h in #1279's original
+title/body — it understates current duration by ~5x. Bumped #1279 p2→p1: the staging cohort
+trial (bear-market flags + native ETHUSDT model) has been completely unobservable for over a day.
+No capital risk (paper only).
+
+**CROSS-SESSION**: branch=main (correct). Worktree count 23 (up from 22 on 10-11) — but
+`prune-worktrees` is Mon-Fri only and correctly had zero scheduled slots over the weekend
+(10-10/11); not a missed slot, the underlying growth problem remains GH #1277 (open, p3).
+Weekly-retro's 2026-10-05 slot fired but landed only a local, unpushed commit (`8de92056` on
+`retro/2026-10-05` — `git ls-remote origin` for it is empty) — no PR, stranded; likely to be
+superseded by today's ~09:20 UTC weekly-retro run per the #1137/#1266 supersede pattern; flagged,
+not actioned (out of this task's scope). One long-running background process again present: PID
+90785, externally-managed (`--resume`, slock transport, not a Claude.app session), now etime
+3d3h (was 1d11h on 10-10/11) — third consecutive day flagged, still no owner this task can
+identify.
+
+**Scheduled-task audit (48h / 7d-weekly lookback)**: `daily-trading-standup` 2/2 daily slots
+(10-10, 10-11) hit; both transcripts end in a clean final WARNING summary despite transient
+mid-run API-error/ENOTFOUND retries — not a miss. `prune-worktrees` 0 expected weekday slots in
+window (correct, no miss). `weekly-model-retrain` 1/1 slot (10-11) hit. `weekly-retro` 1/1 slot
+(10-05) hit but effect-missed (no PR landed — see above).
+
+**Market**: BTC $83,710 (+0.88% 24h), ETH $2,557.04 (+2.30% 24h) — live quote, CoinGecko.
+
+Ref: GH #1269 (credential P1, 9th escalation), #1279 (staging outage, bumped to p1), #1277
+(worktree growth), #1276 (stop-loss notional, tracked no-op), #1268, #1275, #1278, #1270, #1271,
+#1266; incident `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`;
+.claude/LESSONS.md §2.17/§5.7.
