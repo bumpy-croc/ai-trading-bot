@@ -2134,3 +2134,115 @@ comment. Every other finding is an existing open issue (#1260, #1261, #1262, #12
 6. #1261 (p1): three money-path findings in production, unowned for 7 days.
 Ref: PR #1263, #1264 (`904e038e`), #1265, #1260, #1261, #1262, #1233, #1127, #1230, #1099;
 [D-2026-09-21-01], [D-2026-09-15-01]; LESSONS §2.9(i)/§2.15.
+
+## [D-2026-10-12-01] 2026-10-12 ~08:20 · incident-escalate · daily-trading-standup
+Severity: amber  Top anomaly: P1 credential-rotation incident (2026-10-04T0915, GH #1269) reaches
+9 escalations / 4 push-notification attempts (all 4 failed — `Remote Control inactive`, confirming
+the channel itself is non-functional on this host, not merely unanswered) with zero recorded human
+action. `origin/develop` has had ZERO merges in 8 days (still pinned at `812b5701`, 2026-10-04); a
+THIRD unmerged PR (#1278) joined this incident's own backlog yesterday instead of clearing it —
+#1268 (CONFLICTING, 8d), #1275 (MERGEABLE, 4d), #1278 (MERGEABLE, 1d) — plus unrelated #1270/#1271
+(MERGEABLE, 8d/4d) also idle. This is a stalled-PR-queue problem independent of the credential.
+
+**PROD**: equity $88.34 (balance $88.14), 30d-window peak equity $88.89 → DD 0.69% (matches
+`account_history.drawdown` directly). All tripwires PASS (cap 20%, warning 10%=$8.89, critical
+16%=$14.22, breach 20%=$17.78 at today's peak — current DD 7-29x below SOFT). 1 open position
+(ETHUSDT LONG #35, entry 2493.70, stop_loss 2540.38, protected). Latch state: newest
+`system_events` row is `ENTRIES_ENABLED` (07:31:13 UTC) — entries live. Heartbeat fresh (38min).
+`Decision:` lines flowing every ~60-70s through 08:09 UTC. No 4+ loss streak (last 4 trades:
++0.0009/-0.588/+0.286/+0.451). No weekly DD-rate regime shift (7d-ago DD 0.67% vs today 0.69%).
+FEATURE_ENTRY_PAUSE=false, no macro window active regardless (Oct 14 CPI window not yet open).
+4 CRITICAL `system_events` in the last 7d, all 2026-10-09 stop-loss-notional failures — already
+tracked at GH #1276 (p2, filed 10-11), no new occurrence since; treated as actioned, not re-filed.
+
+**STAGING (GH #1279, escalated to p1)**: Postgres still in recovery mode, confirmed via a fresh
+`ERRO Database session error ... SSL SYSCALL error` at 08:10:49 UTC today in live `railway logs`.
+Outage has now run ~30h (since 2026-10-11 02:24 UTC), not the ~5.8h in #1279's original
+title/body — it understates current duration by ~5x. Bumped #1279 p2→p1: the staging cohort
+trial (bear-market flags + native ETHUSDT model) has been completely unobservable for over a day.
+No capital risk (paper only).
+
+**CROSS-SESSION**: branch=main (correct). Worktree count 23 (up from 22 on 10-11) — but
+`prune-worktrees` is Mon-Fri only and correctly had zero scheduled slots over the weekend
+(10-10/11); not a missed slot, the underlying growth problem remains GH #1277 (open, p3).
+Weekly-retro's 2026-10-05 slot fired but landed only a local, unpushed commit (`8de92056` on
+`retro/2026-10-05` — `git ls-remote origin` for it is empty) — no PR, stranded; likely to be
+superseded by today's ~09:20 UTC weekly-retro run per the #1137/#1266 supersede pattern; flagged,
+not actioned (out of this task's scope). One long-running background process again present: PID
+90785, externally-managed (`--resume`, slock transport, not a Claude.app session), now etime
+3d3h (was 1d11h on 10-10/11) — third consecutive day flagged, still no owner this task can
+identify.
+
+**Scheduled-task audit (48h / 7d-weekly lookback)**: `daily-trading-standup` 2/2 daily slots
+(10-10, 10-11) hit; both transcripts end in a clean final WARNING summary despite transient
+mid-run API-error/ENOTFOUND retries — not a miss. `prune-worktrees` 0 expected weekday slots in
+window (correct, no miss). `weekly-model-retrain` 1/1 slot (10-11) hit. `weekly-retro` 1/1 slot
+(10-05) hit but effect-missed (no PR landed — see above).
+
+**Market**: BTC $83,710 (+0.88% 24h), ETH $2,557.04 (+2.30% 24h) — live quote, CoinGecko.
+
+Ref: GH #1269 (credential P1, 9th escalation), #1279 (staging outage, bumped to p1), #1277
+(worktree growth), #1276 (stop-loss notional, tracked no-op), #1268, #1275, #1278, #1270, #1271,
+#1266; incident `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`;
+.claude/LESSONS.md §2.17/§5.7.
+
+## [D-2026-10-13-01] 2026-10-13 ~08:15 · incident-escalate · daily-trading-standup
+Severity: amber (WARNING)  Top anomaly: P1 credential-rotation incident (2026-10-04T0915, GH
+#1269) reaches **10 escalations / 5 push-notification attempts — all 5 failed identically**
+(`Remote Control inactive`, 10-07 through 10-13) with zero recorded human action in 22 days
+since the 09-21 original escalation. `origin/develop` has had **ZERO merges in 9 full days**
+(still pinned at `812b5701`, 2026-10-04) — a FOURTH unmerged PR for this incident alone (#1280,
+MERGEABLE) joined the backlog instead of clearing it, on top of #1268 (CONFLICTING, 9d), #1275
+(MERGEABLE, 5d), #1278 (MERGEABLE, 2d). All four are CI-green except #1268. The non-response is
+now the finding, not the condition: five consecutive identical push-notification failures is a
+standing host-configuration gap (Remote Control not connected), not a flaky channel — repeating
+the same attempt unchanged is unlikely to ever succeed. This update's own PR is the fifth queued
+for this one incident.
+
+**PROD**: balance $88.24, equity $88.26. Session peak balance (14d window) $88.75 → DD computed
+independently at ~0.58% (balance-basis), matching `account_history.drawdown` (0.582%) directly —
+cross-validated. All tripwire levels PASS and not close: cap 20%, SOFT 5% ($84.31), WARNING 10%
+($79.87), CRITICAL 16%=($74.55), BREACH 20%=($71.00) at today's peak — current DD is ~9-34x below
+even the SOFT line. 1 open position (ETHUSDT LONG #36, entry 2530.04, stop_loss 2277.83,
+protected — 10% below entry). Latch state: newest `system_events` row is `ENTRIES_ENABLED`
+(07:42:14 UTC, hourly cadence, fresh) — entries live, FEATURE_ENTRY_PAUSE=false. `Decision:`
+lines flowing every ~60-70s through 08:11 UTC — engine alive and deciding. No 4+ loss streak
+(last 7d: 3 trades, one -0.59 loss between two small wins). No weekly DD-rate regime shift (7d-ago
+equity $88.71 vs today $88.26, 0.51% drift, well under 6%). 4 CRITICAL `system_events` in the
+last 7d, all 2026-10-09 stop-loss-notional-filter failures — already tracked at GH #1276 (p2,
+filed 10-11, still open/unfixed, no new occurrence since) — treated as actioned-but-unfixed, not
+re-filed.
+
+**STAGING (GH #1279)**: no `OperationalError`/`recovery mode`/`SSL SYSCALL` lines found in a
+fresh `railway logs -e staging` pull (covering through 08:11:40 UTC today); `Decision:` lines and
+a `heartbeat` event (balance $1020.16, 0 open positions) are flowing normally, and a direct
+`psql` query against the staging DB succeeded (last row 07:15:07 UTC). This is the first run
+since 10-11 where the outage does not reproduce — **apparent recovery, cause unconfirmed**: no
+Railway deploy/restart event was identified to attribute this to (Railway infra is outside this
+task's write scope to inspect further); flagged on #1279 as "appears recovered, not closed" per
+LESSONS §2.16 (don't record relief as attributable without evidence). No capital risk throughout
+(paper only).
+
+**CROSS-SESSION**: branch=main (correct). Worktree count 25 (was 22 on 10-11, unchanged since
+the last reading on 10-12) — already tracked at GH #1277 (p3, open, no new comment needed this
+run beyond a count refresh). All 7 open PRs CI-green except #1268 (CONFLICTING); no repo-wide CI
+blocker. `origin/develop` frozen 9 days (see above) — now affecting #1270/#1271 too (idle
+9d/9d), not just the credential-incident PRs. One long-running background process again present:
+PID 90785, externally-managed (`--resume`, slock transport, not a Claude.app session), now etime
+4d3h (was 3d3h on 10-12) — fourth consecutive day flagged, still no owner this task can identify;
+not filed as an issue (not a repo bug, ops-hygiene note only).
+
+**Scheduled-task audit (48h / 7d-weekly lookback, via `list_task_runs`)**: `daily-trading-standup`
+2/2 daily slots (10-11, 10-12) succeeded. `prune-worktrees` 2/2 weekday slots (10-09, 10-12... )
+succeeded per task status, though its effect on this repo's worktree count remains nil (tracked
+at #1277, not a new finding). `weekly-model-retrain` 1/1 slot (10-11) succeeded (short run,
+consistent with the known ECR-staleness precondition gate exiting early). `weekly-retro` 1/1 slot
+(10-12) succeeded, PR #1281 landed. No missed slots identified.
+
+**Market**: BTC $83,995.45 (+0.4% 24h), ETH $2,530.48 (+1.5% 24h) — live quote, CoinGecko.
+
+Ref: GH #1269 (credential P1, 10th escalation, 5th failed push), #1279 (staging outage, apparent
+recovery unconfirmed), #1277 (worktree growth, unchanged), #1276 (stop-loss notional, tracked
+no-op), #1268, #1275, #1278, #1280, #1270, #1271; incident
+`.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`;
+.claude/LESSONS.md §2.16/§2.17/§5.7.
