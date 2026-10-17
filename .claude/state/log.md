@@ -2351,3 +2351,86 @@ gap, commented), #1267 (drawdown-column-frozen, commented), #1279 (staging, DB-o
 (primary-checkout drift, tracked no-op), #1268, #1275, #1278, #1280, #1282, #1283, #1284, #1270,
 #1271, #1281; incident `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`;
 .claude/LESSONS.md §2.16/§2.17/§5.7.
+
+## [D-2026-10-17-01] 2026-10-17 ~08:15 UTC · incident-escalate · daily-trading-standup
+Severity: amber (WARNING)  Top anomaly: P1 credential-rotation incident (GH #1269) reaches **14
+escalations / 9th push-notification attempt** with zero recorded human action in **26 days**
+since the 09-21 original escalation. `origin/develop` has had **ZERO merges in 13 full days**
+(still pinned at `812b5701`, 2026-10-04) — confirmed via a fresh `git fetch`. PR queue for this
+incident alone holds at **eight** (#1268 CONFLICTING/13d, #1275 MERGEABLE/9d, #1278 MERGEABLE/6d,
+#1280 MERGEABLE/5d, #1282 MERGEABLE/4d, #1283 MERGEABLE/3d, #1284 MERGEABLE/2d, #1285
+MERGEABLE/1d). **New this run:** deliberately did NOT open a ninth PR — today's cross-session
+sweep counted 11 open PRs total, 8 of them this incident's own unmerged escalation branches, and
+flagged them as a contributing cause of a 28-worktree overrun (limit 6). This update instead
+landed as a new commit on the existing open branch behind PR #1285.
+
+**9th push-notification attempt**: `Mobile push not sent (Remote Control inactive)` — identical
+to all 8 prior attempts spanning 10-07 through 10-17 (10 days). This session's final report puts
+a direct yes/no decision to the human in its own text, a channel distinct from the GH comment and
+the push notification.
+
+**New blocker this run**: Railway CLI auth failure now also affects the **production** project
+specifically (not only staging as previously tracked at #1141) — `railway logs`/`variables`/
+`whoami` on production all returned `Unauthorized`, and the separate Railway MCP connector failed
+with `CONNECTION_CLOSED`. Substituted the DB-sourced `system_events` latch row (`ENTRIES_ENABLED`)
+for the blocked `FEATURE_ENTRY_PAUSE` read; could NOT independently verify the 60s `Decision:` log
+cadence (prod) or governor/`gate_reason` lines (staging) this run — reported BLOCKED/unverified,
+not PASS. Commented on #1141 with today's evidence (scope now widened to production).
+
+**PROD**: balance $88.239, equity $87.643 (latest, 07:22:19 UTC, heartbeat ~48min old — PASS).
+Peak equity $88.894 (2026-09-23, no restart gap in 90d of history) → DD = 1.41%. All tripwire
+levels PASS, not close — cap 20%, SOFT 5%=floor $84.449, WARNING 10%=floor $80.004, CRITICAL
+16%=floor $74.671, BREACH 20%=floor $71.115 at today's peak; current DD >3.5x below the SOFT
+line. 1 open position (ETHUSDT LONG #36, entry 2530.04, current 2434.04, stop_loss 2277.83,
+protected). Latch: newest `system_events` row is `ENTRIES_ENABLED` (07:22:15 UTC) — entries live,
+#1103 monitor confirmed deployed (origin/main ancestor-verified) and behaviorally healthy. No
+manual halt. No 4+ loss streak (1 loss in last 6 trades). Weekly DD-rate: 7d-ago equity $88.142
+vs today's $87.643 → 0.57% drift, well under 6%. Zero unresolved CRITICAL system_events in 7d.
+**New minor finding**: DB's stored `account_history.drawdown` column (~0.58%, frozen across 15+
+hourly rows) diverges ~2x from the peak/equity-based DD computed here (1.41%) — same PASS verdict
+either way, but flagged for a follow-up on which formula the live guard logic actually uses (ties
+into already-tracked #1267). 2026-10-09 "Stop-loss placement failed - emergency close" (trade #25,
+~$0.0009 cost) remains the only near-miss in the window, already tracked at #1276 (p2) — not
+re-filed.
+
+**STAGING (GH #1279)**: 4th consecutive clean day via direct `psql` — paper equity $1020.16,
+latest row 08:03:56 UTC today, last 4 trades (all HyperGrowth/ETHUSDT) normal stop-loss exits.
+Log-based governor/circuit/gate_reason check again BLOCKED by the Railway CLI auth failure above
+(now confirmed non-staging-specific, see #1141). Two new minor/non-urgent findings from today's
+DB read, not filed as new issues (flagged for a human look): (1) ~$20 unreconciled gap between
+51-trade trial pnl-minus-commission (~+$40.31) and current balance ($1020.16 vs implied ~$1040);
+(2) 20 stale `positions` rows still marked OPEN from April-July 2026 (current/live state is
+correct and flat — this is a data-hygiene smell, not a live divergence).
+
+**CROSS-SESSION**: branch=main (correct). Worktree count **28** (27 linked + primary) — up from
+27 yesterday, continuing the climb tracked at #1277. 11 open PRs, CI green on all 11; mergeable
+state: #1268 CONFLICTING, rest MERGEABLE. `origin/develop` frozen 13 full days (see above), now
+also idling #1270 (13d), #1271 (13d, deflake fix), and #1281 (weekly-retro, 5d). 18 of 28
+worktrees have no associated open PR — finished-but-unpushed/unlanded work, tied to #1273 (hung
+Docker / false pre-push failures); a `rebase-1268` worktree in particular holds an unpushed fix
+for PR #1268's conflict. One background Claude process observed running 2d22h (etime
+`02-22:28:31`, bypass-permissions mode), exceeding the 12h flag threshold; not independently tied
+to this repo or identified as anomalous. Three P0 issues (#1127, #734, #669) remain open 47-135
+days with no PR; noted for visibility, not re-escalated individually this run (scope: today's
+cross-session sweep, not a full backlog audit).
+
+**Scheduled-task audit**: no transcript-level misses found in the graded windows (daily-standup,
+prune-worktrees, weekly-retro all ran to clean completion with matching layer-2 artifacts).
+**New finding**: `weekly-model-retrain`'s 2026-10-11 run completed cleanly but was a *functional*
+miss — blocked by the already-tracked stale ECR training image (#1233, open since 10-05, image
+pushed 2026-08-13, now predating pipeline commit 00d214a6); no retrain occurred that week.
+Commented on #1233 with today's confirmation rather than filing a duplicate. `prune-worktrees`
+is firing on schedule but has removed zero worktrees from this repo across 9+ consecutive runs
+(all its removals land in hue-backend/hue-frontend) while this repo's count climbs 7→28 — already
+tracked at #1277, not re-filed.
+
+**Market**: BTC $81,627 (-0.67% 24h), ETH $2,431.95 (-0.84% 24h) — live CoinGecko quote.
+
+Ref: GH #1269 (credential P1, 14th escalation, 9th push attempt), #1141 (Railway CLI auth,
+widened to production, commented), #1233 (stale ECR image, commented), #1279 (staging, 4th clean
+day, commented), #1277 (worktree growth, 28, still climbing), #1276/#1267 (tracked no-ops),
+#1273 (unpushed branches/worktree overrun), #1127 (systemic merge-authority gap), #1075/#1260
+(primary-checkout drift, tracked no-op), #1268, #1275, #1278, #1280, #1282, #1283, #1284, #1285,
+#1270, #1271, #1281; incident
+`.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`;
+.claude/LESSONS.md §2.16/§2.17/§5.7.
