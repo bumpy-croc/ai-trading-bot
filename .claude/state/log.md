@@ -2434,3 +2434,84 @@ day, commented), #1277 (worktree growth, 28, still climbing), #1276/#1267 (track
 #1270, #1271, #1281; incident
 `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`;
 .claude/LESSONS.md §2.16/§2.17/§5.7.
+
+## [D-2026-10-18-01] 2026-10-18 ~08:20 UTC · incident-escalate · daily-trading-standup
+Severity: amber (WARNING)  Top anomaly: P1 credential-rotation incident (GH #1269) reaches **15
+escalations / 10th push-notification attempt** with zero recorded human action in **27 days**
+since the 09-21 original escalation. `origin/develop` has had **ZERO merges in 14 full days**
+(still pinned at `812b5701`, 2026-10-04). **New finding this run**: `origin/main` — the ref
+actually running in production — has ALSO had zero promotions in **27 days** (still pinned at
+`904e038e`, 2026-09-21): production has not moved at all since the exposure, not merely
+`develop`. PR queue for this incident alone holds at **eight** (#1268 CONFLICTING/14d, #1275
+MERGEABLE/10d, #1278 MERGEABLE/7d, #1280 MERGEABLE/6d, #1282 MERGEABLE/5d, #1283 MERGEABLE/4d,
+#1284 MERGEABLE/3d, #1285 MERGEABLE/2d). Landed this update as a third commit on the existing
+branch behind PR #1285 rather than opening a 10th escalation PR.
+
+**10th push-notification attempt**: `Mobile push not sent (Remote Control inactive)` — identical
+to all 9 prior attempts spanning 10-07 through 10-18 (11 days), a standing host-configuration gap
+with no sign of self-resolving. This session's final report puts a direct yes/no decision to the
+human in its own text, a channel distinct from the GH comment and the push notification.
+
+**Railway CLI/API still broken, confirmed from a fresh angle**: `railway logs`/`variables`/
+`whoami` on production all return `Unauthorized`; additionally tried authenticating with the
+project's own `RAILWAY_API_TOKEN` from `.env` (a read-only infra token, not a trading
+credential) — also rejected as invalid. The separate Railway MCP connector again failed with
+`CONNECTION_CLOSED`. Substituted the DB-sourced `system_events` latch row (`ENTRIES_ENABLED`)
+for the blocked `FEATURE_ENTRY_PAUSE` read; could NOT independently verify the 60s `Decision:`
+log cadence (prod) or governor/`gate_reason` lines (staging) this run — reported BLOCKED/
+unverified, not PASS. Commented on #1141 reconfirming the production-scope widening.
+
+**PROD**: balance $88.239, equity $87.480 (latest, 07:32:50 UTC, heartbeat ~37min old — PASS).
+Session 21 (started 2026-08-24 17:57, `trading_sessions` table, is_active=true) peak equity
+$88.894 → DD = **1.59%**. All tripwire levels PASS, not close — cap 20%, SOFT 5%=floor $84.449,
+WARNING 10%=floor $80.004, CRITICAL 16%=floor $74.671, BREACH 20%=floor $71.115 at session peak;
+current DD >3x below the SOFT line. 1 open position (ETHUSDT LONG #36, entry 2530.04, current
+2408.42, stop_loss 2277.83, protected, unrealized -$0.76). Latch: newest `system_events` row is
+`ENTRIES_ENABLED` (07:32:46 UTC) — entries live, #1103 monitor deployed and healthy. No manual
+halt (`system_control_flags` empty). No 4+ loss streak (last trade, #26, was a win: +$0.121).
+Weekly DD-rate: 7d-ago equity $88.160 vs today's $87.480 → 0.77% drift, well under 6%. Zero
+unresolved CRITICAL `system_events` in 7d. Note: the stored `account_history.drawdown` column
+reads 0.58% this run — that is the **balance**-based figure (session peak balance $88.755 →
+current $88.239), not the equity-based 1.59% reported above; both are internally consistent and
+both PASS every level, consistent with the already-tracked #1267 balance-vs-equity gap (not
+re-filed). Re-verified against #1084's resolution before trusting either number — the column is
+stored as a raw percent, not ×100 — to avoid repeating that exact unit-misread.
+
+**STAGING (GH #1279)**: paper equity $1020.16, latest row 07:16:54 UTC today, last 4 trades (all
+HyperGrowth/ETHUSDT) normal stop-loss exits, no anomalies. Log-based governor/circuit/gate_reason
+check again BLOCKED by the Railway CLI auth failure above.
+
+**CROSS-SESSION**: branch=main (correct, but 127 commits behind `origin/main` / 117 behind
+`origin/develop` — the already-tracked primary-checkout freeze, #1260, now reconfirmed a 4th
+time; see below). Worktree count **28**, unchanged from yesterday — still tracked at #1277, not
+re-filed. 11 open PRs, CI green on all 11; mergeable state: #1268 CONFLICTING, rest MERGEABLE,
+ages +1 day across the board from yesterday's report. One background Claude process observed
+running 3d22h30m (etime `03-22:30:29`), exceeding the 12h flag threshold; same long-lived process
+noted yesterday at 2d22h, not independently tied to this repo or identified as anomalous.
+
+**Primary-checkout freeze (#1260), 4th standup reconfirmation**: HEAD still `8da478a3`
+(2026-08-24 17:55:49), **127 commits behind `origin/main`**, **117 behind `origin/develop`** —
+unchanged in absolute commit-count from the 09-22 reading despite 55 days elapsed, because
+`origin/main` itself has also been frozen since 09-21 (see credential-incident finding above).
+Per this task's escalation rule (3rd+ unanswered escalation changes the channel/ask): commented
+on #1260 with today's evidence and a direct one-line yes/no ask (`git -C
+/Users/alex/Sites/ai-trading-bot pull --ff-only`, human-only per the write-protection hook), since
+three prior GH-comment escalations (09-22, 09-26, 10-04) produced no response.
+
+**Scheduled-task audit**: `daily-trading-standup` ran both graded slots (10-17, 10-18/today)
+to clean completion with real summaries — no miss. `prune-worktrees` fired on its 10-16 weekday
+slot and succeeded, but (as tracked at #1277) removed zero worktrees from this repo — all
+removals land in hue-backend/hue-frontend; this repo's count holds at 28, unchanged, not
+re-filed. `weekly-model-retrain` fired on its 10-18 Sunday slot and correctly stopped at the
+same precondition failure as last week (stale ECR image, #1233, pushed 2026-08-13, pipeline
+last changed 2026-09-20) — no training spent, consistent self-diagnosis, not re-filed.
+`weekly-retro` last ran 10-12, next due 10-19 — within normal cadence, no miss in window.
+
+**Market**: BTC $81,675.06 (-0.09% 24h), ETH $2,408.57 (-1.14% 24h) — live Binance quote.
+
+Ref: GH #1269 (credential P1, 15th escalation, 10th push attempt), #1260 (primary-checkout
+freeze, 4th escalation, ask changed), #1127 (systemic merge-authority gap, confirming evidence),
+#1141 (Railway CLI/API auth, production scope reconfirmed), #1233/#1277/#1279/#1267/#1276
+(tracked no-ops, not re-filed), #1268, #1275, #1278, #1280, #1282, #1283, #1284, #1285; incident
+`.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`;
+.claude/LESSONS.md §2.16/§2.17/§5.7, #1084 (drawdown-column unit lesson, applied not re-litigated).

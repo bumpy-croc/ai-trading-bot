@@ -198,6 +198,16 @@ Treating this as capital-risk-adjacent rather than cosmetic.
                        confirms the trading engine itself remains alive and undamaged by the
                        CLI/MCP outage. Zero human comments recorded on #1269 across 14
                        escalations.
+2026-10-18 08:1x UTC — [escalation] 15th escalation, 10th push-notification attempt (failed
+                       identically — `Remote Control inactive`). `origin/develop` confirmed
+                       STILL pinned at `812b5701` via fresh `git fetch` — 14 full days, zero
+                       merges. New this run: `origin/main` (production's actual deployed ref)
+                       is itself still at `904e038e`, dated 2026-09-21 — the same calendar day
+                       as the credential exposure; production has not been promoted at all
+                       since the exposure occurred, 27 days. Landed as a third commit on the
+                       existing `standup/1016-credential-rotation-followup7` branch (PR #1285)
+                       rather than opening a 10th escalation PR. Trading engine itself
+                       independently confirmed healthy (DD 1.59%, all tripwires PASS).
 ```
 
 ## Actions taken
@@ -279,31 +289,43 @@ on #1269 (status update) and #1141 (Railway CLI auth now also failing for the pr
 project, plus the Railway MCP connector down with CONNECTION_CLOSED — a widening of that
 issue's previously staging-only scope). DB-side evidence confirms the trading engine itself
 remains healthy throughout.
+2026-10-18 (this update): 15th escalation, 10th push notification (failed identically —
+`Remote Control inactive`). Verified `origin/develop` STILL unchanged at `812b5701` — 14 full
+days with zero merges of any kind. New finding this run: `origin/main` — the ref production is
+actually running — has ALSO not moved since `904e038e` (2026-09-21), the same day as the
+credential exposure; this is the first run to state production's own promotion freeze (27 days)
+explicitly rather than only the develop freeze. Landed as a third commit on the existing
+`standup/1016-credential-rotation-followup7` branch (PR #1285), deliberately not opening a 10th
+escalation PR. Re-confirmed trading engine health independently (DD 1.59% via session-21 peak
+equity $88.894 → current $87.480, all tripwires PASS) and that this remains the correct read:
+no capital risk from this incident, only unrotated-secret and process-paralysis risk.
 
 ## Current state
 
-Credential is presumed still live and unrotated as of 2026-10-17, **26 days** after the original
-09-21 escalation and **13 full days** after this incident was formally opened, with **zero
-recorded human action across 14 escalations and 9 push-notification attempts — all 9 confirmed
-failed to deliver** (`Remote Control inactive`). `origin/develop` has had **zero merges in 13
-full days** (still pinned at `812b5701`, 2026-10-04). The PR queue for this single incident holds
-at **eight** unmerged PRs — #1268 (CONFLICTING, 13d), #1275 (MERGEABLE, 9d), #1278
-(MERGEABLE, 6d), #1280 (MERGEABLE, 5d), #1282 (MERGEABLE, 4d), #1283 (MERGEABLE, 3d), #1284
-(MERGEABLE, 2d), #1285 (MERGEABLE, 1d, updated by this entry) — this run deliberately did not add
-a ninth. CI is green on every one of them, including #1268 (whose only problem is a merge
-conflict against `develop`, not a test failure) — confirmed again this run that the freeze is
-100% an absent-human-action gap: nobody is merging PRs that have nothing blocking them. There is
-no evidence any of them has been reviewed by a human. Two independent human actions remain
-outstanding: (1) rotate the credential in Railway, (2) merge any one of the open PRs to land a
-durable record on `develop` — right now `develop` carries zero record of this P1, thirteen days
-after it was first opened. A third, lower-cost action would unblock the automated escalation path
-itself: enable/reconnect Remote Control on this host so push notifications can reach the human at
-all. The ask is unchanged from prior runs because it has never been answered. At 14 escalations
-and roughly 320x the charter's 1-hour P1 SLA, the automation has exhausted the actions available
-to it on this host; the two things that would move this are both human-only (rotate the
-credential, or merge a PR). This report's own final message puts a direct yes/no decision to the
-human in a channel distinct from the GH issue and the push notification, per the three-channel-
-change guidance for escalations past the third.
+Credential is presumed still live and unrotated as of 2026-10-18, **27 days** after the original
+09-21 escalation and **14 full days** after this incident was formally opened, with **zero
+recorded human action across 15 escalations and 10 push-notification attempts — all 10 confirmed
+failed to deliver** (`Remote Control inactive`). `origin/develop` has had **zero merges in 14
+full days** (still pinned at `812b5701`, 2026-10-04); `origin/main` (the ref actually deployed to
+production) has had **zero promotions in 27 days** (still pinned at `904e038e`, 2026-09-21) —
+production has not moved at all since the exposure. The PR queue for this single incident holds
+at **eight** unmerged PRs — #1268 (CONFLICTING, 14d), #1275 (MERGEABLE, 10d), #1278
+(MERGEABLE, 7d), #1280 (MERGEABLE, 6d), #1282 (MERGEABLE, 5d), #1283 (MERGEABLE, 4d), #1284
+(MERGEABLE, 3d), #1285 (MERGEABLE, 2d, updated by this entry) — this run again deliberately did
+not add a ninth. CI is green on every one of them, including #1268 (whose only problem is a merge
+conflict against `develop`, not a test failure) — the freeze remains 100% an absent-human-action
+gap: nobody is merging PRs that have nothing blocking them. There is no evidence any of them has
+been reviewed by a human. Two independent human actions remain outstanding: (1) rotate the
+credential in Railway, (2) merge any one of the open PRs to land a durable record on `develop`
+(or promote to `main` directly) — right now neither branch carries any record of this P1,
+fourteen days after it was first opened. A third, lower-cost action would unblock the automated
+escalation path itself: enable/reconnect Remote Control on this host so push notifications can
+reach the human at all. The ask is unchanged from prior runs because it has never been answered.
+At 15 escalations and roughly 648x the charter's 1-hour P1 SLA (27 days), the automation has
+exhausted the actions available to it on this host; the two things that would move this are both
+human-only (rotate the credential, or merge/promote a PR). This report's own final message puts
+a direct yes/no decision to the human in a channel distinct from the GH issue and the push
+notification, per the three-channel-change guidance for escalations past the third.
 
 ## Post-mortem (filled after close)
 
