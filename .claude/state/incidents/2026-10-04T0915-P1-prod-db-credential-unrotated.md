@@ -208,6 +208,25 @@ Treating this as capital-risk-adjacent rather than cosmetic.
                        existing `standup/1016-credential-rotation-followup7` branch (PR #1285)
                        rather than opening a 10th escalation PR. Trading engine itself
                        independently confirmed healthy (DD 1.59%, all tripwires PASS).
+2026-10-19 08:1x UTC — [escalation #16, 11th push-notification attempt] still unrotated — **28
+                       days** since 09-21, **15 full days** since the incident was opened.
+                       `origin/develop` reconfirmed STILL pinned at `812b5701` (fresh `git fetch`)
+                       — 15 full days, zero merges of any kind. `origin/main` (production's
+                       actual deployed ref) reconfirmed STILL at `904e038e` — 28 days, zero
+                       promotions. Landed as a fourth commit on the existing
+                       `standup/1016-credential-rotation-followup7` branch (PR #1285), still
+                       deliberately not opening a 9th escalation PR; PR queue for this incident
+                       unchanged at eight, ages +1 day each. **Correction to prior entries**: the
+                       charter's escalation SLA (`.claude/state/charter.md` §Escalation) is "1
+                       hour for P0/critical, 24 hours otherwise" — this incident's own frontmatter
+                       and GH label are both `P1`/`priority:p1`, not P0/critical, so the 24-hour
+                       bucket applies, not the 1-hour one. Prior entries (10-13 through 10-18)
+                       computed the SLA multiple against the 1-hour P0 bucket (e.g. "648x"); the
+                       correct figure against the actual 24-hour P1 SLA is **~28x** (28 days ÷ 1
+                       day). This does not change the underlying fact (16 escalations, zero human
+                       action), only the stated multiple — logged per the append-only correction
+                       norm rather than silently changed. Trading engine independently
+                       reconfirmed healthy this run (see standup report).
 ```
 
 ## Actions taken
@@ -299,30 +318,41 @@ explicitly rather than only the develop freeze. Landed as a third commit on the 
 escalation PR. Re-confirmed trading engine health independently (DD 1.59% via session-21 peak
 equity $88.894 → current $87.480, all tripwires PASS) and that this remains the correct read:
 no capital risk from this incident, only unrotated-secret and process-paralysis risk.
+2026-10-19 (this update): 16th escalation, 11th push notification attempt. Verified
+`origin/develop` STILL unchanged at `812b5701` — 15 full days with zero merges of any kind, and
+`origin/main` STILL unchanged at `904e038e` — 28 days with zero promotions. PR queue unchanged
+at eight, ages +1 day each; landed as a fourth commit on the existing
+`standup/1016-credential-rotation-followup7` branch (PR #1285), still not opening a ninth.
+**Correction**: this incident is `P1` (frontmatter + GH label), which the charter's escalation
+rule places in the 24-hour "otherwise" SLA bucket, not the 1-hour P0/critical bucket prior
+entries used — the correct overdue multiple is ~28x, not 648x; logged as a correction, not a
+silent edit. Trading engine reconfirmed healthy (DD ~1.4% via 60d peak $88.894, all tripwires
+PASS; see standup report for full detail).
 
 ## Current state
 
-Credential is presumed still live and unrotated as of 2026-10-18, **27 days** after the original
-09-21 escalation and **14 full days** after this incident was formally opened, with **zero
-recorded human action across 15 escalations and 10 push-notification attempts — all 10 confirmed
-failed to deliver** (`Remote Control inactive`). `origin/develop` has had **zero merges in 14
+Credential is presumed still live and unrotated as of 2026-10-19, **28 days** after the original
+09-21 escalation and **15 full days** after this incident was formally opened, with **zero
+recorded human action across 16 escalations and 11 push-notification attempts — all 11 confirmed
+failed to deliver** (`Remote Control inactive`). `origin/develop` has had **zero merges in 15
 full days** (still pinned at `812b5701`, 2026-10-04); `origin/main` (the ref actually deployed to
-production) has had **zero promotions in 27 days** (still pinned at `904e038e`, 2026-09-21) —
+production) has had **zero promotions in 28 days** (still pinned at `904e038e`, 2026-09-21) —
 production has not moved at all since the exposure. The PR queue for this single incident holds
-at **eight** unmerged PRs — #1268 (CONFLICTING, 14d), #1275 (MERGEABLE, 10d), #1278
-(MERGEABLE, 7d), #1280 (MERGEABLE, 6d), #1282 (MERGEABLE, 5d), #1283 (MERGEABLE, 4d), #1284
-(MERGEABLE, 3d), #1285 (MERGEABLE, 2d, updated by this entry) — this run again deliberately did
+at **eight** unmerged PRs — #1268 (CONFLICTING, 15d), #1275 (MERGEABLE, 11d), #1278
+(MERGEABLE, 8d), #1280 (MERGEABLE, 7d), #1282 (MERGEABLE, 6d), #1283 (MERGEABLE, 5d), #1284
+(MERGEABLE, 4d), #1285 (MERGEABLE, 3d, updated by this entry) — this run again deliberately did
 not add a ninth. CI is green on every one of them, including #1268 (whose only problem is a merge
 conflict against `develop`, not a test failure) — the freeze remains 100% an absent-human-action
 gap: nobody is merging PRs that have nothing blocking them. There is no evidence any of them has
 been reviewed by a human. Two independent human actions remain outstanding: (1) rotate the
 credential in Railway, (2) merge any one of the open PRs to land a durable record on `develop`
 (or promote to `main` directly) — right now neither branch carries any record of this P1,
-fourteen days after it was first opened. A third, lower-cost action would unblock the automated
+fifteen days after it was first opened. A third, lower-cost action would unblock the automated
 escalation path itself: enable/reconnect Remote Control on this host so push notifications can
 reach the human at all. The ask is unchanged from prior runs because it has never been answered.
-At 15 escalations and roughly 648x the charter's 1-hour P1 SLA (27 days), the automation has
-exhausted the actions available to it on this host; the two things that would move this are both
+At 16 escalations and roughly 28x the charter's 24-hour P1 SLA (28 days; see 10-19 correction
+above — prior runs' "648x" figure used the wrong 1-hour P0 bucket), the automation has exhausted
+the actions available to it on this host; the two things that would move this are both
 human-only (rotate the credential, or merge/promote a PR). This report's own final message puts
 a direct yes/no decision to the human in a channel distinct from the GH issue and the push
 notification, per the three-channel-change guidance for escalations past the third.

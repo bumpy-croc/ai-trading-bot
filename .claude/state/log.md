@@ -2515,3 +2515,86 @@ freeze, 4th escalation, ask changed), #1127 (systemic merge-authority gap, confi
 (tracked no-ops, not re-filed), #1268, #1275, #1278, #1280, #1282, #1283, #1284, #1285; incident
 `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`;
 .claude/LESSONS.md §2.16/§2.17/§5.7, #1084 (drawdown-column unit lesson, applied not re-litigated).
+
+## [D-2026-10-19-01] 2026-10-19 ~08:10 UTC · incident-escalate · daily-trading-standup
+Severity: amber (WARNING)  Top anomaly: P1 credential-rotation incident (GH #1269) reaches **16
+escalations / 11th push-notification attempt** with zero recorded human action in **28 days**
+since the 09-21 original escalation. `origin/develop` still pinned at `812b5701` (2026-10-04) —
+**ZERO merges in 15 full days**. `origin/main` (the ref actually running in production) still
+pinned at `904e038e` (2026-09-21) — **zero promotions in 28 days**. PR queue for this incident
+alone holds at **eight** (#1268 CONFLICTING/15d, #1275 MERGEABLE/11d, #1278 MERGEABLE/8d, #1280
+MERGEABLE/7d, #1282 MERGEABLE/6d, #1283 MERGEABLE/5d, #1284 MERGEABLE/4d, #1285 MERGEABLE/3d).
+Landed this update as a fourth commit on the existing branch behind PR #1285 rather than opening
+a 9th escalation PR.
+
+**Correction to prior entries' SLA multiple**: the charter (`.claude/state/charter.md`
+§Escalation) sets "1 hour for P0/critical, 24 hours otherwise." This incident is `P1` in both
+its own frontmatter and its GH label (`priority:p1`), not `P0/critical`, so the 24-hour bucket
+applies. Entries from 10-13 through 10-18 computed the overdue multiple against the 1-hour P0
+bucket (e.g. "648x"); the correct figure against the actual 24-hour P1 SLA is **~28x** (28 days
+overdue ÷ 1-day SLA). The underlying fact — 16 escalations, zero human action — is unchanged;
+only the stated multiple was wrong. Logged as a correction per the append-only norm, not a
+silent edit to prior entries. Detail and the same correction: incident file's 10-19 timeline/
+current-state entries.
+
+**11th push-notification attempt**: `Mobile push not sent (Remote Control inactive)` — identical
+to all 10 prior attempts spanning 10-07 through 10-19 (12 days), a standing host-configuration
+gap with no sign of self-resolving. This session's final report puts a direct yes/no decision to
+the human in its own text, a channel distinct from the GH comment and the push notification.
+
+**Railway CLI/API still broken, reconfirmed**: `railway logs`/`variables` on both production and
+staging all return `Unauthorized. Please run 'railway login' again.` — same failure mode as
+10-17/10-18, 3rd consecutive day in this exact state (GH #1141, not re-filed today — no new
+information). Substituted the DB-sourced `system_events` latch row (`ENTRIES_ENABLED`) for the
+blocked `FEATURE_ENTRY_PAUSE` read; could NOT independently verify the 60s `Decision:` log
+cadence (prod) or governor/`gate_reason` lines (staging) this run — reported BLOCKED/unverified,
+not PASS.
+
+**PROD**: balance $88.239, equity $87.620 (latest, 07:54:05 UTC, heartbeat ~15min old — PASS).
+60-day peak equity $88.894 → DD = **1.43%**. All tripwire levels PASS, not close — cap 20%, SOFT
+5%=floor $84.449, WARNING 10%=floor $80.004, CRITICAL 16%=floor $74.671, BREACH 20%=floor
+$71.115 at peak; current DD >3x below the SOFT line. 1 open position (ETHUSDT LONG #36, entry
+2530.04, current 2428.13, stop_loss 2277.83, protected, unrealized -$0.64). Latch: newest
+`system_events` row is `ENTRIES_ENABLED` (07:53:59 UTC) — entries live, #1103 monitor deployed
+and healthy, 5 consecutive hourly rows all `ENTRIES_ENABLED` (no stuck/repeating duration). No
+manual halt (`system_control_flags` not checked this run via Railway CLI, inferred healthy from
+latch row per #1095/#1096 convention). No 4+ loss streak (last trade, #26, was a win: +$0.121;
+only 1 loss in last 8 trades). Weekly DD-rate: 7d-ago equity $88.339 vs today's $87.620 → 0.81%
+drift, well under 6%. Zero unresolved CRITICAL `system_events` in 7d. Stored
+`account_history.drawdown` column again reads a static `0.58178923` across all of today's rows
+(balance-based figure per #1267/#1084, not re-litigated) — internally consistent with, and
+diverging from, the equity-based 1.43% above for the reason already tracked at #1267.
+
+**STAGING (GH #1279)**: paper equity $1020.16, latest row 07:27:16 UTC today, last 4 trades (all
+HyperGrowth/ETHUSDT) normal stop-loss exits, no anomalies — 7th consecutive clean day. Log-based
+governor/circuit/gate_reason check again BLOCKED by the Railway CLI auth failure above.
+
+**CROSS-SESSION**: branch=main (correct, but 127 commits behind `origin/main` / confirmed via
+fresh `git rev-list --left-right --count main...origin/main` → `0 127` — the already-tracked
+primary-checkout freeze, #1260, now reconfirmed a 5th time; unchanged because `origin/main`
+itself is also frozen since 09-21, see credential-incident finding above — not re-filed with a
+new comment today, no new information since 10-18's channel-changed escalation). Worktree count
+**28**, unchanged from yesterday — still tracked at #1277, not re-filed. 11 open PRs; mergeable
+state: #1268 CONFLICTING, rest MERGEABLE, ages +1 day across the board from yesterday. One
+background Claude process observed running 4d22h28m (etime `04-22:28:38`), exceeding the 12h
+flag threshold; same long-lived process noted on 10-17/10-18 at progressively longer elapsed
+times, not independently tied to this repo or identified as anomalous.
+
+**Scheduled-task audit**: `daily-trading-standup` fired this run (lastRunAt 08:07:48 UTC today)
+to clean completion — no miss. `prune-worktrees` last fired 10-16 (Friday) 22:10 UTC per its
+Mon-Fri cron — correctly not due again until tonight 10-19 23:10 UTC; no miss, weekend gap is
+expected (cron excludes Sat/Sun). `weekly-model-retrain` fired its 10-18 Sunday slot (already
+logged in the 10-18 entry) — next due 10-25, nothing new this run. `weekly-retro` last ran
+10-12, next due later today (10-19, nextRunAt 09:20 UTC) — within normal cadence, no miss.
+
+**Market**: BTC and ETH 24h-change figures unavailable this run — web search returned no dated
+quote for 2026-10-19 (results were stale, from 09-25 or earlier); not substituted with a stale
+number. Recommend sourcing from the exchange/Binance API directly on a future run if this recurs.
+
+Ref: GH #1269 (credential P1, 16th escalation, 11th push attempt, SLA-multiple correction),
+#1260 (primary-checkout freeze, 5th reconfirmation, not re-filed), #1127 (systemic
+merge-authority gap, consistent), #1141 (Railway CLI/API auth, 3rd consecutive day, not
+re-filed), #1233/#1277/#1279/#1267/#1276 (tracked no-ops, not re-filed), #1268, #1275, #1278,
+#1280, #1282, #1283, #1284, #1285; incident
+`.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`;
+.claude/LESSONS.md §2.16/§2.17/§5.7 (applied, not re-litigated).
