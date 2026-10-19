@@ -48,11 +48,20 @@ checklist line, a new tripwire.
    targets call bare `python`, which does not exist on this machine. **But first diff the installed
    artifact against `git show origin/develop:<source>`:** the installers read their source from the
    primary checkout, and on 2026-09-21 a false `DRIFT` would have downgraded the fixed hook (#1260).
+   It recurred 2026-10-19: `DRIFT` on `pre-push` while the installed file was byte-identical to
+   `origin/develop`'s. The diff decides, not the verdict; a false `DRIFT` gets no installer run.
    Earned: #1026
    closed unmerged 2026-07-21 after the 07-20 retro deliberately did not reproduce it; LESSONS §2.9.
-   **If that PR is still open: `git reset --hard origin/<its-branch>` and build this retro on top of
-   it** — this PR then supersedes it and merges whether or not the old one lands, instead of adding a
-   second stranded PR to the queue. And **if this is the second consecutive stranded retro PR, the
+   **Also look for a retro that never became a PR:** `git branch --list '*retro*'` and
+   `git worktree list | grep -i retro`. If one is ahead of `origin/develop`, `git reset --hard` onto
+   it and re-land it. The 2026-10-05 retro committed a full distillate and died on the push hook;
+   `gh pr list` showed nothing for 7 days (LESSONS §2.9 rule (j)).
+   **If that PR is still open: `git reset --hard origin/<its-branch>`, build this retro on top of it,
+   and push back to THAT branch (`git push origin HEAD:<its-branch>`) so the existing PR updates in
+   place** — retitle it to cover both windows, rewrite its body, and do not open a second PR.
+   Superseding with a new PR closes the one that showed its true age and opens one that shows zero
+   days, every Monday (LESSONS §2.9 rule (k): #1263 → #1266, 10-05 unpushed → #1281 → 10-19).
+   And **if this is the second consecutive stranded retro PR, the
    completion summary must lead with it, addressed to the human** — the retro cannot merge its own
    output, so an unmerged queue is invisible everywhere else (LESSONS §2.9 rule (d); #1047 sat
    `CLEAN` and unmerged for 14 days, taking §2.9/§2.10 off `develop` with it).
@@ -83,6 +92,10 @@ checklist line, a new tripwire.
    — that's the pipeline working as designed.
 3. **Agent failures** — stalls, wake-losses, kills, review collisions, fabricated/wrong relayed
    claims (`agent-fleet-health` findings; the 2026-07-05 ml-engineer session-integrity note).
+   **Count local-only work, not just PRs:**
+   `git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads | grep ahead`, plus
+   `pgrep -fl 'pytest|pre-push'` for pushes that never returned. On 2026-10-05 `gh pr list` showed
+   3 open PRs while 20 finished branches sat unpushed behind a hung Docker (LESSONS §3, #1273).
 4. **Prediction-vs-outcome record** — every dated prediction made in the log (deploy will be
    healthy, model will beat incumbent, "no midnight heroics" calls) vs what happened. Agents'
    calibration is a charter review item (monthly: "review calibration of each agent"); the
@@ -151,12 +164,27 @@ checklist line, a new tripwire.
      took 6h and finished). Record how late the report landed, not just whether it landed.
      Tasks launching within the same second are a catch-up batch, and a catch-up that fails gets no
      retry (LESSONS §2.15, 09-28 bullet).
+   - **Grade the ending by its last *event*, not its last text block.** Desktop-app sessions end
+     with an `mcp__ccd_turn__wrap_up` tool call whose `recap` carries the report; the last text
+     block before it is often a preamble ("PR #1285 opened. Now the issue comments."). A grader
+     reading the last text block scored 2 of 8 clean 10-12 → 10-19 standups as died-mid-task. A
+     transcript ending in `wrap_up` or a final text block is clean; one ending in a `tool_use` with
+     no result is not. And probe Docker with the backgrounded probe, never `timeout` — macOS has
+     none, and command-not-found reads as "hung" (LESSONS §3, 2026-10-19).
 7. **Model scoreboard** — new rows this week; stale `latest` claims.
 8. **Outstanding pre-merge asks from previous retros.** For every "requested change / blocking
    observation" this retro or a previous one left on someone else's PR, check the **merged tree**
    (`git ls-tree origin/main <path>`), never the review thread — a plain comment is not a gate and
    merges past one routinely. On 2026-09-13 PR #1130 merged with the `ETHUSDT/price/latest` symlink
    the 09-07 retro had asked it to drop; it is now in production (LESSONS §1.16 update, §2.11).
+
+## First action
+
+After creating the worktree, run `gh pr list --state open --search "retro in:title"`. If a retro PR
+is open, reset onto its branch and push there (input 0b; one retro PR per stranded chain). Otherwise
+push the branch and open a **draft PR** (header only) before reading any input; update it as you go. Probe Docker with a bound first (`docker info` can hang, LESSONS §3)
+and use `TEST_TYPE=unit git push` if it does. A push not back in 5 minutes is dead: stop and report.
+A retro with no remote artifact is invisible to every reader (LESSONS §2.9 rule (j)).
 
 ## The distillation pass
 
@@ -199,6 +227,11 @@ A log.md entry (kind `note`, via `decision-record`) listing, as diffs:
 - calibration verdicts per agent (over/under-confident, with the week's examples);
 - scheduled-task audit result (fired/missed);
 - process changes proposed to the Board (anything touching layer 1 → `risk-ratification`).
+
+**Every "Needs a human" line in the PR body and completion summary cites an open issue number.** An
+ask with no issue gets one filed in this run; do not close with "every finding maps to an existing
+issue" without checking each line. Earned: the prod DB credential rotation rode two retro PR bodies
+(#1263, #1266) for 13 days with no issue until #1269 (LESSONS §2.17, 2026-10-05 amendment).
 
 Zero diffs is a legitimate outcome for a quiet week — say so explicitly rather than
 manufacturing lessons.
