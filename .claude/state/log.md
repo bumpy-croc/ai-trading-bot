@@ -2288,3 +2288,94 @@ checked per line below). Comments added on #1273, #1127, #1083.
 6. #1260: pull the primary checkout (frozen since 08-24).
 Ref: #1266, #1268, #1270, #1271, #1275, #1278, #1280; #1269, #1273, #1274, #1276, #1277, #1279,
 #1083, #1127, #1233, #1260, #1099; LESSONS §2.9(j)/§2.15/§2.17.
+
+## [D-2026-10-19-02] 2026-10-19 ~10:40 · note · daemon(weekly-retro)
+Weekly retro, window 2026-10-12 → 10-19. Id is `-02` because the 10-19 standup already holds
+`[D-2026-10-19-01]` on PR #1285 (§2.17 amendment below: scan open branches before numbering).
+
+**Input 0c — nothing a retro writes is being read.** Primary checkout still `8da478a3`
+(2026-08-24): 127 commits behind `origin/main`, 117 behind `origin/develop`; `.claude/` differs by
+14 files / 2041 lines. `origin/main` itself has not moved since 09-21 (`904e038e`), so even a pull
+would load only through the 09-14 retro. Five retros of distillate (09-21, 09-28, 10-05, 10-12,
+this) are unloaded. #1260 open 28 days, 5 standup re-confirmations, no action.
+
+**Input 0b — third retro in one chain, second consecutive stranded.** 10-05 retro died on push (no
+PR); 10-12 retro landed as #1281, CI-green since 10-12, unmerged 7 days; this run reset onto
+#1281's branch and **pushed back to it** instead of opening a third PR (§2.9 rule (k)), retitled.
+Time-to-merge for #1281: not merged. Nothing at all has merged to `develop` since 10-04 (15 days).
+Every "Needs a human" line the 10-12 retro listed (#1269, #1127, #1273, #1233, #1279, #1260) is
+untouched. Install-required checks: merge driver OK, worktree shim OK, `install_git_hooks.py
+--check` printed `DRIFT` — **false**: installed `pre-push` is byte-identical to
+`origin/develop:.githooks/pre-push`; installer not run (second false DRIFT, §3).
+
+**Input 0 — AGENDA.** Empty on arrival, twelfth consecutive window; no open PR carried an item.
+Cleared. #1099 (restructure/retire the file) open and unowned 56 days.
+
+**Input 1 — log coverage.** `log.md` on `develop` ends 2026-09-28. Sixteen October entries exist,
+all on unmerged branches: 10-04 (#1268, CONFLICTING), 10-08 (#1275), 10-10/11 (#1278), 10-12
+(#1280 and #1282), 10-13 (#1282), 10-14 (#1283, #1284, #1285), 10-15 (#1284, #1285), 10-16 → 10-19
+(#1285). Eight of the twelve window slots are covered by one branch (#1285) since the standup
+stopped opening per-day PRs on 10-17.
+
+**Input 2 — incidents.** `2026-10-04T0915-P1-prod-db-credential-unrotated` (#1269) open day 28,
+16 escalations, zero human action; 11 of the 16 were `PushNotification` attempts that returned
+`Remote Control inactive` — nothing delivered (now #1286). The standup's 10-19 run self-corrected
+six days of SLA multiples computed against the P0 bucket for a P1 (648x → 28x), as an append-only
+correction entry; the norm held. `2026-08-24T1200-P1-close-only-4day-silent-halt` still
+`status: open` on `develop` (#1230, open 32 days, unowned).
+
+**Input 3 — agent failures.** None in the window: 8/8 standups, 5/5 prune slots (one as an 11.5h
+catch-up), 1/1 retrain, 1/1 retro ran to clean endings. Two standup transcripts (10-16, 10-18) end
+in a `wrap_up` call rather than a text block; a last-text-block grader marks them died-mid-task.
+Skill input 6 amended.
+
+**Input 4 — calibration.** `daily-trading-standup`: well-calibrated on trading state (every PASS
+verdict held; staging "apparent recovery, cause unconfirmed" on 10-13 was kept open through seven
+clean days per §2.16, correct); **over-stated on escalation arithmetic** for six days (SLA bucket)
+and on escalation *count* (undelivered pushes counted) — both now rules. Its 10-14 "catch-up batch,
+not a scheduler bug" read was hedged and correct (prune 10-13 slot and standup 10-14 slot fired in
+the same second, 09:38:23Z). `weekly-retro` (10-12): "not in force until merged and pulled" —
+correct, still not. `weekly-model-retrain`: BLOCKED self-diagnosis correct both weeks; fifth
+consecutive Sunday with no retrain since 09-20 (#1233 p1, unassigned 29 days).
+
+**Input 6 — scheduled tasks (registry 16, 4 enabled; 22 dirs, 6 unregistered = the 08-13
+retirements).** Slots enumerated, each matched to a transcript graded by its last event:
+- `daily-trading-standup` 09:07 daily: 8/8 (10-12 → 10-19). 10-14 fired 91 min late as a catch-up.
+- `prune-worktrees` Mon–Fri 23:10: 10-12, 10-14, 10-15, 10-16 on slot; **10-13 missed** and fired
+  at 10-14 09:38:23Z as a catch-up (same second as the standup). Effect: 0 removals in this repo
+  across all five runs ("every remaining worktree carries unmerged or unpushed work"); worktrees
+  22 → 28 this window, 29 with this retro's (#1277). 31 local branches ahead of their upstream, 62
+  with none (#1273).
+- `weekly-model-retrain` Sun 08:14: 1/1 (10-18), `BLOCKED-stale-training-image` (#1233).
+- `weekly-retro` Mon 10:21: 1/1 (10-12 → #1281); this run.
+- Docker responds (`docker info` rc=0 in <1s); the retro's own first probe said "hung" because
+  macOS has no `timeout` — §3 entry.
+
+**Input 7 / 5.** No `latest` symlink changed; no promotion row; no experiment concluded.
+
+**Diffs in this PR (#1281, retitled).** LESSONS: §2.9 rule (k) (push onto the open retro PR);
+§2.16 amendment 2026-10-19 (delivered-only escalation count, SLA bucket, prompt caps beat unmerged
+rules); §2.17 amendment 2026-10-19 (id collision, forward-copied entries conflict — reproduced with
+the merge driver); §3 (macOS `timeout`, second false `DRIFT`); §5.9 (DB-only monitoring under a dead
+Railway CLI; the balance-based drawdown column). `weekly-retro/SKILL.md`: 0b push-onto-branch, 0b
+drift recurrence, input 6 wrap_up grading, First action. AGENDA cleared. **Outside the PR:**
+`~/.claude/scheduled-tasks/daily-trading-standup/SKILL.md` amended directly (08-24 precedent) —
+SLA bucket by severity label, one record PR per incident, delivered-only escalation count, NN scan
+of open branches. Issues filed: #1286 (dead push channel, human-only), #1287 (record-queue collapse:
+merge #1285 first, one follow-up PR re-lands 10-04 → 10-13, close the rest). Neither has an owner;
+per §2.11 they are notes until dispatched.
+
+**Not in force until this PR merges, is promoted, and the primary checkout is pulled** (§2.9(i)).
+
+**Needs a human** (each with its issue):
+1. #1269 (day 28): rotate the prod DB credential. Then #1287: merge #1285 first.
+2. #1127 (p0, 49 days): `develop` at 0 merges in 15 days, `main` at 0 promotes in 28. Merge #1270,
+   #1271 and #1281.
+3. #1286: enable Remote Control or retire the push channel.
+4. #1260: `git -C /Users/alex/Sites/ai-trading-bot pull --ff-only` (28 days).
+5. #1233: rebuild the ECR training image (5 Sundays without a retrain).
+6. #1141: `railway login` (CLI/API dead for prod and staging since 10-15).
+7. #1273 / #1277: push the 31 local-only branches; the pruner will then act on this repo.
+Ref: #1281, #1285, #1268, #1275, #1278, #1280, #1282, #1283, #1284, #1270, #1271; #1269, #1286,
+#1287, #1127, #1260, #1233, #1141, #1273, #1277, #1279, #1267, #1230, #1099; LESSONS
+§2.9(k)/§2.16/§2.17/§3/§5.9.

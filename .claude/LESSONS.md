@@ -538,6 +538,21 @@ recovered them.
   is dead; stop and report, don't wait.
   Earned: 2026-10-05 retro run (died on push); recovered by the 2026-10-12 retro; #1273.
 
+- **Rule (k) — superseding a stranded retro PR resets its age to zero; push onto it instead.** The
+  09-21 retro (#1263) was closed and replaced by #1266; the 10-05 retro never pushed; the 10-12 retro
+  built on 10-05's commit as a new PR (#1281); this one found #1281 still open, 7 days green, and the
+  skill told it to reset onto the branch and open a third. Each supersede closes the PR that showed
+  its true age and opens one that shows zero days, so the queue never displays "retro distillate
+  unmerged since 10-05" — the human sees a fresh docs PR every Monday. Two consecutive stranded retros
+  is rule (d)'s escalation trigger, and the mechanism was hiding the count.
+  **Rule:** when the previous retro PR is open, build on its branch *and push back to that branch*
+  (`git push origin HEAD:<its-branch>`), retitle it to cover both windows, and rewrite its body. One
+  retro PR per stranded chain — the same shape as §2.17's one-record-PR-per-incident. The completion
+  summary states the chain length and the date of the oldest unmerged distillate. Open a new PR
+  only when there is none to push to.
+  Earned: #1263 → #1266 (09-21/09-28); 10-05 unpushed → #1281 → 2026-10-19 (this run pushed onto
+  #1281); 14 days of distillate behind one 7-day-old PR.
+
 ### 2.10 A monitoring run that writes nothing durable did not happen
 Between 2026-07-20 and 2026-07-27 the scheduled fleet ran ~25 times (`daily-trading-standup` 8/8
 days, `alert-monitor` 6-hourly, `staging-cohort-observer` 1–3x/day) and `log.md` gained **zero**
@@ -1027,6 +1042,38 @@ difference, because every instrument it owns measures detection.
   Earned: PM session `b3015dfb` 2026-09-14 → 09-20; promotes `3a73bfe5`/`e86ee267`/`9821a660`/
   `7831cb82`/#1231 (unrecorded); PR #1190; `origin/main..origin/develop` = 16 on 2026-09-21.
 
+- **Amendment 2026-10-19 — an escalation count that includes undelivered sends, a multiple computed
+  against the wrong SLA bucket, and the control that actually changed behaviour.** Week 10-12 → 10-19
+  of #1269 (credential P1, day 21 → 28):
+  - **Eleven consecutive `PushNotification` attempts (10-07 → 10-19) returned `Mobile push not sent
+    (Remote Control inactive)`, and each was counted as an escalation** ("16 escalations / 11th
+    push-notification attempt"). Nothing reached a phone. No issue existed for the dead channel; it
+    was a sub-clause of the daily comment. The task prompt's "change the channel" rule was being
+    satisfied by a channel that had already failed ten times.
+    **Rule:** an escalation is a *delivered* message. A send that returns an error is a finding about
+    the channel, not an escalation: file the channel once (its own issue, labelled for the human —
+    #1286), count only delivered sends, and stop retrying a channel that has failed three times in a
+    row until its issue closes.
+  - **Six entries (10-13 → 10-18) reported the incident at several hundred times SLA ("648x") by
+    dividing by the 1-hour P0 bucket.** The incident is P1 in its own frontmatter and label; the
+    charter gives P1 24 hours, so the true multiple was 22-28x. The 10-19 run caught and corrected it
+    (append-only, as a correction entry — the norm held). The number went to the human six times,
+    24x inflated; an overstated multiple reads as noise and trains the reader to discount the next.
+    **Rule:** derive the multiple from the bucket the incident's *own* severity label names, and
+    print the bucket beside it ("28x the 24h P1 SLA"). A severity label is an input to arithmetic,
+    not decoration.
+  - **What finally stopped the per-day PRs was a number in the task prompt, not the rule.** §2.17's
+    2026-10-12 amendment ("one record PR per incident") sat on unmerged #1281 all week, and the
+    primary checkout could not have loaded it anyway (§3, #1260). On 10-17 the standup stopped opening
+    PRs and committed onto #1285's branch instead, citing the prompt's own line — "worktree list |
+    wc -l — if >6, flag" — after counting 28. A cap it could read beat a rule it could not.
+    **Rule:** a rule that must bind a scheduled task *this week* goes into the task prompt as a
+    number or a step (the 2026-08-24 precedent, §2.10), with the LESSONS entry as the explanation. A
+    LESSONS-only rule binds nothing until merged, promoted and pulled. The 10-19 retro amended the
+    standup prompt directly for all three rules above.
+  Earned: #1269 comments 10-13 → 10-19; PR #1285 commits 10-16 → 10-19 (one branch, four days);
+  #1286; charter §Escalation ("1 hour for P0/critical, 24 hours otherwise").
+
 ### 2.17 A record on an unmerged branch is not in layer 2 — and layer-2 readers must look in the queue
 The 2026-08-31 retro closed §2.10 by routing P0/P1 findings through `incident-response` §5: incident
 file **plus** GH issue **plus** `log.md` append. The standup complied exactly, on day 5. Every one of
@@ -1108,6 +1155,31 @@ right things in the right places, and the writes never reached the branch anyone
   a comment on the incident issue) and does not open another. The issue is the per-day record; the
   `log.md` line is written once, when the PR can actually land.
   Earned: #1268, #1275, #1278, #1280; #1269; #1127.
+
+- **Amendment 2026-10-19 — the record queue now collides with itself: duplicate ids and
+  forward-copied entries.** With `log.md` on `develop` ending 2026-09-28 and sixteen October entries
+  spread over eight unmerged branches, two defects appeared that no single run could see:
+  - **`[D-2026-10-12-01]` is two different records.** The 10-12 standup (#1280, #1282) and the 10-12
+    retro (#1281) each numbered from `develop`'s count, where neither existed. `decision-record` says
+    NN is "assigned at append time" — but append time is branch time, and a branch does not see its
+    siblings. Reproduced with `tools/merge_append_only.py`: #1280 into #1281 merges **clean** and
+    lands both blocks under the same id, the 10:50 retro entry ordered *before* the 08:20 standup
+    entry (the driver orders each side by its first block).
+  - **The 10-14 entry is in three PRs, the 10-12 and 10-15 entries in two each, and the copies are
+    not byte-identical** (a trailing blank line; #1283 vs #1284). Each standup copied the previous
+    day's unmerged entry into its own branch so `develop` "would have it". Reproduced: #1284 into
+    #1285 **conflicts**, #1283 into #1284 **conflicts** — the near-copies defeat the driver's
+    identical-block collapse, so the first merge strands every later one. The incident file (175
+    lines on #1280, 366 on #1285) is edited in place and is not append-only-merged, so it conflicts
+    on its own as well. #1268 has been `CONFLICTING` since 10-05 on that file.
+  **Rule:** before assigning NN, scan every open PR branch for the date, not just `develop`:
+  `git fetch origin && git grep -h '^## \[D-<date>-' $(git branch -r --format='%(refname)') -- .claude/state/log.md | sort -u`,
+  then max+1. **Rule:** a record PR carries only the entries its own run wrote; never copy a sibling
+  PR's unmerged entry forward. **Rule:** when a per-day queue is folded into one branch (as 10-17
+  did, correctly), the folding run closes the PRs it superseded in the same run — eight CI-green PRs
+  for one incident is the §2.11 note-to-self at PR scale. The queue's resolution is tracked in #1287.
+  Earned: #1280/#1281/#1282 (id collision); #1283/#1284/#1285 (10-14 x3); #1284/#1285 (10-15 x2);
+  #1268 `CONFLICTING` since 10-05; driver runs 2026-10-19.
 
 ---
 
@@ -1517,6 +1589,18 @@ right things in the right places, and the writes never reached the branch anyone
   Earned: 2026-10-04 parallel fix burst; #1269 comment 2026-10-05 08:28Z; structural fix tracked in
   #1273.
 
+- **macOS has no `timeout(1)`; `timeout 10 docker info` fails with "command not found" and reads
+  as "Docker hung".** The 2026-10-19 retro's first Docker probe reported `NOT responsive / hung`; the
+  bounded background probe (above) returned `rc=0` in under a second. Trusting the first read would
+  have pushed under `TEST_TYPE=unit` for no reason and re-escalated a resolved #1273 hang. Use the
+  backgrounded probe (`docker info >/dev/null 2>&1 & p=$!; sleep 10; kill -0 $p`) or `gtimeout` from
+  coreutils; never bare `timeout`. Same morning, `tools/install_git_hooks.py --check` printed `DRIFT`
+  for `pre-push` while the installed file was byte-identical to `origin/develop:.githooks/pre-push`
+  — the checker compares against the frozen primary's source (above, #1260). Second false `DRIFT`
+  (09-21, 10-19): diff against `origin/develop` before believing it, and never run the installer on
+  a false one.
+  Earned: 2026-10-19 retro run; #1273, #1260.
+
 ---
 
 ## 4. Patterns that worked for risk-critical (money-moving) changes
@@ -1702,3 +1786,24 @@ drawdown guard reads realized balance, so the guard would also stay silent on th
   need, not the absence of the alarm you have). Whether 20% per trade is intended at this balance
   is a risk-officer / Board call (#1272); reporting the number is not optional either way.
   Earned: prod position id 33, 2026-09-28 → 10-05; #1272, #1267.
+
+### 5.9 Railway CLI/API dead: what the DB alone proves, what it cannot, and the drawdown column
+From 2026-10-15 the Railway CLI returned `Unauthorized. Please run 'railway login' again.` for every
+call; on 10-17 that widened from staging (#1141) to production, the project's own `RAILWAY_API_TOKEN`
+was rejected, and the Railway MCP connector failed `CONNECTION_CLOSED`. For five standups the only
+prod read was Postgres. What those runs did, which is the rule:
+- **Latch / entries:** the `system_events` rows at the newest timestamp — `ENTRIES_ENABLED` hourly =
+  loop alive and able to trade; any `*_LATCHED` = P0; no row in 2h = loop thread dead (§5.7). This
+  stands in for the `FEATURE_ENTRY_PAUSE` read when `railway variables` is unavailable, because the
+  monitor's own message asserts "no entry pause in force".
+- **Liveness:** `account_history` newest-row age (hourly heartbeat; >2h = FAIL).
+- **NOT provable from the DB:** the 60s `Decision:` cadence (prod), governor / `gate_reason` /
+  circuit lines (staging), `system_control_flags` via the CLI. Report each as **BLOCKED**, never as a
+  PASS inferred from silence. The 10-15 → 10-19 runs did exactly this; keep doing it.
+- **`account_history.drawdown` is the BALANCE-based figure (#1267; unit note #1084) and stays flat
+  between closed trades.** It read exactly `0.58178923` for 87+ hours while equity moved 1.3-1.8%.
+  Four consecutive standups (10-16 → 10-19) re-derived this one day at a time ("frozen", "diverges
+  2x", "that is the balance figure", "not re-litigated"). A flat column while equity moves is
+  expected and is neither a liveness nor a guard signal: compute equity drawdown from the session
+  peak yourself, print both with their basis, and check the unit against #1084 before comparing.
+Earned: #1141 (10-15 → 10-19, widened to production 10-17); standups 10-16 → 10-19 on #1267.

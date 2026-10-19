@@ -48,15 +48,20 @@ checklist line, a new tripwire.
    targets call bare `python`, which does not exist on this machine. **But first diff the installed
    artifact against `git show origin/develop:<source>`:** the installers read their source from the
    primary checkout, and on 2026-09-21 a false `DRIFT` would have downgraded the fixed hook (#1260).
+   It recurred 2026-10-19: `DRIFT` on `pre-push` while the installed file was byte-identical to
+   `origin/develop`'s. The diff decides, not the verdict; a false `DRIFT` gets no installer run.
    Earned: #1026
    closed unmerged 2026-07-21 after the 07-20 retro deliberately did not reproduce it; LESSONS §2.9.
    **Also look for a retro that never became a PR:** `git branch --list '*retro*'` and
    `git worktree list | grep -i retro`. If one is ahead of `origin/develop`, `git reset --hard` onto
    it and re-land it. The 2026-10-05 retro committed a full distillate and died on the push hook;
    `gh pr list` showed nothing for 7 days (LESSONS §2.9 rule (j)).
-   **If that PR is still open: `git reset --hard origin/<its-branch>` and build this retro on top of
-   it** — this PR then supersedes it and merges whether or not the old one lands, instead of adding a
-   second stranded PR to the queue. And **if this is the second consecutive stranded retro PR, the
+   **If that PR is still open: `git reset --hard origin/<its-branch>`, build this retro on top of it,
+   and push back to THAT branch (`git push origin HEAD:<its-branch>`) so the existing PR updates in
+   place** — retitle it to cover both windows, rewrite its body, and do not open a second PR.
+   Superseding with a new PR closes the one that showed its true age and opens one that shows zero
+   days, every Monday (LESSONS §2.9 rule (k): #1263 → #1266, 10-05 unpushed → #1281 → 10-19).
+   And **if this is the second consecutive stranded retro PR, the
    completion summary must lead with it, addressed to the human** — the retro cannot merge its own
    output, so an unmerged queue is invisible everywhere else (LESSONS §2.9 rule (d); #1047 sat
    `CLEAN` and unmerged for 14 days, taking §2.9/§2.10 off `develop` with it).
@@ -159,6 +164,13 @@ checklist line, a new tripwire.
      took 6h and finished). Record how late the report landed, not just whether it landed.
      Tasks launching within the same second are a catch-up batch, and a catch-up that fails gets no
      retry (LESSONS §2.15, 09-28 bullet).
+   - **Grade the ending by its last *event*, not its last text block.** Desktop-app sessions end
+     with an `mcp__ccd_turn__wrap_up` tool call whose `recap` carries the report; the last text
+     block before it is often a preamble ("PR #1285 opened. Now the issue comments."). A grader
+     reading the last text block scored 2 of 8 clean 10-12 → 10-19 standups as died-mid-task. A
+     transcript ending in `wrap_up` or a final text block is clean; one ending in a `tool_use` with
+     no result is not. And probe Docker with the backgrounded probe, never `timeout` — macOS has
+     none, and command-not-found reads as "hung" (LESSONS §3, 2026-10-19).
 7. **Model scoreboard** — new rows this week; stale `latest` claims.
 8. **Outstanding pre-merge asks from previous retros.** For every "requested change / blocking
    observation" this retro or a previous one left on someone else's PR, check the **merged tree**
@@ -168,8 +180,9 @@ checklist line, a new tripwire.
 
 ## First action
 
-After creating the worktree, push the branch and open a **draft PR** (header only) before reading
-any input; update it as you go. Probe Docker with a bound first (`docker info` can hang, LESSONS §3)
+After creating the worktree, run `gh pr list --state open --search "retro in:title"`. If a retro PR
+is open, reset onto its branch and push there (input 0b; one retro PR per stranded chain). Otherwise
+push the branch and open a **draft PR** (header only) before reading any input; update it as you go. Probe Docker with a bound first (`docker info` can hang, LESSONS §3)
 and use `TEST_TYPE=unit git push` if it does. A push not back in 5 minutes is dead: stop and report.
 A retro with no remote artifact is invisible to every reader (LESSONS §2.9 rule (j)).
 
