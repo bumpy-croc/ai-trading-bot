@@ -329,33 +329,44 @@ entries used — the correct overdue multiple is ~28x, not 648x; logged as a cor
 silent edit. Trading engine reconfirmed healthy (DD ~1.4% via 60d peak $88.894, all tripwires
 PASS; see standup report for full detail).
 
+2026-10-20 (this update): 17th escalation. Did NOT attempt a 12th push notification — the
+channel is already tracked as dead at #1286 (11 consecutive `Remote Control inactive` failures,
+opened 2026-10-19); per the standing guidance, retries are paused until that issue closes.
+Verified `origin/develop` STILL unchanged at `812b5701` — 16 full days with zero merges of any
+kind, and `origin/main` STILL unchanged at `904e038e` — 29 days with zero promotions. PR queue
+unchanged at eight, ages +1 day each; landed as a fifth commit on the existing
+`standup/1016-credential-rotation-followup7` branch (PR #1285), still not opening a ninth. Local
+primary-checkout `main` reconfirmed 127 commits behind `origin/main` via
+`git rev-list --left-right --count main...origin/main` → `0 127` (#1260, unchanged, not
+re-filed). Railway CLI auth still broken for both `logs` and `variables` on production and for
+`logs` on staging (#1141, unchanged, not re-filed). Trading engine reconfirmed healthy (DD
+~1.67% via peak equity $88.894 → current $87.412, all tripwires PASS; see standup report for
+full detail).
+
 ## Current state
 
-Credential is presumed still live and unrotated as of 2026-10-19, **28 days** after the original
-09-21 escalation and **15 full days** after this incident was formally opened, with **zero
-recorded human action across 16 escalations and 11 push-notification attempts — all 11 confirmed
-failed to deliver** (`Remote Control inactive`). `origin/develop` has had **zero merges in 15
-full days** (still pinned at `812b5701`, 2026-10-04); `origin/main` (the ref actually deployed to
-production) has had **zero promotions in 28 days** (still pinned at `904e038e`, 2026-09-21) —
-production has not moved at all since the exposure. The PR queue for this single incident holds
-at **eight** unmerged PRs — #1268 (CONFLICTING, 15d), #1275 (MERGEABLE, 11d), #1278
-(MERGEABLE, 8d), #1280 (MERGEABLE, 7d), #1282 (MERGEABLE, 6d), #1283 (MERGEABLE, 5d), #1284
-(MERGEABLE, 4d), #1285 (MERGEABLE, 3d, updated by this entry) — this run again deliberately did
-not add a ninth. CI is green on every one of them, including #1268 (whose only problem is a merge
-conflict against `develop`, not a test failure) — the freeze remains 100% an absent-human-action
-gap: nobody is merging PRs that have nothing blocking them. There is no evidence any of them has
-been reviewed by a human. Two independent human actions remain outstanding: (1) rotate the
-credential in Railway, (2) merge any one of the open PRs to land a durable record on `develop`
-(or promote to `main` directly) — right now neither branch carries any record of this P1,
-fifteen days after it was first opened. A third, lower-cost action would unblock the automated
-escalation path itself: enable/reconnect Remote Control on this host so push notifications can
-reach the human at all. The ask is unchanged from prior runs because it has never been answered.
-At 16 escalations and roughly 28x the charter's 24-hour P1 SLA (28 days; see 10-19 correction
-above — prior runs' "648x" figure used the wrong 1-hour P0 bucket), the automation has exhausted
-the actions available to it on this host; the two things that would move this are both
-human-only (rotate the credential, or merge/promote a PR). This report's own final message puts
-a direct yes/no decision to the human in a channel distinct from the GH issue and the push
-notification, per the three-channel-change guidance for escalations past the third.
+Credential is presumed still live and unrotated as of 2026-10-20, **29 days** after the original
+09-21 escalation and **16 full days** after this incident was formally opened, with **zero
+recorded human action across 17 escalations**. Push-notification attempts stopped at 11 (all
+failed, `Remote Control inactive`) and are now paused pending #1286 (the dead-channel tracking
+issue) rather than repeated a 12th time with no reason to expect a different result.
+`origin/develop` has had **zero merges in 16 full days** (still pinned at `812b5701`,
+2026-10-04); `origin/main` (the ref actually deployed to production) has had **zero promotions
+in 29 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
+the exposure. The PR queue for this single incident holds at **eight** unmerged PRs — #1268
+(CONFLICTING, 16d), #1275 (MERGEABLE, 12d), #1278 (MERGEABLE, 9d), #1280 (MERGEABLE, 8d), #1282
+(MERGEABLE, 7d), #1283 (MERGEABLE, 6d), #1284 (MERGEABLE, 5d), #1285 (MERGEABLE, 4d, updated by
+this entry) — this run again deliberately did not add a ninth. CI remains green on every one of
+them, including #1268 (whose only problem is a merge conflict against `develop`, not a test
+failure) — the freeze remains 100% an absent-human-action gap. Two independent human actions
+remain outstanding: (1) rotate the credential in Railway, (2) merge any one of the open PRs to
+land a durable record on `develop` (or promote to `main` directly) — right now neither branch
+carries any record of this P1, sixteen days after it was first opened. At 17 escalations and
+roughly 29x the charter's 24-hour P1 SLA, the automation has exhausted the actions available to
+it via the channels it has: the GH-comment channel has drawn zero response in 17 attempts, and
+the push-notification channel is confirmed dead. This report's own final message changes channel
+again — a direct yes/no decision put to the human in the chat itself, the first channel change
+since the 10-18 GH-comment escalation.
 
 ## Post-mortem (filled after close)
 

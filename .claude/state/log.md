@@ -2598,3 +2598,80 @@ re-filed), #1233/#1277/#1279/#1267/#1276 (tracked no-ops, not re-filed), #1268, 
 #1280, #1282, #1283, #1284, #1285; incident
 `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`;
 .claude/LESSONS.md §2.16/§2.17/§5.7 (applied, not re-litigated).
+
+---
+
+## 2026-10-20 08:07 · standup · daily-trading-standup
+**PROD**: balance $88.239 (flat vs 7d-ago), equity $87.412 (latest row 07:09:23 UTC, heartbeat
+~1h old — PASS). Peak equity $88.894 (unchanged from prior runs) → DD = **1.67%**. All tripwire
+levels PASS, not close — cap 20% (source: fresh `git show origin/main:src/config/risk-limits.json`
+→ cap=0.20, warn_frac=0.50, crit_frac=0.80); at this peak: SOFT 5%=floor $84.449, WARNING
+10%=floor $80.005, CRITICAL 16%=floor $74.671, BREACH 20%=floor $71.115 — current DD is <3x below
+the SOFT line. 1 open position (ETHUSDT LONG #36, entry $2530.04, current $2385.25, stop_loss
+$2277.83, protected, unrealized -$0.91). Latch: newest `system_events` rows are `ENTRIES_ENABLED`
+(latest 07:09:20 UTC, 5 consecutive hourly rows, no stuck/repeating duration — #1103 mechanism
+live since 2026-08-24) — entries possible, no latch. FEATURE_ENTRY_PAUSE inferred false from that
+same engine-reported state; direct `railway variables` read returned nothing (see Railway-auth
+finding below) so this is a substitution, not independent confirmation. Zero unresolved CRITICAL
+`system_events` in 7d. No 4+ loss streak (most recent trade #26 was a win, +$0.121; 1 loss in last
+6). Weekly DD-rate: balance flat vs 7d-ago ($88.239 both), well under 6%. `Decision:`-cadence and
+`Max-drawdown`-guard log lines could not be checked directly — `railway logs` unauthorized for
+production; DB heartbeat/ENTRIES_ENABLED cadence used as the best available proxy for loop
+liveness, consistent with a live, undegraded loop. Stored `account_history.drawdown` column again
+reads a static `0.58178923` across today's rows — balance-based, not the equity-based percentage
+above (already tracked at #1267/#1084, not re-litigated).
+
+**STAGING**: paper equity $1020.16 (latest row 07:40:48 UTC today), last 4 trades (all LONG,
+stop-loss exits): 1 loss (-$4.96), 3 wins, no anomalies. Governor/circuit/gate_reason log check
+BLOCKED — `railway logs` unauthorized for staging too (same failure as production, below).
+
+**RAILWAY CLI/API AUTH**: `railway variables` returns nothing and `railway logs` returns
+`Unauthorized. Please run railway login again.` for both production and staging; `railway whoami`
+and `railway status` both also return `Unauthorized`. Same root cause as #1141, now blocking
+Decision-cadence, Max-drawdown-guard-line, direct FEATURE_ENTRY_PAUSE, and staging gate_reason
+checks. Not re-filed — referenced only.
+
+**CREDENTIAL-ROTATION INCIDENT (#1269)**: 17th escalation, 29 days since the 09-21 original
+escalation, 16 full days since the incident was opened, zero recorded human action throughout.
+Did not attempt a 12th push notification — the channel is confirmed dead and tracked at #1286
+(opened 2026-10-19); paused per standing guidance until that issue closes. `origin/develop` still
+pinned at `812b5701` (16 full days, zero merges); `origin/main` (the ref actually deployed to
+production) still pinned at `904e038e` (29 days, zero promotions) — production has not moved
+since the exposure. PR queue unchanged at eight (#1268 CONFLICTING/16d, #1275/12d, #1278/9d,
+#1280/8d, #1282/7d, #1283/6d, #1284/5d, #1285/4d) — landed today's update as a fifth commit on
+the existing `standup/1016-credential-rotation-followup7` branch (PR #1285), not a ninth PR. This
+finding's escalation channel is changing in this run's final message: a direct yes/no decision is
+put to the human in chat itself, since both the GH-comment channel (17 escalations, zero
+response) and the push-notification channel (dead, #1286) are exhausted.
+
+**CROSS-SESSION**: branch=main (correct). Local primary-checkout `main` reconfirmed 127 commits
+behind `origin/main` (`git rev-list --left-right --count main...origin/main` → `0 127`) —
+already tracked at #1260 (frozen since 2026-08-24), unchanged, not re-filed. Worktree count
+**28**, unchanged from yesterday — still tracked at #1277, not re-filed. 11 open PRs; mergeable
+state unchanged (#1268 CONFLICTING, rest MERGEABLE). One background Claude process observed
+running **5d22h27m** (etime `05-22:27:49`), exceeding the 12h flag threshold — same long-lived
+process noted on 10-17 through 10-19 at progressively longer elapsed times (+1 day each day),
+still not independently tied to this repo or identified as anomalous.
+
+**Scheduled-task audit**: `daily-trading-standup` — `list_task_runs` confirms every run from
+10-11 through 10-20 (10 consecutive days) shows `status: succeeded` with no gaps; no missed slot
+in this window. `prune-worktrees` last fired 10-19 22:11 UTC per its Mon-Fri cron (on schedule)
+but remains ineffective for this repo per #1277's tracked history — worktree count unchanged
+again today. `weekly-model-retrain` last fired its 10-18 Sunday slot (on schedule, next due
+10-25). `weekly-retro` last fired 10-19 Monday (on schedule, next due 10-26). Did not
+deep-audit the weekly tasks' transcripts beyond lastRunAt-vs-cron consistency this run
+(acknowledged limitation, per §2.15 the daily task's own run-list is the stronger check and was
+done).
+
+**Market**: web search again returned no reliable dated BTC/ETH quote for today (results ranged
+$61.8k–$95k for BTC and $2.45k–$4.65k for ETH across clearly different, undated snapshots) — 2nd
+consecutive day this has failed; not substituting a guessed number. Recommend wiring a direct
+exchange/CoinGecko API call for this check rather than web search.
+
+Ref: GH #1269 (credential P1, 17th escalation, channel-changed to direct human ask in chat),
+#1286 (dead push-notification channel, paused not retried), #1260 (primary-checkout freeze,
+unchanged, not re-filed), #1141 (Railway CLI/API auth, unchanged, not re-filed), #1277 (worktree
+overrun, unchanged, not re-filed), #1267/#1084 (stored drawdown-column divergence, not
+re-litigated), #1268/#1275/#1278/#1280/#1282/#1283/#1284/#1285; incident
+`.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`;
+.claude/LESSONS.md §2.16/§2.17/§5.7 (applied, not re-litigated).
