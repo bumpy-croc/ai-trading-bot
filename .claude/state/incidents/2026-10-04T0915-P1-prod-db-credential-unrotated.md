@@ -227,6 +227,27 @@ Treating this as capital-risk-adjacent rather than cosmetic.
                        action), only the stated multiple — logged per the append-only correction
                        norm rather than silently changed. Trading engine independently
                        reconfirmed healthy this run (see standup report).
+2026-10-20 ~08:1x UTC  — [escalation #17] still unrotated — **29 days** since 09-21, **16 full
+                       days** since the incident was opened. `origin/develop` STILL pinned at
+                       `812b5701` — 16 full days, zero merges. `origin/main` STILL at `904e038e`
+                       — 29 days, zero promotions. Did not attempt a 12th push notification —
+                       channel confirmed dead at #1286, paused. Landed as a fifth commit on
+                       `standup/1016-credential-rotation-followup7` (PR #1285), PR queue for this
+                       incident unchanged at eight. Trading engine reconfirmed healthy (DD
+                       ~1.67%, all tripwires PASS).
+2026-10-21 ~08:2x UTC  — [escalation #18] still unrotated — **30 days** since 09-21, **17 full
+                       days** since the incident was opened. `origin/develop` reconfirmed STILL
+                       pinned at `812b5701` — 17 full days, zero merges of any kind. `origin/main`
+                       (production's actual deployed ref) reconfirmed STILL at `904e038e` — 30
+                       days, zero promotions. Did not attempt a 12th push notification — channel
+                       confirmed dead at #1286, paused per standing guidance. **Process fix landed
+                       this run**: closed the seven superseded daily-escalation PRs (#1268, #1275,
+                       #1278, #1280, #1282, #1283, #1284) as duplicates of #1285 — the first
+                       cleanup action since the PR-per-day pattern began on 10-04; this incident's
+                       open-PR count drops from eight to one. Landed as a sixth commit on the
+                       existing `standup/1016-credential-rotation-followup7` branch (PR #1285).
+                       Trading engine independently reconfirmed healthy this run (DD 1.34%, all
+                       tripwires PASS; see standup report for full detail).
 ```
 
 ## Actions taken
@@ -342,31 +363,37 @@ re-filed). Railway CLI auth still broken for both `logs` and `variables` on prod
 `logs` on staging (#1141, unchanged, not re-filed). Trading engine reconfirmed healthy (DD
 ~1.67% via peak equity $88.894 → current $87.412, all tripwires PASS; see standup report for
 full detail).
+2026-10-21 (this update): 18th escalation. Did not attempt a 12th push notification (channel
+dead, #1286, paused). Verified `origin/develop` STILL unchanged at `812b5701` — 17 full days,
+zero merges; `origin/main` STILL at `904e038e` — 30 days, zero promotions. **Closed PRs #1268,
+#1275, #1278, #1280, #1282, #1283, #1284** as duplicates superseded by #1285 — the consolidation
+the protocol has called for since 10-17 but that no run had actually executed; this incident's
+PR queue is now one (#1285), not eight. Landed this update as the sixth commit on that branch.
+Trading engine reconfirmed healthy (DD 1.34%, all tripwires PASS).
 
 ## Current state
 
-Credential is presumed still live and unrotated as of 2026-10-20, **29 days** after the original
-09-21 escalation and **16 full days** after this incident was formally opened, with **zero
-recorded human action across 17 escalations**. Push-notification attempts stopped at 11 (all
-failed, `Remote Control inactive`) and are now paused pending #1286 (the dead-channel tracking
-issue) rather than repeated a 12th time with no reason to expect a different result.
-`origin/develop` has had **zero merges in 16 full days** (still pinned at `812b5701`,
+Credential is presumed still live and unrotated as of 2026-10-21, **30 days** after the original
+09-21 escalation and **17 full days** after this incident was formally opened, with **zero
+recorded human action across 18 escalations**. Push-notification attempts stopped at 11 (all
+failed, `Remote Control inactive`) and remain paused pending #1286 (the dead-channel tracking
+issue) rather than repeated with no reason to expect a different result.
+`origin/develop` has had **zero merges in 17 full days** (still pinned at `812b5701`,
 2026-10-04); `origin/main` (the ref actually deployed to production) has had **zero promotions
-in 29 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
-the exposure. The PR queue for this single incident holds at **eight** unmerged PRs — #1268
-(CONFLICTING, 16d), #1275 (MERGEABLE, 12d), #1278 (MERGEABLE, 9d), #1280 (MERGEABLE, 8d), #1282
-(MERGEABLE, 7d), #1283 (MERGEABLE, 6d), #1284 (MERGEABLE, 5d), #1285 (MERGEABLE, 4d, updated by
-this entry) — this run again deliberately did not add a ninth. CI remains green on every one of
-them, including #1268 (whose only problem is a merge conflict against `develop`, not a test
-failure) — the freeze remains 100% an absent-human-action gap. Two independent human actions
-remain outstanding: (1) rotate the credential in Railway, (2) merge any one of the open PRs to
-land a durable record on `develop` (or promote to `main` directly) — right now neither branch
-carries any record of this P1, sixteen days after it was first opened. At 17 escalations and
-roughly 29x the charter's 24-hour P1 SLA, the automation has exhausted the actions available to
-it via the channels it has: the GH-comment channel has drawn zero response in 17 attempts, and
-the push-notification channel is confirmed dead. This report's own final message changes channel
-again — a direct yes/no decision put to the human in the chat itself, the first channel change
-since the 10-18 GH-comment escalation.
+in 30 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
+the exposure. The PR queue for this single incident is now **one** unmerged PR — #1285
+(MERGEABLE, 5d, updated by this entry) — after this run closed the seven duplicate daily-
+escalation PRs (#1268 CONFLICTING/17d, #1275/13d, #1278/10d, #1280/9d, #1282/8d, #1283/7d,
+#1284/6d) that had accumulated from the PR-per-day pattern. CI remains green on #1285. The
+freeze remains 100% an absent-human-action gap, now with one clean record branch rather than
+eight competing ones. Two independent human actions remain outstanding: (1) rotate the
+credential in Railway, (2) merge #1285 to land a durable record on `develop` (or promote to
+`main` directly) — right now neither branch carries any record of this P1, seventeen days after
+it was first opened. At 18 escalations and roughly 30x the charter's 24-hour P1 SLA, the
+automation has exhausted the actions available to it via the channels it has: the GH-comment
+channel has drawn zero response in 18 attempts, and the push-notification channel is confirmed
+dead. This report's own final message continues the channel change from 10-20 — a direct yes/no
+decision put to the human in the chat itself.
 
 ## Post-mortem (filled after close)
 
