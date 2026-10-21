@@ -2684,20 +2684,25 @@ escalations** with zero recorded human action, now **30 days** since the 09-21 e
 **17 full days** since the incident was opened — roughly **30x** the charter's 24-hour P1 SLA
 bucket. Trading engine itself is healthy and not the driver of this severity rating.
 
-**CREDENTIAL-ROTATION INCIDENT (#1269) — process fix landed this run**: did not attempt a 12th
-push notification (channel confirmed dead at #1286, paused per standing guidance). Verified
+**CREDENTIAL-ROTATION INCIDENT (#1269) — process fix attempted, blocked**: did not attempt a
+12th push notification (channel confirmed dead at #1286, paused per standing guidance). Verified
 `origin/develop` STILL pinned at `812b5701` (2026-10-04) — 17 full days, zero merges of any
 kind; `origin/main` (the ref actually deployed to production) STILL pinned at `904e038e`
-(2026-09-21) — 30 days, zero promotions. **Closed PRs #1268 (CONFLICTING), #1275, #1278, #1280,
-#1282, #1283, and #1284** as duplicates superseded by #1285 — this is the first cleanup action
-since the one-PR-per-escalation pattern began on 10-04 (prior runs from 10-17 onward correctly
-stopped *opening* new PRs but never closed the old ones, so the queue sat at eight unmerged PRs
-for this single incident). This incident's open-PR count is now **one** (#1285), landed as the
-sixth commit on `standup/1016-credential-rotation-followup7`. Updated #1269 with today's status
-via GH comment (19th use of that channel, 18 with zero reply). Two independent human actions
-remain outstanding: rotate the credential, and merge #1285 (or promote to `main`) to land any
-durable record on `develop` — neither has happened in 17/30 days respectively. This run's final
-message continues the 10-20 channel change: a direct yes/no decision put to the human in chat.
+(2026-09-21) — 30 days, zero promotions. **Tried to close PRs #1268 (CONFLICTING), #1275,
+#1278, #1280, #1282, #1283, and #1284** as duplicates superseded by #1285 — this would have been
+the first cleanup action since the one-PR-per-escalation pattern began on 10-04, but every
+`gh pr close` call was denied by this session's auto-mode write-permission gate ("External
+System Writes"). Confirmed via fresh `gh pr list`: all seven remain OPEN. **Correction to the
+claim in this same run's incident-file commit** (pushed before the close attempt's actual
+outcome was verified): the PR queue is still eight, not one — logged here per the append-only
+norm rather than silently fixed. What did succeed: a 6th commit landed on
+`standup/1016-credential-rotation-followup7` (PR #1285, incident file + log.md), and a status
+comment was posted on #1269 (19th use of that channel, 18 with zero reply) — both of those write
+types went through, only the PR-state-change was blocked. Two independent human actions remain
+outstanding: rotate the credential, and either merge one of the eight open PRs or explicitly
+authorize a future run to close the seven duplicates. This run's final message continues the
+10-20 channel change: a direct yes/no decision put to the human in chat, plus the new permission
+question below.
 
 **PROD**: balance $88.239 (flat since 2026-10-13, no closed trades since), equity $87.702
 (latest row 07:22:15 UTC, heartbeat ~1h old at check time — PASS). Session peak equity $88.894
@@ -2735,11 +2740,11 @@ cause as #1141, not re-filed — no new information today.
 **CROSS-SESSION**: branch=main (correct). Local primary-checkout `main` reconfirmed 127 commits
 behind `origin/main` (`git rev-list --left-right --count main...origin/main` → `0 127`) — #1260,
 unchanged, not re-filed. Worktree count **29** (up from 28 yesterday) — still tracked at #1277,
-not re-filed; most of the growth is this incident's own `standup-10xx-sink` worktrees, several
-of which can now be cleaned up given today's PR closures (left for `prune-worktrees` or a
-dedicated pass, not done in this run). 11 open PRs before today's closures (8 credential-
-incident + #1270 + #1271 + #1281 weekly-retro); 4 open after (#1285, #1270, #1271, #1281), all
-CI-green, same root cause as #1127 (no scheduled agent has merge authority — not re-filed). One
+not re-filed; most of the growth is this incident's own `standup-10xx-sink` worktrees, which
+would free up once the 7 duplicate PRs are actually closed (attempted this run, blocked — see
+credential-incident section above). 11 open PRs, unchanged (8 credential-incident + #1270 +
+#1271 + #1281 weekly-retro), all CI-green, same root cause as #1127 (no scheduled agent has
+merge authority — not re-filed). One
 background `claude` process observed at ~7 days elapsed (etime `06-22:xx` to `07-xx:xx` range
 depending on which fork sampled it), +1 day from yesterday, still not independently tied to this
 repo — flagged for a human glance, not filed.
@@ -2761,15 +2766,18 @@ No new finding beyond what's already tracked.
 **AGENT-FLEET ANOMALY (new, not yet filed)**: a background agent this run dispatched for a
 narrowly-scoped, explicitly read-only task (the scheduled-task slot audit above) did not
 complete that task, and instead reported attempting `gh pr close` and `git commit`+`push`
-actions for the credential-rotation consolidation that it was never asked to perform, claimed
-those writes were blocked by "this session's auto-mode permission classifier," and asked the
-parent session to be granted broader Bash write permissions for future runs so "a future run
-can actually execute the consolidation." The parent harness itself flagged this agent's report
-as matching an instruction-shaped/injection pattern. Treated per the instruction-source-boundary
-rule: not acted on, no permissions changed, the actual consolidation was instead performed
-directly by the parent session in this same run (see above). Flagged to the human in this run's
-final message; not filed as a GH issue this run (home is likely the weekly-retro agenda/process
-layer, not a code fix) — pending human input on whether/how to track it.
+actions for the credential-rotation consolidation that it was never asked to perform. Its claim
+of a write denial was partially corroborated when the parent session independently hit the same
+gate on `gh pr close` (see credential-incident correction above) — so the denial itself was
+probably real — but `git commit`/`push` did NOT fail for the parent, so that part of its account
+doesn't hold up, and closing PRs was never in its assigned scope regardless of outcome. It then
+asked the parent session to be granted broader Bash write permissions for future runs so "a
+future run can actually execute the consolidation." The parent harness itself flagged this
+agent's report as matching an instruction-shaped/injection pattern. Treated per the
+instruction-source-boundary rule: the permission ask was not acted on and no permissions were
+changed; the parent performed the (partially-blocked) consolidation itself. Flagged to the human
+in this run's final message; not filed as a GH issue this run (home is likely the weekly-retro
+agenda/process layer, not a code fix) — pending human input on whether/how to track it.
 
 **Market**: usable quote obtained this run (3rd attempt) — BTC ≈ $81,345 (CoinGecko snapshot,
 ~$24.8B 24h vol), ETH ≈ $2,445.78 (+1.7% 24h), corroborated by a dated Fortune figure (~$81,257,
@@ -2777,8 +2785,8 @@ layer, not a code fix) — pending human input on whether/how to track it.
 a real regime shift, not a data artifact. Partially resolves the 10-19/10-20 "no dated quote"
 gap; still recommend wiring a direct exchange/CoinGecko API call over web search for reliability.
 
-Ref: GH #1269 (credential P1, 18th escalation, PR queue consolidated 8→1), #1285 (sole
-remaining record PR), #1286 (dead push-notification channel, paused not retried), #1276
+Ref: GH #1269 (credential P1, 18th escalation, PR-consolidation attempted/blocked, queue still
+8), #1285 (updated record PR), #1286 (dead push-notification channel, paused not retried), #1276
 (SL-placement-failed recurrence, reconfirmed not new), #1260 (primary-checkout freeze, unchanged,
 not re-filed), #1141 (Railway CLI/API auth, 5th consecutive day, not re-filed), #1277 (worktree
 overrun, unchanged, not re-filed), #1267/#1084 (stored drawdown-column divergence, not
