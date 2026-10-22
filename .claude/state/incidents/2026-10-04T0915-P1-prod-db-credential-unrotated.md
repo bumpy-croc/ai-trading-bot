@@ -383,31 +383,43 @@ consolidation is proposed and recorded here, not executed. A status comment was 
 a future run with that specific permission granted deliberately by the human — not something
 this run can self-grant, and not requested as such; see this run's final message.
 
+2026-10-22 (this update): 19th escalation. Did not retry the 10-21 `gh pr close` attempt on
+#1268/#1275/#1278/#1280/#1282/#1283/#1284 — that write was denied by this session's
+write-permission gate ("External System Writes") on 10-21, which is a harness policy gate rather
+than a transient fault, so an identical unattended retry would either stall on an approval no
+one is present to give or be denied again with no new information. PR queue unchanged at eight.
+Landed as the 7th commit on `standup/1016-credential-rotation-followup7` (PR #1285). Verified
+`origin/develop` still pinned at `812b5701` (18 full days, zero merges); `origin/main` still at
+`904e038e` (31 days, zero promotions). Trading engine reconfirmed healthy (DD 1.45%, all
+tripwires PASS; see standup report for full detail). Also filed #1288 (unrelated, low-severity:
+the standup's market-quote step has no reliable price source — recurring tooling gap, not
+capital-risk).
+
 ## Current state
 
-Credential is presumed still live and unrotated as of 2026-10-21, **30 days** after the original
-09-21 escalation and **17 full days** after this incident was formally opened, with **zero
-recorded human action across 18 escalations**. Push-notification attempts stopped at 11 (all
+Credential is presumed still live and unrotated as of 2026-10-22, **31 days** after the original
+09-21 escalation and **18 full days** after this incident was formally opened, with **zero
+recorded human action across 19 escalations**. Push-notification attempts stopped at 11 (all
 failed, `Remote Control inactive`) and remain paused pending #1286 (the dead-channel tracking
 issue) rather than repeated with no reason to expect a different result.
-`origin/develop` has had **zero merges in 17 full days** (still pinned at `812b5701`,
+`origin/develop` has had **zero merges in 18 full days** (still pinned at `812b5701`,
 2026-10-04); `origin/main` (the ref actually deployed to production) has had **zero promotions
-in 30 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
+in 31 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
 the exposure. The PR queue for this single incident remains **eight** unmerged PRs — #1268
-(CONFLICTING, 17d), #1275 (12d), #1278 (9d), #1280 (8d), #1282 (7d), #1283 (6d), #1284 (5d), and
-#1285 (MERGEABLE, 5d, updated by this entry) — this run attempted to close the first seven as
-duplicates of #1285 but that write was denied by this session's permission gate (see correction
-above); the consolidation is proposed, not executed. CI remains green on #1285. The freeze
-remains 100% an absent-human-action gap. Three independent human actions remain outstanding: (1)
-rotate the credential in Railway, (2) merge #1285 (or any one of the eight) to land a durable
-record on `develop` (or promote to `main` directly), (3) close the seven superseded PRs — either
-by hand, or by granting a future run the specific permission to do it. Right now no branch
-carries a merged record of this P1, seventeen days after it was first opened. At 18 escalations
-and roughly 30x the charter's 24-hour P1 SLA, the automation has exhausted the actions available
-to it via the channels it has: the GH-comment channel has drawn zero response in 18 attempts
-(though it can still post), and the push-notification channel is confirmed dead. This report's
-own final message continues the channel change from 10-20 — a direct yes/no decision put to the
-human in the chat itself.
+(CONFLICTING, 18d), #1275 (14d), #1278 (11d), #1280 (10d), #1282 (9d), #1283 (8d), #1284 (7d), and
+#1285 (MERGEABLE, 6d, updated by this entry) — consolidation remains proposed, not executed: the
+10-21 close attempt was denied by this session's permission gate, and this run deliberately did
+not retry an identical, already-diagnosed-as-blocked action. CI remains green on #1285. The
+freeze remains 100% an absent-human-action gap. Three independent human actions remain
+outstanding: (1) rotate the credential in Railway, (2) merge #1285 (or any one of the eight) to
+land a durable record on `develop` (or promote to `main` directly), (3) close the seven
+superseded PRs — either by hand, or by granting a future run the specific permission to do it.
+Right now no branch carries a merged record of this P1, eighteen days after it was first opened.
+At 19 escalations and roughly 31x the charter's 24-hour P1 SLA, the automation has exhausted the
+actions available to it via the channels it has: the GH-comment channel has drawn zero response
+in 19 attempts (though it can still post), and the push-notification channel is confirmed dead.
+This report's own final message continues the channel change from 10-20 — a direct yes/no
+decision put to the human in the chat itself.
 
 ## Post-mortem (filled after close)
 
