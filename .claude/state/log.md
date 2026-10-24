@@ -2971,3 +2971,96 @@ reconfirmed not new), #1141 (Railway CLI/API auth, 7th consecutive day, not re-f
 re-litigated), #1127 (merge-authority gap, consistent), #1279 (staging recovery-mode, did not
 reproduce), #1288 (market one-liner tooling gap, not re-filed); incident
 `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`.
+
+---
+
+## [D-2026-10-24-01] 2026-10-24 ~08:12 UTC · incident-escalate · daily-trading-standup
+Severity: amber (WARNING) Top anomaly: P1 credential-rotation incident (GH #1269) reaches **21
+escalations** with zero recorded human action, now **33 days** since the 09-21 exposure and
+**20 full days** since the incident was opened — roughly **33x** the charter's 24-hour P1 SLA
+bucket. Trading engine itself is healthy and not the driver of this severity rating.
+
+**CREDENTIAL-ROTATION INCIDENT (#1269)**: did not attempt a push notification (channel confirmed
+dead at #1286, paused per standing guidance — still paused, not re-tried). Verified
+`origin/develop` STILL pinned at `812b5701` (2026-10-04, confirmed via `git log -1 origin/develop`
+— commit timestamp 2026-10-04T18:02:16+01:00) — 20 full days, zero merges; `origin/main` (the ref
+actually deployed to production) STILL pinned at `904e038e` (2026-09-21) — 33 days, zero
+promotions. Did **not** retry `gh pr close` on the 7 superseded PRs
+(#1268/#1275/#1278/#1280/#1282/#1283/#1284): same harness-level write-permission gate ("External
+System Writes") that blocked the 10-21 attempt and every day since — not a transient fault, so an
+unattended retry would hang on an absent approver or be denied identically; no new information to
+gain by repeating it. PR queue remains **eight**, unchanged. What this run executed: a 9th commit
+landed on `standup/1016-credential-rotation-followup7` (PR #1285, incident file + this log.md
+entry), and a status comment posted on #1269 (22nd use of that channel, 21 with zero reply). The
+three outstanding human actions are unchanged: (1) rotate the credential, (2) merge #1285 (or any
+one of the eight) or promote directly to `main`, (3) either close the seven duplicates by hand or
+explicitly grant a future run that specific permission. This run's final message continues the
+10-20 channel change: a direct yes/no decision put to the human in chat.
+
+**PROD**: balance $88.23902811 (flat since the 2026-10-12 close, no trades since), equity
+$87.28932611 (latest row 07:52:56 UTC, heartbeat ~20min old at check time — PASS). Session peak
+equity $88.89367342 (session_id 21, started 2026-08-24; excludes the Mar-Jun phantom-era book
+value) → DD = **1.80%**. Tripwire ladder (CAP/WARN/CRIT = 0.20/0.50/0.80, read fresh from
+`origin/main:src/config/risk-limits.json`, all three numeric — section not BROKEN): SOFT
+5%/$84.45, WARNING 10%/$80.00, CRITICAL 16%/$74.67, BREACH 20%/$71.11 — all **PASS**. One open
+position: ETHUSDT LONG #36, entry $2530.04, current $2371.36, stop_loss $2277.83 (protected),
+unrealized -$1.00, open since 2026-10-12 (~12 days — not a halt; latch below is PASS). Latch:
+newest `system_events` rows are `ENTRIES_ENABLED` on an hourly cadence, latest 07:52:53 UTC —
+**PASS**, #1103 monitor deployed and healthy. FEATURE_ENTRY_PAUSE inferred false from that same
+row's message text; direct `railway variables` read blocked again (see Railway-auth below), so
+this is a substitution, not independent confirmation. No 4+ loss streak (1 loss in last 6 trades,
+most recent trade a win). Weekly DD-rate: equity $87.64 (7d ago, 10-17) → $87.29 today — a 0.40%
+move, stable, not degraded. Zero unresolved CRITICAL `system_events` in 7d. `Decision:`-cadence
+could not be checked directly (`railway logs` unauthorized); substituted DB write cadence (hourly
+`system_events` rows, latest ~20min old) as the best available proxy — PASS-via-DB-proxy, not
+independently confirmed via logs. Stored `account_history.drawdown` column again reads a static
+`0.58178923` — balance-based, not the equity-based percentage above (#1267/#1084, not
+re-litigated; a dedicated fix branch `fix/1267-drawdown-equity` already exists in-tree). Trade #25
+SL-placement-failure (2026-10-09) remains the only occurrence, already tracked at #1276 — no new
+occurrence.
+
+**STAGING**: paper equity $1020.16200850 (latest row 07:27:06 UTC today), last 4 trades unchanged
+(all LONG, stop-loss exits): #51 +$0.12 (10-12), #50 -$4.96 (10-08), #49 +$1.28 (09-21), #48
++$2.40 (09-21) — net positive, no anomalies, no open position, flat since 10-12. Governor/circuit/
+gate_reason log check BLOCKED again — `railway logs -e staging` unauthorized (see below). #1279
+(staging Postgres stuck in recovery, filed earlier) did not reproduce this run — DB answered
+normally; left open as-is, not independently re-verified as resolved.
+
+**RAILWAY CLI/API AUTH**: `railway variables`/`logs`/`whoami`/`status` all return `Unauthorized.
+Please run 'railway login' again.` for both production and staging — 8th consecutive day (10-17
+through 10-24). Same root cause as #1141, not re-filed — no new information today. Railway MCP
+connector also failed to connect this session (`CONNECTION_CLOSED`), consistent with the same
+outage.
+
+**CROSS-SESSION**: branch=main (correct). Local primary-checkout `main` reconfirmed 127 commits
+behind `origin/main`, 0 ahead (`git rev-list --left-right --count main...origin/main` → `0 127`,
+run against the primary checkout directly) — #1260, unchanged, not re-filed; this is a clean
+behind-only relationship, not a divergence. Worktree count **29**, unchanged from yesterday —
+still tracked at #1277, not re-filed; most of the standing total is this incident's own
+`standup-10xx-sink` worktrees, which would free up once the duplicate PRs are actually closed. 11
+open PRs, unchanged (8 credential-incident + #1270 + #1271 + #1281 weekly-retro), all CI-green,
+same root cause as #1127 (no scheduled agent has merge authority — not re-filed). One background
+`claude` process observed at ~9d22h30m elapsed (pid 33319, `etime 09-22:30:05`), consistent with
+the same long-lived process flagged on prior days (+1 day), still not independently tied to this
+repo — flagged for a human glance again, not filed.
+
+**Scheduled-task audit**: `daily-trading-standup` fired this run at 08:07:05 UTC (on-schedule);
+`list_task_runs` shows the last 3 runs (10-21, 10-22, 10-23) all `succeeded` — no miss.
+`prune-worktrees`, `weekly-retro`, `weekly-model-retrain` are all weekday/weekly-scoped and today
+(Saturday 10-24) is correctly not one of their due days per `nextRunAt` — no miss to evaluate.
+
+**Market**: web search again returned no reliably-dated BTC/ETH quote (undated/conflicting
+snapshots spanning a wide range) — consistent with the standing tooling gap tracked at #1288, not
+re-filed. Used the DB's own ETHUSDT mark instead: ~$2,371 as of this run's latest `positions` row
+(07:52 UTC) — fresher and more reliable than the web search for this one pair; no comparable
+BTC anchor available from this repo's own data.
+
+Ref: GH #1269 (credential P1, 21st escalation, consolidation deliberately not re-attempted this
+run — see rationale above, queue still 8), #1285 (updated record PR), #1286 (dead
+push-notification channel, paused not retried), #1276 (SL-placement-failed recurrence,
+reconfirmed not new), #1141 (Railway CLI/API auth, 8th consecutive day, not re-filed), #1277
+(worktree overrun, unchanged, not re-filed), #1267/#1084 (stored drawdown-column divergence, not
+re-litigated), #1127 (merge-authority gap, consistent), #1279 (staging recovery-mode, did not
+reproduce), #1260 (primary checkout 127 commits behind, unchanged), #1288 (market one-liner
+tooling gap, not re-filed); incident
+`.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`.
