@@ -79,6 +79,10 @@ checklist line, a new tripwire.
    `git show origin/develop:.claude/skills/weekly-retro/SKILL.md`, not from the path the task prompt
    names. Earned: 2026-09-21, primary frozen at `8da478a3` since 2026-08-24, 10 files and 772 lines
    of three retros' output unloaded.
+   **Even a fresh checkout loads only a preview of LESSONS.** `wc -c .claude/LESSONS.md` on
+   `develop`: 151KB on 2026-10-26, and the SessionStart hook `cat`s it whole, so the harness hands
+   sessions a ~2KB preview plus a file path (the 70KB primary copy already arrived that way). If it is
+   still that large and #1289 is open, say so in the summary; each retro append makes it worse.
 1. **log.md** — the week's entries end to end, not just the tail. **A week with no entries is a
    finding, not a quiet week** — cross-check against the scheduled-task traces (input 6): if the
    monitors ran and the log is empty, findings were surfaced and dropped (LESSONS §2.10).
@@ -164,6 +168,9 @@ checklist line, a new tripwire.
      took 6h and finished). Record how late the report landed, not just whether it landed.
      Tasks launching within the same second are a catch-up batch, and a catch-up that fails gets no
      retry (LESSONS §2.15, 09-28 bullet).
+   - **Cron fires in local time; transcripts are stamped UTC.** The UK clock change on 2026-10-25
+     moved the standup from 08:07Z to 09:07Z. Convert the slot to UTC for the date you are checking
+     before calling a run early or late.
    - **Grade the ending by its last *event*, not its last text block.** Desktop-app sessions end
      with an `mcp__ccd_turn__wrap_up` tool call whose `recap` carries the report; the last text
      block before it is often a preamble ("PR #1285 opened. Now the issue comments."). A grader

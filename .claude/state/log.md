@@ -2379,3 +2379,72 @@ per §2.11 they are notes until dispatched.
 Ref: #1281, #1285, #1268, #1275, #1278, #1280, #1282, #1283, #1284, #1270, #1271; #1269, #1286,
 #1287, #1127, #1260, #1233, #1141, #1273, #1277, #1279, #1267, #1230, #1099; LESSONS
 §2.9(k)/§2.16/§2.17/§3/§5.9.
+
+## [D-2026-10-26-01] 2026-10-26 ~10:45 · note · daemon(weekly-retro)
+Weekly retro, window 2026-10-19 → 10-26. Pushed onto #1281's branch (§2.9 rule (k)); no new PR.
+Scanned open branches before numbering: only `standup/1016-credential-rotation-followup7` holds
+`10-2x` ids, none `-26-`.
+
+**Input 0c.** Primary checkout still `8da478a3`: 127 commits behind `origin/main`, `.claude/`
+differs by 14 files / 2041 lines, 63 days frozen (#1260). Six retros of distillate (09-21 →
+this) are unloaded. New this week: even a current checkout would not load LESSONS. It is 151KB on
+`develop` and the SessionStart hook `cat`s it whole, so sessions get a ~2KB preview (#1289).
+
+**Input 0b.** #1281 is CI-green and CLEAN, open 14 days, carrying four retro windows (10-05,
+10-12, 10-19, this). Time-to-merge: not merged. `develop` has had **zero merges since 10-04
+(22 days)**; `main` none since 09-21. Last week's issues #1286, #1287 untouched (7 days, no
+owner); #1288 got one standup comment. Installers: merge driver OK, worktree shim OK,
+`install_git_hooks.py --check` printed `DRIFT`, **false** (installed `pre-push` byte-identical to
+`origin/develop:.githooks/pre-push`; installer not run; third occurrence, §3).
+
+**Input 0 — AGENDA.** Empty, thirteenth consecutive window; only #1281 carries the file. Cleared.
+
+**Input 1/2.** Standup record PRs on #1269 collapsed from 8 to 1 on 10-26 (#1285); open PRs now
+#1285, #1281, #1271, #1270. The 10-21 standup reported closing the 7 duplicates, found the close was
+denied by the permission gate, and corrected its pushed record. The pipeline worked as designed.
+Whether #1287's second half (re-land the 10-04 → 10-13 records) was done is unverified. #1269
+open 35 days, 23 escalations, no human action. No incident opened or closed in the window.
+
+**Input 3/4 — failures and calibration.** None. `daily-trading-standup`: trading state well
+calibrated (every PASS held; DD drifted 1.34% → 2.33% on an open ETHUSDT long with a stop, inside
+the ladder). Over-stated once (10-21 "closed 7 PRs"), self-corrected same run. `weekly-model-
+retrain`: BLOCKED self-diagnosis correct again, sixth consecutive Sunday with no retrain (#1233,
+unassigned 31 days). `weekly-retro` (10-19): "not in force until merged" correct, still not.
+
+**Input 6 — scheduled tasks (registry 17, 5 enabled; 23 dirs, same 6 unregistered = the 08-13
+retirements; registry has no entry without a directory).** New since last count:
+`republish-project-map` (Mon–Fri 08:01, enabled), not this repo's task; not audited here.
+- `daily-trading-standup` daily: 7/7 slots 10-20 → 10-26 (10-19's was in the last retro), all
+  ended with a report. Slot moved 08:07Z → 09:07Z on 10-25 (UK clock change); not a late run.
+- `prune-worktrees` Mon–Fri 23:10: 5/5 (10-19 → 10-23, transcripts under the `hands-up-education`
+  project dir), all ended with a report. Effect: 0 removals in this repo; worktrees 29 → 29 (30
+  with this retro's). 183 local branches. #1277.
+- `weekly-model-retrain` Sun: 1/1 (10-25), `BLOCKED-stale-training-image` (#1233).
+- `weekly-retro` Mon: 1/1 (10-19 → #1281); this run.
+
+**Input 7/5/8.** No `latest` symlink changed (nothing merged); no promotion row; no experiment
+concluded; no outstanding pre-merge ask.
+
+**Diffs in this PR.** LESSONS §3: third false `DRIFT` count; new entry on LESSONS.md exceeding
+the SessionStart hook's deliverable size (#1289). `weekly-retro/SKILL.md`: input 0c preview-size
+check, input 6 local-time vs UTC slot note. AGENDA cleared. Issue filed: #1289 (p2, unowned).
+
+**Disposition of repeat findings, no action:** the ~11-day-old background `claude` process the
+standup flags daily is "not tied to this repo"; left alone. `republish-project-map` belongs to
+another project.
+
+**Unowned queue (§2.11).** Of the issues this chain tracks, 14 are open with zero assignees
+(#1269, #1286, #1287, #1288, #1289, #1127, #1260, #1233, #1141, #1273, #1277, #1230, #1099, #1267);
+oldest #1099 at 63 days. Recorded on #1127.
+
+**Not in force until this PR merges, is promoted, and the primary checkout is pulled** (§2.9(i)).
+
+**Needs a human:**
+1. #1127 (p0): merge #1281, #1285, #1270, #1271. `develop` is 22 days without a merge.
+2. #1269 (day 35): rotate the prod DB credential.
+3. #1260: `git -C /Users/alex/Sites/ai-trading-bot pull --ff-only` (63 days).
+4. #1289: decide the LESSONS delivery fix.
+5. #1233: rebuild the ECR training image (6 Sundays without a retrain).
+6. #1286 / #1141: push channel dead; `railway login`.
+Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260, #1233, #1141,
+#1273, #1277, #1230, #1099, #1267; LESSONS §3.

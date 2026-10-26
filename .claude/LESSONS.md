@@ -1596,10 +1596,18 @@ right things in the right places, and the writes never reached the branch anyone
   backgrounded probe (`docker info >/dev/null 2>&1 & p=$!; sleep 10; kill -0 $p`) or `gtimeout` from
   coreutils; never bare `timeout`. Same morning, `tools/install_git_hooks.py --check` printed `DRIFT`
   for `pre-push` while the installed file was byte-identical to `origin/develop:.githooks/pre-push`
-  — the checker compares against the frozen primary's source (above, #1260). Second false `DRIFT`
-  (09-21, 10-19): diff against `origin/develop` before believing it, and never run the installer on
-  a false one.
+  — the checker compares against the frozen primary's source (above, #1260). Third false `DRIFT`
+  (09-21, 10-19, 10-26): diff against `origin/develop` before believing it, and never run the
+  installer on a false one. It will keep printing `DRIFT` until #1260 is done.
   Earned: 2026-10-19 retro run; #1273, #1260.
+- **`LESSONS.md` is larger than a SessionStart hook can deliver.** `session-start-lessons.sh`
+  `cat`s the whole file. At 151KB (1,809 lines) on `develop`, and already at 70KB on the frozen
+  primary, the harness replaces the output with a ~2KB preview and a saved-file path. Only the
+  header and the top of §1.1 reach a session unless it opens the file. "Auto-loaded every session"
+  has been false for a while, and each retro adds about 70 lines. Before assuming a rule was
+  "available" to an agent, check whether the agent read the file. Fix tracked in #1289 (index
+  instead of body, size check).
+  Earned: 2026-10-26 retro run, input 0c; #1289.
 
 ---
 
