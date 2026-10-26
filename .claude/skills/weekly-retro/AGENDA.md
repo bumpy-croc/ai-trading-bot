@@ -13,8 +13,8 @@ becomes a diff or gets a written disposition.
 
 ## Items
 
-_(Cleared by the 2026-09-28 retro. Empty on arrival for the **ninth** consecutive window; the only
-open PR (#1263, last week's retro, superseded by this one) carried nothing new. This window's
-items came from the `source:automation` issue #1265, standup comments on #1127/#1230/#1260, and
-the scheduled-task transcripts. None came through here. #1099 (retire or restructure this file) is
-still open and unowned. See [D-2026-09-28-01].)_
+_(Cleared by the 2026-10-26 retro. Empty on arrival for the **thirteenth** consecutive window; the
+only open PR carrying this file is #1281, which this retro is built on. This window's items came
+from the standup transcripts, the `source:automation` issues, the scheduled-task registry and the
+open-PR list. None came through here. #1099 (retire or restructure this file) is still open and
+unowned after 63 days. See [D-2026-10-26-01].)_
