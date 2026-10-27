@@ -467,28 +467,35 @@ at `812b5701` (22 full days, zero merges); `origin/main` still at `904e038e` (35
 promotions). Trading engine reconfirmed healthy (DD 2.33%, all tripwires PASS, `ENTRIES_ENABLED`
 latch PASS; see standup report for full detail).
 
+2026-10-27 (this update): 24th escalation. No new action attempted (the PR-close backlog from
+10-21→10-25 is already cleared; queue stays at one). Reconfirmed `origin/develop` still pinned
+at `812b5701` (23 full days, zero merges) and `origin/main` still at `904e038e` (36 days, zero
+promotions) — both unchanged since yesterday. Did not retry push notification (#1286 still
+open, dead channel, paused per standing guidance). Landed as the 12th commit on
+`standup/1016-credential-rotation-followup7` (PR #1285, still the sole open PR for this
+incident). Trading engine reconfirmed healthy and unaffected (DD 1.98%, all tripwires PASS,
+`ENTRIES_ENABLED` latch PASS; see standup report for full detail).
+
 ## Current state
 
-Credential is presumed still live and unrotated as of 2026-10-26, **35 days** after the original
-09-21 escalation and **22 full days** after this incident was formally opened, with **zero
-recorded human action across 23 escalations**. Push-notification remains paused pending #1286
+Credential is presumed still live and unrotated as of 2026-10-27, **36 days** after the original
+09-21 escalation and **23 full days** after this incident was formally opened, with **zero
+recorded human action across 24 escalations**. Push-notification remains paused pending #1286
 (the dead-channel tracking issue, still open) — not retried this run.
-`origin/develop` has had **zero merges in 22 full days** (still pinned at `812b5701`,
+`origin/develop` has had **zero merges in 23 full days** (still pinned at `812b5701`,
 2026-10-04); `origin/main` (the ref actually deployed to production) has had **zero promotions
-in 35 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
-the exposure. **The PR queue for this single incident is now one** — #1285 (MERGEABLE, updated
-by this entry) — after this run's `gh pr close` on the seven superseded PRs (#1268, #1275,
-#1278, #1280, #1282, #1283, #1284) succeeded, where five prior runs (10-21 through 10-25) found
-the identical action denied by a write-permission gate. CI remains green on #1285. The freeze
-remains 100% an absent-human-action gap. Two independent human actions remain outstanding:
-(1) rotate the credential in Railway, (2) merge #1285 to land a durable record on `develop` (or
-promote directly to `main`) — the third outstanding action from prior entries (closing the
-duplicate PRs) is now done. Right now no branch carries a merged record of this P1, twenty-two
-days after it was first opened. At 23 escalations and roughly 35x the charter's 24-hour P1 SLA,
-the automation has exhausted the actions available to it via the channels it has: the
-GH-comment channel has drawn zero response in 23 attempts (though it can still post), and the
-push-notification channel remains confirmed dead. This report's own final message continues the
-channel change from 10-20 — a direct yes/no decision put to the human in the chat itself.
+in 36 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
+the exposure. **The PR queue for this single incident remains one** — #1285 (MERGEABLE,
+updated by this entry), unchanged since the 10-26 cleanup of the seven superseded PRs. CI
+remains green on #1285. The freeze remains 100% an absent-human-action gap. Two independent
+human actions remain outstanding: (1) rotate the credential in Railway, (2) merge #1285 to land
+a durable record on `develop` (or promote directly to `main`). Right now no branch carries a
+merged record of this P1, twenty-three days after it was first opened. At 24 escalations and
+roughly 36x the charter's 24-hour P1 SLA, the automation has exhausted the actions available to
+it via the channels it has: the GH-comment channel has drawn zero response in 24 attempts
+(though it can still post), and the push-notification channel remains confirmed dead. This
+report's own final message continues the channel change from 10-20 — a direct yes/no decision
+put to the human in the chat itself.
 
 ## Post-mortem (filled after close)
 
