@@ -476,26 +476,46 @@ open, dead channel, paused per standing guidance). Landed as the 12th commit on
 incident). Trading engine reconfirmed healthy and unaffected (DD 1.98%, all tripwires PASS,
 `ENTRIES_ENABLED` latch PASS; see standup report for full detail).
 
+2026-10-28 (this update): 25th escalation. Reconfirmed `origin/develop` still pinned at
+`812b5701` (24 full days, zero merges) and `origin/main` still at `904e038e` (37 days, zero
+promotions) — both unchanged since yesterday. Did not retry push notification (#1286 still open,
+dead channel, paused per standing guidance). Landed as the 13th commit on
+`standup/1016-credential-rotation-followup7` (PR #1285, still the sole open PR for this
+incident). **New this run**: direct prod-DB `psql` reads — the fallback every prior run has used
+since Railway CLI auth broke (#1141) — were themselves refused this run by the harness's own
+auto-mode classifier ("Production Reads" denied, no live user present to approve). Staging DB
+reads were unaffected (same mechanism, not blocked), so this is scoped to the production
+classification specifically. Net effect: trading-engine health (equity, drawdown, open positions,
+stop-loss presence, the entry-pause/close-only latch, unresolved CRITICAL events) could **not**
+be verified this run — filed as its own, separate, lower-severity gap at #1290 (code-bug/no
+confirmed-capital-risk bucket, not folded into this P1) since the bot was confirmed healthy as of
+yesterday's run (DD 2.24%, all tripwires PASS) and nothing today suggests an active incident,
+only a visibility gap. This incident's own tracking (develop/main SHAs, PR queue, GH comment) does
+not depend on prod DB access and is unaffected.
+
 ## Current state
 
-Credential is presumed still live and unrotated as of 2026-10-27, **36 days** after the original
-09-21 escalation and **23 full days** after this incident was formally opened, with **zero
-recorded human action across 24 escalations**. Push-notification remains paused pending #1286
+Credential is presumed still live and unrotated as of 2026-10-28, **37 days** after the original
+09-21 escalation and **24 full days** after this incident was formally opened, with **zero
+recorded human action across 25 escalations**. Push-notification remains paused pending #1286
 (the dead-channel tracking issue, still open) — not retried this run.
-`origin/develop` has had **zero merges in 23 full days** (still pinned at `812b5701`,
+`origin/develop` has had **zero merges in 24 full days** (still pinned at `812b5701`,
 2026-10-04); `origin/main` (the ref actually deployed to production) has had **zero promotions
-in 36 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
+in 37 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
 the exposure. **The PR queue for this single incident remains one** — #1285 (MERGEABLE,
 updated by this entry), unchanged since the 10-26 cleanup of the seven superseded PRs. CI
 remains green on #1285. The freeze remains 100% an absent-human-action gap. Two independent
 human actions remain outstanding: (1) rotate the credential in Railway, (2) merge #1285 to land
 a durable record on `develop` (or promote directly to `main`). Right now no branch carries a
-merged record of this P1, twenty-three days after it was first opened. At 24 escalations and
-roughly 36x the charter's 24-hour P1 SLA, the automation has exhausted the actions available to
-it via the channels it has: the GH-comment channel has drawn zero response in 24 attempts
+merged record of this P1, twenty-four days after it was first opened. At 25 escalations and
+roughly 37x the charter's 24-hour P1 SLA, the automation has exhausted the actions available to
+it via the channels it has: the GH-comment channel has drawn zero response in 25 attempts
 (though it can still post), and the push-notification channel remains confirmed dead. This
 report's own final message continues the channel change from 10-20 — a direct yes/no decision
-put to the human in the chat itself.
+put to the human in the chat itself. Separately, today's run surfaced a new, unrelated gap
+(#1290): the standup's prod-DB fallback read path is now also blocked for unattended runs, which
+does not change this incident's status but does mean future runs may not be able to reconfirm
+"trading engine healthy" the way every run since 10-04 has.
 
 ## Post-mortem (filled after close)
 

@@ -3326,3 +3326,84 @@ flag continued), #1276 (SL-placement-failed, not new), #1141 (Railway CLI/API au
 and commented), #1277 (worktree overrun, unchanged at 29, commented), #1267/#1084 (stored
 drawdown-column divergence, not re-litigated), #1288 (market one-liner tooling gap, not re-filed);
 incident `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`.
+
+## [D-2026-10-28-01] 2026-10-28 ~09:13 UTC · incident-escalate · daily-trading-standup
+
+**#1269 credential-rotation P1 — 25th escalation, day 37 since exposure (09-21), day 24 since
+opened (10-04), ~37x the charter's 24h P1 SLA.** `origin/develop` still pinned at `812b5701`
+(2026-10-04, 24 full days, zero merges); `origin/main` still at `904e038e` (2026-09-21, 37 days,
+zero promotions) — production has not moved since the exposure, unchanged from yesterday. PR
+queue for this incident remains **one** (#1285, this run's 13th commit) — no new PR opened, no
+cleanup needed. Did not retry push notification (#1286 still open, dead channel, paused per
+standing guidance). Two human actions remain outstanding: (1) rotate the credential in Railway,
+(2) merge #1285 (or promote directly to `main`). This turn's final message continues the same
+direct yes/no decision put to the human in the chat itself. Posted the 25th status comment on
+#1269.
+
+**NEW — #1290 (filed this run): standup's prod-DB fallback read is now also blocked.** Every run
+since Railway CLI auth broke (#1141) has fallen back to direct `psql` reads of
+`RAILWAY_PRODUCTION_DATABASE_URL` for prod health (used successfully as recently as yesterday's
+`[D-2026-10-27-01]`). This run, that same query was refused by the harness's own auto-mode
+classifier ("Production Reads" denied, no live user present to approve) — a different mechanism
+from #1141, and one staging reads were not subject to (staging `psql` succeeded this run). Net
+effect: equity, drawdown, open positions, stop-loss presence, the entry-pause/close-only latch,
+and unresolved-CRITICAL-events could **not** be verified this run. Filed as #1290 in the
+"code bug, no immediate capital risk" bucket, not folded into #1269's P1, because the bot was
+confirmed healthy as of yesterday (DD 2.24%, all tripwires PASS) and nothing today indicates an
+active incident — only a visibility gap. Did not attempt to route around the denial via another
+tool; accepted it and reported the gap instead, per the harness's own guidance on permission
+refusals.
+
+**#1260 primary-checkout-frozen P1 — re-escalated, now 10 days silent since last human comment
+(10-18).** Primary checkout still `8da478a3`, still 127 commits behind `origin/main` (0 ahead) —
+confirmed via `git rev-list --left-right --count HEAD...origin/main`, unchanged. Not re-filed.
+
+**#1261 money-path-findings P1 — re-escalated, continuing the standup-coverage-gap flag (no new
+diagnosis).** Three money-path defects (#1224, #1199, #1221) remain merged into production code,
+unowned.
+
+**PROD**: **NOT ASSESSED this run** — see #1290 above. No equity/drawdown/position/latch/event
+data available; last confirmed reading is yesterday's `[D-2026-10-27-01]` (DD 2.24%, all
+tripwires PASS, `ENTRIES_ENABLED` latch PASS, one open ETHUSDT position with stop-loss protected).
+
+**STAGING**: paper equity $1020.16200850 (latest row 08:15:45 UTC today), last 4 trades
+unchanged (#51 +$0.12 10-12, #50 -$4.96 10-08, #49 +$1.28 09-21, #48 +$2.40 09-21) — net positive,
+flat since 10-12, no open position. Governor/circuit/gate_reason log check BLOCKED — `railway
+logs -e staging` unauthorized (see below; this is the #1141 Railway-CLI failure, not the new
+#1290 DB-read block — staging DB itself was readable).
+
+**RAILWAY CLI/API AUTH**: `railway logs -e staging` returned `Unauthorized` — consistent with
+#1141, not re-filed. Railway MCP connector also failed to connect this session
+(`CONNECTION_CLOSED`), consistent.
+
+**CROSS-SESSION**: branch=main (correct). Open PR count unchanged at **4** (#1285 + #1270 +
+#1271 + #1281), all MERGEABLE, all known/unmerged >48h — not re-filed. Worktree count **30**
+(up from 29 yesterday, up from 22 when #1277 was first filed) despite `prune-worktrees` firing
+on schedule every weeknight (last fired 10-27 23:10 UTC, pruned 21 worktrees across other repos
+in `~/Sites/` — zero from `ai-trading-bot`) — tracked at #1277, commented with today's count and
+the prune-run evidence that it is structurally not touching this repo's worktrees. One background
+`claude` process observed older than 12h: ~14d (pid 33319, opus, `--resume`/slock-managed, no
+visible project marker tying it to this repo) — consistent with prior days, still not
+independently tied to this repo, flagged for a human glance again, not filed.
+
+**Scheduled-task audit**: graded by actual run status/duration via `list_task_runs`, not
+`lastRunAt`. `daily-trading-standup` fired this run 09:07 UTC (this run; prior 4 runs 10-24→10-27
+all `succeeded` with real multi-minute durations). `prune-worktrees` fired on every weeknight
+slot 10-21→10-27, all `succeeded`. `weekly-model-retrain` fired 10-25 (Sunday, on-cron,
+`succeeded` — "retrain did not run", precondition-blocked per #1233, not new). `weekly-retro`
+fired 10-26 (Monday, on-cron, `succeeded`). No missed slots identified for any of the four
+tasks over the last 7 days.
+
+**Market**: web search again returned no reliably-dated BTC/ETH quote (the one same-day-looking
+hit, an FXStreet article timestamped "202510281210" in its URL, is actually dated 2025-10-28 on
+the page itself) — consistent with the standing tooling gap tracked at #1288, not re-filed. No
+DB-sourced price anchor available this run either, since prod DB reads are blocked (#1290).
+
+Ref: GH #1269 (credential P1, 25th escalation, queue stays at 1), #1285 (updated record PR, 13th
+commit), #1286 (dead push-notification channel, not retried), #1290 (NEW — prod-DB fallback read
+blocked by auto-mode classifier, filed this run), #1260 (primary checkout 127 commits behind,
+re-escalated after 10-day silence), #1261 (re-escalated, standup-coverage-gap flag continued),
+#1141 (Railway CLI auth, re-confirmed for staging logs), #1277 (worktree overrun, now 30,
+commented with prune-run evidence), #1233 (weekly-retrain precondition block, not new), #1288
+(market one-liner tooling gap, not re-filed); incident
+`.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`.
