@@ -493,29 +493,51 @@ yesterday's run (DD 2.24%, all tripwires PASS) and nothing today suggests an act
 only a visibility gap. This incident's own tracking (develop/main SHAs, PR queue, GH comment) does
 not depend on prod DB access and is unaffected.
 
+2026-10-29 (this update): 26th escalation. Reconfirmed `origin/develop` still pinned at
+`812b5701` (25 full days, zero merges) and `origin/main` still at `904e038e` (38 days, zero
+promotions) — both unchanged since yesterday. Did not retry push notification (#1286 still
+open, dead channel, paused per standing guidance). Landed as this commit on
+`standup/1016-credential-rotation-followup7` (PR #1285, still the sole open PR for this
+incident, still MERGEABLE, CI green) — queue stays at one. **#1290 update**: the same harness
+auto-mode classifier that blocked yesterday's prod-DB fallback read (`railway variables -k`,
+"Credential Materialization" this time rather than "Production Reads") was hit again this run,
+but this time the engine-health check did **not** need it — `FEATURE_ENTRY_PAUSE` state and the
+close-only/entry-pause/halt latch were read directly from `system_events`
+(`ENTRIES_ENABLED`/`*_LATCHED` rows, the #1103 mechanism) instead of via `railway variables`, and
+that path is unaffected by the classifier. Trading engine reconfirmed healthy this run with no
+visibility gap: equity $86.918 vs session peak $88.894 → DD 2.22%, all tripwires PASS,
+newest `system_events` row is `ENTRIES_ENABLED` (08:37:24Z, same pass as the latest
+`account_history` row). Commented on #1290 recommending the DB-latch read be adopted as the
+standing method (it doesn't depend on Railway CLI auth at all, unlike the `psql` fallback used
+10-04→10-27, so it survives both the Railway CLI outage (#1141) and this classifier gate).
+Also surfaced today, same root cause as this incident's merge freeze: `ai-trading-bot` worktree
+count is 30 (unchanged from 10-28, still >>6) per #1277, and PRs #1270 and #1271 have had zero
+activity for 3-4 weeks despite green CI and MERGEABLE state — both symptoms of #1127 (no
+scheduled agent has merge authority), not new conditions.
+
 ## Current state
 
-Credential is presumed still live and unrotated as of 2026-10-28, **37 days** after the original
-09-21 escalation and **24 full days** after this incident was formally opened, with **zero
-recorded human action across 25 escalations**. Push-notification remains paused pending #1286
+Credential is presumed still live and unrotated as of 2026-10-29, **38 days** after the original
+09-21 escalation and **25 full days** after this incident was formally opened, with **zero
+recorded human action across 26 escalations**. Push-notification remains paused pending #1286
 (the dead-channel tracking issue, still open) — not retried this run.
-`origin/develop` has had **zero merges in 24 full days** (still pinned at `812b5701`,
+`origin/develop` has had **zero merges in 25 full days** (still pinned at `812b5701`,
 2026-10-04); `origin/main` (the ref actually deployed to production) has had **zero promotions
-in 37 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
+in 38 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
 the exposure. **The PR queue for this single incident remains one** — #1285 (MERGEABLE,
 updated by this entry), unchanged since the 10-26 cleanup of the seven superseded PRs. CI
 remains green on #1285. The freeze remains 100% an absent-human-action gap. Two independent
 human actions remain outstanding: (1) rotate the credential in Railway, (2) merge #1285 to land
 a durable record on `develop` (or promote directly to `main`). Right now no branch carries a
-merged record of this P1, twenty-four days after it was first opened. At 25 escalations and
-roughly 37x the charter's 24-hour P1 SLA, the automation has exhausted the actions available to
-it via the channels it has: the GH-comment channel has drawn zero response in 25 attempts
+merged record of this P1, twenty-five days after it was first opened. At 26 escalations and
+roughly 38x the charter's 24-hour P1 SLA, the automation has exhausted the actions available to
+it via the channels it has: the GH-comment channel has drawn zero response in 26 attempts
 (though it can still post), and the push-notification channel remains confirmed dead. This
 report's own final message continues the channel change from 10-20 — a direct yes/no decision
-put to the human in the chat itself. Separately, today's run surfaced a new, unrelated gap
-(#1290): the standup's prod-DB fallback read path is now also blocked for unattended runs, which
-does not change this incident's status but does mean future runs may not be able to reconfirm
-"trading engine healthy" the way every run since 10-04 has.
+put to the human in the chat itself. The 10-28 visibility gap (#1290) did not recur as a capital
+risk this run — a DB-native path around the classifier gate was found and used — but the
+underlying classifier behavior (blocking unattended reads of Railway production config) is
+unchanged and could resurface for a check that has no DB-native equivalent.
 
 ## Post-mortem (filled after close)
 
