@@ -287,6 +287,20 @@ Treating this as capital-risk-adjacent rather than cosmetic.
                        engine independently reconfirmed healthy this run (DD 2.33% via session-21
                        peak equity $88.894 → current $86.827, all tripwires PASS, `ENTRIES_ENABLED`
                        latch PASS; see standup report for full detail).
+2026-10-31 09:1x UTC — [escalation #28] still unrotated — **40 days** since 09-21, **27 full
+                       days** since the incident was opened, ~40x the charter's 24h P1 SLA.
+                       `origin/develop` STILL pinned at `812b5701` (27 full days, zero merges);
+                       `origin/main` STILL at `904e038e` (40 days, zero promotions). PR queue
+                       unchanged at one (#1285). **Cannot independently reconfirm trading-engine
+                       health this run**: #1290 (prod-DB-read classifier gate) escalated to a
+                       total block today — every production `psql` path, including the
+                       single-statement and DB-latch fallbacks that covered 10-29/10-30, was
+                       denied. Opened a dedicated incident file
+                       (`2026-10-31T0907-P1-prod-db-reads-total-block.md`) since no workaround
+                       exists for the first time. Last known-good trading-engine reading remains
+                       2026-10-30 (DD 2.80%, all tripwires PASS). This incident's own tracking
+                       (develop/main SHAs, PR queue, GH comment) does not depend on prod DB access
+                       and is unaffected.
 ```
 
 ## Actions taken
@@ -537,29 +551,42 @@ zero activity, same root cause as #1127 (not re-filed). One background `claude` 
 ~16 days old (pid 33319, opus, slock-managed `--resume`, no project marker tying it to this
 repo) — consistent with prior days, not filed.
 
+2026-10-31 (this update): 28th escalation. Reconfirmed `origin/develop` still pinned at
+`812b5701` (27 full days, zero merges) and `origin/main` still at `904e038e` (40 days, zero
+promotions) — both unchanged since yesterday. Did not retry push notification (#1286 still open,
+dead channel, paused per standing guidance). Landed as this commit on
+`standup/1016-credential-rotation-followup7` (PR #1285, still the sole open PR for this
+incident, still MERGEABLE, CI green) — queue stays at one. **#1290 escalated to a total block
+today** (see new dedicated incident file `2026-10-31T0907-P1-prod-db-reads-total-block.md`):
+unlike 10-28 through 10-30, no DB-native path (single-statement `psql`, `system_events` latch
+read) was available this run, so trading-engine health could not be independently reconfirmed —
+last known-good remains 10-30's DD 2.80%, all tripwires PASS. This incident's own tracking does
+not depend on prod DB access and is unaffected.
+
 ## Current state
 
-Credential is presumed still live and unrotated as of 2026-10-30, **39 days** after the original
-09-21 escalation and **26 full days** after this incident was formally opened, with **zero
-recorded human action across 27 escalations**. Push-notification remains paused pending #1286
+Credential is presumed still live and unrotated as of 2026-10-31, **40 days** after the original
+09-21 escalation and **27 full days** after this incident was formally opened, with **zero
+recorded human action across 28 escalations**. Push-notification remains paused pending #1286
 (the dead-channel tracking issue, still open) — not retried this run.
-`origin/develop` has had **zero merges in 26 full days** (still pinned at `812b5701`,
+`origin/develop` has had **zero merges in 27 full days** (still pinned at `812b5701`,
 2026-10-04); `origin/main` (the ref actually deployed to production) has had **zero promotions
-in 39 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
+in 40 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
 the exposure. **The PR queue for this single incident remains one** — #1285 (MERGEABLE,
 updated by this entry), unchanged since the 10-26 cleanup of the seven superseded PRs. CI
 remains green on #1285. The freeze remains 100% an absent-human-action gap. Two independent
 human actions remain outstanding: (1) rotate the credential in Railway, (2) merge #1285 to land
 a durable record on `develop` (or promote directly to `main`). Right now no branch carries a
-merged record of this P1, twenty-six days after it was first opened. At 27 escalations and
-roughly 39x the charter's 24-hour P1 SLA, the automation has exhausted the actions available to
-it via the channels it has: the GH-comment channel has drawn zero response in 27 attempts
+merged record of this P1, twenty-seven days after it was first opened. At 28 escalations and
+roughly 40x the charter's 24-hour P1 SLA, the automation has exhausted the actions available to
+it via the channels it has: the GH-comment channel has drawn zero response in 28 attempts
 (though it can still post), and the push-notification channel remains confirmed dead. This
 report's own final message continues the channel change from 10-20 — a direct yes/no decision
-put to the human, now also surfaced as this run's own ask to the operator. Today's recurrence of
-the #1290 classifier gate (two new denial forms) did not cost a capital-risk gap — a DB-native
-path around it was used again — but the underlying classifier behavior remains unchanged and
-could resurface for a check that has no DB-native equivalent.
+put to the human, now also surfaced as this run's own ask to the operator. **Separately and more
+urgently**: #1290 (prod-DB-read classifier gate) escalated today to a total block with no
+workaround, meaning this repo's sole automated watchdog is currently blind to prod — see the new
+dedicated incident file. That is a more time-sensitive gap than this incident's own freeze, since
+it affects detection of *any* future live-capital issue, not just this one credential.
 
 ## Post-mortem (filled after close)
 
