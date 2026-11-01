@@ -3629,3 +3629,71 @@ not re-commented), #1270/#1271/#1281 (stale PRs, same root cause as #1127, not r
 (weekly-retrain precondition block, not new); incidents
 `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md` and
 `.claude/state/incidents/2026-10-31T0907-P1-prod-db-reads-total-block.md` (new).
+
+## [D-2026-11-01-01] 2026-11-01 ~09:12 UTC · incident-escalate · daily-trading-standup
+
+**#1269 (credential rotation, P1)**: 29th escalation, day 41 since exposure (09-21), day 28 since
+this incident was opened, ~41x the charter's 24h P1 SLA. `origin/develop` still pinned at
+`812b5701` (28 full days, zero merges); `origin/main` still at `904e038e` (41 days, zero
+promotions) — unchanged from yesterday. PR queue remains **one** (#1285, MERGEABLE, CI green).
+Did not retry push notification (#1286 still open, dead channel, paused per standing guidance).
+Posted the 29th status comment on #1269, cross-referencing today's #1290 update as the more
+time-sensitive item.
+
+**PROD**: CANNOT-VERIFY, second consecutive day. Before concluding this, re-tried both documented
+fallbacks as their own separate Bash calls (single-statement `account_history` psql, and the
+narrow `system_events` latch query) — both denied again, identically (`[Production Reads]`).
+Confirms 10-31 was not a one-off: #1290 is now a persistent 2-day total block with zero available
+workaround. Equity, drawdown, open-position/stop-loss state, and unresolved-CRITICAL
+`system_events` are UNKNOWN this run — not asserted as PASS. Last known-good remains 2026-10-30:
+DD 2.80%, all tripwires PASS, one open ETHUSDT position with stop-loss present. Updated incident
+`2026-10-31T0907-P1-prod-db-reads-total-block.md` and commented on #1290 with today's
+confirmation.
+
+**Tripwire ladder (computed, cannot be evaluated against an observed value this run)**: read
+fresh from `origin/main:src/config/risk-limits.json` — CAP=20%, WARNING=CAP×0.50=10%,
+CRITICAL=CAP×0.80=16%, BREACH=20%. All three values numeric and non-null (tripwire section itself
+is not broken, only the DD observation needed to evaluate it).
+
+**POSITIVE-STATE ASSERTIONS**: CANNOT-VERIFY, same cause as PROD. `FEATURE_ENTRY_PAUSE`/
+close-only-latch state, the `ENTRIES_ENABLED`/`*_LATCHED` row, unresolved CRITICAL events in 7
+days, and the 60s `Decision:` log cadence could not be read this run. Not claimed as PASS.
+
+**STAGING**: paper equity $1020.16200850 (fresh row, 09:03:46 UTC today), last 4 trades unchanged
+(#51 +$0.12 10-12, #50 -$4.96 10-08, #49 +$1.28 09-21, #48 +$2.40 09-21) — flat since 10-12, no
+open position. Governor/circuit/gate_reason log check BLOCKED — `railway logs -e staging` and
+`railway logs -e production` both returned `Unauthorized. Please run 'railway login' again.`,
+consistent with #1141, not re-filed.
+
+**CROSS-SESSION**: branch=main (correct). Open PR count unchanged at **4** (#1285 + #1270 +
+#1271 + #1281), all MERGEABLE; #1285 and #1281 CI-verified green this run, #1270/#1271 not
+re-verified (no new commits since 10-08/10-04, consistent with prior days). #1270 (28d stale) and
+#1271 (24d stale) remain weeks with zero review activity, and #1281 (weekly-retro distillate,
+open since 10-12, 20d) remains its own stale-PR case — same root cause as #1127 (no scheduled
+agent has merge authority), not re-filed. Worktree count **30**, unchanged from yesterday (still
+>>6) — tracked at #1277, not re-commented. Two background `claude` processes observed older than
+12h: ~18d (pid 33319, opus, `--resume`/slock-managed, no project marker tying it to this repo —
+consistent with prior days, not filed) and a new one at ~23h (pid 40950/40951, sonnet, tied to
+`hands-up-education/hue-agent-plugin` per its `--project-config-root` — different repo, out of
+scope here, not filed).
+
+**Scheduled-task audit**: `daily-trading-standup` fired this run 09:07 UTC on schedule, no gap
+since yesterday. `weekly-model-retrain` fired on its correct Sunday slot (08:13 UTC today, cron
+`0 8 * * 0`) — outcome not reviewed by this standup, ml-engineer territory. `weekly-retro` and
+`prune-worktrees` both show `lastRunAt`/`nextRunAt` consistent with their cron schedules, no
+apparent missed slot in the last 48h; `prune-worktrees`' effect check (worktree count not
+growing) trivially PASSes since the count is unchanged at 30. Did not redo full transcript-level
+slot enumeration for `daily-trading-standup` itself (self-audit is circular per §2.15) — relying
+on yesterday's thorough pass plus today's on-time firing.
+
+**Market**: BTC $78,115 (+1.02% 24h), ETH $2,272.55 (+1.39% 24h), via direct CoinGecko public API
+(per #1288's established workaround for unreliable WebSearch quotes).
+
+Ref: GH #1269 (credential P1, 29th escalation, queue stays at 1), #1285 (updated record PR, 17th
+commit), #1286 (dead push-notification channel, not retried), #1290 (confirmed persistent 2-day
+total block, commented), #1260 (main/develop divergence, unchanged, not re-filed), #1141 (Railway
+CLI auth, reconfirmed broken for both staging and production logs), #1277 (worktree overrun,
+still 30, not re-commented), #1270/#1271/#1281 (stale PRs, same root cause as #1127, not
+re-filed), #1233 (weekly-retrain precondition block, not new); incidents
+`.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md` and
+`.claude/state/incidents/2026-10-31T0907-P1-prod-db-reads-total-block.md` (both updated).

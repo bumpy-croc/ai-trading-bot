@@ -563,30 +563,43 @@ read) was available this run, so trading-engine health could not be independentl
 last known-good remains 10-30's DD 2.80%, all tripwires PASS. This incident's own tracking does
 not depend on prod DB access and is unaffected.
 
+2026-11-01 (this update): 29th escalation. Reconfirmed `origin/develop` still pinned at
+`812b5701` (28 full days, zero merges) and `origin/main` still at `904e038e` (41 days, zero
+promotions) — both unchanged since yesterday. Did not retry push notification (#1286 still open,
+dead channel, paused per standing guidance). Landed as this commit on
+`standup/1016-credential-rotation-followup7` (PR #1285, still the sole open PR for this
+incident, still MERGEABLE, CI green) — queue stays at one. **#1290 confirmed as a persistent
+2-day total block**, not a one-off: both documented fallbacks (single-statement `psql`,
+`system_events` latch read) were retried as their own separate Bash calls this run and both
+denied again, identically. Trading-engine health could not be independently reconfirmed for the
+second day running — last known-good remains 10-30's DD 2.80%, all tripwires PASS. This
+incident's own tracking does not depend on prod DB access and is unaffected.
+
 ## Current state
 
-Credential is presumed still live and unrotated as of 2026-10-31, **40 days** after the original
-09-21 escalation and **27 full days** after this incident was formally opened, with **zero
-recorded human action across 28 escalations**. Push-notification remains paused pending #1286
+Credential is presumed still live and unrotated as of 2026-11-01, **41 days** after the original
+09-21 escalation and **28 full days** after this incident was formally opened, with **zero
+recorded human action across 29 escalations**. Push-notification remains paused pending #1286
 (the dead-channel tracking issue, still open) — not retried this run.
-`origin/develop` has had **zero merges in 27 full days** (still pinned at `812b5701`,
+`origin/develop` has had **zero merges in 28 full days** (still pinned at `812b5701`,
 2026-10-04); `origin/main` (the ref actually deployed to production) has had **zero promotions
-in 40 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
+in 41 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
 the exposure. **The PR queue for this single incident remains one** — #1285 (MERGEABLE,
 updated by this entry), unchanged since the 10-26 cleanup of the seven superseded PRs. CI
 remains green on #1285. The freeze remains 100% an absent-human-action gap. Two independent
 human actions remain outstanding: (1) rotate the credential in Railway, (2) merge #1285 to land
 a durable record on `develop` (or promote directly to `main`). Right now no branch carries a
-merged record of this P1, twenty-seven days after it was first opened. At 28 escalations and
-roughly 40x the charter's 24-hour P1 SLA, the automation has exhausted the actions available to
-it via the channels it has: the GH-comment channel has drawn zero response in 28 attempts
+merged record of this P1, twenty-eight days after it was first opened. At 29 escalations and
+roughly 41x the charter's 24-hour P1 SLA, the automation has exhausted the actions available to
+it via the channels it has: the GH-comment channel has drawn zero response in 29 attempts
 (though it can still post), and the push-notification channel remains confirmed dead. This
 report's own final message continues the channel change from 10-20 — a direct yes/no decision
 put to the human, now also surfaced as this run's own ask to the operator. **Separately and more
-urgently**: #1290 (prod-DB-read classifier gate) escalated today to a total block with no
-workaround, meaning this repo's sole automated watchdog is currently blind to prod — see the new
-dedicated incident file. That is a more time-sensitive gap than this incident's own freeze, since
-it affects detection of *any* future live-capital issue, not just this one credential.
+urgently**: #1290 (prod-DB-read classifier gate) is now a confirmed persistent 2-day total block
+with no workaround, meaning this repo's sole automated watchdog remains blind to prod for a
+second consecutive day — see the incident file's 11-01 update. That is a more time-sensitive gap
+than this incident's own freeze, since it affects detection of *any* future live-capital issue,
+not just this one credential.
 
 ## Post-mortem (filled after close)
 

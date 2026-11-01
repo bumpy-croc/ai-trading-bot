@@ -71,6 +71,13 @@ unbounded until this classifier gate relents or is addressed, rather than the al
                         DB-latch query denied — the first day with zero available production
                         read path. Staging DB control query succeeded, confirming scope. This
                         incident file opened; #1269's daily escalation entry cross-references it.
+2026-11-01 09:07 UTC — [day 2, same shape] both documented fallbacks retried as separate Bash
+                        calls — single-statement `account_history` psql, and the narrow
+                        `system_events` latch query — each denied again, identically
+                        (`[Production Reads]`). Confirms 10-31 was not a one-off: this is now a
+                        persistent block with zero available workaround, not a transient
+                        classifier hiccup. ~24h since this incident opened (~1x the charter's 24h
+                        P1 SLA). Commented on #1290.
 ```
 
 ## Actions taken
@@ -82,14 +89,21 @@ with today's evidence. Did not attempt further workarounds beyond the three docu
 this task's own instructions not to bypass a permission denial. Standup's prod-dependent sections
 reported as CANNOT-VERIFY rather than PASS this run.
 
+2026-11-01: re-tried both documented fallbacks (single-statement `psql`, narrow `system_events`
+latch read) as their own separate Bash calls before concluding anything — both denied again,
+same reason string. No new workaround attempted beyond that, per the denial's own instruction not
+to bypass intent. Commented on #1290 with today's confirmation. Landed as part of this run's
+commit on `standup/1016-credential-rotation-followup7` (PR #1285).
+
 ## Current state
 
-Open. No production read path is currently available to this automation. Human action needed:
-either adjust the auto-mode classifier's policy for this specific, long-validated read-only
-monitoring query, or accept that this task's prod-health coverage is unavailable until it is
-changed, and decide whether that risk is acceptable given #1269 (credential rotation) and #1127
-(no scheduled agent has merge/action authority) are both still open and unresolved on their own
-much longer timelines.
+Open, now **2 consecutive days** of a total block with no available workaround (10-31, 11-01).
+No production read path is currently available to this automation. Human action needed: either
+adjust the auto-mode classifier's policy for this specific, long-validated read-only monitoring
+query, or accept that this task's prod-health coverage is unavailable until it is changed, and
+decide whether that risk is acceptable given #1269 (credential rotation) and #1127 (no scheduled
+agent has merge/action authority) are both still open and unresolved on their own much longer
+timelines.
 
 ## Post-mortem (filled after close)
 
