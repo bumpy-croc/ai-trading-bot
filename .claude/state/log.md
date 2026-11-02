@@ -3697,3 +3697,83 @@ still 30, not re-commented), #1270/#1271/#1281 (stale PRs, same root cause as #1
 re-filed), #1233 (weekly-retrain precondition block, not new); incidents
 `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md` and
 `.claude/state/incidents/2026-10-31T0907-P1-prod-db-reads-total-block.md` (both updated).
+
+## [D-2026-11-02-01] 2026-11-02 ~09:15 UTC · incident-escalate · daily-trading-standup
+
+**#1269 (credential rotation, P1)**: 30th escalation, day 42 since exposure (09-21), day 29 since
+this incident was opened, ~42x the charter's 24h P1 SLA. `origin/develop` still pinned at
+`812b5701` (29 full days, zero merges); `origin/main` still at `904e038e` (42 days, zero
+promotions) — unchanged from yesterday. PR queue remains **one** (#1285, MERGEABLE, CI green).
+Did not retry push notification (#1286 still open, dead channel, paused per standing guidance).
+Posted the 30th status comment on #1269.
+
+**PROD**: VERIFIED, first time in 3 days. #1290's classifier block did not reproduce this run —
+`account_history`, `positions`, `trades`, and `system_events` all read successfully on the first
+try, no `[Production Reads]` denial. No known cause for the change (no commit/config/human action
+claims it); treated as classifier non-determinism, not a fix. Equity $86.69185149, balance
+$86.63146320, 1 open position (ETHUSDT LONG, entry 2278.80, stop 2049.381 present), last 6 trades
+unchanged since 10-29 (#27 -$1.58 stop_loss most recent). No unresolved CRITICAL `system_events`
+in the last 7 days. Updated incident `2026-10-31T0907-P1-prod-db-reads-total-block.md` (opened
+for a second clean day before treating the block as over) and commented on #1290.
+
+**Tripwire ladder**: CAP/WARN_FRAC/CRIT_FRAC read fresh from `origin/main:src/config/risk-limits.json`
+— all numeric, none null. PEAK = session-21 peak equity $88.89367342 (2026-09-23); current equity
+$86.69185149 → **DD 2.48%**. SOFT (≥5%, $4.44): PASS. WARNING (CAP×0.50=10%, $8.89 drawdown):
+PASS. CRITICAL (CAP×0.80=16%, $14.22 drawdown): PASS. BREACH (CAP=20%, $17.78 drawdown): PASS.
+4+ consecutive losing trades: PASS (most recent loss is a single trade, preceded by a win).
+Weekly DD rate vs 7d-ago equity ($86.82659123 on 10-26): -0.15 pp, PASS. Open position missing
+stop_loss: PASS (none).
+
+**POSITIVE-STATE ASSERTIONS**: `FEATURE_ENTRY_PAUSE` — inferred PASS (false) from the
+`system_events` latch message text ("no close-only latch, manual halt or entry pause in force");
+could not independently confirm via `railway variables -k` — denied this run by this session's
+own Claude Code auto-mode classifier ("Credential Materialization"), before reaching Railway.
+Latch state — PASS: newest `system_events` row (09:07:46 UTC, <10min old) is `ENTRIES_ENABLED`.
+Monitor precondition (#1103 deployed to `main`): confirmed, deployed commit `904e038e` postdates
+#1103's merge. No unresolved CRITICAL events in 7 days: PASS (0 rows). Decision-line cadence
+(60s `Decision:` log lines) — **CANNOT-VERIFY**: `railway logs -e production` returned
+`Unauthorized`, consistent with #1141; not claimed as PASS. Flat->48h check: N/A, 1 open position.
+
+**STAGING**: paper equity $1020.16200850 (fresh row, 08:15 UTC today), last 4 trades unchanged
+(#51 +$0.12 10-12, #50 -$4.96 10-08, #49 +$1.28 09-21, #48 +$2.40 09-21) — flat since 10-12, no
+open position. Governor/circuit/gate_reason log check BLOCKED — `railway logs -e staging`
+returned `Unauthorized`, consistent with #1141, not re-filed.
+
+**CROSS-SESSION**: branch=main (correct). Open PR count unchanged at **4** (#1285 + #1270 +
+#1271 + #1281), all MERGEABLE, none CONFLICTING, no unrecognised branches. #1270 (29d stale),
+#1271 (29d stale), #1281 (21d stale) remain the same root cause as #1127 (no scheduled agent has
+merge authority), not re-filed. Worktree count **30**, unchanged (still >6) — tracked at #1277,
+not re-commented. Two background `claude` processes observed older than 12h: ~19d (pid 33319,
+opus, `--resume`/slock-managed, no project marker tying it to this repo — consistent with prior
+days, not filed) and one at ~1d23h (pid 40950/40951, tied to
+`hands-up-education/hue-agent-plugin` per `--project-config-root` — different repo, out of scope,
+not filed). Several short-lived (<8min) processes tied to `hands-up-education/hue-backend` —
+well under the 12h threshold, not flagged.
+
+**Railway CLI (#1141)**: reconfirmed broken — `railway logs`, `whoami`, and `status --json` (both
+envs) all returned `Unauthorized. Please run 'railway login' again.` New nuance this run:
+`railway variables -k` (production) was denied one layer earlier, by this session's own
+Claude Code permission classifier, before the command reached Railway's auth check at all —
+commented on #1141 with this distinction rather than filing a new issue, since the end-user
+symptom (cannot read Railway state from this automation) is already tracked there.
+
+**Scheduled-task audit**: `daily-trading-standup` fired this run 09:07 UTC on schedule, no gap
+since yesterday. `weekly-retro` is due later today (10:21 UTC, last fired 10-26, on schedule, not
+yet due at time of this check). `prune-worktrees` last fired 10-30 (Fri), next due tonight
+23:10 UTC (Mon) — no missed Mon-Fri slot in the window; effect check (worktree count not growing)
+trivially PASSes, still 30. `weekly-model-retrain` fired its correct Sunday slot (11-01, 08:13
+UTC) — outcome not reviewed here, ml-engineer territory. Did not redo full transcript-level slot
+enumeration for `daily-trading-standup` itself (self-audit is circular per §2.15) — relying on
+the prior thorough pass plus today's on-time firing.
+
+**Market**: BTC $78,233 (+0.09% 24h), ETH $2,297.19 (+1.09% 24h), via direct CoinGecko public API
+(per #1288's established workaround for unreliable WebSearch quotes).
+
+Ref: GH #1269 (credential P1, 30th escalation, queue stays at 1), #1285 (updated record PR, 18th
+commit), #1286 (dead push-notification channel, not retried), #1290 (did not reproduce this run,
+commented, kept open pending a second clean day), #1260 (main/develop divergence, unchanged, not
+re-filed), #1141 (Railway CLI auth, reconfirmed broken + new classifier-layer nuance on
+`variables -k`, commented), #1277 (worktree overrun, still 30, not re-commented), #1270/#1271/
+#1281 (stale PRs, same root cause as #1127, not re-filed), #1233 (weekly-retrain precondition
+block, not new); incidents `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md`
+and `.claude/state/incidents/2026-10-31T0907-P1-prod-db-reads-total-block.md` (both updated).

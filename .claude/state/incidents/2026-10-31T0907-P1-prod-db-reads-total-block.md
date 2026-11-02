@@ -95,15 +95,28 @@ same reason string. No new workaround attempted beyond that, per the denial's ow
 to bypass intent. Commented on #1290 with today's confirmation. Landed as part of this run's
 commit on `standup/1016-credential-rotation-followup7` (PR #1285).
 
+2026-11-02: full prod-health query set (account_history, open positions, trades, system_events
+latch, critical-events window) all succeeded on the first try — no classifier denial, no `
+[Production Reads]` reason string, nothing to work around. This is a change from 10-31/11-01, not
+a change to anything this repo controls: no commit, config edit, or human action in this window
+claims to have touched the classifier, so treating this as "fixed" would be the same mistake
+LESSONS §2.16 already flags for unexplained clears. Recording it as observed behavior only.
+Commented on #1290 with today's result. Landed as part of this run's commit on
+`standup/1016-credential-rotation-followup7` (PR #1285).
+
 ## Current state
 
-Open, now **2 consecutive days** of a total block with no available workaround (10-31, 11-01).
-No production read path is currently available to this automation. Human action needed: either
-adjust the auto-mode classifier's policy for this specific, long-validated read-only monitoring
-query, or accept that this task's prod-health coverage is unavailable until it is changed, and
-decide whether that risk is acceptable given #1269 (credential rotation) and #1127 (no scheduled
-agent has merge/action authority) are both still open and unresolved on their own much longer
-timelines.
+Open. Day 3 since this incident was opened (10-31), but **today's run (11-02) saw zero blocking**
+— full prod reads succeeded — after 2 consecutive days (10-31, 11-01) of a total block. Since the
+reprieve has no identified cause, this is read as the classifier's decision varying run-to-run,
+not as the underlying policy having changed; the incident stays open pending at least one more
+clean day before any claim that the block is over. If tomorrow's run blocks again, that confirms
+intermittency rather than resolution, which is itself worth noting as its own pattern. Human
+action still useful regardless: either adjust the auto-mode classifier's policy for this specific,
+long-validated read-only monitoring query so it stops being denied *or* resumed at its own
+discretion, or accept the intermittent-blindness risk given #1269 (credential rotation) and #1127
+(no scheduled agent has merge/action authority) are both still open and unresolved on their own
+much longer timelines.
 
 ## Post-mortem (filled after close)
 
