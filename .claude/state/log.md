@@ -2448,3 +2448,45 @@ oldest #1099 at 63 days. Recorded on #1127.
 6. #1286 / #1141: push channel dead; `railway login`.
 Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260, #1233, #1141,
 #1273, #1277, #1230, #1099, #1267; LESSONS §3.
+
+## [D-2026-11-02-02] 2026-11-02 ~10:25 UTC · note · weekly-retro
+
+**Scope.** Weekly retro for 10-26 → 11-02. Built on the open #1281 branch (`retro/2026-10-12`, input 0b), so this PR supersedes it. Scanned all remote branches for `D-2026-11-02-*` before numbering (LESSONS §2.17).
+
+**Input 0b.** #1281 open 21 days, CLEAN, carrying the 10-05, 10-12, 10-19 and 10-26 retros. `develop` has had no commit since `812b5701` (10-04, 29 days).
+
+**Input 0 — AGENDA.** Empty, fourteenth consecutive window. Open PRs #1285, #1271, #1270 checked for AGENDA additions: none. Cleared.
+
+**Input 1 — log.md.** Develop's log ends 10-26. Standup entries 10-26 → 11-02 (eight) live only on #1285, with incident `2026-10-31T0907-P1-prod-db-reads-total-block.md`. Distillate taken from them: LESSONS §2.17 bullet and §2.18.
+
+**Input 2 — incidents.** Opened: `2026-10-31T0907-P1-prod-db-reads-total-block.md` (on #1285). Open on develop: `2026-08-24T1200-P1-close-only-4day-silent-halt.md`. Credential rotation #1269 at day 42 since exposure, 30 escalations, no human action.
+
+**Input 3 — failures.** Standup prod-read denial 10-28 → 11-01 (#1290). Standup reported CANNOT-VERIFY or BLOCKED on those days and did not PASS.
+
+**Input 4 — calibration.** Standup 11-02: PASS only where a fresh read returned data; Railway logs and staging checks stayed BLOCKED (`Unauthorized`, #1141). No dated prediction in the window resolved.
+
+**Input 6 — scheduled tasks.** Registry 26 entries, 5 recurring enabled. Directories 32. Six directories have no registry entry: `alert-monitor`, `eod-worktree-prune`, `hue-287-legacy-asset-soak`, `pm-fleet-watchdog`, `staging-cohort-observer`, `suburani-flip-daily-watch`. Not called outages: 08-13 precedent (missing registry entry may be a deliberate retirement). Alex to confirm. Slot audit, 10-26 → 11-02:
+- `daily-trading-standup` 09:07 daily: 7/7 slots (10-27 → 11-02) have entries, on #1285 only.
+- `prune-worktrees` 23:10 Mon–Fri: 10-26 → 10-30 slots fired (last run 10-30). Effect not verified this run.
+- `weekly-model-retrain` Sun 08:14: 11-01 slot fired, BLOCKED (`stale-training-image`, #1233).
+- `weekly-retro` Mon 10:21: 10-26 slot → #1281; 11-02 slot is this run.
+- `republish-project-map` Mon–Fri 08:01: not this repo's task; not audited.
+
+**Input 7 — model scoreboard.** No `latest` symlink change (nothing merged to develop). No promotion row.
+
+**Diffs in this PR.**
+- LESSONS §2.17: "still true at 11-02" bullet (stranded standup entries on #1285; retro numbering).
+- LESSONS §2.18 (new): a monitor that cannot read its own data is a blind window, not a pass. Earned #1290.
+- weekly-retro SKILL input 1: read every open PR branch's `log.md` and `incidents/`.
+- AGENDA cleared.
+
+**Calibration verdicts.** Standup: calibrated; blind days reported honestly. No agent over- or under-confidence example in the window that this retro could verify.
+
+**Process changes proposed to the Board (layer 1, not edited here).**
+- Merge or close #1281 and #1285 (both CLEAN). Oldest distillate (10-05) is not on develop.
+- Confirm the six unregistered task directories are retired; if so, delete them.
+- Assign an owner to #1290, the monitor's blind spot.
+
+**Unowned queue (§2.11).** Open, no assignee: #1290, #1289, #1288, #1287, #1286, #1099 (oldest, 63 days). Escalated as one item here, not per issue.
+
+**Not in force until this PR merges and develop is promoted (§2.9(i)).**

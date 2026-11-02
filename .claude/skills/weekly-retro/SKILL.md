@@ -83,7 +83,7 @@ checklist line, a new tripwire.
    `develop`: 151KB on 2026-10-26, and the SessionStart hook `cat`s it whole, so the harness hands
    sessions a ~2KB preview plus a file path (the 70KB primary copy already arrived that way). If it is
    still that large and #1289 is open, say so in the summary; each retro append makes it worse.
-1. **log.md** — the week's entries end to end, not just the tail. **A week with no entries is a
+1. **log.md** — the week's entries end to end, not just the tail, **and every open PR branch's `.claude/state/log.md` and `incidents/` (`git show origin/<branch>:<path>`)**: records a standup wrote while its PR is unmerged are invisible on `develop` (LESSONS §2.17). **A week with no entries is a
    finding, not a quiet week** — cross-check against the scheduled-task traces (input 6): if the
    monitors ran and the log is empty, findings were surfaced and dropped (LESSONS §2.10).
    **Holes matter as much as emptiness, and only the slot list finds them.** Diff the log's *date

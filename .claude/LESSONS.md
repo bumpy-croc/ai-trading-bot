@@ -1180,6 +1180,23 @@ right things in the right places, and the writes never reached the branch anyone
   for one incident is the §2.11 note-to-self at PR scale. The queue's resolution is tracked in #1287.
   Earned: #1280/#1281/#1282 (id collision); #1283/#1284/#1285 (10-14 x3); #1284/#1285 (10-15 x2);
   #1268 `CONFLICTING` since 10-05; driver runs 2026-10-19.
+- **Still true at 11-02 (retro 2026-11-02).** `develop` has had no commit since `812b5701` (10-04).
+  The daily standup's entries from 10-26 → 11-02 (eight, `D-2026-10-26-01` … `D-2026-11-02-01`) and
+  incident `2026-10-31T0907-P1-prod-db-reads-total-block.md` exist only on #1285 (open since 10-16,
+  CLEAN). The 11-02 standup used `[D-2026-11-02-01]`, the id this retro's scan would have chosen.
+  The retro entry is therefore numbered `[D-2026-11-02-02]` after scanning all remote branches.
+  Earned: #1285; #1287.
+
+### 2.18 A monitor that cannot read its own data is a blind window, not a pass
+
+Trap: the production DB read path was denied by a permission classifier on 10-28 and again 10-29
+through 11-01 (#1290). Each standup could report only "cannot verify"; a run that carried forward
+an older PASS or inferred one from the message text of an old row would have looked healthy.
+Rule: a denied or failing read is recorded as a blind window, with its first and last day, in the
+incident file. It is not counted as PASS. Rule: one good read does not close the window. The 11-02
+standup did this correctly, keeping the incident open for a second clean day and writing
+"classifier non-determinism, not a fix" rather than "resolved". Earned: #1290; incident
+`2026-10-31T0907-P1-prod-db-reads-total-block.md` (on #1285); the 10-28 and 11-02 standup entries.
 
 ---
 
