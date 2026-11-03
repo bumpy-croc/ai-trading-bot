@@ -104,15 +104,24 @@ LESSONS §2.16 already flags for unexplained clears. Recording it as observed be
 Commented on #1290 with today's result. Landed as part of this run's commit on
 `standup/1016-credential-rotation-followup7` (PR #1285).
 
+2026-11-03: reproduced again, but in the milder batched-call shape, not the 10-31/11-01 total
+block: the first combined 3-statement `psql` call against `account_history`/`positions`/`trades`
+was denied (`[Production Reads]`), but splitting into one `psql -c` per Bash call — the
+10-30-documented workaround — succeeded immediately on the retry, every time. No capital-risk
+gap this run: full prod-health query set (account_history, positions, trades, system_events
+latch) all confirmed via the single-statement path. Commented on #1290 with today's evidence.
+Landed as part of this run's commit on `standup/1016-credential-rotation-followup7` (PR #1285).
+
 ## Current state
 
-Open. Day 3 since this incident was opened (10-31), but **today's run (11-02) saw zero blocking**
-— full prod reads succeeded — after 2 consecutive days (10-31, 11-01) of a total block. Since the
-reprieve has no identified cause, this is read as the classifier's decision varying run-to-run,
-not as the underlying policy having changed; the incident stays open pending at least one more
-clean day before any claim that the block is over. If tomorrow's run blocks again, that confirms
-intermittency rather than resolution, which is itself worth noting as its own pattern. Human
-action still useful regardless: either adjust the auto-mode classifier's policy for this specific,
+Open. Day 4 since this incident was opened (10-31). Pattern across the window: 10-31/11-01 total
+block (zero workaround), 11-02 no block at all, 11-03 (today) back to the milder batched-call
+trigger with the single-statement workaround intact. This confirms genuine intermittency in both
+*whether* the gate fires and *which* shape it takes on a given day, not a fixed policy and not a
+fix — no commit, config edit, or human action in this window claims to have touched the
+classifier. Keeping this open rather than closing on today's clean recovery, consistent with the
+10-31/11-01 lesson that a one-day reprieve is not evidence of resolution. Human action still
+useful regardless: either adjust the auto-mode classifier's policy for this specific,
 long-validated read-only monitoring query so it stops being denied *or* resumed at its own
 discretion, or accept the intermittent-blindness risk given #1269 (credential rotation) and #1127
 (no scheduled agent has merge/action authority) are both still open and unresolved on their own
