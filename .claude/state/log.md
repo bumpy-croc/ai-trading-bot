@@ -3863,3 +3863,78 @@ reconfirmed broken), #1270/#1271 (stale PRs, same root cause as #1127, not re-fi
 (stale, superseded by #1291 per #1291's own title but still open — flagged, not closed);
 incidents `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md` and
 `.claude/state/incidents/2026-10-31T0907-P1-prod-db-reads-total-block.md` (both updated).
+
+## [D-2026-11-04-01] 2026-11-04 ~09:10 UTC · incident-escalate · daily-trading-standup
+
+**#1269 (credential rotation, P1)**: 32nd escalation, day 44 since exposure (09-21), day 31
+since this incident was opened, ~44x the charter's 24h P1 SLA. `origin/develop` still pinned at
+`812b5701` (31 full days, zero merges); `origin/main` still at `904e038e` (44 days, zero
+promotions) — unchanged from yesterday. PR queue remains **one** (#1285, MERGEABLE, CI green on
+all 6 checks). Restamped the PR title to "32nd escalation (day 44)". Did not retry push
+notification (#1286 still open, dead channel, paused). Posted the 32nd status comment on #1269.
+Two outstanding human actions, unchanged: (1) rotate the credential in Railway, (2) merge #1285
+to land a durable record on `develop`.
+
+**PROD**: VERIFIED. Equity $86.81, balance $86.63, 1 open position (ETHUSDT LONG #37, entry
+2278.80, current 2320.30, unrealized +0.17, stop 2049.38 present). Last 6 trades: -1.58
+stop_loss (10-29), +0.12 stop_loss, +0.001 emergency close (10-09), -0.59 stop_loss, +0.29,
++0.45 — no 4-in-a-row losing streak. No unresolved CRITICAL `system_events` in the last 7 days
+(0 rows). Heartbeat 47min old, PASS.
+
+**Tripwire ladder**: CAP/WARN_FRAC/CRIT_FRAC read fresh from `origin/main:src/config/risk-limits.json`
+— all numeric, none null (CAP=0.20, WARN_FRAC=0.50, CRIT_FRAC=0.80). PEAK = session-21 peak
+equity $88.89 (hourly-snapshot basis, same convention as prior runs); current equity $86.81 →
+**DD 2.35%**. SOFT (≥5%, $84.45): PASS. WARNING (CAP×0.50=10%, $80.00): PASS. CRITICAL
+(CAP×0.80=16%, $74.67): PASS. BREACH (CAP=20%, $71.12): PASS. Weekly DD rate vs 7d-ago equity
+(~$87.13 on 10-28): ~-0.4pp, PASS. Open position missing stop_loss: PASS (none).
+
+**POSITIVE-STATE ASSERTIONS**: `FEATURE_ENTRY_PAUSE` — inferred PASS (false) from the
+`system_events` latch message text; direct `railway variables -k` read UNVERIFIED (`railway`
+CLI itself returned `Unauthorized`, #1141, not a classifier block this time). Latch state —
+PASS: newest `system_events` row (08:23:10 UTC, 47min old) is `ENTRIES_ENABLED`, one row/hour
+back to at least 04:21; no `*_LATCHED` rows. Monitor precondition (#1103 on `main`): confirmed
+deployed. No unresolved CRITICAL events in 7 days: PASS. Decision-line cadence — UNVERIFIED:
+`railway logs -e production` returned `Unauthorized`, consistent with #1141; not claimed as
+PASS. Flat->48h check: N/A, 1 open position (open ~5.5 days, no time-based exit in live per
+prior standup notes).
+
+**STAGING**: paper equity $1020.162850 (fresh row, 08:41 UTC today), last 4 trades unchanged
+(#51 +$0.12 10-12, #50 -$4.96 10-08, #49 +$1.28 09-21, #48 +$2.40 09-21) — flat since 10-12 (23
+days), no open position. Governor/circuit/gate_reason log check BLOCKED — `railway logs -e
+staging` returned `Unauthorized`, consistent with #1141, not re-filed. **Filed #1292**: this
+23-day flat condition had no dedicated tracking issue until today (checked — #1279 is a
+different, apparently-resolved Postgres-recovery-mode incident, not this).
+
+**CROSS-SESSION**: branch=main (correct). Open PR count **5** (#1291, #1285, #1281, #1271,
+#1270), all MERGEABLE, none CONFLICTING, CI green (6/6) on every one — no repo-wide CI blocker.
+#1281 still open despite #1291's own title claiming to supersede it (flagged 11-03, unchanged,
+not re-flagged as new). #1270/#1271 remain stale (same root cause as #1127, not re-filed).
+**Worktree count unchanged at 31** (same as 11-03) despite `prune-worktrees` firing again last
+night — today's scheduled-task slot audit found its sampled runs removing worktrees only in the
+`hands-up-education` repos, never `ai-trading-bot`; commented on #1277 with this more specific
+evidence. One background `claude` process observed ~21d old (pid 33319,
+`--dangerously-skip-permissions`, consistent with prior days — this is the expected long-lived
+PM daemon process per this repo's own operating model, not filed). `origin/main`/`origin/develop`
+34/1 commit split, frozen 44/31 days respectively (see #1269 above).
+
+**Scheduled-task audit**: `daily-trading-standup` fired on schedule (09:07 UTC), HIT for 11-02
+and 11-03 (verified via their own GH-comment artifacts). `prune-worktrees` fired its 5 weeknight
+slots cleanly (10-28 through 11-03) but is ineffective for this repo (see cross-session note).
+`weekly-model-retrain` fired its correct Sunday slot (11-01) and ended cleanly, but the result
+was "RETRAIN BLOCKED - image stale" for the **4th consecutive week** (10-11, 10-18, 10-25,
+11-01) — commented on the already-tracked #1233 with this duration. `weekly-retro` fired its
+Monday slot (11-02) cleanly, PR #1291 opened and still open. `republish-project-map` PARTIAL
+today: the publish itself was refused (live artifact newer) but readings were still recorded
+and pushed — minor, self-correcting, not filed.
+
+**Market**: BTC $78,300 (+2.1% 24h), ETH $2,316 (+2.6% 24h), via CoinGecko/Binance public APIs
+(cross-checked, agreed within noise).
+
+Ref: GH #1269 (credential P1, 32nd escalation, queue stays at 1, PR title restamped), #1285
+(updated record PR, 20th commit), #1286 (dead push-notification channel, not retried), #1290
+(did not reproduce today, 2nd clean day, commented), #1277 (worktree pruner scoped to wrong
+repos, commented with new evidence), #1141 (Railway CLI auth, reconfirmed broken for prod+
+staging), #1292 (NEW — staging flat 23 days, previously untracked), #1233 (weekly-model-retrain
+blocked 4 consecutive weeks, commented), #1270/#1271/#1281 (stale PRs, not re-filed); incidents
+`.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md` and
+`.claude/state/incidents/2026-10-31T0907-P1-prod-db-reads-total-block.md` (both updated).

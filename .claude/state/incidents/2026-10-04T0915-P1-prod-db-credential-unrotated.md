@@ -613,28 +613,50 @@ capital-risk gap resulted. Separately noted: PR #1291 (weekly retro) states in i
 it "supersedes #1281", but #1281 is still open — flagged as a finding in this run's report, not
 closed (closing another PR is outside this task's authorized writes).
 
+2026-11-04 (this update): 32nd escalation. Reconfirmed `origin/develop` still pinned at
+`812b5701` (31 full days, zero merges) and `origin/main` still at `904e038e` (44 days, zero
+promotions) — both unchanged since yesterday. Did not retry push notification (#1286 still
+open, dead channel, paused per standing guidance). Landed as this commit on
+`standup/1016-credential-rotation-followup7` (PR #1285, still the sole open PR for this
+incident, still MERGEABLE, CI green on all 6 checks) — queue stays at one. Restamped the PR
+title to "32nd escalation (day 44)". Trading engine reconfirmed healthy this run: equity
+$86.81 vs session-21 peak equity $88.89367342 → DD 2.35%, all tripwires PASS, `ENTRIES_ENABLED`
+latch fresh (<1h old). **#1290 did NOT reproduce today** — the same combined 3-statement `psql`
+call that 11-03 saw denied succeeded cleanly on the first try, a second clean day matching
+11-02's pattern; left open pending a longer clean run before treating as resolved. `railway
+variables`/`logs` reconfirmed broken for both production and staging (#1141, Railway's own
+auth layer this time, not a classifier block — commented with today's evidence). Worktree
+count unchanged at 31 (same as 11-03); today's scheduled-task slot audit found the pruner's
+sampled runs removing worktrees only in the `hands-up-education` repos, never this one —
+commented on #1277 with this more specific evidence. Also filed #1292 (staging paper trading
+flat 23 days since 2026-10-12, no dedicated tracking issue existed until today) and commented
+on #1233 (weekly-model-retrain has now failed its ECR-staleness check for 4 consecutive Sunday
+slots: 10-11, 10-18, 10-25, 11-01) — neither folds into this P1; both are separate, lower
+severity (staging is paper-only, no capital risk; the retrain gap degrades model freshness, not
+today's trading).
+
 ## Current state
 
-Credential is presumed still live and unrotated as of 2026-11-03, **43 days** after the original
-09-21 escalation and **30 full days** after this incident was formally opened, with **zero
-recorded human action across 31 escalations**. Push-notification remains paused pending #1286
+Credential is presumed still live and unrotated as of 2026-11-04, **44 days** after the original
+09-21 escalation and **31 full days** after this incident was formally opened, with **zero
+recorded human action across 32 escalations**. Push-notification remains paused pending #1286
 (the dead-channel tracking issue, still open) — not retried this run.
-`origin/develop` has had **zero merges in 30 full days** (still pinned at `812b5701`,
+`origin/develop` has had **zero merges in 31 full days** (still pinned at `812b5701`,
 2026-10-04); `origin/main` (the ref actually deployed to production) has had **zero promotions
-in 43 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
+in 44 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
 the exposure. **The PR queue for this single incident remains one** — #1285 (MERGEABLE, CI
-green, title restamped by this entry), unchanged since the 10-26 cleanup of the seven superseded
-PRs. The freeze remains 100% an absent-human-action gap. Two independent human actions remain
-outstanding: (1) rotate the credential in Railway, (2) merge #1285 to land a durable record on
-`develop` (or promote directly to `main`). Right now no branch carries a merged record of this
-P1, thirty days after it was first opened. At 31 escalations and roughly 43x the charter's
-24-hour P1 SLA, the automation has exhausted the actions available to it via the channels it
-has: the GH-comment channel has drawn zero response in 31 attempts (though it can still post),
-and the push-notification channel remains confirmed dead. This report's own final message
-continues the channel change from 10-20 — a direct yes/no decision put to the human, now also
-surfaced as this run's own ask to the operator. #1290 (prod-DB-read classifier gate) reproduced
-today in its known batched-call shape but recovered immediately via the documented workaround —
-no capital-risk gap, full trading-engine health independently confirmed.
+green, title restamped by this entry to "32nd escalation (day 44)"), unchanged since the 10-26
+cleanup of the seven superseded PRs. The freeze remains 100% an absent-human-action gap. Two
+independent human actions remain outstanding: (1) rotate the credential in Railway, (2) merge
+#1285 to land a durable record on `develop` (or promote directly to `main`). Right now no
+branch carries a merged record of this P1, thirty-one days after it was first opened. At 32
+escalations and roughly 44x the charter's 24-hour P1 SLA, the automation has exhausted the
+actions available to it via the channels it has: the GH-comment channel has drawn zero
+response in 32 attempts (though it can still post), and the push-notification channel remains
+confirmed dead. This run's own completion summary puts the same direct yes/no decision to the
+operator again, through the session UI rather than only the GH comment thread. #1290 did not
+reproduce today — a second clean day, but not yet treated as resolved pending a longer run of
+clean days.
 
 ## Post-mortem (filled after close)
 

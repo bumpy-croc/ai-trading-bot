@@ -112,16 +112,24 @@ gap this run: full prod-health query set (account_history, positions, trades, sy
 latch) all confirmed via the single-statement path. Commented on #1290 with today's evidence.
 Landed as part of this run's commit on `standup/1016-credential-rotation-followup7` (PR #1285).
 
+2026-11-04: did NOT reproduce. The combined 3-statement `psql` call (account_history, positions,
+trades in one Bash call, the exact shape 11-03 saw denied) succeeded cleanly on the first try —
+no `[Production Reads]` denial, nothing to work around. Second clean day of this window (after
+11-02), now outnumbering the two total-block days (10-31, 11-01) and the one milder batched-call
+day (11-03). Still no commit, config edit, or human action in this window identifies a fix, so
+this stays recorded as observed intermittency, not resolution. Landed as part of this run's
+commit on `standup/1016-credential-rotation-followup7` (PR #1285).
+
 ## Current state
 
-Open. Day 4 since this incident was opened (10-31). Pattern across the window: 10-31/11-01 total
-block (zero workaround), 11-02 no block at all, 11-03 (today) back to the milder batched-call
-trigger with the single-statement workaround intact. This confirms genuine intermittency in both
-*whether* the gate fires and *which* shape it takes on a given day, not a fixed policy and not a
-fix — no commit, config edit, or human action in this window claims to have touched the
-classifier. Keeping this open rather than closing on today's clean recovery, consistent with the
-10-31/11-01 lesson that a one-day reprieve is not evidence of resolution. Human action still
-useful regardless: either adjust the auto-mode classifier's policy for this specific,
+Open. Day 5 since this incident was opened (10-31). Pattern across the window: 10-31/11-01 total
+block (zero workaround), 11-02 clean, 11-03 milder batched-call trigger (single-statement
+workaround intact), 11-04 clean again. Two clean days now outnumber the blocked ones, but the
+intermittency itself — both *whether* the gate fires and *which* shape it takes — remains
+unexplained: no commit, config edit, or human action in this window claims to have touched the
+classifier. Keeping this open; a run of consecutive clean days is not yet being treated as
+resolution per the 10-31/11-01 lesson that a short reprieve isn't evidence of a fix. Human action
+still useful regardless: either adjust the auto-mode classifier's policy for this specific,
 long-validated read-only monitoring query so it stops being denied *or* resumed at its own
 discretion, or accept the intermittent-blindness risk given #1269 (credential rotation) and #1127
 (no scheduled agent has merge/action authority) are both still open and unresolved on their own
