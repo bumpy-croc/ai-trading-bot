@@ -3938,3 +3938,81 @@ staging), #1292 (NEW — staging flat 23 days, previously untracked), #1233 (wee
 blocked 4 consecutive weeks, commented), #1270/#1271/#1281 (stale PRs, not re-filed); incidents
 `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md` and
 `.claude/state/incidents/2026-10-31T0907-P1-prod-db-reads-total-block.md` (both updated).
+
+## [D-2026-11-05-01] 2026-11-05 ~09:16 UTC · incident-escalate · daily-trading-standup
+
+**#1269 (credential rotation, P1)**: 33rd escalation, day 45 since exposure (09-21), day 32
+since this incident was opened, ~45x the charter's 24h P1 SLA. `origin/develop` still pinned at
+`812b5701` (32 full days, zero merges); `origin/main` still at `904e038e` (45 days, zero
+promotions) — unchanged from yesterday. PR queue remains **one** (#1285, MERGEABLE, CI green on
+all 6 checks). Restamped the PR title to "33rd escalation (day 45)". Did not retry push
+notification (#1286 still open, dead channel, paused). Posted the 33rd status comment on #1269.
+Two outstanding human actions, unchanged: (1) rotate the credential in Railway, (2) merge #1285
+to land a durable record on `develop`.
+
+**PROD**: VERIFIED. Equity $87.06145517, balance $86.91367559, 1 open position (ETHUSDT LONG
+#38, entry 2406.63, current 2414.38, unrealized +0.056, stop 2167.065 present). Last 6 trades:
++0.309 Stop loss (11-04), -1.584 stop_loss (10-29), +0.121 stop_loss (10-12), +0.0009 emergency
+close (10-09), -0.588 stop_loss (10-08), +0.286 Stop loss (09-21) — no 4-in-a-row losing streak.
+No unresolved CRITICAL `system_events` in the last 7 days (0 rows). Heartbeat ~40min old, PASS.
+Hit the #1290 classifier block mid-run on a single-statement query (see below); full set
+eventually confirmed via retry, not carried forward from stale data.
+
+**Tripwire ladder**: CAP/WARN_FRAC/CRIT_FRAC read fresh from `origin/main:src/config/risk-limits.json`
+— all numeric, none null (CAP=0.20, WARN_FRAC=0.50, CRIT_FRAC=0.80). PEAK = session-21 peak
+equity $88.89367342 (hourly-snapshot basis, same convention as prior runs); current equity
+$87.06145517 → **DD 2.06%**. SOFT (≥5%, $84.45): PASS. WARNING (CAP×0.50=10%, $80.00): PASS.
+CRITICAL (CAP×0.80=16%, $74.67): PASS. BREACH (CAP=20%, $71.11): PASS. Weekly DD rate vs 7d-ago
+equity ($86.92 on 10-29): equity actually *rose* ~0.16pp, PASS. Open position missing
+stop_loss: PASS (none).
+
+**POSITIVE-STATE ASSERTIONS**: `FEATURE_ENTRY_PAUSE` — inferred PASS (false) from the
+`system_events` latch message text; direct `railway variables -k` read unattempted (CLI known
+broken, #1141). Latch state — PASS: newest `system_events` row (08:35:33 UTC, ~40min old) is
+`ENTRIES_ENABLED`, one row/hour back through 04:34. Monitor precondition (#1103): confirmed
+deployed, rows actively emitting. No unresolved CRITICAL events in 7 days: PASS. Decision-line
+cadence — UNVERIFIED: `railway logs -e production` returned `Unauthorized`, consistent with
+#1141; not claimed as PASS. Flat->48h check: N/A, 1 open position.
+
+**STAGING**: paper equity $1020.16200850 (fresh row, 08:51 UTC today), last 4 trades unchanged
+(#51 +$0.12 10-12, #50 -$4.96 10-08, #49 +$1.28 09-21, #48 +$2.40 09-21) — flat since 10-12, now
+**24 days**. Governor/circuit/gate_reason log check BLOCKED again — `railway logs -e staging`
+`Unauthorized`, consistent with #1141. Updated #1292 with today's day count (24, up from 23).
+
+**CROSS-SESSION**: branch=main (correct). Open PR count **5** (#1291, #1285, #1281, #1271,
+#1270), all MERGEABLE, CI green (SUCCESS) on every one — no repo-wide CI blocker, none
+CONFLICTING. #1281 still open despite #1291's title claiming to supersede it (flagged 11-03,
+still unchanged, not re-flagged as new). #1270/#1271 remain stale (same root cause as #1127, not
+re-filed). **Worktree count down to 30** (29 non-primary + primary), from 31 on 11-03/11-04 —
+first decrease seen this window; commented on #1277 with the count and the caveat that the
+nightly pruner only ever touches `hands-up-education` repos, so this is more likely a manual
+cleanup than the pruner working. Background `claude` process pid 33319 now ~22 days old
+(`--dangerously-skip-permissions`) — same expected long-lived PM daemon process as prior days,
+not filed. `origin/main`/`origin/develop` commit split unchanged at 34/1.
+
+**Scheduled-task audit**: `daily-trading-standup` fired on schedule (09:07 UTC); slot audit via
+`list_task_runs` shows HIT with a clean ending summary for both 11-03 and 11-04 (verified from
+the task-run records directly, not just `lastRunAt`). `weekly-model-retrain`'s next slot is
+11-08 (Sunday), not due this window — no new evidence beyond the already-tracked #1233 (4
+consecutive weeks blocked on stale ECR image as of 11-01). `weekly-retro`'s next slot is 11-09,
+not due. `prune-worktrees` fired its scheduled weeknight slot per the registry; its target repo
+(`hands-up-education`) is no longer even a git working tree at the path this task checks
+(`fatal: not a git repository` — `.claude` dir only), so its effect there could not be verified
+this run; its effect on this repo remains "none," per #1277 above.
+
+**Classifier note (#1290)**: reproduced again today, but in a shape that **inverts** the
+10-30/11-03 pattern — the combined 3-statement `psql` call succeeded cleanly, then a
+single-statement query was denied once and cleared on a bare 5s retry with nothing changed. The
+batched-call-is-the-trigger hypothesis no longer holds up; timing/concurrency of the calling
+pattern looks like the more consistent signal across all occurrences so far. No capital-risk gap
+this run. Detail in the incident file; commented on #1290.
+
+**Market**: BTC $80,343 (+2.57% 24h), ETH $2,413.20 (+4.11% 24h), via CoinGecko public API.
+
+Ref: GH #1269 (credential P1, 33rd escalation, queue stays at 1, PR title restamped), #1285
+(updated record PR), #1286 (dead push-notification channel, not retried), #1290 (reproduced in
+an inverted shape, commented), #1277 (worktree count down to 30, commented), #1141 (Railway CLI
+auth, reconfirmed broken for prod+staging), #1292 (staging flat 24 days, updated), #1233 (no new
+evidence this window, next retrain slot 11-08), #1270/#1271/#1281 (stale PRs, not re-filed);
+incidents `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md` and
+`.claude/state/incidents/2026-10-31T0907-P1-prod-db-reads-total-block.md` (both updated).

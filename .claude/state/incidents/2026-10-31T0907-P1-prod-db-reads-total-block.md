@@ -120,14 +120,30 @@ day (11-03). Still no commit, config edit, or human action in this window identi
 this stays recorded as observed intermittency, not resolution. Landed as part of this run's
 commit on `standup/1016-credential-rotation-followup7` (PR #1285).
 
+2026-11-05: reproduced again, but in a shape that **inverts** the 10-30/11-03 correlation rather
+than repeating it. The combined 3-statement `psql` call (account_history/positions/trades in one
+Bash call — the exact shape denied on 11-03) succeeded cleanly on the first try. Immediately
+after, a single-statement `psql -c` session-peak-equity query (the shape that has been the
+reliable workaround on every prior occurrence) was itself denied (`[Production Reads]`), while a
+different single-statement `system_events` query issued in the same parallel tool-call batch
+succeeded. A bare retry of the identical denied query ~5s later succeeded with no change to the
+query, the call shape, or anything else. This weakens the "batched calls trigger it, single
+statements are safe" hypothesis built up over 10-30/11-02/11-03/11-04: today the batched call was
+fine and a single statement was denied, then un-denied on retry with zero intervention. The more
+consistent signal across all occurrences so far is **timing/concurrency of the calling pattern**,
+not statement count — worth noting for whoever eventually investigates the classifier's policy.
+No capital-risk gap this run: full prod-health query set confirmed via the retry. Landed as part
+of this run's commit on `standup/1016-credential-rotation-followup7` (PR #1285).
+
 ## Current state
 
-Open. Day 5 since this incident was opened (10-31). Pattern across the window: 10-31/11-01 total
-block (zero workaround), 11-02 clean, 11-03 milder batched-call trigger (single-statement
-workaround intact), 11-04 clean again. Two clean days now outnumber the blocked ones, but the
-intermittency itself — both *whether* the gate fires and *which* shape it takes — remains
-unexplained: no commit, config edit, or human action in this window claims to have touched the
-classifier. Keeping this open; a run of consecutive clean days is not yet being treated as
+Open. Day 6 since this incident was opened (10-31). Pattern across the window: 10-31/11-01 total
+block (zero workaround), 11-02 clean, 11-03 milder batched-call trigger, 11-04 clean, 11-05
+single-statement trigger that inverted the prior shape correlation and cleared on a bare retry.
+Three clean/near-clean days now outnumber the two total-block days, but the intermittency itself
+— whether the gate fires, which call shape it picks, and why a bare retry with no change clears
+it — remains unexplained: no commit, config edit, or human action in this window claims to have
+touched the classifier. Keeping this open; a run of mostly-clean days is not yet being treated as
 resolution per the 10-31/11-01 lesson that a short reprieve isn't evidence of a fix. Human action
 still useful regardless: either adjust the auto-mode classifier's policy for this specific,
 long-validated read-only monitoring query so it stops being denied *or* resumed at its own

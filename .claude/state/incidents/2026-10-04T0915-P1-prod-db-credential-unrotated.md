@@ -637,26 +637,26 @@ today's trading).
 
 ## Current state
 
-Credential is presumed still live and unrotated as of 2026-11-04, **44 days** after the original
-09-21 escalation and **31 full days** after this incident was formally opened, with **zero
-recorded human action across 32 escalations**. Push-notification remains paused pending #1286
+Credential is presumed still live and unrotated as of 2026-11-05, **45 days** after the original
+09-21 escalation and **32 full days** after this incident was formally opened, with **zero
+recorded human action across 33 escalations**. Push-notification remains paused pending #1286
 (the dead-channel tracking issue, still open) — not retried this run.
-`origin/develop` has had **zero merges in 31 full days** (still pinned at `812b5701`,
+`origin/develop` has had **zero merges in 32 full days** (still pinned at `812b5701`,
 2026-10-04); `origin/main` (the ref actually deployed to production) has had **zero promotions
-in 44 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
+in 45 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
 the exposure. **The PR queue for this single incident remains one** — #1285 (MERGEABLE, CI
-green, title restamped by this entry to "32nd escalation (day 44)"), unchanged since the 10-26
+green, title restamped by this entry to "33rd escalation (day 45)"), unchanged since the 10-26
 cleanup of the seven superseded PRs. The freeze remains 100% an absent-human-action gap. Two
 independent human actions remain outstanding: (1) rotate the credential in Railway, (2) merge
 #1285 to land a durable record on `develop` (or promote directly to `main`). Right now no
-branch carries a merged record of this P1, thirty-one days after it was first opened. At 32
-escalations and roughly 44x the charter's 24-hour P1 SLA, the automation has exhausted the
+branch carries a merged record of this P1, thirty-two days after it was first opened. At 33
+escalations and roughly 45x the charter's 24-hour P1 SLA, the automation has exhausted the
 actions available to it via the channels it has: the GH-comment channel has drawn zero
-response in 32 attempts (though it can still post), and the push-notification channel remains
+response in 33 attempts (though it can still post), and the push-notification channel remains
 confirmed dead. This run's own completion summary puts the same direct yes/no decision to the
-operator again, through the session UI rather than only the GH comment thread. #1290 did not
-reproduce today — a second clean day, but not yet treated as resolved pending a longer run of
-clean days.
+operator again, through the session UI rather than only the GH comment thread. #1290 reproduced
+again today in a new shape — see that issue/incident for detail — so it is not treated as
+trending toward resolution.
 
 ## Post-mortem (filled after close)
 
