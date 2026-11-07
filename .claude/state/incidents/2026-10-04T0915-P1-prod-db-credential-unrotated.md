@@ -320,6 +320,33 @@ Treating this as capital-risk-adjacent rather than cosmetic.
                        session peak) with these numbers. No capital-risk action needed today —
                        3.68% is still well clear of SOFT (5%). #1290 (prod-DB-read classifier)
                        did not reproduce this run, a clean day.
+2026-11-07 09:1x UTC — [escalation #35] still unrotated — **47 days** since 09-21, **34 full
+                       days** since the incident was opened, ~47x the charter's 24h P1 SLA.
+                       `origin/develop` STILL pinned at `812b5701` (34 full days, zero merges);
+                       `origin/main` STILL at `904e038e` (47 days, zero promotions) — production
+                       has not moved at all since the exposure. PR queue unchanged at one (#1285,
+                       MERGEABLE, CI green on all 6 checks, title restamped to "35th escalation
+                       (day 47)"). Did not retry push notification (#1286, confirmed dead
+                       channel, still open, paused). Landed as a further commit on the existing
+                       `standup/1016-credential-rotation-followup7` branch. Trading engine
+                       independently reconfirmed healthy this run: equity $85.78228787 vs
+                       session-21 peak $88.89367342 → DD **3.50%**, all tripwires PASS (well
+                       clear of SOFT 5%), `ENTRIES_ENABLED` latch fresh (08:57 UTC), no open
+                       position missing stop_loss, no 4+ consecutive losing trades, weekly DD
+                       rate 0.80% (vs 7d-ago equity $86.47428649) well under the 6% regime-shift
+                       threshold. The engine's own stored `account_history.drawdown` column still
+                       reads 2.08% for the same row — the #1267 divergence persists unchanged,
+                       not re-derived as new. #1290 (prod-DB-read classifier) did not reproduce
+                       this run — a fourth consecutive clean day for direct `psql` reads (11-02,
+                       then 11-04 through today); still left open pending the issue owner's own
+                       call to close. Railway CLI itself remains broken for both prod and staging
+                       (`Unauthorized. Please run 'railway login' again.` on `logs`/`whoami`) —
+                       #1141 reconfirmed, not re-filed; a narrower `railway variables -k` read was
+                       separately denied by this session's own permission classifier ("Credential
+                       Materialization") before reaching Railway at all, so `FEATURE_ENTRY_PAUSE`
+                       was again read via the `ENTRIES_ENABLED` system_events row rather than the
+                       raw variable — no coverage gap resulted. Worktree count unchanged at 30
+                       (#1277, commented).
 ```
 
 ## Actions taken
@@ -654,30 +681,42 @@ slots: 10-11, 10-18, 10-25, 11-01) — neither folds into this P1; both are sepa
 severity (staging is paper-only, no capital risk; the retrain gap degrades model freshness, not
 today's trading).
 
+2026-11-07 (this update): 35th escalation. Reconfirmed `origin/develop` still pinned at
+`812b5701` (34 full days, zero merges) and `origin/main` still at `904e038e` (47 days, zero
+promotions) — both unchanged since yesterday. Did not retry push notification (#1286 still
+open, dead channel, paused per standing guidance). Landed as this commit on
+`standup/1016-credential-rotation-followup7` (PR #1285, still the sole open PR for this
+incident, still MERGEABLE, CI green on all 6 checks) — queue stays at one. Restamped the PR
+title to "35th escalation (day 47)". Trading engine reconfirmed healthy this run: equity
+$85.78228787 vs session-21 peak $88.89367342 → DD 3.50%, all tripwires PASS, `ENTRIES_ENABLED`
+latch fresh. #1290 did NOT reproduce — a fourth consecutive clean day for direct prod `psql`
+reads. Worktree count unchanged at 30 (#1277, commented, unchanged from 11-05/11-06/11-07).
+This run's final message puts the same direct yes/no decision to the operator again: authorize
+rotation now, or accept the ongoing exposure and tell this task to stop daily re-filing.
+
 ## Current state
 
-Credential is presumed still live and unrotated as of 2026-11-06, **46 days** after the original
-09-21 escalation and **33 full days** after this incident was formally opened, with **zero
-recorded human action across 34 escalations**. Push-notification remains paused pending #1286
+Credential is presumed still live and unrotated as of 2026-11-07, **47 days** after the original
+09-21 escalation and **34 full days** after this incident was formally opened, with **zero
+recorded human action across 35 escalations**. Push-notification remains paused pending #1286
 (the dead-channel tracking issue, still open) — not retried this run.
-`origin/develop` has had **zero merges in 33 full days** (still pinned at `812b5701`,
+`origin/develop` has had **zero merges in 34 full days** (still pinned at `812b5701`,
 2026-10-04); `origin/main` (the ref actually deployed to production) has had **zero promotions
-in 46 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
+in 47 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
 the exposure. **The PR queue for this single incident remains one** — #1285 (MERGEABLE, CI
-green, title restamped by this entry to "34th escalation (day 46)"), unchanged since the 10-26
+green, title restamped by this entry to "35th escalation (day 47)"), unchanged since the 10-26
 cleanup of the seven superseded PRs. The freeze remains 100% an absent-human-action gap. Two
 independent human actions remain outstanding: (1) rotate the credential in Railway, (2) merge
 #1285 to land a durable record on `develop` (or promote directly to `main`). Right now no
-branch carries a merged record of this P1, thirty-three days after it was first opened. At 34
-escalations and roughly 46x the charter's 24-hour P1 SLA, the automation has exhausted the
-actions available to it via the channels it has: the GH-comment channel has drawn zero
-response in 34 attempts (though it can still post), and the push-notification channel remains
-confirmed dead. This run's own completion summary puts the same direct yes/no decision to the
-operator again, through the session UI rather than only the GH comment thread. #1290 did NOT
-reproduce this run — a clean day, left open pending a longer run before treating as resolved.
-Separately, this run found the engine's own stored `drawdown` column (2.08%) diverges from the
-equity-vs-session-peak calc this file has used throughout (3.68%, today's highest reading) —
-reported to #1267, not folded into this P1.
+branch carries a merged record of this P1, thirty-four days after it was first opened. At 35
+escalations and roughly 47x the charter's 24-hour P1 SLA, the automation has exhausted the
+actions available to it via the channels it has: the GH-comment channel has drawn zero response
+in 35 attempts (though it can still post), and the push-notification channel remains confirmed
+dead. This run's own completion summary puts the same direct yes/no decision to the operator
+again, through the session UI rather than only the GH comment thread. #1290 did NOT reproduce
+this run — a fourth consecutive clean day, left open pending the issue owner's own call. The
+#1267 drawdown-methodology divergence (stored column 2.08% vs session-peak calc 3.50% today)
+persists unchanged, not re-derived as new.
 
 ## Post-mortem (filled after close)
 
