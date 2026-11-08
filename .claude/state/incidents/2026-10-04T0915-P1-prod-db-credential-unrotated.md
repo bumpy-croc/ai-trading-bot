@@ -347,6 +347,34 @@ Treating this as capital-risk-adjacent rather than cosmetic.
                        was again read via the `ENTRIES_ENABLED` system_events row rather than the
                        raw variable — no coverage gap resulted. Worktree count unchanged at 30
                        (#1277, commented).
+2026-11-08 09:1x UTC — [escalation #36] still unrotated — **48 days** since 09-21, **35 full
+                       days** since the incident was opened, ~48x the charter's 24h P1 SLA.
+                       `origin/develop` STILL pinned at `812b5701` (35 full days, zero merges);
+                       `origin/main` STILL at `904e038e` (48 days, zero promotions) — production
+                       has not moved at all since the exposure. PR queue unchanged at one (#1285,
+                       MERGEABLE, CI green on all 6 checks incl. claude-review, title restamped to
+                       "36th escalation (day 48)"). Did not retry push notification (#1286,
+                       confirmed dead channel, still open, paused). Landed as a further commit on
+                       the existing `standup/1016-credential-rotation-followup7` branch. Trading
+                       engine independently reconfirmed healthy this run: equity $85.70023626 vs
+                       session-21 peak $88.89367342 → DD **3.59%**, all tripwires PASS (well
+                       clear of SOFT 5%), `ENTRIES_ENABLED` latch fresh (09:02 UTC), open position
+                       (id 38, ETHUSDT LONG) has an intact stop_loss, no 4+ consecutive losing
+                       trades in the last 10, weekly DD rate via the stored column (2.08% today
+                       vs 2.39% 7d-ago) shows no regime-shift. The engine's own stored
+                       `account_history.drawdown` column still reads 2.08% for the same row — the
+                       #1267 divergence persists unchanged, not re-derived as new. #1290
+                       (prod-DB-read classifier) did not reproduce for direct `psql` reads — a
+                       fifth consecutive clean day (11-02, 11-04, 11-06, 11-07, 11-08); the
+                       narrower `railway variables -k` read WAS denied again ("Credential
+                       Materialization"), same pattern as 11-07 — commented on #1290 with both
+                       data points. Railway CLI itself remains broken for both prod and staging
+                       (`Unauthorized. Please run 'railway login' again.` on `logs`) — #1141
+                       reconfirmed, not re-filed. Worktree count unchanged at 30 — 4th consecutive
+                       day at this plateau (#1277, commented). Staging reconfirmed flat 27 days
+                       (since 10-12), balance/equity unchanged at $1020.16 (#1292, commented).
+                       Background `claude` process pid 33319 now ~25 days old — same long-lived
+                       process flagged on prior days, not filed.
 ```
 
 ## Actions taken
@@ -694,28 +722,44 @@ reads. Worktree count unchanged at 30 (#1277, commented, unchanged from 11-05/11
 This run's final message puts the same direct yes/no decision to the operator again: authorize
 rotation now, or accept the ongoing exposure and tell this task to stop daily re-filing.
 
+2026-11-08 (this update): 36th escalation. Reconfirmed `origin/develop` still pinned at
+`812b5701` (35 full days, zero merges) and `origin/main` still at `904e038e` (48 days, zero
+promotions) — both unchanged since yesterday. Did not retry push notification (#1286 still
+open, dead channel, paused per standing guidance). Landed as this commit on
+`standup/1016-credential-rotation-followup7` (PR #1285, still the sole open PR for this
+incident, still MERGEABLE, CI green on all 6 checks) — queue stays at one. Restamped the PR
+title to "36th escalation (day 48)". Trading engine reconfirmed healthy this run: equity
+$85.70023626 vs session-21 peak $88.89367342 → DD 3.59%, all tripwires PASS, `ENTRIES_ENABLED`
+latch fresh. #1290 did NOT reproduce for direct psql reads (5th consecutive clean day) but the
+narrower `railway variables -k` read was denied again ("Credential Materialization") — commented
+on #1290. Worktree count unchanged at 30 (#1277, 4th consecutive day, commented). Staging
+reconfirmed flat 27 days, balance unchanged $1020.16 (#1292, commented). Railway CLI auth still
+broken for prod+staging `logs` (#1141, reconfirmed, not re-filed). Background `claude` process
+pid 33319 now ~25 days old — same long-lived process flagged on prior days, not filed.
+
 ## Current state
 
-Credential is presumed still live and unrotated as of 2026-11-07, **47 days** after the original
-09-21 escalation and **34 full days** after this incident was formally opened, with **zero
-recorded human action across 35 escalations**. Push-notification remains paused pending #1286
+Credential is presumed still live and unrotated as of 2026-11-08, **48 days** after the original
+09-21 escalation and **35 full days** after this incident was formally opened, with **zero
+recorded human action across 36 escalations**. Push-notification remains paused pending #1286
 (the dead-channel tracking issue, still open) — not retried this run.
-`origin/develop` has had **zero merges in 34 full days** (still pinned at `812b5701`,
+`origin/develop` has had **zero merges in 35 full days** (still pinned at `812b5701`,
 2026-10-04); `origin/main` (the ref actually deployed to production) has had **zero promotions
-in 47 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
+in 48 days** (still pinned at `904e038e`, 2026-09-21) — production has not moved at all since
 the exposure. **The PR queue for this single incident remains one** — #1285 (MERGEABLE, CI
-green, title restamped by this entry to "35th escalation (day 47)"), unchanged since the 10-26
+green, title restamped by this entry to "36th escalation (day 48)"), unchanged since the 10-26
 cleanup of the seven superseded PRs. The freeze remains 100% an absent-human-action gap. Two
 independent human actions remain outstanding: (1) rotate the credential in Railway, (2) merge
 #1285 to land a durable record on `develop` (or promote directly to `main`). Right now no
-branch carries a merged record of this P1, thirty-four days after it was first opened. At 35
-escalations and roughly 47x the charter's 24-hour P1 SLA, the automation has exhausted the
+branch carries a merged record of this P1, thirty-five days after it was first opened. At 36
+escalations and roughly 48x the charter's 24-hour P1 SLA, the automation has exhausted the
 actions available to it via the channels it has: the GH-comment channel has drawn zero response
-in 35 attempts (though it can still post), and the push-notification channel remains confirmed
+in 36 attempts (though it can still post), and the push-notification channel remains confirmed
 dead. This run's own completion summary puts the same direct yes/no decision to the operator
 again, through the session UI rather than only the GH comment thread. #1290 did NOT reproduce
-this run — a fourth consecutive clean day, left open pending the issue owner's own call. The
-#1267 drawdown-methodology divergence (stored column 2.08% vs session-peak calc 3.50% today)
+for direct `psql` reads this run — a fifth consecutive clean day — but the narrower `railway
+variables -k` read was denied again, left open pending the issue owner's own call. The
+#1267 drawdown-methodology divergence (stored column 2.08% vs session-peak calc 3.59% today)
 persists unchanged, not re-derived as new.
 
 ## Post-mortem (filled after close)

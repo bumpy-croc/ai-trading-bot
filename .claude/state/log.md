@@ -4156,3 +4156,71 @@ methodology mismatch, updated numbers), #1290 (no reproduction this run, comment
 (worktree count unchanged at 30, commented), #1141 (Railway CLI auth, reconfirmed broken for
 prod+staging), #1292 (staging flat 26 days, updated); incident
 `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md` (updated).
+
+## [D-2026-11-08-01] 2026-11-08 ~09:11 UTC · incident-escalate · daily-trading-standup
+
+**PROD**: equity $85.70023626 vs session-21 peak $88.89367342 (`max(equity) WHERE
+session_id=21`, unchanged — still the 09-23 high) → DD **3.59%**. Clear of
+SOFT(5%)/WARNING(10%)/CRITICAL(16%)/BREACH(20%), computed fresh from `origin/main`'s ratified
+`risk-limits.json` (CAP=0.20, WARN_FRAC=0.50, CRIT_FRAC=0.80 — unchanged). One open position
+(ETHUSDT #38, LONG, entry $2406.63, current $2238.01, unrealized -$1.22, stop $2167.065 intact).
+The engine's own stored `account_history.drawdown` column still reads 2.08% for this same row —
+the #1267 mismatch persists unchanged, not re-derived as new. Positive-state assertions:
+`ENTRIES_ENABLED` latch fresh (09:02:32 UTC, same pass as the latest `account_history` row);
+zero unresolved CRITICAL `system_events` in 7 days; open position has a stop-loss; no 4+
+consecutive losing trades in the last 10; weekly DD rate via the stored column (2.08% today vs
+2.39% 7d-ago) shows no regime-shift. `FEATURE_ENTRY_PAUSE`/`Decision:`-cadence reads blocked
+again by Railway CLI auth (#1141, `railway logs` `Unauthorized`, prod+staging) — substituted via
+the DB latch read as on every prior day; no coverage gap results since the latch row itself
+asserts the pause state. A narrower `railway variables -k` read was separately denied by this
+session's own permission classifier ("Credential Materialization") before reaching Railway at
+all — same layer as 11-07, not a new condition; commented on #1290.
+
+**CREDENTIAL ROTATION (#1269)**: 36th escalation. **48 days** since the 09-21 exposure, **35
+full days** since this incident was opened, ~48x the charter's 24h P1 SLA. `origin/develop`
+STILL pinned at `812b5701` (35 full days, zero merges); `origin/main` (the ref actually deployed
+to production) STILL at `904e038e` (48 days, zero promotions) — production has not moved since
+the exposure. PR queue unchanged at one (#1285, MERGEABLE, CI green on all 6 checks incl.
+`claude-review`; title restamped to "36th escalation (day 48)"). Did not retry push notification
+(#1286, confirmed dead channel, paused per standing guidance). Landed as a further commit on
+`standup/1016-credential-rotation-followup7`. Two outstanding human actions, unchanged for 35
+days: (1) rotate the credential in Railway, (2) merge #1285 to land a durable record on
+`develop`. Putting the same direct yes/no decision to the operator through this run's session UI,
+not only the GH comment thread (36 attempts there, zero replies).
+
+**#1290 (prod-DB-read classifier)**: did not reproduce for direct `psql` reads this run — a
+fifth consecutive clean day (11-02, 11-04, 11-06, 11-07, 11-08). The narrower `railway
+variables -k` read WAS denied again ("Credential Materialization"), same pattern as 11-07.
+Commented with both data points.
+
+**CROSS-SESSION**: branch=main (correct). Open PR count 5 (#1291, #1285, #1281, #1271, #1270),
+all MERGEABLE, CI green on every check, none CONFLICTING — no repo-wide CI blocker. #1291
+(retro, 6 days old), #1281 (retro, 27 days old, still open despite #1291's title claiming to
+supersede it), #1271 (35 days old) and #1270 (31 days old) all stale with no activity since
+creation — symptoms of #1127 (no scheduled agent has merge authority), not re-filed. Worktree
+count **30** — unchanged for a 4th consecutive day (11-05 through 11-08); commented on #1277.
+Background `claude` process pid 33319 now ~25 days old (`--dangerously-skip-permissions`,
+`--resume`, no project marker tying it to this repo) — same long-lived process flagged on prior
+days, not filed.
+
+**Scheduled-task audit**: `daily-trading-standup` HIT for 11-05/11-06/11-07, clean endings per
+`list_task_runs` (this run, 11-08, in progress). `weekly-model-retrain` fired its Sunday slot
+(08:14 UTC) and ended "RETRAIN BLOCKED-stale ECR image" — the **5th consecutive** Sunday blocked
+by this signature (10-11, 10-18, 10-25, 11-01, 11-08); commented on #1233 with the updated
+count. `prune-worktrees` had no slot due in this window (weekday-only, last fired 11-06, next
+11-09) — not a miss.
+
+**STAGING**: flat **27 days** (last trade exit 10-12 19:08 UTC, #51, +$0.12 stop-loss).
+Equity/balance unchanged at $1020.16. Governor/circuit/gate_reason log check BLOCKED —
+`railway logs -e staging` `Unauthorized` (#1141, unchanged). Updated #1292 with today's day
+count (27, up from 26).
+
+**Market**: BTC $75,818 (-0.40% 24h), ETH $2,234.32 (-0.55% 24h), via CoinGecko public API.
+
+Ref: GH #1269 (credential P1, 36th escalation, queue stays at 1, PR title restamped), #1285
+(updated record PR), #1286 (dead push-notification channel, not retried), #1290 (fifth clean
+day for psql reads; classifier read denied again, commented), #1277 (worktree count unchanged
+at 30 for a 4th day, commented), #1141 (Railway CLI auth, reconfirmed broken for prod+staging),
+#1292 (staging flat 27 days, updated), #1233 (weekly-model-retrain 5th consecutive ECR-stale
+Sunday, commented); incident
+`.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md` (updated).
