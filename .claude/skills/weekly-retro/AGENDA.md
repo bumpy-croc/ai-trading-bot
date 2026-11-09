@@ -13,6 +13,6 @@ becomes a diff or gets a written disposition.
 
 ## Items
 
-_(Cleared by the 2026-11-02 retro. Empty on arrival for the **fourteenth** consecutive window. The
-open PRs #1285, #1271 and #1270 were checked for AGENDA additions; none carry any. #1099 (retire or
-restructure this file) is still open and unowned. See [D-2026-11-02-02].)_
+_(Cleared by the 2026-11-09 retro. Empty on arrival for the **fifteenth** consecutive window. The
+open PRs #1285, #1281, #1271 and #1270 were checked for AGENDA additions; none carry any. #1099 (retire or
+restructure this file) is still open and unowned. See [D-2026-11-09-02].)_

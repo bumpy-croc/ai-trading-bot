@@ -1180,12 +1180,13 @@ right things in the right places, and the writes never reached the branch anyone
   for one incident is the §2.11 note-to-self at PR scale. The queue's resolution is tracked in #1287.
   Earned: #1280/#1281/#1282 (id collision); #1283/#1284/#1285 (10-14 x3); #1284/#1285 (10-15 x2);
   #1268 `CONFLICTING` since 10-05; driver runs 2026-10-19.
-- **Still true at 11-02 (retro 2026-11-02).** `develop` has had no commit since `812b5701` (10-04).
-  The daily standup's entries from 10-26 → 11-02 (eight, `D-2026-10-26-01` … `D-2026-11-02-01`) and
-  incident `2026-10-31T0907-P1-prod-db-reads-total-block.md` exist only on #1285 (open since 10-16,
-  CLEAN). The 11-02 standup used `[D-2026-11-02-01]`, the id this retro's scan would have chosen.
-  The retro entry is therefore numbered `[D-2026-11-02-02]` after scanning all remote branches.
-  Earned: #1285; #1287.
+- **Still true at 11-09 (retro 2026-11-09).** `develop` has had no commit since `812b5701` (10-04),
+  36 days. Five open PRs are CLEAN and unmerged: #1291 (this chain), #1285, #1281, #1271, #1270.
+  The daily standup's entries from 10-26 → 11-09 (fifteen) and incidents
+  `2026-10-04T0915-P1-prod-db-credential-unrotated.md` and `2026-10-31T0907-P1-prod-db-reads-total-block.md`
+  exist only on #1285 (open since 10-16, CLEAN). The retro entry is numbered `[D-2026-11-09-02]`
+  after scanning all remote branches (the 11-09 standup holds `-01`).
+  Earned: #1285; #1287; #1291.
 
 ### 2.18 A monitor that cannot read its own data is a blind window, not a pass
 
@@ -1195,7 +1196,9 @@ an older PASS or inferred one from the message text of an old row would have loo
 Rule: a denied or failing read is recorded as a blind window, with its first and last day, in the
 incident file. It is not counted as PASS. Rule: one good read does not close the window. The 11-02
 standup did this correctly, keeping the incident open for a second clean day and writing
-"classifier non-determinism, not a fix" rather than "resolved". Earned: #1290; incident
+"classifier non-determinism, not a fix" rather than "resolved". Reads returned data on each day
+11-02 → 11-09 (eight standups, fresh DD values in each summary). That meets the second-clean-day
+test. Closing #1290 is the owner's call, not the monitor's. Earned: #1290; incident
 `2026-10-31T0907-P1-prod-db-reads-total-block.md` (on #1285); the 10-28 and 11-02 standup entries.
 
 ---

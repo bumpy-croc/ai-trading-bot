@@ -2490,3 +2490,46 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 **Unowned queue (§2.11).** Open, no assignee: #1290, #1289, #1288, #1287, #1286, #1099 (oldest, 63 days). Escalated as one item here, not per issue.
 
 **Not in force until this PR merges and develop is promoted (§2.9(i)).**
+
+## [D-2026-11-09-02] 2026-11-09 ~10:20 UTC · note · weekly-retro
+
+**Scope.** Weekly retro for 11-02 → 11-09. Third consecutive stranded retro PR. Built on the open #1291 branch (`retro/2026-11-02`, input 0b): #1291 now carries the 10-12, 10-19, 10-26, 11-02 and 11-09 distillate, and supersedes #1281. Remote scan for `D-2026-11-09-*` before numbering: only the 11-09 standup's `-01` on #1285.
+
+**Input 0b — stranded queue (first finding, for the human).** #1291 (11-02 retro) CLEAN, open 7 days. #1281 (10-12 chain) CLEAN, open 14 days, now superseded. `develop` has had **no merge since 10-04 (36 days)**; the last commit is `812b5701`. Open CLEAN queue: #1291, #1285, #1281, #1271, #1270. Time-to-merge for the retro chain: never merged. Distillate on develop: 10-04 onward. Not in force until this PR merges.
+
+**Input 0 — AGENDA.** Empty, fifteenth consecutive window. Open PRs #1285, #1281, #1271, #1270 checked for AGENDA additions: none. Cleared.
+
+**Input 1 — log.md.** Develop's log ends 10-26. The 11-02 → 11-09 entries (seven daily standup `incident-escalate` rows, `D-2026-11-03-01` … `D-2026-11-09-01`) exist only on #1285. Read from that branch, not from develop.
+
+**Input 2 — incidents.** Opened on #1285 only: `2026-10-04T0915-P1-prod-db-credential-unrotated.md`, `2026-10-31T0907-P1-prod-db-reads-total-block.md`. On develop, still open: `2026-08-24T1200-P1-close-only-4day-silent-halt.md`.
+
+**Input 3 — failures.** Standup prod-read denial 10-31 → 11-01 (#1290); reads returned data 11-02 → 11-09. Credential rotation #1269: 31st escalation 11-03 (day 43) → 37th on 11-09 (day 49), zero human response. Weekly model retrain 11-08: `BLOCKED stale ECR image` (#1233). Transcript grep for `hit your weekly limit` / `usage limit` / `may not exist or you may not have access` over the last 8 days: 20 files matched, none opened or attributed to a scheduled task. No registry run summary in the window reports either error.
+
+**Input 4 — calibration.** Standup: DD and tripwire claims matched the fresh reads each day (DD 2.06% → 4.50% over the window, all tripwires PASS while entries were enabled). Calibrated. No dated prediction in the window resolved as wrong.
+
+**Input 5 — experiments.** None concluded.
+
+**Input 6 — scheduled tasks.** Registry 26 entries, 5 recurring enabled (plus the one-time `hue-v2-gate-check-2026-11-28`, enabled, pending). Directories 32. Six directories have no registry entry: the 08-13 retirements plus the 11-02 list; still not called outages (LESSONS §3; Alex to confirm). Slot audit, 11-02 → 11-09:
+- `daily-trading-standup` 09:07: 8/8 slots ran and reported (11-02 → 11-09). Artifacts on #1285.
+- `weekly-model-retrain` Sun 08:14: 11-08 slot fired, BLOCKED (`stale ECR image`, #1233). Six consecutive Sundays without a retrain.
+- `prune-worktrees` Mon–Fri 23:10: 11-02 → 11-06 slots all ran. Effect check fails: 11-02 reported 15 removed, 11-03 reported 8 removed, and the worktree count stayed at 30 before this retro's worktree (31 with it). Claimed removals do not show in the count. Open issue #1277.
+- `weekly-retro` Mon 10:21: 11-02 slot → #1281 (chain, now #1291); 11-09 slot is this run.
+- `republish-project-map` Mon–Fri 08:01: not this repo's task; not audited here.
+
+**Input 7 — model scoreboard.** No `latest` symlink change (nothing merged to develop). No promotion row.
+
+**Diffs in this PR.**
+- LESSONS §2.9 "Still true at 11-09": 36-day develop stall, five CLEAN unmerged PRs, fifteen standup entries on #1285. Earned: #1285, #1287, #1291.
+- LESSONS §2.18: blind window closed on 11-02 → 11-09 reads. Keeps "closing #1290 is the owner's call". Earned: #1290.
+- AGENDA cleared, fifteenth-window header.
+- weekly-retro SKILL: no amendment. Input 0b (stranded PR) applied as written.
+
+**Calibration verdicts.** Standup: calibrated. Prune-worktrees: over-stated effect (removals reported, count flat). Not an agent error; filed under #1277.
+
+**Process changes proposed to the Board (layer 1, not edited here).**
+- Merge or close #1285, #1281, #1271, #1270, #1291. Nothing has merged to develop for 36 days.
+- Confirm the six unregistered task directories are retired; if so, delete them.
+
+**Unowned queue (§2.11).** At least 40 open issues have zero assignees (`gh issue list --limit 40` returned 40 with asg=0). Oldest: #1111 (08-24, 77 days). Escalated as one item here, not per issue. Issue filed: none (no new code change needed this week).
+
+**Not in force until this PR merges and develop is promoted (§2.9(i)).**
