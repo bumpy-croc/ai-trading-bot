@@ -1,3 +1,5 @@
+> **Archived 2026-10-04.** Closed: shipped. Superseded by `src/engines/shared/models.py` and [Architecture](../../architecture.md).
+
 # ExecPlan: Shared Models Consolidation
 
 **Created:** 2025-12-26
