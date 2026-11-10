@@ -1658,8 +1658,11 @@ class LiveTradingEngine:
 
         # End the trading session in database
         if self.trading_session_id:
+            # Paper positions are preserved above; the next start re-adopts them (#668).
             self.db_manager.end_trading_session(
-                session_id=self.trading_session_id, final_balance=self.current_balance
+                session_id=self.trading_session_id,
+                final_balance=self.current_balance,
+                carry_forward_open_positions=True,
             )
 
         logger.info("Trading engine stopped")

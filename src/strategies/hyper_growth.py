@@ -129,6 +129,18 @@ class FlatRiskManager(RiskManager):
         # Flat risk — no further confidence/strength scaling
         return balance * self.risk_fraction
 
+    def explain_zero_size(
+        self,
+        signal: Signal,
+        balance: float,
+        regime: RegimeContext | None = None,
+        **context: Any,
+    ) -> str | None:
+        """Name the confidence floor when it is what zeroed the size."""
+        if signal.confidence < self.min_confidence:
+            return f"confidence_{signal.confidence:.3f}_below_min_{self.min_confidence:.3f}"
+        return None
+
     def should_exit(
         self,
         position: Any,

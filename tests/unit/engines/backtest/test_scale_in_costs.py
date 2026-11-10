@@ -18,7 +18,7 @@ class TestCalculateScaleInCosts:
         engine = ExecutionEngine(fee_rate=0.001, slippage_rate=0.0005)
 
         # Act
-        fee, slippage_cost = engine.calculate_scale_in_costs(
+        fee, slippage_cost, _ = engine.calculate_scale_in_costs(
             price=50000.0, notional=1000.0, side="long"
         )
 
@@ -32,7 +32,7 @@ class TestCalculateScaleInCosts:
         engine = ExecutionEngine(fee_rate=0.001, slippage_rate=0.0005)
 
         # Act
-        scale_fee, scale_slip = engine.calculate_scale_in_costs(
+        scale_fee, scale_slip, scale_price = engine.calculate_scale_in_costs(
             price=50000.0, notional=2000.0, side="long"
         )
 
@@ -44,6 +44,19 @@ class TestCalculateScaleInCosts:
         # Assert - fees should be identical
         assert scale_fee == pytest.approx(entry_result.fee)
         assert scale_slip == pytest.approx(entry_result.slippage_cost)
+        assert scale_price == pytest.approx(entry_result.executed_price)
+
+    def test_fill_price_is_slipped_against_the_position_side(self) -> None:
+        """A long buys above the quote and a short sells below it."""
+        engine = ExecutionEngine(fee_rate=0.001, slippage_rate=0.001)
+
+        _, _, long_price = engine.calculate_scale_in_costs(price=100.0, notional=500.0, side="long")
+        _, _, short_price = engine.calculate_scale_in_costs(
+            price=100.0, notional=500.0, side="short"
+        )
+
+        assert long_price == pytest.approx(100.1)
+        assert short_price == pytest.approx(99.9)
 
     def test_short_side_slippage(self) -> None:
         """Scale-in for short positions calculates slippage correctly."""
@@ -51,7 +64,7 @@ class TestCalculateScaleInCosts:
         engine = ExecutionEngine(fee_rate=0.001, slippage_rate=0.001)
 
         # Act
-        fee, slippage_cost = engine.calculate_scale_in_costs(
+        fee, slippage_cost, _ = engine.calculate_scale_in_costs(
             price=40000.0, notional=500.0, side="short"
         )
 
@@ -66,7 +79,7 @@ class TestCalculateScaleInCosts:
         engine = ExecutionEngine(fee_rate=0.0, slippage_rate=0.0005)
 
         # Act
-        fee, slippage_cost = engine.calculate_scale_in_costs(
+        fee, slippage_cost, _ = engine.calculate_scale_in_costs(
             price=50000.0, notional=1000.0, side="long"
         )
 
@@ -80,7 +93,7 @@ class TestCalculateScaleInCosts:
         engine = ExecutionEngine(fee_rate=0.001, slippage_rate=0.0)
 
         # Act
-        fee, slippage_cost = engine.calculate_scale_in_costs(
+        fee, slippage_cost, _ = engine.calculate_scale_in_costs(
             price=50000.0, notional=1000.0, side="long"
         )
 
@@ -106,7 +119,7 @@ class TestCalculateScaleInCosts:
         engine = ExecutionEngine(fee_rate=0.001, slippage_rate=0.0005)
 
         # Act - maker liquidity should produce results without error
-        fee, slippage_cost = engine.calculate_scale_in_costs(
+        fee, slippage_cost, _ = engine.calculate_scale_in_costs(
             price=50000.0, notional=1000.0, side="long", liquidity="maker"
         )
 

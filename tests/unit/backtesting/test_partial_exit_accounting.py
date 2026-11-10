@@ -51,6 +51,11 @@ pytestmark = pytest.mark.unit
 ENTRY_TIME = datetime(2024, 1, 1, tzinfo=UTC)
 
 
+def _zero_cost_scale_in(price, notional, side, liquidity=None):
+    """Fee-free, slippage-free scale-in costs: fills at the quoted price."""
+    return 0.0, 0.0, price
+
+
 def _make_exit_handler(
     policy: PartialExitPolicy,
     fee_rate: float = 0.0,
@@ -63,7 +68,7 @@ def _make_exit_handler(
     risk_manager.daily_risk_used = 0.0
 
     execution_engine = MagicMock()
-    execution_engine.calculate_scale_in_costs.return_value = (0.0, 0.0)
+    execution_engine.calculate_scale_in_costs.side_effect = _zero_cost_scale_in
 
     handler = ExitHandler(
         execution_engine=execution_engine,

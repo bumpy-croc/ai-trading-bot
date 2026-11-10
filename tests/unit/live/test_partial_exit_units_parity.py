@@ -41,6 +41,11 @@ pytestmark = pytest.mark.unit
 ENTRY_TIME = datetime(2024, 1, 1, tzinfo=UTC)
 
 
+def _zero_cost_scale_in(price, notional, side, liquidity=None):
+    """Fee-free, slippage-free scale-in costs: fills at the quoted price."""
+    return 0.0, 0.0, price
+
+
 def _make_live_handler(
     policy: PartialExitPolicy,
 ) -> tuple[LiveExitHandler, LivePositionTracker, MagicMock]:
@@ -202,7 +207,7 @@ class TestBacktestLivePartialExitParity:
         bt_risk.params = SimpleNamespace(max_daily_risk=1.0)
         bt_risk.daily_risk_used = 0.0
         bt_exec = MagicMock()
-        bt_exec.calculate_scale_in_costs.return_value = (0.0, 0.0)
+        bt_exec.calculate_scale_in_costs.side_effect = _zero_cost_scale_in
         bt_handler = ExitHandler(
             execution_engine=bt_exec,
             position_tracker=bt_tracker,

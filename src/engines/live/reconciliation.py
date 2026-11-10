@@ -3284,7 +3284,7 @@ class PositionReconciler:
                         entity_type="position",
                         entity_id=getattr(position, "db_position_id", None),
                         field="current_size",
-                        old_value=str(current or old_quantity),
+                        old_value=str(current if current is not None else old_quantity),
                         new_value=str(getattr(position, "current_size", remaining_qty)),
                         reason=(
                             f"SL order {sl_order.status.value.lower()} after partial fill "

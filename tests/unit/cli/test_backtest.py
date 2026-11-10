@@ -212,6 +212,27 @@ class TestHandleBacktest:
         }
         return mock
 
+    @pytest.mark.parametrize("pin", ["2026-01-01_00h_v1", None])
+    def test_resolved_model_pin_reaches_the_backtester(self, default_args, mock_backtester, pin):
+        """The Backtester needs the pin too: regime switches build strategies after load."""
+        default_args.mock_data = True
+        mock_strategy = Mock(name="ml_basic")
+
+        with (
+            patch(
+                "src.engines.backtest.engine.Backtester", return_value=mock_backtester
+            ) as backtester_cls,
+            patch("cli.commands.backtest._resolve_model_pin", return_value=pin),
+            patch("cli.commands.backtest._load_strategy", return_value=mock_strategy),
+            patch("cli.commands.backtest.configure_logging"),
+            patch("builtins.open", create=True),
+            patch("cli.commands.backtest.PROJECT_ROOT", Path("/tmp/test")),
+        ):
+            result = _handle(default_args)
+
+        assert result == 0
+        assert backtester_cls.call_args.kwargs["model_version"] == pin
+
     def test_successful_backtest_execution(self, default_args, mock_backtester):
         """Test successful backtest execution with default parameters."""
         # Arrange
