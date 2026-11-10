@@ -1,3 +1,5 @@
+> **Archived 2026-10-04.** Closed: shipped; the tracker lives in `src/performance/tracker.py` and is used by both engines. Superseded by [Architecture](../../architecture.md).
+
 # ExecPlan: Performance Tracker Integration
 
 **Created:** 2025-12-26

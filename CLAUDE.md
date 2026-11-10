@@ -101,6 +101,10 @@ atb dev quality     # Run all: black + ruff + mypy + bandit
 atb dev clean       # Remove .pytest_cache, .ruff_cache, etc.
 ```
 
+**What CI enforces**: pytest (`unit-tests`, `integration-tests`) and mypy over `src/` and `cli/`
+(`type-check` job in `.github/workflows/tests.yml`, via `python bin/run_mypy.py`). black, ruff and bandit are
+local-only: CI does not run them.
+
 ### Backtesting & Live Trading
 ```bash
 atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 30
@@ -240,7 +244,11 @@ a shell's cwd gets reset to the primary checkout mid-task, and every subsequent 
 then resolves there instead of in your worktree.
 
 **It fires only for a session that has actually worked inside a worktree** (a "pinned"
-session — pinned on the first tool call whose cwd is in one). An unpinned session is by
+session — pinned on the first tool call whose cwd is in one, or, for a session whose shell cwd
+resets to the primary on every call, on the first call that `cd`s into a worktree, runs a mutating
+`git -C` on one, or edits a file inside one; that *inferred* pin refuses writes but leaves
+`.claude/state/`, standup briefs and the retro agenda writable and skips the relative-read
+check, since the PM daemon looks the same). An unpinned session is by
 definition somebody working legitimately in the only tree they have: the PM daemon, which runs
 in the primary and must append to `.claude/state/log.md`; a fresh single clone with no
 worktrees, which every contributor and every Claude Code Web session has. Those are never

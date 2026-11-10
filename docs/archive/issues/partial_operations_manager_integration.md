@@ -1,3 +1,5 @@
+> **Archived 2026-10-04.** Closed: shipped (see the implementation report in this folder). Superseded by `src/engines/shared/partial_operations_manager.py`.
+
 # GitHub Issue: Integrate shared PartialOperationsManager into both engines
 
 **Title:** Integrate shared PartialOperationsManager into both engines

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -21,6 +21,30 @@ from websockets.frames import Close, CloseCode
 from src.infrastructure.logging.binance_ws_filter import BinanceWSKeepaliveFilter
 
 pytestmark = pytest.mark.unit
+
+
+class _FakeClock:
+    """Manually advanced monotonic clock for the filter's rate-limit window."""
+
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """Replace the filter module's ``time`` so window rollover is driven by the test."""
+    fake = _FakeClock()
+    monkeypatch.setattr(
+        "src.infrastructure.logging.binance_ws_filter.time",
+        SimpleNamespace(monotonic=fake.monotonic),
+    )
+    return fake
 
 
 def _make_record(
@@ -170,7 +194,7 @@ class TestRateLimiting:
 
         assert f.suppressed_count == 10
 
-    def test_window_rollover_releases_next_record(self):
+    def test_window_rollover_releases_next_record(self, clock):
         """After the window expires, the next match passes through again."""
         f = BinanceWSKeepaliveFilter(window_seconds=0.05)
 
@@ -179,8 +203,7 @@ class TestRateLimiting:
         assert f.filter(_keepalive_record()) is False
         assert f.suppressed_count == 2
 
-        # Wait for the window to roll over
-        time.sleep(0.07)
+        clock.advance(0.07)  # past the 0.05s window
 
         assert f.filter(_keepalive_record()) is True
         # Counter resets at rollover
@@ -190,13 +213,13 @@ class TestRateLimiting:
 class TestSummaryEmission:
     """Window rollover with suppressed records emits a summary log."""
 
-    def test_emits_summary_on_rollover_with_suppressions(self, caplog):
+    def test_emits_summary_on_rollover_with_suppressions(self, caplog, clock):
         f = BinanceWSKeepaliveFilter(window_seconds=0.05)
 
         f.filter(_keepalive_record())  # passes
         f.filter(_keepalive_record())  # suppressed
         f.filter(_keepalive_record())  # suppressed
-        time.sleep(0.07)
+        clock.advance(0.07)  # past the 0.05s window
 
         with caplog.at_level(logging.WARNING, logger=BinanceWSKeepaliveFilter.SUMMARY_LOGGER_NAME):
             f.filter(_keepalive_record())  # rollover triggers summary, then passes
@@ -208,11 +231,11 @@ class TestSummaryEmission:
         assert summary_records[0].levelno == logging.WARNING
         assert "Suppressed 2" in summary_records[0].getMessage()
 
-    def test_no_summary_when_window_rolls_with_zero_suppressions(self, caplog):
+    def test_no_summary_when_window_rolls_with_zero_suppressions(self, caplog, clock):
         f = BinanceWSKeepaliveFilter(window_seconds=0.05)
 
         f.filter(_keepalive_record())  # passes
-        time.sleep(0.07)
+        clock.advance(0.07)  # past the 0.05s window
 
         with caplog.at_level(logging.WARNING, logger=BinanceWSKeepaliveFilter.SUMMARY_LOGGER_NAME):
             f.filter(_keepalive_record())  # rollover, but nothing was suppressed

@@ -1,3 +1,5 @@
+> **Archived 2026-10-04.** Completed November 2025 milestone. Superseded by [Prediction & models](../prediction.md) and the experiment write-ups under [docs/research/experiments](../research/experiments/).
+
 # Phase 1: Training & Benchmarking Results Guide
 
 **Purpose:** Guide for running Phase 1 tests and interpreting results
