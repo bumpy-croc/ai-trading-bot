@@ -257,7 +257,7 @@ call-signature drift, not just attribute names).
    `architecture-reviewer` + `code-reviewer` in parallel on `git diff develop...HEAD -- <files>`.
 9. **CI required green:** the four `unit-tests` shards, `integration-tests`, and
    `claude-review` (the bot review; ~7–10 min; concludes `success` even with advisory
-   comments). Unrelated scheduled jobs (Optimizer MVP, Weekly Documentation Scan, Heartbeat
+   comments). Unrelated scheduled jobs (Weekly Documentation Scan, Heartbeat
    Monitor) are independent — ignore them.
 10. **Webhooks do NOT deliver CI success / new pushes / merge-conflict transitions.** Re-poll
     via `mcp__github__pull_request_read get_check_runs`. `send_later` is unavailable; drive

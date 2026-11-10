@@ -280,6 +280,6 @@ git revert HEAD~6..HEAD  # Revert last 6 commits (Phases 1-6)
 ## Contact
 
 For issues or questions:
-- Review execplan: `docs/execplans/performance_tracker_integration.md`
+- Review execplan: `docs/archive/execplans/performance_tracker_integration.md`
 - Check commit history: `git log --oneline | grep "Phase"`
 - Test locally before deploying to production

@@ -299,6 +299,15 @@ class TestTrainingConfig:
         )
         assert config.use_mock_data is False
 
+    def test_set_latest_defaults_to_false(self):
+        config = TrainingConfig(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start_date=datetime(2024, 1, 1),
+            end_date=datetime(2024, 12, 31),
+        )
+        assert config.set_latest is False
+
     def test_use_mock_data_is_settable(self):
         config = TrainingConfig(
             symbol="BTCUSDT",

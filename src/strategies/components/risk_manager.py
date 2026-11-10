@@ -234,6 +234,21 @@ class RiskManager(ABC):
             ValueError: If input parameters are invalid
         """
 
+    def explain_zero_size(
+        self,
+        signal: "Signal",
+        balance: float,
+        regime: Optional["RegimeContext"] = None,
+        **context: Any,
+    ) -> str | None:
+        """Name why ``calculate_position_size`` returned 0 for a directional signal.
+
+        Called only after a zero, purely from the same inputs, so it never
+        changes a decision. Managers with a deliberate veto (confidence floor,
+        regime cash) override it so a zero-size decision is never silent.
+        """
+        return None
+
     @abstractmethod
     def should_exit(
         self,
