@@ -12,7 +12,9 @@ Funding is charged on the position held through each day at the real historical 
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -38,6 +40,11 @@ EXCLUDE = {
     "PAXGUSDT", "XAUUSDT", "XAGUSDT", "XAUTUSDT",
     "BTCSTUSDT",
 }
+# Plus everything Binance's own exchangeInfo classifies as TradFi / index / pre-market
+# (tokenised equities, commodities, FX). Written by data.fetch_non_crypto(), committed.
+_NON_CRYPTO = Path(__file__).resolve().parent / "non_crypto_symbols.json"
+if _NON_CRYPTO.exists():
+    EXCLUDE |= set(json.loads(_NON_CRYPTO.read_text()))
 
 
 def slippage_for_rank(rank: np.ndarray) -> np.ndarray:

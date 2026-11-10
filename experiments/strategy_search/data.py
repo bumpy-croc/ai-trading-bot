@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import re
+import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -202,8 +204,124 @@ def build(refresh: bool = False) -> Market:
     frames = {k: pd.DataFrame(v).reindex(idx) for k, v in cols.items()}
     for k in ("funding", "spot_close"):
         frames[k] = frames[k].reindex(columns=frames["close"].columns)
+    stats = repair(frames)
+    print("gap repair:", json.dumps(stats), flush=True)
+    (DATA_DIR / "repair_stats.json").write_text(json.dumps(stats, indent=1))
+    fetch_non_crypto()
     pd.to_pickle(frames, cache)
     return Market(**frames)
+
+
+# ---------------------------------------------------------------- gap repair + metadata
+
+REST_FUT = "https://www.binance.com/fapi/v1"  # same data as fapi.binance.com, reachable from the cloud
+NON_CRYPTO_FILE = Path(__file__).resolve().parent / "non_crypto_symbols.json"
+
+
+def _rest(path: str, params: dict) -> list:
+    for attempt in range(4):
+        try:
+            resp = _session.get(f"{REST_FUT}/{path}", params=params, timeout=30)
+        except requests.RequestException:
+            time.sleep(1 + attempt)
+            continue
+        if resp.status_code == 200:
+            return resp.json()
+        if resp.status_code == 400:
+            return []  # symbol no longer served (delisted)
+        time.sleep(1 + 2 * attempt)
+    return []
+
+
+def fetch_non_crypto() -> list[str]:
+    """Symbols Binance itself classifies as not a crypto-asset perpetual (TradFi, index, pre-market)."""
+    info = _session.get(f"{REST_FUT}/exchangeInfo", timeout=60).json()
+    out = sorted(
+        x["symbol"]
+        for x in info["symbols"]
+        if x.get("quoteAsset") == "USDT" and (x.get("contractType") != "PERPETUAL" or x.get("underlyingType") != "COIN")
+    )
+    NON_CRYPTO_FILE.write_text(json.dumps(out, indent=0))
+    return out
+
+
+def _ms(ts: pd.Timestamp) -> int:
+    return int(ts.timestamp() * 1000)
+
+
+def _repair_symbol(args: tuple) -> dict:
+    sym, kline_gaps, fund_gaps = args
+    out: dict = {"symbol": sym, "klines": {}, "funding": {}}
+    if len(kline_gaps):
+        rows = _rest("klines", {"symbol": sym, "interval": "1d", "startTime": _ms(kline_gaps[0]),
+                                "endTime": _ms(kline_gaps[-1]) + 86_399_999, "limit": 1500})
+        for r in rows:
+            day = pd.Timestamp(int(r[0]), unit="ms", tz="UTC").normalize()
+            if day in kline_gaps:
+                out["klines"][day] = (float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[7]))
+    if len(fund_gaps):
+        start, end = _ms(fund_gaps[0]), _ms(fund_gaps[-1] + pd.Timedelta(days=1, hours=1))
+        prints: dict = {}
+        while start < end:
+            rows = _rest("fundingRate", {"symbol": sym, "startTime": start, "endTime": end, "limit": 1000})
+            if not rows:
+                break
+            for r in rows:
+                prints[int(r["fundingTime"])] = float(r["fundingRate"])
+            start = int(rows[-1]["fundingTime"]) + 1
+            if len(rows) < 1000:
+                break
+        if prints:
+            f = pd.Series(prints)
+            f.index = pd.to_datetime(f.index, unit="ms", utc=True)
+            daily = f.groupby((f.index - pd.Timedelta(hours=1)).floor("D")).sum()
+            gap_set = set(fund_gaps)
+            out["funding"] = {d: v for d, v in daily.items() if d in gap_set}
+    return out
+
+
+def repair(frames: dict[str, pd.DataFrame]) -> dict:
+    """Fill archive holes from the REST API; forward-fill what is left of short interior price gaps."""
+    # A settled (delisted) contract keeps printing flat zero-volume klines in the archive.
+    # Cut every series after its last day with real volume, so delisting is visible as such.
+    traded = frames["qvol"].fillna(0.0) > 0
+    live = traded.iloc[::-1].cummax().iloc[::-1]  # True up to and including the last traded day
+    trimmed = int((frames["close"].notna() & ~live).sum().sum())
+    for name in ("open", "high", "low", "close", "qvol", "funding"):
+        frames[name] = frames[name].where(live)
+    close, fund = frames["close"], frames["funding"]
+    listed = close.ffill().notna() & close.bfill().notna()
+    kgap = close.isna() & listed
+    fgap = fund.isna() & close.notna()
+    jobs = []
+    for sym in close.columns:
+        kg, fg = kgap.index[kgap[sym]], fgap.index[fgap[sym]]
+        if len(kg) or len(fg):
+            jobs.append((sym, kg, fg))
+    with ThreadPoolExecutor(16) as pool:
+        fixes = list(pool.map(_repair_symbol, jobs))
+    stats = {"zero_volume_tail_days_trimmed": trimmed, "kline_gap_days": int(kgap.sum().sum()), "funding_gap_days": int(fgap.sum().sum()),
+             "kline_filled_rest": 0, "funding_filled_rest": 0}
+    for fx in fixes:
+        sym = fx["symbol"]
+        for day, (o, h, lo, c, q) in fx["klines"].items():
+            for name, val in (("open", o), ("high", h), ("low", lo), ("close", c), ("qvol", q)):
+                frames[name].at[day, sym] = val
+            stats["kline_filled_rest"] += 1
+        for day, val in fx["funding"].items():
+            frames["funding"].at[day, sym] = val
+            stats["funding_filled_rest"] += 1
+    left = frames["close"].isna() & listed
+    stats["kline_forward_filled"] = int(left.sum().sum())
+    for name in ("open", "high", "low", "close"):
+        frames[name] = frames[name].ffill(limit=5).where(listed)
+    frames["qvol"] = frames["qvol"].where(~left, 0.0)
+    spot = frames["spot_close"]
+    spot_listed = spot.ffill().notna() & spot.bfill().notna()
+    stats["spot_forward_filled"] = int((spot.isna() & spot_listed).sum().sum())
+    frames["spot_close"] = spot.ffill(limit=5).where(spot_listed)
+    stats["funding_still_missing"] = int((frames["funding"].isna() & frames["close"].notna()).sum().sum())
+    return stats
 
 
 def coverage(m: Market) -> pd.DataFrame:
