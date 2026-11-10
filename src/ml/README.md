@@ -99,7 +99,7 @@ Use the CLI to train and register new models:
 # Train a new model (automatically registers in the nested structure)
 atb train model BTCUSDT --timeframe 1h --start-date 2023-01-01 --end-date 2024-12-01
 
-# The trainer creates a new version directory and updates the latest symlink
+# The trainer creates a new version directory; latest only moves with --set-latest
 ```
 
 See [docs/prediction.md](../../docs/prediction.md) for training details and model deployment workflows.
