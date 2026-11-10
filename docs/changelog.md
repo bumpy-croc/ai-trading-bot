@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **Stale migration backup directory under `migrations/`** (#791). 15 pre-baseline migrations,
+  including a duplicate `0001_initial_schema`, are gone from the tree (still in git history).
+  Nothing referenced the directory; `alembic heads` still returns the single head
+  `0015_balance_session_id_idx`.
+  `docs/database.md` now documents the migration workflow.
 ### Added
 - **mypy now runs in CI** (#1111). New `type-check` job in `.github/workflows/tests.yml` runs
   `python bin/run_mypy.py` over `src/` and `cli/`. Measured backlog on `develop` is zero errors
