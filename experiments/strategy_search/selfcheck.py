@@ -97,7 +97,35 @@ def check_no_lookahead_on_noise() -> None:
     print(f"noise test: worst |t| across families = {worst:.2f}")
 
 
+def check_cross_venue() -> None:
+    """Same price on both venues, Hyperliquid funding 0.1%/day higher: the rule must short Hyperliquid
+    and earn notional x 0.1% a day once in, paying entry costs once."""
+    import xvenue as xv
+
+    idx = pd.date_range("2024-01-01", periods=60, freq="D", tz="UTC")
+    rng = np.random.default_rng(3)
+    px = pd.DataFrame({"AAA": 100 * np.cumprod(1 + rng.normal(0, 0.03, 60)), "BBB": 50.0}, index=idx)
+    fund_hl = pd.DataFrame({"AAA": 0.001, "BBB": 0.0}, index=idx)
+    fund_bn = pd.DataFrame(0.0, index=idx, columns=px.columns)
+    rank = pd.DataFrame(1.0, index=idx, columns=px.columns)
+    elig = pd.DataFrame(True, index=idx, columns=px.columns)
+    p = xv.Pair(px, px, px, fund_hl, px, px, px, fund_bn, rank, elig)
+    res = xv.simulate(p)
+    notional = 0.1
+    # signal needs 7 days (index 6), executed at index 7, earns from index 8
+    assert np.allclose(res.returns.iloc[:7], 0.0)
+    entry_cost = notional * (eng.PERP_FEE + 0.0005 + xv.HL_FEE + xv.HL_SLIP)
+    assert np.isclose(res.returns.iloc[7], -entry_cost), res.returns.iloc[7]
+    assert np.allclose(res.returns.iloc[8:], notional * 0.001), res.returns.iloc[8:12].to_list()
+    assert res.extra["slots"].iloc[8:].eq(1).all()  # BBB has no gap and is never entered
+    # flip the sign: funding higher on Binance -> long Hyperliquid, short Binance, same income
+    p2 = xv.Pair(px, px, px, fund_bn, px, px, px, fund_hl, rank, elig)
+    res2 = xv.simulate(p2)
+    assert np.allclose(res2.returns.iloc[8:], notional * 0.001)
+
+
 if __name__ == "__main__":
+    check_cross_venue()
     check_timing_and_costs()
     check_funding_and_short()
     check_delisting()

@@ -205,3 +205,7 @@ def on_days(weights: pd.DataFrame, days: pd.DatetimeIndex) -> pd.DataFrame:
     out = pd.DataFrame(np.nan, index=weights.index, columns=weights.columns)
     out.loc[days] = weights.loc[days].fillna(0.0)
     return out
+
+
+def window_frame(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
+    return df.loc[pd.Timestamp(start, tz="UTC") : pd.Timestamp(end, tz="UTC")]
