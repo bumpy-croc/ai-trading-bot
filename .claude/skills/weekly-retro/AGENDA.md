@@ -13,11 +13,9 @@ becomes a diff or gets a written disposition.
 
 ## Items
 
-_(Cleared by the 2026-09-28 retro. Empty on arrival for the **ninth** consecutive window; the only
-open PR (#1263, last week's retro, superseded by this one) carried nothing new. This window's
-items came from the `source:automation` issue #1265, standup comments on #1127/#1230/#1260, and
-the scheduled-task transcripts. None came through here. #1099 (retire or restructure this file) is
-still open and unowned. See [D-2026-09-28-01].)_
+_(Cleared by the 2026-11-09 retro. Empty on arrival for the **fifteenth** consecutive window. The
+open PRs #1285, #1281, #1271 and #1270 were checked for AGENDA additions; none carry any. #1099 (retire or
+restructure this file) is still open and unowned. See [D-2026-11-09-02].)_
 
 - 2026-10-04: #1242 made `latest` an explicit opt-in for local training (`TrainingConfig.set_latest`,
   `--set-latest`, `live-control train --auto-deploy`) and added the NO CHANGE-vs-`latest` CI check.
