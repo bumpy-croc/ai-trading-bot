@@ -18,3 +18,8 @@ open PR (#1263, last week's retro, superseded by this one) carried nothing new. 
 items came from the `source:automation` issue #1265, standup comments on #1127/#1230/#1260, and
 the scheduled-task transcripts. None came through here. #1099 (retire or restructure this file) is
 still open and unowned. See [D-2026-09-28-01].)_
+
+- 2026-10-04: #1242 made `latest` an explicit opt-in for local training (`TrainingConfig.set_latest`,
+  `--set-latest`, `live-control train --auto-deploy`) and added the NO CHANGE-vs-`latest` CI check.
+  LESSONS §1.16(a) and `weekly-retro/SKILL.md` still say the pipeline writes `latest` at training
+  time; rewrite them to describe the opt-in and the CI check.

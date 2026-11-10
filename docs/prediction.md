@@ -71,15 +71,46 @@ Helper commands under `atb models` provide operational visibility:
 - `atb models validate` – reload all bundles to surface missing files or corrupt artifacts.
 - `atb models promote BTCUSDT basic 2025-10-30_12h_v1` – repoint the `latest` symlink for `BTCUSDT/basic` to a specific version directory.
 
+- `atb models cleanup [--keep N] [--apply]` – remove old version directories per the retention policy below. Dry run by default.
+
+### Artifact retention policy
+
+Every training run adds a version directory, and checkouts and builds ship all of them. Retention is governed by `src/ml/model_retention.py` and applied with `atb models cleanup`.
+
+A version directory under `{SYMBOL}/{TYPE}/` is **never** a removal candidate if any of these hold:
+
+1. It is the target of a `latest` symlink (or any other symlink in the type directory).
+2. It is among the newest `N` versions of its `{SYMBOL}/{TYPE}` (`--keep N`, default 3). Age comes from the date, time and `_vN`
+   suffix in the version id, not file mtimes.
+3. Its version id appears in `src/config/`, `feature_flags.json`, or anywhere under `docs/research/` (which includes
+   `model-promotions.md`). Anything that pins or documents a version in those places keeps it. Add more places with
+   `--reference-path PATH` (repeatable).
+4. Its name has no leading `YYYY-MM-DD`, so its age is unknown.
+
+Everything else is a candidate. Behaviour of the command:
+
+- **Dry run by default.** It lists each candidate with its size, the total bytes that would be freed, and (with `--verbose`) why
+  every other version is kept. Nothing is deleted without `--apply`.
+- **It aborts, exit code 1, deleting nothing**, if the registry is inconsistent: a dangling symlink, a symlink pointing outside
+  its type directory, or `latest` being a real directory. Fix those first; cleanup does not repair them.
+- **It never creates, moves or removes a symlink.** Only plain version directories are deleted, and each is re-checked right
+  before removal.
+- Only run `--apply` on a registry you have reviewed in a dry run. A deleted version can be recovered only from git history.
+
 ## Training and deployment
 
-`atb train model` writes models directly into the registry at `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}` and refreshes the `latest`
-symlink used by the prediction engine. Operations teams can also trigger training from the live-control CLI, which simply wraps the
-same pipeline:
+`atb train model` writes models directly into the registry at `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}` but does **not** move the
+`latest` symlink: the registry serves every `latest` as a production model and does not serve a `{SYMBOL}/{TYPE}` directory without
+one, so a freshly trained bundle is inert until it is deliberately promoted. Pass `--set-latest` (`atb train model|price`) to
+point `latest` at the new bundle without validation, or promote afterwards with the validation-gated `atb live-control deploy-model`.
+Operations teams can also trigger training from the live-control CLI, which wraps the same pipeline:
 
 ```bash
-# Train a price-only model on the last 365 days and update the latest bundle
+# Train a price-only model on the last 365 days; latest is left untouched
 atb live-control train --symbol BTCUSDT --days 365 --epochs 50
+
+# Train and promote only if the validation gate passes (latest rolls back otherwise)
+atb live-control train --symbol BTCUSDT --days 365 --epochs 50 --auto-deploy
 ```
 
 To roll back, repoint the `latest` symlink with either `atb models promote …` or `atb live-control deploy-model --model-path BTCUSDT/basic/2025-09-17_1h_v1`.

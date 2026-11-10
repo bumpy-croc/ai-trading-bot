@@ -50,6 +50,24 @@ The manager falls back to creating tables automatically when connecting to an em
   real exchange position. `--session-id` narrows it to one session.
 - `atb db nuke` – drops all objects (including enums) and recreates the schema; intended for local resets only.
 
+## Migrations
+
+`migrations/versions/` is the only migration directory and holds one linear chain (`alembic heads` returns a single head).
+Retired migrations from the pre-baseline schema were deleted rather than kept in the tree; recover them from git history if
+needed (`git log --diff-filter=D --name-only -- migrations/`).
+
+Workflow for a schema change:
+
+1. Change `src/database/models.py`.
+2. Point `DATABASE_URL` at a throwaway Postgres already upgraded to head, then run
+   `alembic revision --autogenerate -m "<short description>"`.
+3. Treat the generated file as a draft. Review it and hand-edit: autogenerate misses enum changes, views, server defaults,
+   data backfills and `CREATE INDEX CONCURRENTLY`, and it can emit drops for objects it does not know about.
+4. Hand-write the migration from scratch for data migrations and anything autogenerate cannot express.
+5. Name the revision `NNNN_short_name`, keep the id at 32 characters or fewer (the `alembic_version` column is `VARCHAR(32)`),
+   and set `down_revision` to the current head.
+6. Verify on a fresh database: `alembic upgrade head`, then `atb db verify`.
+
 ## Ended sessions and OPEN positions
 
 `DatabaseManager.end_trading_session` decides what happens to the session's OPEN `positions` rows, by session mode:

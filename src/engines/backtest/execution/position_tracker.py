@@ -19,6 +19,7 @@ from src.config.constants import (
     DEFAULT_SLIPPAGE_RATE,
 )
 from src.engines.backtest.models import ActiveTrade, Trade
+from src.engines.shared.cost_basis import blend_cost_basis
 from src.engines.shared.models import PartialExitOutcome, PositionSide
 from src.engines.shared.partial_exit_executor import PartialExitExecutor
 from src.engines.shared.side_utils import to_side_string
@@ -203,7 +204,7 @@ class PositionTracker:
 
         # Use shared executor for consistent financial calculations
         result = self._partial_exit_executor.execute_partial_exit(
-            entry_price=float(self.current_trade.entry_price),
+            entry_price=float(self.current_trade.cost_basis_price),
             exit_price=float(current_price),
             position_side=self.current_trade.side,
             exit_fraction=float(exit_fraction),
@@ -290,7 +291,8 @@ class PositionTracker:
         trade = self.current_trade
         if trade is None:
             return 0.0
-        if trade.entry_price <= 0 or not math.isfinite(trade.entry_price):
+        cost_price = trade.cost_basis_price
+        if cost_price <= 0 or not math.isfinite(cost_price):
             return 0.0
         if current_price <= 0 or not math.isfinite(current_price):
             return 0.0
@@ -302,7 +304,7 @@ class PositionTracker:
 
         side_str = to_side_string(trade.side)
         side_enum = Side.LONG if side_str == "long" else Side.SHORT
-        pct = pnl_percent(trade.entry_price, current_price, side_enum, fraction)
+        pct = pnl_percent(cost_price, current_price, side_enum, fraction)
 
         entry_balance = getattr(trade, "entry_balance", None)
         basis = (
@@ -314,12 +316,23 @@ class PositionTracker:
             return 0.0
         return cash_pnl(pct, basis)
 
-    def apply_scale_in(self, additional_size: float, max_position_size: float = 1.0) -> None:
+    def apply_scale_in(
+        self,
+        additional_size: float,
+        price: float,
+        max_position_size: float = 1.0,
+    ) -> None:
         """Increase position size via scale-in.
+
+        The added slice is blended into the position's average cost so P&L
+        measures it from the price it was bought at. ``entry_price`` is left
+        alone: partial-exit targets, trailing activation and breakeven keep
+        measuring from the first fill.
 
         Args:
             additional_size: Additional size to add, in balance-fraction
                 units (same units as ``current_size``).
+            price: Fill price of the added slice.
             max_position_size: Maximum allowed position size. Growth is
                 capped at this value without shrinking already-over-cap
                 state (never-shrink semantics, parity with the live tracker).
@@ -335,9 +348,15 @@ class PositionTracker:
         current_size = cast(float, self.current_trade.current_size)
         size = self.current_trade.size
         delta = float(additional_size)
-        self.current_trade.current_size = min(
-            current_size + delta, max(max_position_size, current_size)
+        new_current_size = min(current_size + delta, max(max_position_size, current_size))
+        # Blend only the slice that was actually added after the cap.
+        self.current_trade.avg_cost_price = blend_cost_basis(
+            held_cost_price=self.current_trade.cost_basis_price,
+            held_size=current_size,
+            added_price=float(price),
+            added_size=new_current_size - current_size,
         )
+        self.current_trade.current_size = new_current_size
         self.current_trade.size = min(size + delta, max(max_position_size, size))
         self.current_trade.scale_ins_taken += 1
 
@@ -430,10 +449,11 @@ class PositionTracker:
         if exit_price <= 0 or not math.isfinite(exit_price):
             raise ValueError(f"Invalid exit_price: {exit_price}")
 
-        # Calculate PnL using shared function for parity with live engine
+        # Calculate PnL using shared function for parity with live engine,
+        # measured from the average cost so scale-in slices earn from their own fill.
         side_str = to_side_string(trade.side)
         side_enum = Side.LONG if side_str == "long" else Side.SHORT
-        trade_pnl_pct = pnl_percent(trade.entry_price, exit_price, side_enum, fraction)
+        trade_pnl_pct = pnl_percent(trade.cost_basis_price, exit_price, side_enum, fraction)
 
         entry_balance = getattr(trade, "entry_balance", None)
         if entry_balance is not None and entry_balance > 0:
@@ -498,6 +518,8 @@ class PositionTracker:
         for key in (PARTIAL_FEES_KEY, PARTIAL_SLIPPAGE_KEY, REALIZED_PARTIAL_PNL_KEY):
             if key in trade.metadata:
                 completed_trade.metadata[key] = float(trade.metadata[key])
+        if trade.avg_cost_price is not None:
+            completed_trade.metadata["avg_cost_price"] = float(trade.avg_cost_price)
         if banked_partial_pnl or trade.partial_exits_taken:
             # Scale-ins grow ``size`` but not ``original_size``; the persisted
             # size must cover all the exposure whose P&L is on the record.

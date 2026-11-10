@@ -150,7 +150,7 @@ ai-trading-bot/
     ├── architecture.md           # This file
     ├── changelog.md              # Change history
     ├── project_status.md         # Current milestones
-    └── execplans/                # Feature execution plans
+    └── archive/                  # Completed ExecPlans, phase docs, issue write-ups
 ```
 
 ---

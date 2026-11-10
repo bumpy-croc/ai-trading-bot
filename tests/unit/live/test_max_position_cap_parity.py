@@ -42,6 +42,12 @@ pytestmark = pytest.mark.unit
 
 ENTRY_TIME = datetime(2024, 1, 1, tzinfo=UTC)
 
+
+def _zero_cost_scale_in(price, notional, side, liquidity=None):
+    """Fee-free, slippage-free scale-in costs: fills at the quoted price."""
+    return 0.0, 0.0, price
+
+
 # Live gains its max-position headroom clamp in #835; until that lands on
 # this branch the cross-engine comparisons are skipped (backtest-side
 # semantics are still pinned below). Source inspection is used because the
@@ -72,7 +78,7 @@ def _make_backtest_handler(
     risk_manager.params = SimpleNamespace(max_daily_risk=max_daily_risk)
     risk_manager.daily_risk_used = 0.0
     execution_engine = MagicMock()
-    execution_engine.calculate_scale_in_costs.return_value = (0.0, 0.0)
+    execution_engine.calculate_scale_in_costs.side_effect = _zero_cost_scale_in
     handler = ExitHandler(
         execution_engine=execution_engine,
         position_tracker=tracker,
@@ -170,7 +176,7 @@ class TestBacktestMaxPositionCap:
         tracker = PositionTracker(fee_rate=0.0, slippage_rate=0.0)
         trade = _open_backtest_long(tracker, size=0.10)
 
-        tracker.apply_scale_in(0.05, max_position_size=0.05)
+        tracker.apply_scale_in(0.05, price=100.0, max_position_size=0.05)
 
         assert trade.current_size == pytest.approx(0.10)
         assert trade.size == pytest.approx(0.10)
