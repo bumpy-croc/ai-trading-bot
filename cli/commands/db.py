@@ -1054,6 +1054,65 @@ def _nuke(ns: argparse.Namespace) -> int:
         return 1
 
 
+def _close_stale_positions(ns: argparse.Namespace) -> int:
+    """List OPEN positions that belong to ended sessions; close them only with --apply (#1044)."""
+    from src.database.manager import SIMULATED_SESSION_MODES, DatabaseManager
+
+    apply = bool(getattr(ns, "apply", False))
+    session_id = getattr(ns, "session_id", None)
+
+    try:
+        db_manager = DatabaseManager(_get_database_url_for_env(getattr(ns, "env", None)))
+        stale = db_manager.get_open_positions_in_ended_sessions(session_id)
+    except Exception as e:
+        print(f"❌ Could not read stale positions: {e}")
+        return 1
+
+    _print_header("OPEN positions in ended sessions")
+    if not stale:
+        print("✅ None found")
+        return 0
+
+    simulated_modes = {mode.value for mode in SIMULATED_SESSION_MODES}
+    closable = [row for row in stale if row["session_mode"] in simulated_modes]
+    live_rows = [row for row in stale if row["session_mode"] not in simulated_modes]
+    for row in stale:
+        action = "closable" if row["session_mode"] in simulated_modes else "manual"
+        print(
+            f"  position #{row['position_id']} session #{row['session_id']} "
+            f"({row['session_mode']}) {row['symbol']} {row['side']} "
+            f"strategy={row['strategy_name']} entry={row['entry_time']} [{action}]"
+        )
+    print(f"\n{len(stale)} row(s): {len(closable)} closable, {len(live_rows)} LIVE")
+    if live_rows:
+        print(
+            "⚠️  LIVE rows are never closed by this command — verify each against the "
+            "exchange and reconcile by hand."
+        )
+
+    if not apply:
+        print("\nDry run — nothing changed. Re-run with --apply to close the closable rows.")
+        print(
+            "Rows of a recent session with no newer session are not listed: the next engine "
+            "start re-adopts them."
+        )
+        return 0
+
+    try:
+        closed = db_manager.close_open_positions_in_ended_sessions(
+            [row["position_id"] for row in closable],
+            reason=(
+                "Closed balance-neutrally by `atb db close-stale-positions --apply`: "
+                "OPEN position belonged to an ended session (#1044)"
+            ),
+        )
+    except Exception as e:
+        print(f"❌ Failed to close stale positions: {e}")
+        return 1
+    print(f"\n✅ Closed {len(closed)} row(s) balance-neutrally (audit rows written)")
+    return 0
+
+
 def _collation_check(env: str | None) -> int:
     if psycopg2 is None:
         print("psycopg2 is required for collation checks. Install psycopg2-binary first.")
@@ -1263,6 +1322,23 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Target environment (default: uses DATABASE_URL)",
     )
     p_nuke.set_defaults(func=_nuke)
+
+    p_stale = sub.add_parser(
+        "close-stale-positions",
+        help="List OPEN positions of ended sessions; close them with --apply (dry run by default)",
+    )
+    p_stale.add_argument(
+        "--apply",
+        action="store_true",
+        help="Close the listed non-LIVE rows balance-neutrally (default: dry run)",
+    )
+    p_stale.add_argument("--session-id", type=int, help="Restrict to one ended session")
+    p_stale.add_argument(
+        "--env",
+        choices=["development", "staging", "production"],
+        help="Target environment (default: uses DATABASE_URL)",
+    )
+    p_stale.set_defaults(func=_close_stale_positions)
 
     p_coll_check = sub.add_parser("check-collation", help="Inspect database collation status")
     p_coll_check.add_argument(
