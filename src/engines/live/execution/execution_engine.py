@@ -37,7 +37,7 @@ from src.engines.shared.commission import order_commission_usd
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
 from src.trading.balance_retry import read_free_balance_with_retry
-from src.trading.precision import quantize_to_step
+from src.trading.precision import snap_to_step
 from src.trading.symbols.factory import base_asset_from_symbol
 
 logger = logging.getLogger(__name__)
@@ -1801,24 +1801,16 @@ class LiveExecutionEngine:
         else:
             # Apply step_size rounding
             try:
-                if floor:
-                    # +epsilon so a quantity that is mathematically an exact lot
-                    # multiple but stored a hair low (float noise) isn't truncated
-                    # a whole step down (mirrors the SL SELL guard).
-                    normalized = math.floor(quantity / step_size + 1e-9) * step_size
-                else:
-                    normalized = round(quantity / step_size) * step_size
+                # floor=True rounds down (closing SELLs must never exceed holdings);
+                # snap_to_step keeps the result free of float artifacts (Binance 51077).
+                normalized = snap_to_step(quantity, step_size, "floor" if floor else "nearest")
                 if not math.isfinite(normalized):
                     logger.error(
                         "Normalization produced non-finite value for %s - keeping original",
                         symbol,
                     )
                 else:
-                    # `(integer) * step_size` in float math leaves artifacts (e.g.
-                    # 40 * 0.0001 = 0.004000000000000001) that exceed the asset's max
-                    # precision; sent verbatim Binance rejects with code 51077. Quantize
-                    # to the step's decimal count so the sent value has no excess decimals.
-                    quantity = quantize_to_step(normalized, step_size)
+                    quantity = normalized
             except (ArithmeticError, ValueError) as e:
                 logger.error("Step_size normalization failed for %s: %s", symbol, e, exc_info=True)
 

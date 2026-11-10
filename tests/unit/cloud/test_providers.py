@@ -210,6 +210,9 @@ class TestLocalProvider:
         assert ctx.config.target_type == "regression"
         assert ctx.config.target_horizon == 1
         assert ctx.config.primary_model_type is None
+        # The local provider writes into the real registry: promotion is the
+        # orchestrator's explicit --set-latest sync step, never training's.
+        assert ctx.config.set_latest is False
 
     def test_run_local_training_threads_primary_model_type(self, provider: LocalProvider) -> None:
         """Phase 2b item 3: primary_model_type must reach TrainingConfig via

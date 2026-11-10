@@ -327,7 +327,7 @@ class TestCheckUserStreamHealth:
 
         # Faithful reconnect: refresh the timestamp but leave the socket dead — no
         # real event arrives, so user_ws_healthy stays False.
-        def _reconnect():
+        def _reconnect(**_kwargs):
             ex._last_user_event_time = datetime.now(UTC)
 
         with patch.object(
@@ -1098,10 +1098,10 @@ class TestUserDegradedProbeBackoffSchedule:
 
 
 class TestUserHardReconnectMode:
-    """#723 Phase 2: a flag-gated full teardown + fresh-AsyncClient rebuild
-    (hard_reconnect_user). Ships INERT (FEATURE_WS_USER_HARD_RECONNECT default OFF).
-    The mode is decided by the CALLER before stop_user_stream flips state, and a
-    kline/user coupling falls back to in-place reconnect (never crashes the thread)."""
+    """#723: a full teardown + fresh-TWM rebuild (hard_reconnect_user) is the default
+    user-stream reconnect (FEATURE_WS_USER_HARD_RECONNECT default ON, set false to
+    revert). Every recovery path decides the mode, and a kline/user coupling falls
+    back to in-place reconnect (never crashes the thread)."""
 
     @staticmethod
     def _degraded_engine(mock_engine, *, kline_provider=None):
@@ -1126,7 +1126,7 @@ class TestUserHardReconnectMode:
 
     @pytest.mark.fast
     def test_flag_off_uses_in_place_reconnect(self, mock_engine):
-        """Flag OFF (default): the degraded probe passes hard=False → in-place
+        """Flag explicitly OFF: the degraded probe passes hard=False → in-place
         reconnect path (E.10)."""
         ex, _tracker = self._degraded_engine(mock_engine)
         with (
@@ -1151,9 +1151,8 @@ class TestUserHardReconnectMode:
         disc.assert_called_once_with(hard=True)
 
     @pytest.mark.fast
-    def test_flag_on_primary_stale_still_uses_in_place(self, mock_engine):
-        """Flag ON but PRIMARY-stale path → hard=False (mode decided by caller, not
-        read inside the handler post-teardown) (E.10)."""
+    def test_flag_on_primary_stale_uses_hard_reconnect(self, mock_engine):
+        """Flag ON, PRIMARY-stale and unverifiable: the reconnect is HARD (#723)."""
         mock_engine.enable_live_trading = True
         ex = MagicMock()
         ex._user_ws_state = WebSocketState.PRIMARY
@@ -1172,12 +1171,12 @@ class TestUserHardReconnectMode:
             patch.object(mock_engine, "_handle_user_stream_disconnect") as disc,
         ):
             mock_engine._check_user_stream_health()
-        # PRIMARY-stale caller never passes hard → default False.
-        disc.assert_called_once_with()
+        disc.assert_called_once_with(hard=True)
 
     @pytest.mark.fast
-    def test_flag_on_resyncing_still_uses_in_place(self, mock_engine):
-        """Flag ON but RESYNCING path → in-place (hard=False default) (E.10)."""
+    def test_flag_on_resyncing_uses_hard_reconnect(self, mock_engine):
+        """Flag ON, RESYNCING (transport error / failed subscribe): the recovery is
+        HARD and counts against the circuit (#723)."""
         mock_engine.enable_live_trading = True
         ex = MagicMock()
         ex._user_ws_state = WebSocketState.RESYNCING
@@ -1187,13 +1186,107 @@ class TestUserHardReconnectMode:
         tracker.get_tracked_count.return_value = 2
         mock_engine.order_tracker = tracker
         mock_engine._ws_kline_provider = MagicMock()
+        mock_engine._user_reconnect_failures = 0
 
         with (
             patch("src.config.feature_flags.is_enabled", return_value=True),
             patch.object(mock_engine, "_handle_user_stream_disconnect") as disc,
         ):
             mock_engine._check_user_stream_health()
-        disc.assert_called_once_with()  # RESYNCING caller: no hard kwarg
+        disc.assert_called_once_with(hard=True)
+        assert mock_engine._user_reconnect_failures == 1
+
+    @pytest.mark.fast
+    def test_resyncing_opens_circuit_after_limit_instead_of_rebuilding_forever(self, mock_engine):
+        """A stream that keeps failing back into RESYNCING must not be rebuilt every
+        health cycle forever: past the circuit limit it is parked on REST polling and
+        left to the backoff probe (#723)."""
+        from src.config.constants import DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT
+
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex._user_ws_state = WebSocketState.RESYNCING
+        ex.user_ws_healthy = False
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        tracker.get_tracked_count.return_value = 2
+        mock_engine.order_tracker = tracker
+        mock_engine._ws_kline_provider = MagicMock()
+        mock_engine._user_reconnect_failures = DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT
+
+        with patch.object(mock_engine, "_handle_user_stream_disconnect") as disc:
+            mock_engine._check_user_stream_health()
+
+        disc.assert_not_called()
+        ex.stop_user_stream.assert_called_once()
+        ex.mark_user_degraded.assert_called_once()
+        tracker.enable_polling.assert_called_once()
+
+    @pytest.mark.fast
+    def test_reopening_the_circuit_after_a_failed_probe_does_not_page_again(self, mock_engine):
+        """A degraded probe that lands back in RESYNCING re-enters the circuit; the
+        operator was already paged for this outage (#853)."""
+        from src.config.constants import DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT as LIMIT
+
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex._user_ws_state = WebSocketState.RESYNCING
+        ex.user_ws_healthy = False
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        tracker.get_tracked_count.return_value = 2
+        mock_engine.order_tracker = tracker
+        mock_engine._ws_kline_provider = MagicMock()
+        mock_engine._record_event = MagicMock()
+
+        mock_engine._user_reconnect_failures = LIMIT
+        mock_engine._check_user_stream_health()
+        assert mock_engine._record_event.call_count == 1  # first open pages
+
+        mock_engine._user_reconnect_failures = LIMIT + 7  # a later failed probe
+        mock_engine._check_user_stream_health()
+        assert mock_engine._record_event.call_count == 1  # no duplicate
+        assert ex.mark_user_degraded.call_count == 2  # but it is still parked on REST
+
+    @pytest.mark.fast
+    def test_a_recovered_stream_pages_again_on_the_next_outage(self, mock_engine):
+        """The page-once latch clears when a real event proves the stream is back."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex._user_ws_state = WebSocketState.PRIMARY
+        ex.user_ws_healthy = True
+        mock_engine.exchange_interface = ex
+        tracker = MagicMock()
+        tracker.get_tracked_count.return_value = 2
+        tracker.is_polling_enabled.return_value = False
+        mock_engine.order_tracker = tracker
+        mock_engine._ws_kline_provider = MagicMock()
+        mock_engine._user_degraded_paged = True
+
+        mock_engine._check_user_stream_health()
+
+        assert mock_engine._user_degraded_paged is False
+
+    @pytest.mark.fast
+    def test_a_failed_reconnect_pages_even_without_a_circuit_open(self, mock_engine):
+        """Reconnects that fail outright park the stream on REST without ever opening the
+        circuit; that outage must still page, once."""
+        mock_engine.enable_live_trading = True
+        ex = MagicMock()
+        ex.hard_reconnect_user.return_value = False
+        mock_engine.exchange_interface = ex
+        mock_engine.order_tracker = MagicMock()
+        mock_engine._user_data_processor = None
+        mock_engine._periodic_reconciler = None
+        mock_engine._record_event = MagicMock()
+        mock_engine._user_degraded_paged = False
+
+        mock_engine._handle_user_stream_disconnect(hard=True)
+        mock_engine._handle_user_stream_disconnect(hard=True)
+
+        ex.mark_user_degraded.assert_called()
+        assert mock_engine._record_event.call_count == 1
+        assert mock_engine._record_event.call_args.kwargs["error_code"] == "USER_WS_DEGRADED"
 
     @pytest.mark.fast
     def test_coupling_guard_falls_back_to_in_place_and_does_not_raise(self, mock_engine, caplog):
@@ -1220,18 +1313,17 @@ class TestUserHardReconnectMode:
         )
 
     @pytest.mark.fast
-    def test_should_hard_reconnect_helper_default_off(self, mock_engine):
-        """_should_hard_reconnect_user is False when the flag is unset (default OFF),
-        so a missing env var can never silently enable the teardown path (E.13)."""
+    def test_should_hard_reconnect_helper_default_on(self, mock_engine):
+        """_should_hard_reconnect_user is True when the flag is unset (default ON):
+        the in-place re-subscribe cannot restore a ws-api margin stream (#723)."""
         ex = MagicMock()
         mock_engine.exchange_interface = ex
         mock_engine._ws_kline_provider = MagicMock()
-        # No FEATURE_WS_USER_HARD_RECONNECT in env, no overrides → resolves OFF.
         with patch.dict("os.environ", {}, clear=False):
             import os
 
             os.environ.pop("FEATURE_WS_USER_HARD_RECONNECT", None)
-            assert mock_engine._should_hard_reconnect_user() is False
+            assert mock_engine._should_hard_reconnect_user() is True
 
     @pytest.mark.fast
     def test_should_hard_reconnect_helper_false_when_method_missing(self, mock_engine):

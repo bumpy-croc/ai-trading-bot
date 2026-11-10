@@ -71,6 +71,30 @@ class QueryTimeout:
 # This cap indicates "extremely profitable" while remaining storable in Numeric(18, 8).
 MAX_PROFIT_FACTOR = 999999.99
 
+# A clean restart re-adopts the previous session only if it started within this window
+# (covers long-running paper sessions); older sessions' open rows are never carried forward.
+SESSION_RECOVERY_WINDOW_HOURS = 168  # 7 days
+
+# Session modes whose position rows are simulated and may be closed without an exchange check.
+SIMULATED_SESSION_MODES = (TradeSource.PAPER, TradeSource.BACKTEST)
+
+
+class NegativeBalanceError(ValueError):
+    """A balance delta would take the session ledger below zero.
+
+    Subclasses ``ValueError`` so every existing ``except ValueError`` handler
+    keeps working; ``log_trade`` catches this type specifically so a ledger
+    rejection never undoes an already-filled exchange close.
+    """
+
+
+class DuplicateCloseError(ValueError):
+    """A Trade already references the position a ``balance_delta`` close targets.
+
+    Raised by ``log_trade`` under the balance-ledger lock so two racing closers of the
+    same position (engine exit vs reconciler) cannot both book its PnL.
+    """
+
 
 @dataclass(frozen=True)
 class SystemHaltStatus:
@@ -84,6 +108,17 @@ class SystemHaltStatus:
     reason: str | None
     source: str | None
     updated_at: datetime | None
+
+
+def _position_summary(position: Position) -> dict[str, Any]:
+    """Identify a position row in event details and listings."""
+    return {
+        "position_id": position.id,
+        "symbol": position.symbol,
+        "side": position.side.value,
+        "strategy_name": position.strategy_name,
+        "entry_time": position.entry_time.isoformat() if position.entry_time else None,
+    }
 
 
 def _trade_net_pnl(trade: Any) -> float:
@@ -712,9 +747,33 @@ class DatabaseManager:
         self._current_session_id = session_id
 
     def end_trading_session(
-        self, session_id: int | None = None, final_balance: float | None = None
+        self,
+        session_id: int | None = None,
+        final_balance: float | None = None,
+        carry_forward_open_positions: bool = False,
     ) -> None:
-        """End a trading session and calculate final metrics."""
+        """End a trading session and calculate final metrics.
+
+        An ended session must not leave OPEN position rows behind unnoticed
+        (#1044): they are invisible to the session-scoped engine reads yet still
+        count in unscoped queries. What happens to them depends on the session mode:
+
+        - ``LIVE``: rows are never touched (the exchange is the source of truth and
+          closing the row would hide a live position). A critical ``ALERT`` event
+          lists them so an operator reconciles by hand.
+        - ``PAPER`` with ``carry_forward_open_positions=True``: rows stay OPEN for
+          the next start to re-adopt via ``reassign_open_positions_to_session``
+          (#668); the ``ENGINE_STOP`` event records which rows were preserved.
+        - ``PAPER``/``BACKTEST`` otherwise: the positions are simulated and have no
+          successor, so they are closed balance-neutrally with an audit row and a
+          warning event.
+
+        Args:
+            session_id: Session to end (defaults to the manager's current session).
+            final_balance: Final session balance.
+            carry_forward_open_positions: True when the caller is an engine whose
+                next start re-adopts this session's OPEN paper positions.
+        """
         session_id = session_id or self._current_session_id
         if not session_id:
             logger.warning("No active session to end")
@@ -764,24 +823,257 @@ class DatabaseManager:
 
                     trading_session.max_drawdown = max_drawdown * 100
 
+            # Handled in the same transaction as the session end, so a session
+            # never ends with its rows half-processed.
+            open_positions = (
+                db.query(Position)
+                .filter(
+                    Position.session_id == session_id,
+                    Position.status == PositionStatus.OPEN,
+                )
+                .with_for_update()
+                .all()
+            )
+            # Allowlist: only a mode known to be simulated may have rows closed.
+            is_simulated = trading_session.mode in SIMULATED_SESSION_MODES
+            is_live_session = not is_simulated
+            close_positions = (
+                bool(open_positions) and is_simulated and not carry_forward_open_positions
+            )
+            open_position_summaries = [_position_summary(p) for p in open_positions]
+            if close_positions:
+                self._close_orphaned_positions(
+                    db,
+                    open_positions,
+                    reason=(
+                        f"Trading session #{session_id} ended without carry-forward; "
+                        "simulated position closed balance-neutrally (#1044)"
+                    ),
+                )
+
             db.commit()
 
             # Log session end event
+            end_details: dict[str, Any] = {
+                "duration_hours": (
+                    trading_session.end_time - trading_session.start_time
+                ).total_seconds()
+                / 3600,
+                "total_trades": trading_session.total_trades,
+                "final_pnl": trading_session.total_pnl,
+                "win_rate": trading_session.win_rate,
+            }
+            if open_position_summaries:
+                end_details["open_positions"] = {
+                    "disposition": (
+                        "closed"
+                        if close_positions
+                        else "preserved" if is_simulated else "left_open_for_manual_review"
+                    ),
+                    "positions": open_position_summaries,
+                }
             self.log_event(
                 event_type=EventType.ENGINE_STOP,
                 message=f"Trading session ended: {trading_session.session_name}",
-                details={
-                    "duration_hours": (
-                        trading_session.end_time - trading_session.start_time
-                    ).total_seconds()
-                    / 3600,
-                    "total_trades": trading_session.total_trades,
-                    "final_pnl": trading_session.total_pnl,
-                    "win_rate": trading_session.win_rate,
-                },
+                details=end_details,
+                session_id=session_id,
+            )
+            self._log_session_end_open_positions(
+                session_id,
+                is_live_session=is_live_session,
+                closed=close_positions,
+                summaries=open_position_summaries,
             )
 
             logger.info(f"Ended trading session #{session_id}")
+
+    def _log_session_end_open_positions(
+        self,
+        session_id: int,
+        *,
+        is_live_session: bool,
+        closed: bool,
+        summaries: list[dict[str, Any]],
+    ) -> None:
+        """Emit the durable alert/warning for OPEN rows found when a session ended (#1044).
+
+        Preserved paper rows get no extra event: the ``ENGINE_STOP`` event already
+        lists them, and they are expected to be re-adopted on the next start.
+        """
+        if not summaries:
+            return
+        if is_live_session:
+            logger.critical(
+                "LIVE session #%s ended with %d OPEN position row(s) still recorded: %s",
+                session_id,
+                len(summaries),
+                summaries,
+            )
+            self.log_event(
+                event_type=EventType.ALERT,
+                message=(
+                    f"LIVE session #{session_id} ended with {len(summaries)} OPEN position "
+                    "row(s) still recorded — verify against the exchange"
+                ),
+                severity="critical",
+                component="session_end",
+                error_code="LIVE_SESSION_ENDED_WITH_OPEN_POSITIONS",
+                details={"positions": summaries},
+                session_id=session_id,
+            )
+        elif closed:
+            self.log_event(
+                event_type=EventType.WARNING,
+                message=(
+                    f"Session #{session_id} ended with {len(summaries)} OPEN simulated "
+                    "position(s); closed balance-neutrally"
+                ),
+                severity="warning",
+                component="session_end",
+                error_code="SESSION_ENDED_OPEN_POSITIONS_CLOSED",
+                details={"positions": summaries},
+                session_id=session_id,
+            )
+
+    @staticmethod
+    def _close_orphaned_positions(db: Session, positions: list[Position], reason: str) -> None:
+        """Close OPEN position rows without touching any balance or trade ledger.
+
+        Mirrors the reconciler's external-close semantics: the row flips to CLOSED
+        and an immutable audit row records why. No P&L is invented — there is no
+        fill price for a position nobody is managing — and no balance row is written.
+        The caller owns the transaction.
+        """
+        now = datetime.now(UTC)
+        for position in positions:
+            position.status = PositionStatus.CLOSED
+            position.last_update = now
+            db.add(
+                ReconciliationAuditEvent(
+                    session_id=position.session_id,
+                    entity_type="position",
+                    entity_id=position.id,
+                    field="status",
+                    old_value="OPEN",
+                    new_value="CLOSED",
+                    reason=reason,
+                    severity="HIGH",
+                )
+            )
+
+    @staticmethod
+    def _session_is_over() -> Any:
+        """SQL predicate: no engine start will ever re-adopt the in-scope session's rows.
+
+        True when a newer session exists for the same symbol and strategy (this covers a
+        crashed session that is still flagged active but was replaced), or when the
+        session is ended and older than the recovery window. An ended session inside the
+        window with no successor is excluded: its paper positions wait for the next
+        start's carry-forward.
+        """
+        newer = sa.orm.aliased(TradingSession)
+        superseded = sa.exists().where(
+            newer.symbol == TradingSession.symbol,
+            newer.strategy_name == TradingSession.strategy_name,
+            newer.start_time > TradingSession.start_time,
+        )
+        window_cutoff = datetime.now(UTC) - timedelta(hours=SESSION_RECOVERY_WINDOW_HOURS)
+        return sa.or_(
+            superseded,
+            sa.and_(~TradingSession.is_active, TradingSession.start_time < window_cutoff),
+        )
+
+    def get_open_positions_in_ended_sessions(self, session_id: int | None = None) -> list[dict]:
+        """List OPEN positions whose trading session has ended or been superseded (#1044).
+
+        The positive-state check for monitoring: the result must be empty once
+        every restart has carried its positions forward. A non-empty result is a
+        phantom row — invisible to the engine's session-scoped reads, visible to
+        anything unscoped.
+
+        Args:
+            session_id: Restrict the check to one ended session.
+
+        Returns:
+            One dict per row (position id, session id/mode/end time, symbol, side,
+            strategy, entry time, entry price, quantity), oldest session first.
+        """
+        with self.get_session_with_timeout(QueryTimeout.DEFAULT) as db:
+            query = (
+                db.query(Position, TradingSession)
+                .join(TradingSession, Position.session_id == TradingSession.id)
+                .filter(
+                    Position.status == PositionStatus.OPEN,
+                    self._session_is_over(),
+                )
+                .order_by(Position.session_id, Position.id)
+            )
+            if session_id is not None:
+                query = query.filter(Position.session_id == session_id)
+            return [
+                {
+                    **_position_summary(position),
+                    "session_id": ended_session.id,
+                    "session_mode": ended_session.mode.value,
+                    "session_end_time": (
+                        ended_session.end_time.isoformat() if ended_session.end_time else None
+                    ),
+                    "entry_price": float(position.entry_price),
+                    "quantity": float(position.quantity) if position.quantity is not None else None,
+                }
+                for position, ended_session in query.all()
+            ]
+
+    def close_open_positions_in_ended_sessions(
+        self, position_ids: list[int], reason: str
+    ) -> list[int]:
+        """Balance-neutrally close the given OPEN rows of ended, non-LIVE sessions (#1044).
+
+        Each id is re-validated inside the write transaction: it must still be OPEN,
+        belong to an ended session, and that session must not be ``LIVE`` (a LIVE row
+        may mirror a real exchange position and needs manual reconciliation). Ids
+        failing the check are skipped, so a stale listing cannot close a row that was
+        carried forward since.
+
+        Args:
+            position_ids: Candidate ids (from ``get_open_positions_in_ended_sessions``).
+            reason: Audit note stored on each ``reconciliation_audit_events`` row.
+
+        Returns:
+            Ids actually closed.
+        """
+        if not position_ids:
+            return []
+        with self.get_session_with_timeout(QueryTimeout.WRITE) as db:
+            positions = (
+                db.query(Position)
+                .join(TradingSession, Position.session_id == TradingSession.id)
+                .filter(
+                    Position.id.in_(position_ids),
+                    Position.status == PositionStatus.OPEN,
+                    self._session_is_over(),
+                    TradingSession.mode.in_(SIMULATED_SESSION_MODES),
+                )
+                .with_for_update(of=Position)
+                .all()
+            )
+            if not positions:
+                return []
+            closed_ids = [p.id for p in positions]
+            self._close_orphaned_positions(db, positions, reason)
+            try:
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                logger.error(
+                    "Failed to close OPEN positions of ended sessions %s: %s. "
+                    "Transaction rolled back.",
+                    position_ids,
+                    e,
+                    exc_info=True,
+                )
+                raise
+            return closed_ids
 
     @staticmethod
     def _normalize_db_enum(value: str | Enum, enum_cls: type[_DbEnumT]) -> _DbEnumT:
@@ -830,6 +1122,7 @@ class DatabaseManager:
         margin_interest_cost: float | None = None,
         position_id: int | None = None,
         balance_delta: float | None = None,
+        ledger_result: dict[str, Any] | None = None,
     ) -> int:
         """Logs a completed trade to the database.
 
@@ -880,16 +1173,26 @@ class DatabaseManager:
                 trade/position commit used to leave the ledger able to
                 double-apply or drop the same PnL on recovery). Serialized against
                 every other balance writer the same way ``atomic_balance_update``
-                is (see ``_lock_balance_ledger``). When None (the default),
+                is (see ``_lock_balance_ledger``). The close is already a fact on
+                the exchange, so a delta the ledger refuses (resulting balance
+                negative) never aborts the Trade/Position write: the ledger is left
+                unchanged, a CRITICAL ``reconciliation_audit_events`` row is written
+                in the same transaction, and a CRITICAL log is emitted. When None (the default),
                 behaviour is unchanged: no balance write happens here, matching
                 every existing caller that owns its own balance update.
+
+            ledger_result: Optional out-parameter, filled only when ``balance_delta``
+                is given: with the ``old_balance``/``new_balance``/``change`` of the
+                applied delta, or with ``rejected_reason`` when the ledger refused it
+                (the Trade/Position close still committed). Lets callers tell a
+                moved ledger from an untouched one without a second read.
 
         Returns:
             Trade ID
 
         Raises:
             ValueError: Invalid financial inputs, or (with ``balance_delta``) no
-                resolvable session id or the resulting balance would be negative.
+                resolvable session id.
         """
         # Validate financial inputs at API boundary
         if not math.isfinite(entry_price) or entry_price <= 0:
@@ -908,21 +1211,46 @@ class DatabaseManager:
         # Use WRITE timeout - trade logging requires durability guarantees
         with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
             balance_result: dict[str, float] | None = None
+            ledger_rejection: str | None = None
+            ledger_balance_before: float | None = None
             if balance_delta is not None:
                 # Serialize against every other ledger writer and apply the
                 # balance change BEFORE the trade/position writes below, all in
                 # this same session/transaction — see _lock_balance_ledger and
-                # _apply_balance_delta. A negative-balance ValueError here aborts
-                # before any Trade/Position write is even added to the session.
+                # _apply_balance_delta.
                 locked_session_id = cast(int, effective_session_id)  # validated above
                 self._lock_balance_ledger(session, locked_session_id)
-                balance_result = self._apply_balance_delta(
-                    session,
-                    locked_session_id,
-                    balance_delta,
-                    f"realized_pnl_{symbol}_{exit_reason}",
-                    "live_engine",
-                )
+                # Checked under the ledger lock (position_id is set, validated above): a
+                # Trade already linked to this position means another closer booked its
+                # PnL, and a second booking would double-apply it.
+                if (
+                    session.query(Trade.id).filter(Trade.position_id == position_id).first()
+                    is not None
+                ):
+                    raise DuplicateCloseError(
+                        f"position {position_id} already has a terminal trade; "
+                        "refusing to book its PnL again"
+                    )
+                try:
+                    balance_result = self._apply_balance_delta(
+                        session,
+                        locked_session_id,
+                        balance_delta,
+                        f"realized_pnl_{symbol}_{exit_reason}",
+                        "live_engine",
+                    )
+                except NegativeBalanceError as ledger_err:
+                    # Every caller passing balance_delta records a close that has
+                    # ALREADY happened on the exchange, so the ledger's negative-
+                    # balance check must not veto the Trade insert and Position
+                    # CLOSED flip: aborting here would leave a gone exchange
+                    # position OPEN in the DB (phantom position). _apply_balance_delta
+                    # raises before adding any row, so nothing needs undoing; the
+                    # ledger is left untouched and the anomaly is recorded below.
+                    ledger_rejection = str(ledger_err)
+                    ledger_balance_before = AccountBalance.get_current_balance(
+                        locked_session_id, session, for_update=False
+                    )
 
             # Normalize sides/sources to the DATABASE enums (fresh locals, no
             # argument reassignment). Engines pass their own PositionSide
@@ -1005,6 +1333,30 @@ class DatabaseManager:
                             symbol,
                         )
 
+                if ledger_rejection is not None:
+                    # Persisted in the same transaction as the Trade so the
+                    # anomaly record and the close can never diverge.
+                    session.add(
+                        ReconciliationAuditEvent(
+                            session_id=effective_session_id,
+                            entity_type="balance",
+                            entity_id=position_id,
+                            field="realized_pnl",
+                            old_value=f"{ledger_balance_before:.2f}",
+                            new_value=None,
+                            reason=(
+                                f"Ledger rejected realized PnL of {balance_delta:+.2f} for "
+                                f"{symbol} ({exit_reason}); Trade and Position close were "
+                                f"persisted, ledger NOT adjusted: {ledger_rejection}"
+                            ),
+                            severity="CRITICAL",
+                        )
+                    )
+
+                # Flushed before the commit so the id is read while the transaction is
+                # still open: a refresh after commit could fail on a close that did commit.
+                session.flush()
+                trade_id = trade.id
                 session.commit()
             except IntegrityError as ie:
                 # Rollback on integrity errors (duplicate keys, constraint violations)
@@ -1026,22 +1378,47 @@ class DatabaseManager:
                 raise
 
             logger.info(
-                f"Logged trade #{trade.id}: {symbol} {db_side.value} P&L: ${pnl:.2f} ({pnl_percent:.2f}%)"
+                f"Logged trade #{trade_id}: {symbol} {db_side.value} P&L: ${pnl:.2f} ({pnl_percent:.2f}%)"
             )
+            if ledger_result is not None:
+                if ledger_rejection is not None:
+                    ledger_result["rejected_reason"] = ledger_rejection
+                elif balance_result is not None:
+                    ledger_result.update(balance_result)
+            if ledger_rejection is not None:
+                logger.critical(
+                    "LEDGER ANOMALY: realized PnL %+.2f for %s (Trade #%s, Position %s) was "
+                    "persisted but the ledger rejected the balance change (%s). The balance "
+                    "ledger is NOT adjusted and must be reconciled against the exchange.",
+                    cast(float, balance_delta),
+                    symbol,
+                    trade_id,
+                    position_id,
+                    ledger_rejection,
+                )
             if balance_result is not None:
                 logger.info(
                     "Atomic exit: balance $%.2f -> $%.2f | Trade #%s | Position %s closed",
                     balance_result["old_balance"],
                     balance_result["new_balance"],
-                    trade.id,
+                    trade_id,
                     position_id,
                 )
 
-            # Update performance metrics - handle None session_id
+            # Update performance metrics - handle None session_id. The trade is already
+            # committed, so a metrics failure must not make the write look failed.
             if effective_session_id:
-                self._update_performance_metrics(effective_session_id)
+                try:
+                    self._update_performance_metrics(effective_session_id)
+                except Exception as metrics_err:
+                    logger.warning(
+                        "Trade #%s committed but the performance metrics update failed: %s",
+                        trade_id,
+                        metrics_err,
+                        exc_info=True,
+                    )
 
-            return trade.id
+            return trade_id
 
     def log_position(
         self,
@@ -2916,7 +3293,7 @@ class DatabaseManager:
         new_balance = current_balance + delta
 
         if new_balance < 0:
-            raise ValueError(
+            raise NegativeBalanceError(
                 f"Balance update would result in negative balance: "
                 f"${current_balance:.2f} + ${delta:.2f} = ${new_balance:.2f}"
             )
@@ -3939,7 +4316,10 @@ class DatabaseManager:
             )
             session.add(pt)
             # Update position current size and counters
-            cur = float(position.current_size or position.size or 0.0)
+            # 0.0 is valid (fully drained); only a NULL column falls back to size.
+            cur = float(
+                position.current_size if position.current_size is not None else position.size or 0.0
+            )
             new_cur = max(0.0, cur - float(executed_size_delta))
             position.current_size = Decimal(str(new_cur))
             position.partial_exits_taken = int((position.partial_exits_taken or 0) + 1)
@@ -3994,7 +4374,10 @@ class DatabaseManager:
             )
             session.add(pt)
             # Update position current size and counters
-            cur = float(position.current_size or position.size or 0.0)
+            # 0.0 is valid (fully drained); only a NULL column falls back to size.
+            cur = float(
+                position.current_size if position.current_size is not None else position.size or 0.0
+            )
             new_cur = min(1.0, cur + float(added_size_delta))
             position.current_size = Decimal(str(new_cur))
             position.scale_ins_taken = int((position.scale_ins_taken or 0) + 1)
