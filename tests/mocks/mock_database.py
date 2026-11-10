@@ -47,6 +47,10 @@ class MockDatabaseManager:
             "total": 5,
         }
 
+    def set_audit_failure_sink(self, sink: Any) -> None:
+        """Mirror DatabaseManager.set_audit_failure_sink; the mock never fails an audit write."""
+        self._audit_failure_sink = sink
+
     def set_fallback_balance(self, balance: float) -> None:
         """Set a fallback balance for when no session exists (testing helper)."""
         self._fallback_balance = balance
