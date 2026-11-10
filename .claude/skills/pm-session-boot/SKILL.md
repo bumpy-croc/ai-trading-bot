@@ -24,6 +24,12 @@ Parallelize into one batch:
 **Record (layer 2):**
 - c. Tail `.claude/state/log.md` (~50 lines) — recent decisions, open threads, corrections.
 - d. `proposals/` + `incidents/` filtered `status: open`. Any P0 → the session scopes to it.
+  **The directory is a lower bound, not the picture** (LESSONS §2.17): the writers of these
+  records cannot merge their own PRs, so an active incident's file is often still in the queue.
+  Run all three, always: the directory listing, `gh issue list --state open --label
+  type:incident`, and `gh pr list --state open --json number,title,files` filtered for
+  `.claude/state/incidents/` or `log.md`. Earned: on 2026-09-07 the directory on `develop`
+  showed one open P1 from 08-24 while a P0 was on day 11 — its record sat in PR #1129.
 - e. `.claude/state/wakeups.jsonl` — lines with `wake_at <= now` are this tick's top priority.
 
 **Backlog + code momentum:**
@@ -43,13 +49,22 @@ checkout off `main`):**
 - l. RUNNING sessions (if session tooling available) + always: open PRs from branches not in
   log.md; `git -C /Users/alex/Sites/ai-trading-bot branch --show-current` MUST print `main`;
   `git -C /Users/alex/Sites/ai-trading-bot worktree list` — unmerged-branch worktrees are
-  someone's active workspace.
+  someone's active workspace. And it must be **current**:
+  `git -C /Users/alex/Sites/ai-trading-bot rev-list --count HEAD..origin/main` should be ~0. This
+  session's LESSONS, skills and commands were loaded from that tree; if it is behind, they are
+  stale, so read any rule you act on from `git show origin/develop:<path>` and say so in the boot
+  summary (LESSONS §3, #1260: frozen 2026-08-24 → 09-21, 772 lines of distillate unloaded).
 
 **Boot additions:**
-- m. **Scheduled-task inventory**: `ls ~/.claude/scheduled-tasks` — know what's armed
-  (standup, alert-monitor, event-window pause flips, retrains) and check each expected firing
-  actually fired (tasks run only while the app is open — the known silent-miss mode). A pause
-  flag that should have flipped and didn't is an immediate action item.
+- m. **Scheduled-task inventory**: `mcp__scheduled-tasks__list_scheduled_tasks` — **not**
+  `ls ~/.claude/scheduled-tasks`, which keeps a directory per *retired* task and so reads as
+  installed forever (LESSONS §3). Four tasks are enabled: `daily-trading-standup`,
+  `weekly-model-retrain`, `weekly-retro`, `prune-worktrees`; `alert-monitor` and
+  `pm-fleet-watchdog` were retired 2026-07/08 (GH #1050), leaving the **daily standup as the sole
+  automated watchdog — worst-case detection latency ~24h**. Check each expected firing actually
+  fired: tasks run only while the app is open (silent miss), can die on turn 1 from a stale model
+  selection or a usage limit while `lastRunAt` still updates, and fire as a same-second batch after
+  an app reopen. A pause flag that should have flipped and didn't is an immediate action item.
 - n. **In-flight recovery (layer 4)**: read `.claude/state/handover.md` (a `session-handover`
   snapshot, if present), then scan scratchpad state JSONs + background-task outputs for
   interrupted lanes. Layer 4 is a HINT — verify each claimed lane against ground truth

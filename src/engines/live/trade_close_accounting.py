@@ -17,6 +17,70 @@ from src.engines.live.execution.position_tracker import LivePosition as Position
 logger = logging.getLogger(__name__)
 
 
+def held_base_quantity(
+    qty: float | None,
+    current_size: float | None,
+    original_size: float | None,
+    *,
+    allow_scale_in: bool = False,
+) -> float | None:
+    """Base quantity represented by ``qty`` scaled by ``current_size / original_size``.
+
+    The single implementation of the "held quantity" ratio, replacing what used to be
+    divergent, inconsistently-guarded reimplementations scattered across
+    ``reconciliation.py`` and ``stop_loss_manager.py``. Guards mirror
+    ``_closed_base_quantity``: returns ``None`` when ``qty`` is missing/non-finite/
+    non-positive, ``original_size`` is not finite-positive, or ``current_size`` is not
+    finite-non-negative (``0.0`` is a valid, fully-exited holding, not corrupt state —
+    CODE.md Position Fields).
+
+    ``current_size > original_size`` (a scale-in) is guarded by default (``None``): a
+    scale-in grows ``current_size`` but leaves ``original_size``/``quantity`` at their
+    entry values (``LivePositionTracker.apply_scale_in``), so this is the NORMAL outcome
+    of any live scale-in, not a rare/corrupted state -- the held base quantity cannot be
+    derived by scaling and cannot be trusted for a persisted record. Passing
+    ``allow_scale_in=True`` computes the scaled value anyway rather than returning
+    ``None`` for it, and every consolidated ``reconciliation.py`` call site does so except
+    ``_log_reconciliation_trade``: these are operational quantities (stop-loss sizing,
+    notional estimates, P&L on close) where under-sizing a real held amount to 0 risks
+    leaving live inventory unprotected, which is worse than a ratio past 1.0.
+    ``_log_reconciliation_trade`` keeps the strict default (``allow_scale_in=False``)
+    because its consumer is a persisted ``trades.quantity`` audit column -- it NULLs
+    (rather than fabricates) the value for every scaled-in position's reconciler close,
+    similar in spirit to ``_closed_base_quantity``'s no-fabrication policy but not an
+    exact guard match (see below).
+
+    Unlike ``_closed_base_quantity``, this function does NOT fall back to ``position.size``
+    when ``current_size``/``original_size`` are ``None`` (it has no ``Position`` to read
+    ``size`` from) — a caller that needs that fallback (only ``_log_reconciliation_trade``
+    does, to match ``_closed_base_quantity`` exactly for a position that was never
+    partially exited or scaled in) must resolve it before calling, e.g.
+    ``current_size if current_size is not None else position.size``.
+    """
+    if qty is None:
+        return None
+    try:
+        qty_f = float(qty)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(qty_f) or qty_f <= 0:
+        return None
+    if current_size is None or original_size is None:
+        return None
+    try:
+        original_f = float(original_size)
+        current_f = float(current_size)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(original_f) and original_f > 0):
+        return None
+    if not (math.isfinite(current_f) and current_f >= 0):
+        return None
+    if current_f > original_f and not allow_scale_in:
+        return None
+    return qty_f * (current_f / original_f)
+
+
 def _closed_base_quantity(position: Position) -> float | None:
     """Actual filled base-asset quantity represented by a closing ``Trade`` row.
 

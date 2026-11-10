@@ -4,11 +4,13 @@ Tests for prediction engine model components.
 
 import json
 import threading
+from types import SimpleNamespace
 from unittest.mock import Mock, mock_open, patch
 
 import numpy as np
 import pytest
 
+from src.infrastructure.runtime.paths import get_project_root
 from src.prediction.config import PredictionConfig
 from src.prediction.models.execution_providers import get_preferred_providers
 from src.prediction.models.onnx_runner import ModelPrediction, OnnxRunner
@@ -45,7 +47,7 @@ class TestPredictionConfig:
         assert config.prediction_horizons == [1]
         assert config.min_confidence_threshold == 0.6
         assert config.max_prediction_latency == 0.1
-        assert config.model_registry_path == "src/ml/models"
+        assert config.model_registry_path == str(get_project_root() / "src/ml/models")
         assert config.enable_sentiment is False
         assert config.enable_market_microstructure is False
         assert config.feature_cache_ttl == 3600
@@ -61,7 +63,7 @@ class TestPredictionConfig:
 
         assert config.prediction_horizons == [1, 5, 10]
         assert config.min_confidence_threshold == 0.8
-        assert config.model_registry_path == "custom/path"
+        assert config.model_registry_path == str(get_project_root() / "custom/path")
 
 
 class TestModelCache:
@@ -88,19 +90,20 @@ class TestModelCache:
 
     def test_cache_expiration(self):
         """Test cache TTL expiration"""
-        import time
+        now = {"t": 1_000_000.0}
 
-        cache = ModelCache(ttl=0.1)  # 100ms TTL
-        cache.set("key1", "value1")
+        with patch("src.prediction.utils.caching.time", SimpleNamespace(time=lambda: now["t"])):
+            cache = ModelCache(ttl=0.1)  # 100ms TTL
+            cache.set("key1", "value1")
 
-        # Should be available immediately
-        assert cache.get("key1") == "value1"
+            # Should be available immediately
+            assert cache.get("key1") == "value1"
 
-        # Wait for expiration
-        time.sleep(0.2)
+            # Move the clock past the TTL
+            now["t"] += 0.2
 
-        # Should be expired
-        assert cache.get("key1") is None
+            # Should be expired
+            assert cache.get("key1") is None
 
     def test_cache_decorator(self):
         """Test cache decorator functionality"""
@@ -493,6 +496,10 @@ class TestPredictionModelRegistry:
                 }
             )
         )
+        latest = base.parent / "latest"
+        if latest.is_symlink():
+            latest.unlink()
+        latest.symlink_to(version)
         return base
 
     def test_loading_structured_bundles(self, tmp_path):

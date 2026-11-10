@@ -50,7 +50,8 @@ def test_recover_missing_trades_logs_with_exit_order_id():
     exchange.get_recent_trades.return_value = [_make_exchange_trade()]
 
     db = create_autospec(DatabaseManager, instance=True)
-    db.get_trades_by_symbol_and_date.return_value = []  # nothing logged yet
+    db.get_known_exchange_order_ids.return_value = set()  # nothing logged yet
+    db.get_current_balance.return_value = 1_000.0
 
     sync = AccountSynchronizer(exchange=exchange, db_manager=db, session_id=1)
 

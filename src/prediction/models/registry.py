@@ -5,6 +5,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from src.ml.model_metadata import validate_bundle_metadata
+
 from ..config import PredictionConfig
 from ..utils.caching import PredictionCacheManager
 from .exceptions import ModelLoadError, ModelNotAvailableError
@@ -153,18 +155,16 @@ class PredictionModelRegistry:
                     if key4 is not None:
                         versioned_paths[key4] = vdir
 
-                # Eagerly load a fallback bundle (the highest-sorted version)
-                # only when no `latest` symlink exists yet -- preserves prior
-                # behavior for a mid-training/symlink-missing model_type dir
-                # without eagerly loading every OTHER version too.
-                if not latest.exists() and version_dirs:
-                    fallback_dir = version_dirs[-1]
-                    try:
-                        bundle = self._load_bundle(symbol, model_type, fallback_dir)
-                        key = (bundle.symbol, bundle.timeframe, bundle.model_type)
-                        bundles[key] = bundle
-                    except Exception as e:  # pragma: no cover - aggregated logging
-                        logger.error("Failed to load bundle at %s: %s", fallback_dir, e)
+                # A model_type dir without `latest` holds unpromoted candidates:
+                # they stay reachable by explicit key (get_bundle_by_key, via
+                # versioned_paths above) but are never served by select_bundle.
+                if version_dirs and not latest.exists():
+                    logger.info(
+                        "No 'latest' for %s/%s; %d unpromoted version(s) not served for selection",
+                        symbol,
+                        model_type,
+                        len(version_dirs),
+                    )
                 if latest.exists():
                     try:
                         bundle = self._load_bundle(symbol, model_type, latest)
@@ -218,6 +218,12 @@ class PredictionModelRegistry:
 
     def _load(self) -> None:
         """Load structured bundles from the configured registry path."""
+        if not Path(self.config.model_registry_path).is_dir():
+            # An absent registry yields no bundles, which backtests and exams
+            # report as a genuine all-HOLD / 0-trade result.
+            raise FileNotFoundError(
+                f"Model registry directory does not exist: {self.config.model_registry_path}"
+            )
         self._bundles, self._production_index, self._versioned_bundle_paths = self._scan_registry()
         # Seed _versioned_bundles from the already-loaded "latest"/fallback
         # bundles only -- zero extra cost, no new sessions opened.
@@ -282,6 +288,15 @@ class PredictionModelRegistry:
             parts = version_id.split("_")
             if len(parts) >= 2:
                 timeframe = parts[1]
+
+        # A regression bundle whose features are rolling-minmax normalized emits
+        # normalized output; without price_normalization both denormalization
+        # sites return it unchanged and it gets compared against real prices.
+        # Fail at load rather than serve silently wrong predictions (#1049).
+        try:
+            validate_bundle_metadata(metadata, bundle_id=f"{symbol}/{model_type}/{version_id}")
+        except ValueError as e:
+            raise ModelLoadError(str(e)) from e
 
         # Optional schema/metrics
         def _load_json(p: Path) -> dict[str, Any] | None:

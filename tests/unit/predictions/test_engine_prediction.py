@@ -1,5 +1,6 @@
 """Tests covering single prediction flows for PredictionEngine."""
 
+import threading
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -401,7 +402,21 @@ class TestLiveInferenceTimeoutAccounting:
             }
         )
 
-    def _make_engine_with_slow_model(self, config: PredictionConfig, sleep_seconds: float):
+    @pytest.fixture(autouse=True)
+    def _release_hung_models(self):
+        """Unblock any model call left hanging by a timeout test once the test is over."""
+        self._hung_calls = threading.Event()
+        yield
+        self._hung_calls.set()
+
+    def _make_engine_with_slow_model(
+        self, config: PredictionConfig, sleep_seconds: float, hang: bool = False
+    ):
+        """Build an engine whose model takes ``sleep_seconds``, or never returns if ``hang``.
+
+        A hung model makes a timeout deterministic: the call cannot finish inside the
+        budget however long the test thread is starved of CPU.
+        """
         with (
             patch("src.prediction.engine.PredictionModelRegistry"),
             patch("src.prediction.engine.FeaturePipeline"),
@@ -415,7 +430,10 @@ class TestLiveInferenceTimeoutAccounting:
         def slow_predict(features):
             import time
 
-            time.sleep(sleep_seconds)
+            if hang:
+                self._hung_calls.wait(timeout=30)
+            else:
+                time.sleep(sleep_seconds)
             return ModelPrediction(
                 price=105.5,
                 confidence=0.85,
@@ -438,7 +456,7 @@ class TestLiveInferenceTimeoutAccounting:
         set_inference_context(InferenceContext.LIVE)
         config = PredictionConfig()
         config.live_inference_timeout = 0.05
-        engine = self._make_engine_with_slow_model(config, sleep_seconds=0.5)
+        engine = self._make_engine_with_slow_model(config, sleep_seconds=0.0, hang=True)
 
         with caplog.at_level(logging.WARNING, logger="src.prediction.engine"):
             result = engine.predict(self.create_test_data())
@@ -581,3 +599,84 @@ class TestApplyRollingDenormalization:
 
         result = engine._apply_rolling_denormalization(0.75, bundle, input_data)
         assert result == pytest.approx(0.75)
+
+    def test_out_of_range_prediction_logs_warning_but_still_denormalizes(self, caplog):
+        """GH #1145 defense-in-depth: a value far outside the [0, 1] a
+        rolling-minmax price target should produce (e.g. a negative return
+        from a misclassified smoothed_return bundle) still gets denormalized
+        -- this check is a diagnostic signal, not a hard gate, since the
+        root fix lives in metadata classification -- but must log a warning
+        naming the issue so the misclassification is visible in production
+        logs instead of silent.
+        """
+        import logging
+
+        engine = self._make_engine()
+        metadata = {"price_normalization": {"method": "rolling_minmax", "target_feature": "close"}}
+        bundle = _make_bundle(Mock(), metadata=metadata)
+        input_data = self._make_input_data([100.0, 200.0])
+
+        with caplog.at_level(logging.WARNING, logger="src.prediction.engine"):
+            result = engine._apply_rolling_denormalization(-0.9, bundle, input_data)
+
+        assert result == pytest.approx(-0.9 * 100.0 + 100.0)
+        warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert any("1145" in m for m in warnings)
+
+    def test_out_of_range_warning_is_logged_once_per_bundle(self, caplog):
+        """GH #1145: a genuinely misclassified bundle trips the range check on
+        EVERY inference. The warning must fire once per bundle key, not once
+        per call, or a live prediction loop log-spams indefinitely (the same
+        shape already fixed nearby in onnx_runner.py for #948)."""
+        import logging
+
+        engine = self._make_engine()
+        metadata = {"price_normalization": {"method": "rolling_minmax", "target_feature": "close"}}
+        bundle = _make_bundle(Mock(), metadata=metadata)
+        input_data = self._make_input_data([100.0, 200.0])
+
+        with caplog.at_level(logging.WARNING, logger="src.prediction.engine"):
+            engine._apply_rolling_denormalization(-0.9, bundle, input_data)
+            engine._apply_rolling_denormalization(-0.9, bundle, input_data)
+            engine._apply_rolling_denormalization(-0.9, bundle, input_data)
+
+        warnings = [
+            r.message for r in caplog.records if r.levelname == "WARNING" and "1145" in r.message
+        ]
+        assert len(warnings) == 1
+        assert bundle.key in warnings[0]
+
+    def test_out_of_range_warning_still_fires_for_a_different_bundle(self, caplog):
+        """The per-bundle throttle must not suppress a genuinely different
+        misclassified bundle just because another one already warned."""
+        import logging
+
+        engine = self._make_engine()
+        metadata = {"price_normalization": {"method": "rolling_minmax", "target_feature": "close"}}
+        bundle_a = _make_bundle(Mock(), metadata=metadata, symbol="BTCUSDT")
+        bundle_b = _make_bundle(Mock(), metadata=metadata, symbol="ETHUSDT")
+        input_data = self._make_input_data([100.0, 200.0])
+
+        with caplog.at_level(logging.WARNING, logger="src.prediction.engine"):
+            engine._apply_rolling_denormalization(-0.9, bundle_a, input_data)
+            engine._apply_rolling_denormalization(-0.9, bundle_b, input_data)
+
+        warnings = [
+            r.message for r in caplog.records if r.levelname == "WARNING" and "1145" in r.message
+        ]
+        assert len(warnings) == 2
+
+    def test_in_range_prediction_does_not_warn(self, caplog):
+        """A plausible normalized-price value must not trip the sanity log."""
+        import logging
+
+        engine = self._make_engine()
+        metadata = {"price_normalization": {"method": "rolling_minmax", "target_feature": "close"}}
+        bundle = _make_bundle(Mock(), metadata=metadata)
+        input_data = self._make_input_data([100.0, 200.0])
+
+        with caplog.at_level(logging.WARNING, logger="src.prediction.engine"):
+            engine._apply_rolling_denormalization(0.5, bundle, input_data)
+
+        warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert not any("1145" in m for m in warnings)

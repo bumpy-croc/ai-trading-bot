@@ -20,10 +20,13 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.config.constants import (
+    CLOSE_ABORT_CLOSE_ONLY_STREAK,
     DEFAULT_FEE_RATE,
     DEFAULT_SLIPPAGE_RATE,
+    HOLDINGS_CAP_MIN_RATIO,
 )
 from src.data_providers.exchange_interface import (
+    ExchangeOrderError,
     OrderSide,
     OrderStatus,
     OrderType,
@@ -33,10 +36,26 @@ from src.database.models import EventType
 from src.engines.shared.commission import order_commission_usd
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
-from src.trading.precision import quantize_to_step
+from src.trading.balance_retry import read_free_balance_with_retry
+from src.trading.precision import snap_to_step
 from src.trading.symbols.factory import base_asset_from_symbol
 
 logger = logging.getLogger(__name__)
+
+# #1165: bounded retry for the free-base-balance read right after a close cancels
+# the position's resting stop-loss. Binance's cross-margin wallet endpoint is
+# eventually consistent and can keep reporting the stop's `locked` amount for a
+# few seconds, so a same-instant read undercounts a fully sellable position.
+# N attempts sleep (N-1) times between them: 5 attempts * 300ms = 1.2s max added
+# sleep (plus up to 4 extra uncached balance reads), only on the stop-just-
+# cancelled path, and only until a read clears the required amount -- a settled
+# wallet costs nothing beyond the first read. The prod incident observed the
+# wallet still settling ~3s after cancel at reprotect time (an upper bound, not
+# a measurement of the earliest settle point); this budget is deliberately
+# generous relative to that, since the base-asset lock it runs under already
+# tolerates multi-second waits elsewhere in this same close path. The retry
+# loop itself lives in ``src.trading.balance_retry`` (#1173) so the re-protect
+# path can share it instead of a third copy.
 
 # Free base-asset value at or below this is ignorable dust for the SHORT
 # inventory guard; above it, MARGIN_BUY would sell held inventory instead of
@@ -51,6 +70,14 @@ SHORT_GUARD_EPISODE_GAP_SECONDS = 2 * 3600.0
 # long rejection streak stays queryable without one system_events row per
 # trading cycle.
 SHORT_GUARD_EMIT_EVERY_N = 10
+
+# Why ``_normalize_quantity_checked`` returned 0.0.
+CLOSE_UNSELLABLE_REANNOUNCE_SECONDS = 3600.0
+NORMALIZE_INVALID_QUANTITY = "invalid_quantity"
+NORMALIZE_HOLDINGS_CAP = "holdings_cap"
+NORMALIZE_LOT_SIZING = "lot_sizing"
+NORMALIZE_MIN_QTY = "min_qty"
+NORMALIZE_MIN_NOTIONAL = "min_notional"
 
 
 @dataclass
@@ -102,6 +129,11 @@ class ExitExecutionResult:
     exit_fee: float = 0.0
     slippage_cost: float = 0.0
     error: str | None = None
+    # Exchange-confirmed filled quantity, when a live close order's status was
+    # fetched. 0.0 for paper trades and for a fetch that never ran/returned a
+    # fill (ambiguous, not "confirmed zero fill"). Lets a caller distinguish a
+    # zero-fill terminal status from a partial-fill-then-terminal one (#744).
+    filled_quantity: float = 0.0
 
 
 class LiveExecutionEngine:
@@ -146,6 +178,13 @@ class LiveExecutionEngine:
         self.db_manager: Any = None
         self.session_id: int | None = None
         self.strategy_name: str = "unknown"
+        # Operator page dispatcher (the engine's _send_alert) and the close-only
+        # escalation hook (_enter_close_only_mode). Set by the trading engine after
+        # construction, like db_manager; duck-typed and optional so the execution
+        # engine never hard-depends on either. "We cannot exit this position" must
+        # page, not merely land in a table nobody reads (#1096 / #853).
+        self.alert_dispatcher: Callable[[str], object] | None = None
+        self.on_critical: Callable[[str], None] | None = None
 
         # Optional callback returning open positions, used to enrich
         # short-guard rejection events. Set by the trading engine after
@@ -157,6 +196,16 @@ class LiveExecutionEngine:
         # guards the dict only; event writes happen outside it.
         self._short_guard_lock = threading.Lock()
         self._short_guard_episodes: dict[str, _ShortGuardEpisode] = {}
+        # Consecutive close aborts per symbol (#1104 P2 latch). The exit signal that
+        # triggers a close re-fires every trading-loop iteration, so an un-latched
+        # abort would page once per ~66s — the very alert-storm shape #1104 was.
+        self._close_abort_streaks: dict[str, int] = {}
+        # Last recorded unsellable-quantity abort reason per symbol. A stuck dust close
+        # re-fires every candle; recording only on a new (symbol, reason) keeps it to
+        # one durable event + page until the close clears or the cause changes.
+        # Re-announced after CLOSE_UNSELLABLE_REANNOUNCE_SECONDS so a latch left stale by
+        # a resolution outside this path cannot silence a later position's abort.
+        self._close_unsellable_reasons: dict[str, tuple[str, float]] = {}
         # Injectable clock for deterministic episode-gap tests.
         self._monotonic: Callable[[], float] = time.monotonic
 
@@ -194,6 +243,179 @@ class LiveExecutionEngine:
             )
         except Exception as e:  # pragma: no cover - defensive; never break execution
             logger.warning("Failed to log execution event %s: %s", error_code, e)
+
+    def _record_close_inventory_locked(
+        self,
+        *,
+        symbol: str,
+        intended_quantity: float,
+        sellable_quantity: float,
+        free_base: float | None,
+        stop_just_cancelled: bool = False,
+    ) -> None:
+        """Page, persist and latch a close aborted because the inventory is not sellable.
+
+        Fully fault-isolated: the abort decision is already made and observability must
+        never turn a refused close into a raised exception.
+
+        ``stop_just_cancelled`` (#1165) distinguishes two causes this event has
+        historically conflated: a genuinely orphaned/untracked stop (#1104) vs. a
+        close that DID retry a post-cancel balance settlement and still never
+        cleared the gate within budget. Without this, a future incident emits a
+        byte-identical row to the ones that diagnosed #1165, and there is no way
+        to tell "retried and it never settled" from "was never going to settle."
+        """
+        with self._short_guard_lock:
+            streak = self._close_abort_streaks.get(symbol, 0) + 1
+            self._close_abort_streaks[symbol] = streak
+        sellable_pct = (sellable_quantity / intended_quantity * 100.0) if intended_quantity else 0.0
+        lock_hypothesis = (
+            "the post-cancel balance settlement retry ran its full budget and never cleared "
+            "the holdings-cap ratio"
+            if stop_just_cancelled
+            else "base asset is locked by an untracked order or cannot be lot-sized"
+        )
+        message = (
+            f"Close of {symbol} ABORTED: only {sellable_quantity:.8f} of the intended "
+            f"{intended_quantity:.8f} ({sellable_pct:.1f}%) is sellable — {lock_hypothesis}. "
+            f"Position remains OPEN. Consecutive aborts: {streak}."
+        )
+        self._log_execution_event(
+            EventType.ERROR,
+            message,
+            "CLOSE_INVENTORY_LOCKED",
+            severity="critical",
+            details={
+                "symbol": symbol,
+                "intended_quantity": float(intended_quantity),
+                "sellable_quantity": float(sellable_quantity),
+                "free_base_balance": float(free_base) if free_base is not None else None,
+                "min_ratio": HOLDINGS_CAP_MIN_RATIO,
+                "consecutive_aborts": streak,
+                "stop_just_cancelled": stop_just_cancelled,
+            },
+        )
+        if self.alert_dispatcher is not None:
+            try:
+                self.alert_dispatcher(f"\U0001f6a8 {message}")
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("Failed to dispatch close-abort alert for %s: %s", symbol, e)
+        # A repeating abort means the position is stuck open and unexitable. Stop
+        # paging once per iteration and latch the condition instead, which the
+        # latched-condition monitor then re-announces on its bounded schedule (#1096).
+        if streak >= CLOSE_ABORT_CLOSE_ONLY_STREAK and self.on_critical is not None:
+            try:
+                self.on_critical(
+                    f"{symbol} close aborted {streak} times in a row — inventory is not "
+                    "sellable and the position cannot be exited"
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("Failed to escalate repeated close abort for %s: %s", symbol, e)
+
+    def _record_close_unsellable(
+        self,
+        *,
+        symbol: str,
+        reason: str,
+        intended_quantity: float,
+        position_notional: float,
+        reference_price: float | None,
+        free_base: float | None,
+    ) -> None:
+        """Persist and page a close whose quantity normalizes to zero, once per cause.
+
+        Before exchange min-notional was known locally, Binance rejected these with
+        -1013 and ``_record_exchange_order_error`` wrote the durable row. The local
+        guard now aborts first, so this restores that record. Fault-isolated like
+        ``_record_close_inventory_locked``.
+        """
+        with self._short_guard_lock:
+            now = self._monotonic()
+            last = self._close_unsellable_reasons.get(symbol)
+            if (
+                last is not None
+                and last[0] == reason
+                and now - last[1] < CLOSE_UNSELLABLE_REANNOUNCE_SECONDS
+            ):
+                return
+            self._close_unsellable_reasons[symbol] = (reason, now)
+        symbol_info = self._symbol_info_or_none(symbol)
+        min_notional = symbol_info.get("min_notional") if symbol_info else None
+        min_qty = symbol_info.get("min_qty") if symbol_info else None
+        notional = (
+            intended_quantity * reference_price
+            if reference_price and reference_price > 0
+            else position_notional
+        )
+        message = (
+            f"Close of {symbol} ABORTED ({reason}): intended quantity {intended_quantity:.8f} "
+            f"(~${notional:.2f}) is not sellable — min_notional={min_notional}, "
+            f"min_qty={min_qty}. Position remains OPEN."
+        )
+        self._log_execution_event(
+            EventType.ERROR,
+            message,
+            "CLOSE_QUANTITY_UNSELLABLE",
+            severity="critical",
+            details={
+                "symbol": symbol,
+                "abort_reason": reason,
+                "intended_quantity": float(intended_quantity),
+                "notional": float(notional),
+                "min_notional": min_notional,
+                "min_qty": min_qty,
+                "free_base_balance": float(free_base) if free_base is not None else None,
+            },
+        )
+        if self.alert_dispatcher is not None:
+            try:
+                self.alert_dispatcher(f"\U0001f6a8 {message}")
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("Failed to dispatch unsellable-close alert for %s: %s", symbol, e)
+
+    def _symbol_info_or_none(self, symbol: str) -> dict[str, Any] | None:
+        """Symbol filters for event enrichment; ``None`` on any failure (observability only)."""
+        if self.exchange_interface is None:
+            return None
+        try:
+            info = self.exchange_interface.get_symbol_info(symbol)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("Could not fetch symbol info for %s abort event: %s", symbol, e)
+            return None
+        return info if isinstance(info, dict) else None
+
+    def attach_exchange_error_sink(self, exchange: Any) -> None:
+        """Route exchange-layer order failures into ``system_events``.
+
+        Order helpers return ``None`` on failure, so the exchange's own reason
+        (Binance error code + rejected parameters) never reached the database —
+        it lived only in application logs until they aged out (#1094). Wiring is
+        duck-typed and optional: an exchange without the hook is left untouched.
+        """
+        if exchange is None or not hasattr(exchange, "order_error_sink"):
+            return
+        exchange.order_error_sink = self._record_exchange_order_error
+
+    def _record_exchange_order_error(self, error: ExchangeOrderError) -> None:
+        """Persist one exchange order failure with its code and parameters.
+
+        A stop-loss failure leaves a position unprotected, so it is recorded at
+        CRITICAL under its own ``error_code``; other order failures are errors.
+
+        Forensic only: ``_log_execution_event`` writes straight to the DB and
+        never pages, so this CRITICAL row alerts nobody by design. Escalation for
+        an unprotected position is the reconciler's — ``_audit_unprotected`` ->
+        ``on_critical`` -> close-only. Do not add paging here without moving that
+        ownership too.
+        """
+        is_stop_loss = "stop_loss" in error.operation
+        self._log_execution_event(
+            EventType.ERROR,
+            error.summary(),
+            "STOP_LOSS_PLACEMENT_FAILED" if is_stop_loss else "ORDER_PLACEMENT_FAILED",
+            severity="critical" if is_stop_loss else "error",
+            details=error.to_details(),
+        )
 
     def _record_short_guard_rejection(
         self,
@@ -261,9 +483,9 @@ class LiveExecutionEngine:
                 "free_base_balance": float(free_balance) if free_balance is not None else None,
                 "free_value_usd": float(free_value_usd) if free_value_usd is not None else None,
                 "threshold_usd": SHORT_GUARD_DUST_THRESHOLD_USD,
-                "signal": {k: float(v) for k, v in signal_context.items()}
-                if signal_context
-                else None,
+                "signal": (
+                    {k: float(v) for k, v in signal_context.items()} if signal_context else None
+                ),
                 "open_positions": self._open_position_snapshot(),
                 "episode": {
                     "started_at": episode_started_at.isoformat(),
@@ -413,6 +635,23 @@ class LiveExecutionEngine:
                 OrderStatus.FILLED.value,
                 OrderStatus.PARTIALLY_FILLED.value,
             )
+        return False
+
+    def _is_confirmed_terminal_non_fill_status(self, status: Any) -> bool:
+        """Return True only for a CONFIRMED terminal status that never filled.
+
+        PENDING (and NEW, which every exchange provider maps to PENDING) is
+        NOT terminal -- the order may still fill a moment later, so it must
+        keep falling through to the simulated-price path, not be treated as a
+        close failure (#744 follow-up). Only CANCELLED/REJECTED/EXPIRED are
+        confirmed-dead ends.
+        """
+        terminal = (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.EXPIRED)
+        if isinstance(status, OrderStatus):
+            return status in terminal
+        if isinstance(status, str):
+            normalized = status.upper()
+            return normalized in (s.value for s in terminal)
         return False
 
     def _is_journal_confirmed_status(self, status: Any) -> bool:
@@ -706,6 +945,8 @@ class LiveExecutionEngine:
         liquidity: str | None = None,
         apply_slippage: bool = True,
         position_db_id: int | None = None,
+        stop_just_cancelled: bool = False,
+        close_quantity: float | None = None,
     ) -> ExitExecutionResult:
         """Execute an exit order with fees and slippage.
 
@@ -714,11 +955,26 @@ class LiveExecutionEngine:
             side: Position side (LONG or SHORT).
             order_id: Order ID of position to close.
             base_price: Exit price before slippage.
-            position_notional: Notional value of position.
+            position_notional: Notional value of position, used for the fee/
+                slippage cost model (unaffected by ``close_quantity`` below).
             liquidity: Liquidity classification for fee and slippage handling.
             apply_slippage: When False, slippage is suppressed.
             position_db_id: Database row ID for the position being closed.
                 Used to link exit journal entries to their position for crash recovery.
+            stop_just_cancelled: True when this close just cancelled the
+                position's resting stop-loss to free its inventory (#710). The
+                free-balance read used to size the close (#1165) then races
+                Binance's eventually-consistent margin wallet, so pass this
+                through to retry that read before trusting it.
+            close_quantity: Actual base-asset quantity to submit to the
+                exchange (#737), sized by the caller off the position's stored
+                fill quantity rather than ``position_notional / base_price``.
+                That notional-derived quantity is systematically off by the
+                entry-fee fraction versus what is actually held (typically
+                under, once in a while over — see #737), so it is used only as
+                a fallback when the caller cannot supply a trustworthy
+                quantity (missing/legacy ``position.quantity``, or a scale-in
+                that grew the position past its original size).
 
         Returns:
             ExitExecutionResult with execution details.
@@ -759,9 +1015,20 @@ class LiveExecutionEngine:
             slippage_cost = cost_result.slippage_cost
 
             # Execute real order if enabled
+            filled_quantity = 0.0
             if self.enable_live_trading:
-                # Already validated base_price > 0 above
-                quantity = position_notional / base_price
+                # #737: prefer the caller's stored-quantity-derived sizing over the
+                # notional/price fallback, which is systematically off by the entry-fee
+                # fraction versus what is actually held (see close_quantity docstring).
+                if (
+                    close_quantity is not None
+                    and close_quantity > 0
+                    and math.isfinite(close_quantity)
+                ):
+                    quantity = close_quantity
+                else:
+                    # Already validated base_price > 0 above
+                    quantity = position_notional / base_price
                 close_order_id = self._close_live_order(
                     symbol,
                     side,
@@ -769,6 +1036,8 @@ class LiveExecutionEngine:
                     position_notional=position_notional,
                     order_id=order_id,
                     position_db_id=position_db_id,
+                    stop_just_cancelled=stop_just_cancelled,
+                    reference_price=base_price,
                 )
                 if not close_order_id:
                     return ExitExecutionResult(
@@ -778,17 +1047,47 @@ class LiveExecutionEngine:
                 order_details = self._fetch_order_details(symbol, close_order_id)
                 if order_details:
                     status = getattr(order_details, "status", None)
-                    if status is not None and not self._is_filled_status(status):
-                        logger.debug(
-                            "Exit order %s not filled yet (status=%s); using simulated execution",
+                    if status is not None and self._is_confirmed_terminal_non_fill_status(status):
+                        # The exchange CONFIRMED a terminal status that never
+                        # filled (e.g. EXPIRED from book exhaustion). This is a
+                        # genuine close failure, not a pending state to paper
+                        # over with the simulated price -- the resting stop-loss
+                        # was already cancelled ahead of this close (#710), so
+                        # returning success=True here would book PnL at a
+                        # fictional price while the exchange still holds the
+                        # real inventory, untracked and unprotected (#744).
+                        # PENDING is deliberately excluded -- the order may
+                        # still fill a moment later, so it keeps falling
+                        # through to the simulated-price path below instead of
+                        # being treated as a confirmed failure.
+                        # Surface the confirmed filled quantity (0.0 for a clean
+                        # expiry) so the caller can tell a zero-fill expiry apart
+                        # from a partial-fill-then-expire.
+                        filled_quantity = float(
+                            getattr(order_details, "filled_quantity", 0.0) or 0.0
+                        )
+                        logger.error(
+                            "Exit order %s for %s did not fill (status=%s, filled=%.8f) "
+                            "-- treating close as failed so the position stays tracked "
+                            "and protected.",
                             close_order_id,
+                            symbol,
                             status,
+                            filled_quantity,
+                        )
+                        return ExitExecutionResult(
+                            success=False,
+                            filled_quantity=filled_quantity,
+                            error=(
+                                f"Exit order {close_order_id} for {symbol} did not fill "
+                                f"(status={status})"
+                            ),
                         )
                     elif order_details.average_price:
                         executed_price = float(order_details.average_price)
-                        filled_qty = float(order_details.filled_quantity or 0.0)
-                        if filled_qty > 0:
-                            position_notional = filled_qty * executed_price
+                        filled_quantity = float(order_details.filled_quantity or 0.0)
+                        if filled_quantity > 0:
+                            position_notional = filled_quantity * executed_price
                         # Convert the exchange commission to USD via its commission_asset
                         # (a SELL is normally quote/USDT already; a base-asset commission
                         # is priced into USD). None -> not reliably convertible (e.g. BNB),
@@ -821,6 +1120,19 @@ class LiveExecutionEngine:
                             "Exit order %s fill missing average price; using simulated execution",
                             close_order_id,
                         )
+                else:
+                    # Fetch itself failed/unavailable -- ambiguous, not a confirmed
+                    # non-fill (see CODE.md "Exchange None Returns"). The place_order
+                    # call that produced close_order_id already succeeded, and a
+                    # MARKET order that was accepted fills essentially immediately,
+                    # so this is treated the same as before: fall through to the
+                    # simulated price rather than fail a likely-successful close.
+                    logger.warning(
+                        "Could not confirm fill for exit order %s on %s (order-detail "
+                        "fetch failed) -- using simulated execution price.",
+                        close_order_id,
+                        symbol,
+                    )
             else:
                 logger.info("PAPER TRADE - Would close %s position on %s", side.value, symbol)
 
@@ -829,6 +1141,7 @@ class LiveExecutionEngine:
                 executed_price=executed_price,
                 exit_fee=exit_fee,
                 slippage_cost=slippage_cost,
+                filled_quantity=filled_quantity,
             )
 
         except (ValueError, ArithmeticError, TypeError) as e:
@@ -1108,6 +1421,8 @@ class LiveExecutionEngine:
         position_notional: float,
         order_id: str | None = None,
         position_db_id: int | None = None,
+        stop_just_cancelled: bool = False,
+        reference_price: float | None = None,
     ) -> str | None:
         """Close a real market order via exchange.
 
@@ -1118,6 +1433,9 @@ class LiveExecutionEngine:
             order_id: Order ID to close.
             position_db_id: Database row ID for the position being closed.
                 Links exit journal entries to their position for crash recovery.
+            stop_just_cancelled: See ``execute_exit``. Passed to
+                ``_free_base_for_close`` to retry a stale post-cancel balance
+                read instead of trusting it on the first try (#1165).
 
         Returns:
             Order ID if successful, None otherwise.
@@ -1143,8 +1461,29 @@ class LiveExecutionEngine:
             # BinanceProvider.place_stop_loss_order). A closing BUY (short cover) is
             # funded from quote and must repay the full base borrow, so it keeps the
             # nearest snap: flooring it would strand interest-accruing borrow dust.
+            # The quantity we intend to close. Every reduction below is a mechanical
+            # adjustment (holdings cap, lot snap) that must only ever shave a sliver;
+            # the gate after them enforces that against what is actually submitted.
+            intended_quantity = quantity
+            free_base: float | None = None
             if order_side == OrderSide.SELL:
-                free_base = self._free_base_for_close(symbol)
+                min_required = None
+                if stop_just_cancelled:
+                    # Pad by one lot step: the retry below verdicts on the RAW
+                    # balance, but the gate two blocks down evaluates the
+                    # quantity AFTER _normalize_quantity floors it to a lot
+                    # step. A read that clears the ratio by less than one step
+                    # would floor back under it and abort anyway, defeating the
+                    # retry in exactly the case it exists for (#1165 review).
+                    # Capped at `quantity`: for a position narrower than
+                    # ~50 lot steps (ETHUSDT's real LOT_SIZE step made this the
+                    # common case, not an edge case) the padded threshold can
+                    # exceed the position itself, burning the full retry
+                    # budget on every stop-cancelled close even when the very
+                    # first read is already the whole, fresh balance.
+                    step_size = self._lot_step_size(symbol) or 0.0
+                    min_required = min(quantity, quantity * HOLDINGS_CAP_MIN_RATIO + step_size)
+                free_base = self._free_base_for_close(symbol, min_required=min_required)
                 if free_base is not None and free_base < quantity:
                     logger.warning(
                         "Close sell qty %.8f for %s exceeds free base balance %.8f "
@@ -1154,16 +1493,77 @@ class LiveExecutionEngine:
                         free_base,
                     )
                     quantity = free_base
-                quantity = self._normalize_quantity(symbol, quantity, position_notional, floor=True)
+                capped_quantity = quantity
+                quantity, abort_reason = self._normalize_quantity_checked(
+                    symbol, quantity, position_notional, floor=True, price=reference_price
+                )
+                # A sliver of free base (locked inventory) fails min-notional only because
+                # it was capped, so attribute it to the cap, not the normalizer's verdict.
+                if abort_reason and capped_quantity < intended_quantity * HOLDINGS_CAP_MIN_RATIO:
+                    abort_reason = NORMALIZE_HOLDINGS_CAP
             else:
-                quantity = self._normalize_quantity(symbol, quantity, position_notional)
+                quantity, abort_reason = self._normalize_quantity_checked(
+                    symbol, quantity, position_notional, price=reference_price
+                )
             if quantity <= 0:
+                reason = abort_reason or NORMALIZE_INVALID_QUANTITY
                 logger.error(
-                    "Close quantity for %s is not sellable after holdings cap and lot "
-                    "sizing — aborting close attempt",
+                    "Close quantity for %s is not sellable (%s) after holdings cap, lot "
+                    "sizing and min-notional checks — aborting close attempt",
                     symbol,
+                    reason,
+                )
+                if reason == NORMALIZE_HOLDINGS_CAP:
+                    # Locked inventory: same condition, page and close-only latch as the
+                    # ratio gate below, which a zero quantity would otherwise skip.
+                    self._record_close_inventory_locked(
+                        symbol=symbol,
+                        intended_quantity=intended_quantity,
+                        sellable_quantity=capped_quantity,
+                        free_base=free_base,
+                        stop_just_cancelled=stop_just_cancelled,
+                    )
+                else:
+                    self._record_close_unsellable(
+                        symbol=symbol,
+                        reason=reason,
+                        intended_quantity=intended_quantity,
+                        position_notional=position_notional,
+                        reference_price=reference_price,
+                        free_base=free_base,
+                    )
+                return None
+            # Gate on the SUBMITTED quantity, after both the holdings cap and the lot
+            # snap. Gating on free_base alone would miss the lot-floor case, where a
+            # position only a few lots wide floors away a quarter of itself. In #1104 an
+            # orphaned stop-loss locked the whole position and the cap silently shrank a
+            # full close to 1.1% of its size. Submitting that partial is the dangerous
+            # branch: the caller books a FULL close on success and abandons the rest of
+            # the inventory untracked and unprotected. Fail loudly and let the reconciler
+            # resolve exchange truth.
+            if quantity < intended_quantity * HOLDINGS_CAP_MIN_RATIO:
+                logger.critical(
+                    "ABORTING close of %s: only %.8f of the intended %.8f is sellable "
+                    "(free base %s) — inventory is locked (orphaned stop-loss?) or the "
+                    "position cannot be lot-sized honestly. Refusing to sell a fraction "
+                    "and book a full close.",
+                    symbol,
+                    quantity,
+                    intended_quantity,
+                    "unknown" if free_base is None else f"{free_base:.8f}",
+                )
+                self._record_close_inventory_locked(
+                    symbol=symbol,
+                    intended_quantity=intended_quantity,
+                    sellable_quantity=quantity,
+                    free_base=free_base,
+                    stop_just_cancelled=stop_just_cancelled,
                 )
                 return None
+            # Gate passed: the condition cleared, so a later abort starts a fresh streak.
+            with self._short_guard_lock:
+                self._close_abort_streaks.pop(symbol, None)
+                self._close_unsellable_reasons.pop(symbol, None)
 
             # Generate deterministic client order ID for exit order idempotency
             # Format: atbx_{timestamp_hex}_{uuid8} (~25 chars, within Binance 36-char limit)
@@ -1257,34 +1657,99 @@ class LiveExecutionEngine:
             logger.error("Live order close failed: %s", e)
             return None
 
-    def _free_base_for_close(self, symbol: str) -> float | None:
+    def _free_base_for_close(
+        self, symbol: str, *, min_required: float | None = None
+    ) -> float | None:
         """Free base-asset balance available to a closing SELL, or None when unknown.
 
         ``free`` is the amount available to sell — reported identically in spot and
-        margin mode, and the resting stop-loss is cancelled before the close (#710),
-        so its previously locked inventory is free again by the time this reads it.
-        A None return means the cap is skipped, never that the close is blocked: a
-        transient balance-lookup failure must not stop an exit.
+        margin mode. The close path cancels the position's resting stop-loss first
+        (#710), intending its inventory to be free again by the time this reads it —
+        but that is NOT guaranteed, for two independent reasons: a stop the engine
+        has lost track of (#1104 saw an orphaned stop lock the whole position), or
+        the read itself outrunning exchange settlement (#1165, see ``min_required``
+        below). The caller therefore gates on the submitted-vs-intended ratio rather
+        than trusting this value to be complete. A None return means the cap is
+        skipped, never that the close is blocked: a transient balance-lookup failure
+        must not stop an exit.
 
         The base asset comes from the quote-suffix strip rather than
         ``get_symbol_info`` — that would add a second full exchange-info fetch to
         the latency-sensitive close path (``_normalize_quantity`` already makes
         one). An unrecognized quote degrades safely: the balance lookup finds no
         such asset, returns None, and only the cap is skipped.
+
+        ``min_required`` (#1165): even the stop-loss-just-cancelled case above is
+        NOT always settled by the time this reads it — Binance's cross-margin
+        wallet endpoint (``/sapi/v1/margin/account``) is eventually consistent
+        and can keep reporting the stop's cancelled `locked` amount for a few
+        seconds, so the close sizes itself off a pre-cancel snapshot and trips
+        the caller's holdings-cap gate on a fully sellable position. When the
+        caller passes ``min_required`` (the quantity it actually needs freed,
+        already padded by one lot step so a "settled" verdict here survives the
+        caller's later floor-to-step normalization — see ``_close_live_order``),
+        the shared ``read_free_balance_with_retry`` (``src.trading.balance_retry``)
+        polls the read up to ``POST_CANCEL_BALANCE_RETRY_ATTEMPTS`` times,
+        ``POST_CANCEL_BALANCE_RETRY_DELAY_SECONDS`` apart, and returns as soon
+        as a read clears it. If the budget expires the last (still-stale) read
+        is returned unchanged, so the caller's existing gate still aborts a
+        genuinely locked inventory — this only removes the false-positive delay.
         """
         if self.exchange_interface is None:
             return None
 
         base_asset = base_asset_from_symbol(symbol)
-        try:
-            balance = self.exchange_interface.get_balance(base_asset)
-            return float(balance.free) if balance is not None else None
-        except Exception as e:
-            logger.warning("Could not read free %s balance for close sizing: %s", base_asset, e)
+
+        def _read_free_base() -> float | None:
+            try:
+                balance = self.exchange_interface.get_balance(base_asset)
+                # Convert INSIDE the try: a malformed balance (e.g. a non-numeric
+                # `.free`) must degrade to None like every other lookup failure
+                # here, never raise past this method. Outside the try, that raise
+                # propagates to a failed close with the stop already cancelled —
+                # the exact storm this retry exists to stop, from a new trigger
+                # (#1165 review).
+                return float(balance.free) if balance is not None else None
+            except Exception as e:
+                logger.warning("Could not read free %s balance for close sizing: %s", base_asset, e)
+                return None
+
+        return read_free_balance_with_retry(
+            _read_free_base, min_required=min_required, context=symbol
+        )
+
+    def _lot_step_size(self, symbol: str) -> float | None:
+        """Best-effort LOT_SIZE step for ``symbol``, or None if unavailable.
+
+        Used only to pad the #1165 post-cancel balance-retry threshold in
+        ``_close_live_order`` so a "settled" verdict there survives
+        ``_normalize_quantity``'s later floor-to-step rounding. Every failure
+        mode (no exchange interface, a fetch error, a missing/invalid field)
+        degrades to None; callers must treat that as "skip the padding," the
+        same fail-open contract ``_free_base_for_close`` uses for a None
+        balance — never as a reason to block the close.
+        """
+        if self.exchange_interface is None:
             return None
+        try:
+            symbol_info = self.exchange_interface.get_symbol_info(symbol)
+        except Exception:
+            return None
+        if not symbol_info or not isinstance(symbol_info, dict):
+            return None
+        step_size = symbol_info.get("step_size")
+        if not isinstance(step_size, int | float) or step_size <= 0 or not math.isfinite(step_size):
+            return None
+        return float(step_size)
 
     def _normalize_quantity(
-        self, symbol: str, quantity: float, value: float, *, floor: bool = False
+        self,
+        symbol: str,
+        quantity: float,
+        value: float,
+        *,
+        floor: bool = False,
+        price: float | None = None,
     ) -> float:
         """Normalize quantity based on exchange symbol info with robust error handling.
 
@@ -1292,14 +1757,29 @@ class LiveExecutionEngine:
         never exceed holdings); the default nearest snap suits entries and
         short-cover BUYs.
         """
+        return self._normalize_quantity_checked(symbol, quantity, value, floor=floor, price=price)[
+            0
+        ]
+
+    def _normalize_quantity_checked(
+        self,
+        symbol: str,
+        quantity: float,
+        value: float,
+        *,
+        floor: bool = False,
+        price: float | None = None,
+    ) -> tuple[float, str | None]:
+        """``_normalize_quantity`` plus the reason it returned 0.0 (``None`` if it did not)."""
         if quantity <= 0 or self.exchange_interface is None:
-            return 0.0
+            return 0.0, NORMALIZE_INVALID_QUANTITY
+        original_quantity = quantity
 
         try:
             symbol_info = self.exchange_interface.get_symbol_info(symbol)
         except (ConnectionError, TimeoutError) as e:
             logger.error("Failed to fetch symbol info for %s: %s - using raw quantity", symbol, e)
-            return quantity
+            return quantity, None
 
         if not symbol_info or not isinstance(symbol_info, dict):
             logger.warning(
@@ -1307,7 +1787,7 @@ class LiveExecutionEngine:
                 symbol,
                 type(symbol_info).__name__ if symbol_info else "None",
             )
-            return quantity
+            return quantity, None
 
         # Validate and apply step_size
         step_size = symbol_info.get("step_size")
@@ -1321,24 +1801,16 @@ class LiveExecutionEngine:
         else:
             # Apply step_size rounding
             try:
-                if floor:
-                    # +epsilon so a quantity that is mathematically an exact lot
-                    # multiple but stored a hair low (float noise) isn't truncated
-                    # a whole step down (mirrors the SL SELL guard).
-                    normalized = math.floor(quantity / step_size + 1e-9) * step_size
-                else:
-                    normalized = round(quantity / step_size) * step_size
+                # floor=True rounds down (closing SELLs must never exceed holdings);
+                # snap_to_step keeps the result free of float artifacts (Binance 51077).
+                normalized = snap_to_step(quantity, step_size, "floor" if floor else "nearest")
                 if not math.isfinite(normalized):
                     logger.error(
                         "Normalization produced non-finite value for %s - keeping original",
                         symbol,
                     )
                 else:
-                    # `(integer) * step_size` in float math leaves artifacts (e.g.
-                    # 40 * 0.0001 = 0.004000000000000001) that exceed the asset's max
-                    # precision; sent verbatim Binance rejects with code 51077. Quantize
-                    # to the step's decimal count so the sent value has no excess decimals.
-                    quantity = quantize_to_step(normalized, step_size)
+                    quantity = normalized
             except (ArithmeticError, ValueError) as e:
                 logger.error("Step_size normalization failed for %s: %s", symbol, e, exc_info=True)
 
@@ -1352,21 +1824,33 @@ class LiveExecutionEngine:
                     min_qty,
                     symbol,
                 )
-                return 0.0
+                return 0.0, NORMALIZE_LOT_SIZING if quantity <= 0 else NORMALIZE_MIN_QTY
 
         # Validate min_notional constraint
+        # Every order this engine places is MARKET, which Binance exempts when
+        # applyMinToMarket is false. The notional is re-derived from the final
+        # (capped and lot-snapped) quantity at the caller's implied unit price.
         min_notional = symbol_info.get("min_notional")
-        if min_notional and isinstance(min_notional, int | float) and min_notional > 0:
-            if value < min_notional:
+        applies_to_market = symbol_info.get("apply_min_to_market", True)
+        if (
+            applies_to_market
+            and min_notional
+            and isinstance(min_notional, int | float)
+            and min_notional > 0
+        ):
+            # Callers whose ``value`` is not quantity*price (closes) pass ``price``.
+            unit_price = price if price and price > 0 else value / original_quantity
+            final_notional = quantity * unit_price
+            if final_notional < min_notional:
                 logger.error(
                     "Order value %.2f below minimum notional %.2f for %s",
-                    value,
+                    final_notional,
                     min_notional,
                     symbol,
                 )
-                return 0.0
+                return 0.0, NORMALIZE_LOT_SIZING if quantity <= 0 else NORMALIZE_MIN_NOTIONAL
 
-        return quantity
+        return (quantity, None) if quantity > 0 else (0.0, NORMALIZE_LOT_SIZING)
 
     def get_execution_stats(self) -> dict:
         """Get execution statistics.

@@ -51,6 +51,7 @@ def call_strategy_factory(
     *,
     symbol: str | None = None,
     model_version: str | None = None,
+    timeframe: str | None = None,
 ) -> "Strategy":
     """Invoke a strategy factory, threading the trading symbol when supported.
 
@@ -66,6 +67,11 @@ def call_strategy_factory(
     ``**kwargs`` (a factory forwarding unknown kwargs elsewhere would crash
     or, worse, silently drop the pin). A pin the factory cannot honor
     raises so a "pinned" run can never silently score with ``latest``.
+
+    ``timeframe`` is the run's candle timeframe. It is threaded only to
+    factories that declare an explicit ``timeframe`` parameter (ML factories
+    use it for registry selection, so a 4h run never scores with the 1h
+    default). Factories with no such parameter are called unchanged.
 
     Raises:
         ValueError: ``model_version`` was requested but the factory has no
@@ -88,5 +94,8 @@ def call_strategy_factory(
 
     if symbol is not None and factory_accepts_symbol(factory):
         kwargs["symbol"] = symbol
+
+    if timeframe is not None and parameters is not None and "timeframe" in parameters:
+        kwargs["timeframe"] = timeframe
 
     return factory(**kwargs)

@@ -116,7 +116,7 @@ def test_execution_engine_short_blocked_by_free_base_asset():
 def test_execution_engine_exit_auto_repay():
     """Exit orders should pass side_effect_type='AUTO_REPAY' — repay margin debt."""
     engine = _make_live_execution_engine()
-    engine._normalize_quantity = MagicMock(return_value=0.001)
+    engine._normalize_quantity_checked = MagicMock(return_value=(0.001, None))
 
     engine._close_live_order(
         symbol="BTCUSDT",

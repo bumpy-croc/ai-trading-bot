@@ -20,8 +20,22 @@ didn't happen. log.md is layer 2: append-only, corrections as new entries
 - Ratifications (`risk-ratification`), drill results (`kill-switch-drill`), retro diffs
   (`weekly-retro`), material fleet actions (`agent-fleet-health`).
 
+- **A production deploy or promote, and any service restart it performs** — including when the
+  human said "proceed". "Proceed" records the *approval*; the entry records what was shipped, what
+  it was expected to change, and what actually changed.
+- **A batch merge.** Merging N PRs in one sitting is one decision, not N mechanics — record the set,
+  the order, and any review comment merged past.
+
 Routine mechanics (a green deploy poll, a clean monitor tick) do NOT get entries — the log
 stays scannable because it records decisions, not activity.
+
+**The actor that takes the action owes the entry, in the same session.** Nothing downstream can
+reconstruct a decision: on 2026-09-13/14 the PM daemon merged all seven open PRs, promoted to
+production and restarted the live service — ending an 18-day P0 — and wrote **no** `log.md` entry
+for any of it. The next morning's standup, reconstructing from artifacts, recorded the cause as *"a
+side effect of an unrelated routine deploy"* when the deploy's own commit message named clearing
+the latch as its purpose. A wrong record in an append-only log costs a second entry to retract; the
+right record cost one paragraph at the time (LESSONS §2.16).
 
 ## The rubric, applied inline
 
@@ -81,6 +95,9 @@ launder it once and every past entry becomes untrustworthy.
 ## Red flags
 
 - A prod flag flip, merge-to-main, or model symlink move with no `[D-…]` entry.
+- **Acting on a prompt that only asked you to report.** Being inside the envelope answers "was I
+  allowed", not "was I asked" — an open-ended status request is not a work order. Report, propose,
+  then act on the answer (LESSONS §2.16).
 - "Approved by human" with no pointer to where/how the human approved.
 - A verdict entry with C ≥ 3 and no artifact ref.
 - Fixing a typo'd number in place "because it's just a typo" — append the correction.

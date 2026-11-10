@@ -535,13 +535,17 @@ class TestBacktesterPositionSizeParity:
     """Verify backtester position size limits match live engine."""
 
     def test_backtester_max_position_size_default(self):
-        """Backtester should have same default max_position_size as live engine (10%)."""
+        """A bare Backtester caps at the Board-ratified position size (#986).
+
+        Asserted against the loader so the cap under test is the one the system
+        actually resolves, plus a hard 0.20 pin so a loader regression cannot
+        make the comparison vacuous. The pin deliberately blocks a silent
+        ratification change — on a revote, update it and the matching pin in
+        test_risk_limits_boot_wiring.py together.
+        """
+        from src.config.risk_limits import get_risk_limits
         from src.engines.backtest.engine import Backtester
 
-        # Both engines should default to 10%
-        assert hasattr(Backtester.__init__, "__defaults__") or True
-
-        # Create backtester and verify default
         strategy = Mock()
         strategy.name = "test"
         strategy.get_risk_overrides.return_value = None
@@ -554,7 +558,23 @@ class TestBacktesterPositionSizeParity:
             initial_balance=10_000.0,
         )
 
-        assert backtester.max_position_size == 0.1  # Default 10%
+        ratified = get_risk_limits().position.max_position_size_pct
+        assert ratified == 0.20
+        assert backtester.max_position_size == ratified
+        self._assert_reported_equals_enforced(backtester)
+
+    @staticmethod
+    def _assert_reported_equals_enforced(backtester) -> None:
+        """The reported cap must be the one the handlers actually apply.
+
+        #1073 shipped a property that reported 0.10 while the handlers enforced
+        0.20; the old equality-against-a-literal assertion still passed. Pinning
+        reported == enforced is what makes this guard non-vacuous.
+        """
+        reported = backtester.max_position_size
+        assert reported == backtester.risk_manager.params.max_position_size
+        assert reported == backtester.entry_handler.max_position_size
+        assert reported == backtester.exit_handler.max_position_size
 
     def test_backtester_max_position_size_configurable(self):
         """Backtester max_position_size should be configurable."""
@@ -574,6 +594,7 @@ class TestBacktesterPositionSizeParity:
         )
 
         assert backtester.max_position_size == 0.25
+        self._assert_reported_equals_enforced(backtester)
 
     def test_backtester_rejects_invalid_max_position_size(self):
         """Backtester should reject invalid max_position_size values."""

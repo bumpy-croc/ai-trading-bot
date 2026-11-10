@@ -7,7 +7,7 @@ import os
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Any, cast
 
 # Ensure project root and src are in sys.path for absolute imports
 from src.infrastructure.runtime.paths import get_project_root
@@ -67,7 +67,12 @@ _EXAM_STRATEGY_NAMES = frozenset(
 )
 
 
-def _load_strategy(strategy_name: str, symbol: str | None = None, model_version: str | None = None):
+def _load_strategy(
+    strategy_name: str,
+    symbol: str | None = None,
+    model_version: str | None = None,
+    timeframe: str | None = None,
+):
     """Load a strategy by name, threading the trading symbol when supported.
 
     Mirrors the live runner (backtest-live parity): the symbol must reach ML
@@ -107,8 +112,10 @@ def _load_strategy(strategy_name: str, symbol: str | None = None, model_version:
         builder = available_strategies.get(strategy_name)
         if builder is not None:
             if model_version is not None and strategy_name in _EXAM_STRATEGY_NAMES:
-                return _call_exam_factory_pinned(builder, symbol, model_version)
-            return call_strategy_factory(builder, symbol=symbol, model_version=model_version)
+                return _call_exam_factory_pinned(builder, symbol, model_version, timeframe)
+            return call_strategy_factory(
+                builder, symbol=symbol, model_version=model_version, timeframe=timeframe
+            )
 
         print(f"Unknown strategy: {strategy_name}")
         print(f"Available strategies: {', '.join(available_strategies.keys())}")
@@ -119,7 +126,10 @@ def _load_strategy(strategy_name: str, symbol: str | None = None, model_version:
 
 
 def _call_exam_factory_pinned(
-    builder: Callable[..., Strategy], symbol: str | None, model_version: str
+    builder: Callable[..., Strategy],
+    symbol: str | None,
+    model_version: str,
+    timeframe: str | None = None,
 ) -> Strategy:
     """Construct an exam strategy with the version pin set in its env var.
 
@@ -131,7 +141,7 @@ def _call_exam_factory_pinned(
     prior = os.environ.get(MODEL_VERSION_OVERRIDE_ENV_VAR)
     os.environ[MODEL_VERSION_OVERRIDE_ENV_VAR] = model_version
     try:
-        return call_strategy_factory(builder, symbol=symbol)
+        return call_strategy_factory(builder, symbol=symbol, timeframe=timeframe)
     finally:
         if prior is None:
             os.environ.pop(MODEL_VERSION_OVERRIDE_ENV_VAR, None)
@@ -251,6 +261,7 @@ def _get_date_range(args):
 
 def _handle(ns: argparse.Namespace) -> int:
     try:
+        from src.config.risk_limits import get_risk_limits
         from src.data_providers.feargreed_provider import FearGreedProvider
         from src.engines.backtest.engine import Backtester
         from src.engines.shared.risk_configuration import resolve_strategy_max_position_size
@@ -258,10 +269,18 @@ def _handle(ns: argparse.Namespace) -> int:
 
         configure_logging()
 
+        # Fail closed on the ratified limits before any data-provider setup.
+        get_risk_limits()
+
         start_date, end_date = _get_date_range(ns)
 
         model_version = _resolve_model_pin(ns, start_date, end_date)
-        strategy = _load_strategy(ns.strategy, symbol=ns.symbol, model_version=model_version)
+        strategy = _load_strategy(
+            ns.strategy,
+            symbol=ns.symbol,
+            model_version=model_version,
+            timeframe=ns.timeframe,
+        )
         logger.info(f"Loaded strategy: {strategy.name}")
         if model_version is not None:
             logger.info(f"Model version pinned for this backtest: {model_version}")
@@ -312,10 +331,19 @@ def _handle(ns: argparse.Namespace) -> int:
             sentiment_provider = FearGreedProvider()
             logger.info("Using sentiment analysis in backtest")
 
-        risk_params_kwargs = {
+        # Only explicitly passed risk flags are forwarded; omitted ones hydrate
+        # from the ratified limits, so backtests run at live-representative risk
+        # by default instead of the literals they had drifted to.
+        risk_flag_overrides = {
             "base_risk_per_trade": ns.risk_per_trade,
             "max_risk_per_trade": ns.max_risk_per_trade,
             "max_drawdown": ns.max_drawdown,
+        }
+        # Values are all floats, but the annotation stays Any: narrowing it to
+        # dict[str, float] makes mypy check the ** unpacking against every
+        # RiskParameters field, including the int and list ones.
+        risk_params_kwargs: dict[str, Any] = {
+            key: value for key, value in risk_flag_overrides.items() if value is not None
         }
         if ns.max_position_size is not None:
             if not 0 < ns.max_position_size <= 1:
@@ -325,8 +353,10 @@ def _handle(ns: argparse.Namespace) -> int:
             risk_params_kwargs["max_position_size"] = ns.max_position_size
         else:
             # Honor strategy-level max_fraction (e.g., trend-following uses 95%
-            # allocation instead of the default 10% cap) via the seam shared
-            # with ExperimentRunner, so CLI and harness sizing cannot drift.
+            # allocation instead of the ratified cap) via the seam shared with
+            # ExperimentRunner, so CLI and harness sizing cannot drift. When the
+            # strategy declares nothing the key is omitted and RiskParameters
+            # hydrates the ratified value (#986).
             strategy_max_position = resolve_strategy_max_position_size(strategy)
             if strategy_max_position is not None:
                 risk_params_kwargs["max_position_size"] = strategy_max_position
@@ -357,6 +387,8 @@ def _handle(ns: argparse.Namespace) -> int:
             log_to_database=enable_db_logging,
             enable_engine_risk_exits=enable_engine_risk_exits,
             enable_dynamic_risk=enable_dynamic_risk,
+            drawdown_cap_mode=getattr(ns, "drawdown_cap_mode", "enforce"),
+            model_version=model_version,
         )
 
         # Map provider types to exchange names for symbol conversion
@@ -391,6 +423,25 @@ def _handle(ns: argparse.Namespace) -> int:
         print(f"Final Balance: ${results['final_balance']:.2f}")
         print(f"Hold Return: {results['hold_return']:.2f}%")
         print(f"Trading vs Hold: {results['trading_vs_hold_difference']:+.2f}%")
+        print(f"Drawdown Cap Mode: {results.get('drawdown_cap_mode', 'enforce')}")
+        if results.get("early_stopped"):
+            print("!" * 50)
+            print("WARNING: RUN WAS TRUNCATED — results above cover a PARTIAL window only.")
+            print(f"  Reason: {results.get('early_stop_reason')}")
+            print(f"  Stopped at: {results.get('early_stop_date')}")
+            print(
+                "  Re-run with --drawdown-cap-mode measure to see the full "
+                "drawdown profile (research use only — not live-representative)."
+            )
+            print("!" * 50)
+        elif results.get("drawdown_cap_breached"):
+            print(
+                "NOTE: drawdown crossed the cap "
+                f"({results.get('drawdown_cap_threshold', 0):.1%}) at "
+                f"{results.get('drawdown_cap_breach_date')} but the run was NOT "
+                "truncated (drawdown_cap_mode=measure) — a live-representative "
+                "run with the same cap would have halted here."
+            )
         print("=" * 50)
 
         if enable_db_logging and results.get("session_id"):
@@ -488,9 +539,17 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         "--initial-balance", type=float, default=DEFAULT_INITIAL_BALANCE, help="Initial balance"
     )
     p.add_argument(
-        "--risk-per-trade", type=float, default=0.01, help="Risk per trade - 1 percent equals 0.01"
+        "--risk-per-trade",
+        type=float,
+        default=None,
+        help="Risk per trade - 1 percent equals 0.01. Default: ratified limit",
     )
-    p.add_argument("--max-risk-per-trade", type=float, default=0.02, help="Maximum risk per trade")
+    p.add_argument(
+        "--max-risk-per-trade",
+        type=float,
+        default=None,
+        help="Maximum risk per trade. Default: ratified limit",
+    )
     p.add_argument(
         "--use-sentiment", action="store_true", help="Use sentiment analysis in backtest"
     )
@@ -517,14 +576,35 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--max-drawdown",
         type=float,
-        default=0.5,
-        help="Maximum drawdown before stopping - default: 0.5 (50 percent)",
+        default=None,
+        help="Maximum drawdown before stopping. Default: ratified limit",
+    )
+    p.add_argument(
+        "--drawdown-cap-mode",
+        choices=["enforce", "measure"],
+        default="enforce",
+        help=(
+            "'enforce' (default; safe for live-representative/promotion runs): "
+            "halt the run the instant drawdown crosses --max-drawdown, matching "
+            "what prod actually does at the cap. 'measure' (research/"
+            "characterisation only): run the full window without truncating and "
+            "report whether/when the cap would have been breached instead of "
+            "stopping there -- never use 'measure' results to justify promoting "
+            "a strategy to live trading. A truncated run is always marked "
+            "'early_stopped: true' in the results, so a partial run can never "
+            "be mistaken for a complete one."
+        ),
     )
     p.add_argument(
         "--max-position-size",
         type=float,
         default=None,
-        help="Maximum position size as fraction of balance (0.1 = 10 percent) - default: 0.1",
+        help=(
+            "Maximum position size as fraction of balance (0.1 = 10 percent). "
+            "Default: the strategy's max_fraction if it declares one, otherwise "
+            "the Board-ratified position.max_position_size_pct from "
+            "src/config/risk-limits.json."
+        ),
     )
     p.add_argument(
         "--disable-engine-sl",

@@ -46,6 +46,7 @@ def create_leveraged_regime_strategy(
     take_profit_pct: float = 0.10,
     stop_loss_pct: float = 0.05,
     symbol: str | None = None,
+    timeframe: str | None = None,
 ) -> Strategy:
     """Create a leveraged regime strategy using component composition.
 
@@ -65,6 +66,8 @@ def create_leveraged_regime_strategy(
         stop_loss_pct: Stop loss percentage.
         symbol: Trading symbol threaded to the ML signal generator for model
             registry selection (None keeps the generator default BTCUSDT).
+        timeframe: Run timeframe for model registry selection (None keeps
+            the generator default "1h").
 
     Returns:
         Configured Strategy instance with leverage manager attached.
@@ -78,7 +81,9 @@ def create_leveraged_regime_strategy(
     # (declared up-front: branches assign different subtypes)
     signal_generator: SignalGenerator
     if signal_source == "ml":
-        signal_generator = MLBasicSignalGenerator(name=f"{name}_signals", symbol=symbol)
+        signal_generator = MLBasicSignalGenerator(
+            name=f"{name}_signals", symbol=symbol, timeframe=timeframe
+        )
     else:
         signal_generator = MomentumSignalGenerator(name=f"{name}_signals")
 

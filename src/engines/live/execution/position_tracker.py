@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -20,6 +21,7 @@ from src.config.constants import (
     DEFAULT_MFE_MAE_PRECISION_DECIMALS,
     DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS,
     DEFAULT_SLIPPAGE_RATE,
+    DRAWDOWN_MARK_MAX_AGE_SECONDS,
 )
 from src.engines.shared.models import (
     BasePosition,
@@ -56,6 +58,18 @@ class LivePosition(BasePosition):
     # Live-specific: track execution prices for partial operations
     last_partial_exit_price: float | None = None
     last_scale_in_price: float | None = None
+    # Live-specific: the price the resting exchange stop-loss order actually
+    # sits at right now. Distinct from `stop_loss` (the trailing-stop
+    # ratchet's tracked/intended level), which the min-trailing-stop-move
+    # floor lets advance every cycle regardless of whether a real move()
+    # happens -- using `stop_loss` as the floor's baseline would let each
+    # comparison reset against an already-advanced value, so a monotonic run
+    # of sub-threshold ratchets would never accumulate past the floor
+    # (#1179). In-memory only (not persisted): a restart resets it to None,
+    # which the floor treats as "no baseline yet" and forces a real resync
+    # on the next ratchet -- the safe choice, since a persisted value would
+    # just replay whatever drift had already accumulated before the restart.
+    last_placed_stop_price: float | None = None
 
 
 @dataclass
@@ -67,6 +81,26 @@ class PositionCloseResult:
     exit_price: float
     exit_time: datetime
     mfe_mae_metrics: MFEMetrics | None = None
+
+
+@dataclass(frozen=True)
+class MarkReading:
+    """Aggregate unrealized P&L plus whether it can be trusted as a live mark.
+
+    ``fresh`` is False when any open position was not priced by the latest
+    ``update_pnl`` (invalid price, recovered from persistence and never
+    re-marked) or when the last pricing pass is older than the caller's limit.
+    ``unrealized_pnl`` is then not a live number and must not be trusted.
+    ``sequence`` advances when the marking price changes (or has been held for
+    ``DRAWDOWN_MARK_MAX_AGE_SECONDS``), so callers can tell distinct marks apart
+    from repeated reads of the same one. ``flat`` means no position is open:
+    the reading then carries no unrealized component to second-guess.
+    """
+
+    unrealized_pnl: float
+    fresh: bool
+    sequence: int
+    flat: bool = False
 
 
 class LivePositionTracker:
@@ -108,6 +142,13 @@ class LivePositionTracker:
         self._position_db_ids: dict[str, int | None] = {}
         # Protects concurrent access from OrderTracker callbacks and main trading loop
         self._positions_lock = threading.Lock()
+        # Mark bookkeeping for ``mark_reading``: written only under the lock.
+        self._mark_sequence = 0
+        self._last_mark_price: float | None = None
+        self._price_held_since: float | None = None
+        self._last_mark_monotonic: float | None = None
+        self._last_pass_complete = False
+        self._recovered_unmarked = False
         self.db_manager = db_manager
         self.mfe_mae_tracker = MFEMAETracker(precision_decimals=mfe_mae_precision)
         self._mfe_mae_update_frequency = mfe_mae_update_frequency
@@ -274,6 +315,40 @@ class LivePositionTracker:
         with self._positions_lock:
             self._positions[order_id] = position
             self._position_db_ids[order_id] = db_id
+            # Its unrealized_pnl is the persisted value, not a live mark.
+            self._recovered_unmarked = True
+
+    @staticmethod
+    def _optional_float(value: Any) -> float | None:
+        return float(value) if value is not None else None
+
+    @staticmethod
+    def _as_utc(value: datetime | None) -> datetime | None:
+        """DB DateTime columns are naive; the live tracker writes aware UTC."""
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
+
+    def seed_mfe_mae(self, order_id: str, pos_data: dict[str, Any]) -> None:
+        """Seed the MFE/MAE tracker with the peaks persisted on a recovered row.
+
+        Without this the in-memory running max restarts from zero and the next
+        periodic persist overwrites the stored (higher) excursion history.
+        """
+        try:
+            self.mfe_mae_tracker.seed_metrics(
+                order_id,
+                MFEMetrics(
+                    mfe=float(pos_data.get("mfe") or 0.0),
+                    mae=float(pos_data.get("mae") or 0.0),
+                    mfe_price=self._optional_float(pos_data.get("mfe_price")),
+                    mae_price=self._optional_float(pos_data.get("mae_price")),
+                    mfe_time=self._as_utc(pos_data.get("mfe_time")),
+                    mae_time=self._as_utc(pos_data.get("mae_time")),
+                ),
+            )
+        except (TypeError, ValueError) as e:
+            logger.warning("Could not seed MFE/MAE for %s: %s", order_id, e)
 
     def set_stop_loss_order_id(self, order_id: str, stop_loss_order_id: str | None) -> None:
         """Update the stop-loss order ID for a tracked position.
@@ -299,6 +374,47 @@ class LivePositionTracker:
                 )
             except Exception as e:
                 logger.warning("Failed to persist stop-loss order ID: %s", e)
+
+    def set_stop_loss_price(self, order_id: str, stop_loss: float) -> None:
+        """Update the tracked stop-loss price for a position.
+
+        Used when a guarded placement adopts an already-resting order (#1112)
+        whose price differs from what was intended (``guard_stop_placement``
+        only guarantees it is within tolerance, not equal) -- without this the
+        engine's own exit check keeps trusting the intended price instead of
+        the one the exchange will actually trigger at, the exact divergence
+        class #1167 exists to close.
+        """
+        with self._positions_lock:
+            position = self._positions.get(order_id)
+            if position is None:
+                return
+            position.stop_loss = stop_loss
+            db_id = self._position_db_ids.get(order_id)
+
+        if self.db_manager is not None and db_id is not None:
+            try:
+                self.db_manager.update_position(
+                    position_id=db_id,
+                    stop_loss=stop_loss,
+                )
+            except Exception as e:
+                logger.warning("Failed to persist adopted stop-loss price: %s", e)
+
+    def set_last_placed_stop_price(self, order_id: str, price: float) -> None:
+        """Record the price the resting exchange stop-loss order actually sits at.
+
+        Called on every successful placement/move/reprotect/adopt (achieved
+        price, not the ratchet's intent) so the trailing-stop min-move floor
+        has a baseline that tracks exchange reality instead of the ratchet's
+        ever-advancing `stop_loss` value (#1179). In-memory only -- see the
+        field's own docstring on `LivePosition`.
+        """
+        with self._positions_lock:
+            position = self._positions.get(order_id)
+            if position is None:
+                return
+            position.last_placed_stop_price = price
 
     def remove_position(self, order_id: str) -> None:
         """Remove a position without closing it (e.g., canceled entry)."""
@@ -466,6 +582,7 @@ class LivePositionTracker:
         """
         with self._positions_lock:
             # Perform all mutations inside the lock to prevent race conditions
+            complete = True
             for position in self._positions.values():
                 fraction = float(
                     position.current_size if position.current_size is not None else position.size
@@ -488,6 +605,7 @@ class LivePositionTracker:
                         position.entry_price,
                         position.symbol,
                     )
+                    complete = False
                     position.unrealized_pnl = 0.0
                     position.unrealized_pnl_percent = 0.0
                     continue
@@ -495,6 +613,7 @@ class LivePositionTracker:
                     logger.error(
                         "Invalid current_price %.8f for position %s", current_price, position.symbol
                     )
+                    complete = False
                     position.unrealized_pnl = 0.0
                     position.unrealized_pnl_percent = 0.0
                     continue
@@ -506,6 +625,44 @@ class LivePositionTracker:
 
                 position.unrealized_pnl = cash_pnl(pnl_pct, basis_balance)
                 position.unrealized_pnl_percent = pnl_pct * 100.0
+
+            # A repeated price is the same mark, not a confirmation of itself —
+            # unless it has been held long enough that a frozen price must not
+            # postpone a breach indefinitely.
+            now = time.monotonic()
+            if (
+                current_price != self._last_mark_price
+                or self._price_held_since is None
+                or now - self._price_held_since >= DRAWDOWN_MARK_MAX_AGE_SECONDS
+            ):
+                self._mark_sequence += 1
+                self._price_held_since = now
+            self._last_mark_price = current_price
+            self._last_mark_monotonic = now
+            self._last_pass_complete = complete
+            if complete:
+                self._recovered_unmarked = False
+
+    def mark_reading(self, max_age_seconds: float) -> MarkReading:
+        """Unrealized P&L with an explicit freshness verdict (see ``MarkReading``).
+
+        ``update_pnl`` silently writes 0.0 for a position it cannot price, which
+        is indistinguishable from a flat position; a guard that must not mistake
+        "could not price" for "flat" reads this instead of ``total_unrealized_pnl``
+        so a missing mark degrades loudly.
+        """
+        with self._positions_lock:
+            total = sum(float(p.unrealized_pnl) for p in self._positions.values())
+            if not self._positions:
+                return MarkReading(total, True, self._mark_sequence, flat=True)
+            last = self._last_mark_monotonic
+            fresh = (
+                last is not None
+                and self._last_pass_complete
+                and not self._recovered_unmarked
+                and time.monotonic() - last <= max_age_seconds
+            )
+            return MarkReading(total, fresh, self._mark_sequence)
 
     def total_unrealized_pnl(self) -> float:
         """Sum of unrealized P&L across all open positions, in cash terms.
@@ -646,9 +803,16 @@ class LivePositionTracker:
             )
 
             # Update position state - clamp to exactly zero if very close (accumulated rounding)
+            size_before = float(position.current_size)
             position.current_size = max(0.0, float(position.current_size) - float(delta_fraction))
             if abs(position.current_size) < EPSILON:
                 position.current_size = 0.0
+            # The exited slice is realized: rescale the open mark now so risk
+            # guards reading it before the next pricing pass don't double count it.
+            if size_before > 0:
+                remaining = position.current_size / size_before
+                position.unrealized_pnl *= remaining
+                position.unrealized_pnl_percent *= remaining
             position.partial_exits_taken += 1
             position.last_partial_exit_price = price
 
@@ -990,6 +1154,7 @@ class LivePositionTracker:
                     continue
 
                 self.track_recovered_position(position, db_id=pos_data.get("id"))
+                self.seed_mfe_mae(tracker_key, pos_data)
                 recovered.append(position)
                 logger.info(
                     "Recovered position: %s %s @ %.2f",

@@ -13,7 +13,7 @@ import math
 import os
 from collections import Counter
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pandas as pd
 from pandas import DataFrame
@@ -30,7 +30,6 @@ from src.config.constants import (
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_MARKET_TIMEZONE,
     DEFAULT_MAX_HOLDING_HOURS,
-    DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MFE_MAE_PRECISION_DECIMALS,
     DEFAULT_REGIME_LOOKBACK_BUFFER,
     DEFAULT_SLIPPAGE_RATE,
@@ -46,6 +45,10 @@ from src.engines.backtest.execution import (
     PositionTracker,
 )
 from src.engines.backtest.execution.exit_handler import ExitCheckResult
+from src.engines.backtest.execution.position_tracker import (
+    PARTIAL_FEES_KEY,
+    PARTIAL_SLIPPAGE_KEY,
+)
 from src.engines.backtest.logging import EventLogger
 from src.engines.backtest.models import ActiveTrade, Trade
 from src.engines.backtest.regime import RegimeHandler
@@ -87,6 +90,7 @@ from src.strategies.components import (
 )
 from src.strategies.components import Strategy as ComponentStrategy
 from src.strategies.components.exposure_governor import ExposureGovernor
+from src.trading.exit_reason import ExitReason
 
 if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
@@ -98,6 +102,17 @@ logger = logging.getLogger(__name__)
 
 # Use centralized constant for regime lookback buffer
 REGIME_LOOKBACK_BUFFER = DEFAULT_REGIME_LOOKBACK_BUFFER
+
+# "enforce" halts the run the instant drawdown crosses the cap — this is the
+# live-representative behaviour (prod really does latch close-only at the
+# cap) and is the safe default for any promotion decision. "measure" runs
+# the full window without truncating, for research characterising a
+# strategy's true drawdown profile; the cap is then reported as a metric
+# (whether/when it would have been breached) instead of enforced as a stop.
+# See docs/research/experiments and #1102 for why the two must not be
+# conflated behind one silent default.
+DrawdownCapMode = Literal["enforce", "measure"]
+_VALID_DRAWDOWN_CAP_MODES = ("enforce", "measure")
 
 
 def _compute_regime_lookback(regime_switcher: Any) -> int:
@@ -166,6 +181,16 @@ class Backtester:
       first symbol that signals; live can hold N. If your strategy depends
       on simultaneous positions, validate live behaviour separately rather
       than inferring it from backtest.
+    - **Partial-exit trade outcomes.** ``win_rate``/``profit_factor`` report
+      whole-position outcomes (partial slices banked into the trade's P&L);
+      live records only the final leg, so they are not comparable to live for
+      partial-exit strategies until #1234 lands.
+    - **Scale-in cost basis.** P&L, fees and the equity sample use the
+      quantity-weighted average cost of the position, so a scale-in slice
+      earns from its own (slipped) fill. Partial-exit targets, trailing
+      activation and breakeven stay measured from the first fill. The live
+      tracker does not blend cost yet; it is dormant while live scale-ins are
+      disabled.
     - ExitHandler: Processes exit signals and execution
     - CorrelationHandler: Applies correlation-based sizing
     - RegimeHandler: Manages regime-based strategy switching
@@ -201,6 +226,8 @@ class Backtester:
         use_high_low_for_stops: bool = True,
         max_position_size: float | None = None,
         annual_margin_interest_rate: float = 0.0,
+        drawdown_cap_mode: DrawdownCapMode = "enforce",
+        model_version: str | None = None,
         _regime_switcher_class: type | None = None,
         _strategy_manager: Any | None = None,
     ) -> None:
@@ -243,11 +270,34 @@ class Backtester:
                 running a margin-mode strategy will silently overstate
                 returns; set it to your venue's effective borrow rate to
                 preserve backtest-live parity.
+            drawdown_cap_mode: ``"enforce"`` (default) halts the run the
+                instant drawdown crosses ``risk_parameters.max_drawdown``,
+                matching what prod actually does at the cap — the correct
+                and safe default for any live-representative or promotion
+                backtest. ``"measure"`` runs the full window without
+                truncating so a research/characterisation run can observe a
+                strategy's true drawdown profile; the results still report
+                whether and when the cap would have been breached
+                (``drawdown_cap_breached`` / ``drawdown_cap_breach_date`` /
+                ``drawdown_cap_breach_candle_index``). Both modes stamp the
+                results with ``drawdown_cap_mode`` and an explicit
+                ``early_stopped`` boolean so a truncated run can never be
+                mistaken for a complete one.
+            model_version: The run's point-in-time model pin (GH #988). Threaded
+                to regime switching so a switched-in ML strategy scores with the
+                same pinned version as the initial strategy; a strategy that
+                cannot honor the pin is never switched to (it would silently
+                resolve ``latest``).
             _regime_switcher_class: Optional regime switcher class for testing (internal).
             _strategy_manager: Optional strategy manager class or instance for testing (internal).
         """
         if initial_balance <= 0:
             raise ValueError("Initial balance must be positive")
+        if drawdown_cap_mode not in _VALID_DRAWDOWN_CAP_MODES:
+            raise ValueError(
+                f"drawdown_cap_mode must be one of {_VALID_DRAWDOWN_CAP_MODES}, "
+                f"got {drawdown_cap_mode!r}"
+            )
         if annual_margin_interest_rate < 0 or not math.isfinite(annual_margin_interest_rate):
             raise ValueError(
                 f"annual_margin_interest_rate must be non-negative and finite, "
@@ -351,13 +401,21 @@ class Backtester:
         self.legacy_stop_loss_indexing = legacy_stop_loss_indexing
         self.enable_engine_risk_exits = enable_engine_risk_exits
 
-        # Early stop tracking
+        # Drawdown cap tracking. "enforce" mode truncates the run at the cap
+        # (early_stop_* fields); "measure" mode runs to completion and only
+        # records whether/when the cap would have been breached
+        # (drawdown_cap_breach_* fields). See DrawdownCapMode docstring above.
+        self.drawdown_cap_mode: DrawdownCapMode = drawdown_cap_mode
+        self.early_stopped: bool = False
         self.early_stop_reason: str | None = None
         self.early_stop_date: datetime | None = None
         self.early_stop_candle_index: int | None = None
-        self._early_stop_max_drawdown = (
-            self.risk_manager.params.max_drawdown if risk_parameters is not None else 0.5
-        )
+        self.drawdown_cap_breached: bool = False
+        self.drawdown_cap_breach_date: datetime | None = None
+        self.drawdown_cap_breach_candle_index: int | None = None
+        # Always the hydrated params (ratified limits when none supplied), so the
+        # threshold reported in results is the one enforced.
+        self._early_stop_max_drawdown = self.risk_manager.params.max_drawdown
 
         # Initialize handlers
         self.execution_engine = ExecutionEngine(
@@ -419,6 +477,7 @@ class Backtester:
 
         # Regime switching
         self.enable_regime_switching = enable_regime_switching
+        self.model_version = model_version
         self.regime_handler: RegimeHandler | None = None
 
         # Validate test injection parameters (both or neither must be provided)
@@ -553,9 +612,14 @@ class Backtester:
 
     @property
     def max_position_size(self) -> float:
-        """Get max position size (backward compatibility)."""
-        if self.risk_parameters is None:
-            return DEFAULT_MAX_POSITION_SIZE  # Default for backward compatibility
+        """The position cap the entry/exit handlers actually enforce.
+
+        Reads the same source the handlers are built from
+        (``risk_manager.params``), so the reported cap cannot drift from the
+        enforced one. Before #1073 this branched on ``risk_parameters is None``
+        and reported a literal 10% while the handlers enforced whatever
+        ``RiskParameters`` resolved to.
+        """
         return self.risk_manager.params.max_position_size
 
     def _init_regime_switching(
@@ -603,6 +667,7 @@ class Backtester:
                 regime_switcher=regime_switcher,
                 strategy_manager=strategy_manager,
                 initial_strategy_name=self.initial_strategy_name,
+                model_version=self.model_version,
             )
 
             logger.info("Regime-aware strategy switching enabled for backtesting")
@@ -913,9 +978,13 @@ class Backtester:
         self.peak_balance = self.initial_balance
         self.trades.clear()
         self.dynamic_risk_adjustments.clear()
+        self.early_stopped = False
         self.early_stop_reason = None
         self.early_stop_date = None
         self.early_stop_candle_index = None
+        self.drawdown_cap_breached = False
+        self.drawdown_cap_breach_date = None
+        self.drawdown_cap_breach_candle_index = None
         self.trading_session_id = None
         self.execution_engine.reset()
         self.position_tracker.reset()
@@ -936,6 +1005,7 @@ class Backtester:
             self.regime_handler.regime_history.clear()
             self.regime_handler.strategy_switches.clear()
             self.regime_handler._current_strategy_name = self.initial_strategy_name
+            self.regime_handler._failed_loads.clear()
 
     def run(
         self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
@@ -1241,6 +1311,7 @@ class Backtester:
                     # cast: the handler only reads .name from current_strategy, which
                     # every engine strategy (SupportsRuntimeHooks) exposes.
                     current_strategy=cast(ComponentStrategy, self.strategy),
+                    symbol=symbol,
                 )
                 if switched and new_strategy:
                     self._switch_strategy(new_strategy, df)
@@ -1268,15 +1339,31 @@ class Backtester:
                         winning_trades += 1
                     yearly_balance[current_time.year]["end"] = self.balance
 
-                    # Check max drawdown
+                    # Check max drawdown. Record the first breach regardless
+                    # of mode so "measure" runs still know whether/when the
+                    # cap would have fired; only "enforce" actually truncates.
                     if current_drawdown > self._early_stop_max_drawdown:
-                        self.early_stop_reason = (
-                            f"Maximum drawdown exceeded ({current_drawdown:.1%})"
-                        )
-                        self.early_stop_date = current_time
-                        self.early_stop_candle_index = i
-                        logger.warning("Maximum drawdown exceeded. Stopping backtest.")
-                        break
+                        first_breach = not self.drawdown_cap_breached
+                        if first_breach:
+                            self.drawdown_cap_breached = True
+                            self.drawdown_cap_breach_date = current_time
+                            self.drawdown_cap_breach_candle_index = i
+                        if self.drawdown_cap_mode == "enforce":
+                            self.early_stopped = True
+                            self.early_stop_reason = (
+                                f"Maximum drawdown exceeded ({current_drawdown:.1%})"
+                            )
+                            self.early_stop_date = current_time
+                            self.early_stop_candle_index = i
+                            logger.warning("Maximum drawdown exceeded. Stopping backtest.")
+                            break
+                        elif first_breach:
+                            logger.warning(
+                                "Maximum drawdown exceeded (%.1f%%) but "
+                                "drawdown_cap_mode='measure' — continuing to "
+                                "measure the full profile instead of stopping.",
+                                current_drawdown * 100,
+                            )
 
             # Entry path - only evaluate when no position is open and no entry
             # occurred this candle to prevent queuing stale signals
@@ -1357,6 +1444,13 @@ class Backtester:
             )
         elif partial_result.scale_in_fees > 0:
             self.balance -= partial_result.scale_in_fees
+            # Scale-ins are entry legs: fold their fees into entry_fee so the
+            # reported fee totals and DB commission match what the balance paid.
+            open_trade = self.position_tracker.current_trade
+            if open_trade is not None:
+                open_trade.metadata["entry_fee"] = (
+                    float(open_trade.metadata.get("entry_fee", 0.0)) + partial_result.scale_in_fees
+                )
 
         # Update MFE/MAE
         self.position_tracker.update_metrics(current_price, current_time)
@@ -1375,6 +1469,7 @@ class Backtester:
                 exit_reason=(
                     f"Partial exits complete @ level {max(0, trade.partial_exits_taken - 1)}"
                 ),
+                exit_category=ExitReason.PARTIAL_EXIT_COMPLETE,
                 exit_price=current_price,
             )
         else:
@@ -1430,6 +1525,7 @@ class Backtester:
             completed_trade, net_pnl, exit_fee, slippage = self.exit_handler.execute_exit(
                 exit_price=exit_check.exit_price,
                 exit_reason=exit_check.exit_reason,
+                exit_category=exit_check.exit_category,
                 current_time=current_time,
                 current_price=current_price,
                 balance=self.balance,
@@ -1459,8 +1555,16 @@ class Backtester:
             entry_meta = getattr(completed_trade, "metadata", None) or {}
             entry_fee_logged = float(entry_meta.get("entry_fee", 0.0) or 0.0)
             entry_slippage_logged = float(entry_meta.get("entry_slippage_cost", 0.0) or 0.0)
-            total_fee = entry_fee_logged + float(exit_fee)
-            total_slippage = entry_slippage_logged + float(slippage)
+            total_fee = (
+                entry_fee_logged
+                + float(exit_fee)
+                + float(entry_meta.get(PARTIAL_FEES_KEY, 0.0) or 0.0)
+            )
+            total_slippage = (
+                entry_slippage_logged
+                + float(slippage)
+                + float(entry_meta.get(PARTIAL_SLIPPAGE_KEY, 0.0) or 0.0)
+            )
             # Update performance tracking.
             self.performance_tracker.record_trade(
                 trade=completed_trade, fee=total_fee, slippage=total_slippage
@@ -1632,9 +1736,15 @@ class Backtester:
                 "prediction_mae": 0.0,
             },
             "session_id": None,
+            "early_stopped": False,
             "early_stop_reason": None,
             "early_stop_date": None,
             "early_stop_candle_index": None,
+            "drawdown_cap_mode": self.drawdown_cap_mode,
+            "drawdown_cap_threshold": self._early_stop_max_drawdown,
+            "drawdown_cap_breached": False,
+            "drawdown_cap_breach_date": None,
+            "drawdown_cap_breach_candle_index": None,
             "dynamic_risk_adjustments": [],
             "dynamic_risk_summary": None,
             "execution_settings": (
@@ -1720,9 +1830,25 @@ class Backtester:
             "hold_return": hold_return,
             "trading_vs_hold_difference": perf_metrics.total_return_pct - hold_return,
             "session_id": self.trading_session_id if self.log_to_database else None,
+            # Explicit, machine-readable truncation marker — do not infer
+            # truncation from early_stop_reason being non-None; check this
+            # boolean. A run with early_stopped=True reported partial
+            # results: every metric above only covers the candles before
+            # the stop. See DrawdownCapMode docstring for enforce vs measure.
+            "early_stopped": self.early_stopped,
             "early_stop_reason": self.early_stop_reason,
             "early_stop_date": self.early_stop_date,
             "early_stop_candle_index": self.early_stop_candle_index,
+            "drawdown_cap_mode": self.drawdown_cap_mode,
+            "drawdown_cap_threshold": self._early_stop_max_drawdown,
+            # Whether drawdown ever crossed the cap, independent of mode. In
+            # "enforce" mode this is redundant with early_stopped (the run
+            # stopped at first breach). In "measure" mode this is the signal
+            # a research run needs: the full drawdown profile was measured,
+            # and it would have breached the live cap at breach_date/index.
+            "drawdown_cap_breached": self.drawdown_cap_breached,
+            "drawdown_cap_breach_date": self.drawdown_cap_breach_date,
+            "drawdown_cap_breach_candle_index": self.drawdown_cap_breach_candle_index,
             "prediction_metrics": pred_metrics,
             "dynamic_risk_adjustments": (
                 self.dynamic_risk_adjustments if self.enable_dynamic_risk else []

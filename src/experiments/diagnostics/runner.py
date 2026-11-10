@@ -67,6 +67,7 @@ class SignalDiagnostic:
             cfg.strategy_name,
             factory_kwargs=cfg.factory_kwargs or None,
             symbol=cfg.symbol,
+            timeframe=cfg.timeframe,
         )
         signal_generator = getattr(strategy, "signal_generator", None)
         if signal_generator is None:

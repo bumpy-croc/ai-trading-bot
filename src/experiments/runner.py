@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import inspect
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
+from src.config.risk_limits import get_risk_limits
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
@@ -66,6 +68,7 @@ class ExperimentRunner:
         strategy_name: str,
         factory_kwargs: dict[str, object] | None = None,
         symbol: str | None = None,
+        timeframe: str | None = None,
     ) -> Strategy:
         """Construct a strategy, optionally passing kwargs to the factory.
 
@@ -84,6 +87,11 @@ class ExperimentRunner:
         ``MLBasicSignalGenerator.DEFAULT_SYMBOL`` ("BTCUSDT"), scoring
         whatever symbol the backtest runs on with the wrong model (GH #997).
         An explicit ``symbol`` key in ``factory_kwargs`` always wins.
+
+        ``timeframe`` (``config.timeframe``) is injected the same way when the
+        factory declares a ``timeframe`` parameter, so ML strategies select a
+        model of the run's timeframe instead of the 1h default. An explicit
+        ``timeframe`` key in ``factory_kwargs`` always wins.
         """
         strategies: dict[str, Callable[..., Strategy]] = {
             "ml_basic": create_ml_basic_strategy,
@@ -97,6 +105,12 @@ class ExperimentRunner:
         kwargs = dict(factory_kwargs or {})
         if symbol is not None and "symbol" not in kwargs and factory_accepts_symbol(builder):
             kwargs["symbol"] = symbol
+        if (
+            timeframe is not None
+            and "timeframe" not in kwargs
+            and "timeframe" in inspect.signature(builder).parameters
+        ):
+            kwargs["timeframe"] = timeframe
         if not kwargs:
             return builder()
         try:
@@ -462,10 +476,14 @@ class ExperimentRunner:
                 )
 
     def run(self, config: ExperimentConfig) -> ExperimentResult:
+        # Fail closed on the ratified limits before any strategy/provider setup.
+        get_risk_limits()
+
         strategy = self._load_strategy(
             config.strategy_name,
             factory_kwargs=config.factory_kwargs or None,
             symbol=config.symbol,
+            timeframe=config.timeframe,
         )
         # Apply any parameter overrides for strategy-level tuning
         self._apply_parameter_overrides(strategy, config)
@@ -495,6 +513,7 @@ class ExperimentRunner:
             risk_parameters=risk_params,
             initial_balance=config.initial_balance,
             log_to_database=False,
+            drawdown_cap_mode=config.drawdown_cap_mode,
         )
 
         results = backtester.run(
@@ -519,6 +538,22 @@ class ExperimentRunner:
             session_id=results.get("session_id"),
             trade_pnl_pcts=trade_pnl_pcts,
             effective_sizing=dict(results.get("effective_sizing") or {}),
+            early_stopped=bool(results.get("early_stopped", False)),
+            # cast: the Backtester's own constructor validates this against
+            # the same two literals before it can ever land in its results
+            # dict (ValueError on anything else), so this narrowing merely
+            # tells mypy what runtime already guarantees.
+            drawdown_cap_mode=cast(
+                Literal["enforce", "measure"],
+                results.get("drawdown_cap_mode", config.drawdown_cap_mode),
+            ),
+            drawdown_cap_breached=bool(results.get("drawdown_cap_breached", False)),
+            drawdown_cap_breach_date=results.get("drawdown_cap_breach_date"),
+            drawdown_cap_threshold=(
+                float(results["drawdown_cap_threshold"])
+                if results.get("drawdown_cap_threshold") is not None
+                else None
+            ),
         )
 
     def run_sweep(self, configs: list[ExperimentConfig]) -> list[ExperimentResult]:

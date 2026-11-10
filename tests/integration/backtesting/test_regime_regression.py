@@ -14,6 +14,7 @@ import pytest
 
 from src.data_providers.data_provider import DataProvider
 from src.engines.backtest.engine import Backtester
+from src.engines.backtest.regime.regime_handler import RegimeHandler
 from src.strategies.components.position_sizer import PositionSizer
 from src.strategies.components.risk_manager import RiskManager
 from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
@@ -351,9 +352,14 @@ def test_regime_backtester_regression(monkeypatch):
 
     monkeypatch.setenv("FEATURE_ENABLE_REGIME_DETECTION", "true")
 
-    original_loader = Backtester._load_strategy_by_name
+    original_loader = RegimeHandler._load_strategy
 
-    def _patched_loader(self: Backtester, strategy_name: str) -> Strategy | None:
+    def _patched_loader(
+        self: RegimeHandler,
+        strategy_name: str,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+    ) -> Strategy | None:
         if strategy_name == "alternate":
             new_strategy = strategy_factory("alternate")
             strategy_manager.current_strategy = new_strategy
@@ -362,9 +368,9 @@ def test_regime_backtester_regression(monkeypatch):
             new_strategy = strategy_factory("ml_basic")
             strategy_manager.current_strategy = new_strategy
             return new_strategy
-        return original_loader(self, strategy_name)
+        return original_loader(self, strategy_name, symbol=symbol, timeframe=timeframe)
 
-    monkeypatch.setattr(Backtester, "_load_strategy_by_name", _patched_loader)
+    monkeypatch.setattr(RegimeHandler, "_load_strategy", _patched_loader)
 
     backtester = Backtester(
         strategy=primary_strategy,

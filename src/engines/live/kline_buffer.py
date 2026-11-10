@@ -33,6 +33,11 @@ _TIMEFRAME_MS: dict[str, int] = {
 }
 
 
+def timeframe_to_ms(timeframe: str) -> int | None:
+    """Milliseconds per candle for a timeframe string, or None when unknown."""
+    return _TIMEFRAME_MS.get(timeframe) or None
+
+
 class KlineBuffer:
     """Rolling window of OHLCV candles seeded from REST and maintained by WebSocket events.
 
@@ -58,6 +63,12 @@ class KlineBuffer:
         # Seed from REST
         self._df: pd.DataFrame = provider.get_live_data(symbol, timeframe, limit=500)
         self._last_update: datetime = datetime.now(UTC)
+        # REST klines include the in-progress candle as the tail row, so the
+        # tail is conservatively treated as forming until a WebSocket event
+        # proves it closed (x=true, or a successor bar arriving). Tracked for
+        # closed-candle gating (parity plan P1.0/D1) — decision paths only;
+        # protective paths never consult this.
+        self._tail_closed = False
 
         logger.info(
             "KlineBuffer seeded for %s %s with %d candles",
@@ -85,6 +96,7 @@ class KlineBuffer:
             if self._df.empty:
                 self._df = self._parse_kline(kline)
                 self._last_update = datetime.now(UTC)
+                self._tail_closed = bool(kline.get("x", False))
                 return
 
             event_ts = pd.Timestamp(kline["t"], unit="ms")
@@ -94,8 +106,18 @@ class KlineBuffer:
                 return  # Stale event — don't bump freshness timer
 
             if event_ts == tail_ts:
-                # Update current candle (open or closed — same OHLCV write)
+                # Once a bar is closed its OHLCV is final. A late duplicate of
+                # an earlier forming event for the same bar must not rewrite it
+                # — the values, not just the flag: closed-candle gating hands
+                # that row to the strategy as the bar's settled truth, and a
+                # re-delivered mid-bar close would silently un-settle it.
+                # A repeated x=true carries identical final values, so allowing
+                # it through costs nothing and keeps the path idempotent.
+                if self._tail_closed and not kline.get("x"):
+                    return
                 self._update_current_candle(kline)
+                if kline.get("x"):
+                    self._tail_closed = True
             else:
                 # event_ts > tail_ts — new candle
                 # Detect gap: if more than one interval was skipped, flag for resync
@@ -113,6 +135,9 @@ class KlineBuffer:
 
                 new_row = self._parse_kline(kline)
                 self._df = pd.concat([self._df.iloc[1:], new_row])
+                # The new tail is normally a forming bar; x=true covers the
+                # rare case where the first event seen for a bar is its close.
+                self._tail_closed = bool(kline.get("x", False))
 
             self._last_update = datetime.now(UTC)
 
@@ -124,6 +149,22 @@ class KlineBuffer:
         """
         with self._lock:
             return self._df.copy()
+
+    def snapshot(self) -> tuple[pd.DataFrame, pd.Timestamp | None]:
+        """Return the frame and its closed-bar frontier captured atomically.
+
+        Reading ``get_dataframe()`` and ``last_closed_bar_time`` as two separate
+        locked calls is a race: the WebSocket thread can close the tail bar in
+        between, so the frontier would declare a bar closed that the already-copied
+        frame still holds mid-formation. Closed-candle gating would then decide on a
+        floating close while reporting ``decision_bar_closed=True`` — the exact
+        contamination it exists to remove. One lock, both values, no window.
+
+        Returns:
+            (frame copy, open time of the newest provably closed bar or None).
+        """
+        with self._lock:
+            return self._df.copy(), self._last_closed_bar_time_locked()
 
     @property
     def is_fresh(self) -> bool:
@@ -142,6 +183,29 @@ class KlineBuffer:
     def needs_resync(self) -> bool:
         """True when a candle gap was detected and REST resync is needed."""
         return self._needs_resync
+
+    @property
+    def last_closed_bar_time(self) -> pd.Timestamp | None:
+        """Open time of the newest bar known to be closed, or None.
+
+        Authoritative when the tail has received its ``x: true`` (bar closed)
+        WebSocket event; otherwise the second-to-last bar, which is closed by
+        construction (a successor bar exists). Consumed by closed-candle
+        gating (parity plan P1.0/D1) for the decision path only — protective
+        paths (stop-loss/trailing/exit checks) never wait on this.
+        """
+        with self._lock:
+            return self._last_closed_bar_time_locked()
+
+    def _last_closed_bar_time_locked(self) -> pd.Timestamp | None:
+        """Closed-bar frontier. Must be called while holding ``self._lock``."""
+        if self._df.empty:
+            return None
+        if self._tail_closed:
+            return self._df.index[-1]
+        if len(self._df) >= 2:
+            return self._df.index[-2]
+        return None
 
     def resync_from_rest(self, provider, symbol: str, timeframe: str) -> None:
         """Replace the entire buffer with fresh REST data after reconnection.
@@ -171,6 +235,8 @@ class KlineBuffer:
             self._df = new_df
             self._last_update = datetime.now(UTC)
             self._needs_resync = False
+            # REST data includes the in-progress candle — tail is forming again.
+            self._tail_closed = False
 
         logger.info(
             "KlineBuffer resynced for %s %s with %d candles",

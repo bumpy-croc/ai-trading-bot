@@ -77,6 +77,9 @@ def _make_live_engine(
     engine.enable_live_trading = True
     exchange = Mock()
     exchange.is_margin_mode = True
+    # #1112 guard: confirm no resting stop by default so re-protect's normal
+    # placement path is exercised; tests targeting the guard itself override this.
+    exchange.get_open_orders_checked.return_value = []
     engine.exchange_interface = exchange
     engine.order_tracker = Mock()
     engine.performance_tracker.record_trade = Mock()
@@ -266,6 +269,10 @@ def test_failed_close_reprotects_when_still_held():
     assert kw["stop_price"] == 95.0
     assert kw["side"] == OrderSide.SELL
     assert kw["quantity"] == pytest.approx(0.5)
+    # #1179: reprotect() seeds the trailing-stop min-move floor's baseline
+    # too, not just move() -- otherwise the first ratchet after a reprotect
+    # would compare against a stale (or missing) baseline.
+    assert position.last_placed_stop_price == pytest.approx(95.0)
 
 
 def test_failed_close_skips_reprotect_when_not_held():
@@ -312,6 +319,37 @@ def test_reprotect_retries_then_succeeds():
     _exit(engine, position)
 
     assert engine.exchange_interface.place_stop_loss_order.call_count == 2
+
+
+def test_reprotect_adopts_untracked_resting_stop_instead_of_duplicating():
+    """#1112: if a matching stop is somehow already resting when re-protect
+    runs, adopt it rather than placing a duplicate."""
+    engine, _calls = _make_live_engine(_fail(), sl_fills=(0.0, 0.0), held=True)
+    position = _track(engine, quantity=0.5, current_size=0.5, original_size=0.5)
+    engine.exchange_interface.get_open_orders_checked.return_value = [
+        Mock(order_id="already_resting", side=OrderSide.SELL, stop_price=95.0)
+    ]
+
+    _exit(engine, position)
+
+    engine.exchange_interface.place_stop_loss_order.assert_not_called()
+    assert position.stop_loss_order_id == "already_resting"
+    # #1179: the ADOPT branch seeds the floor's baseline from the achieved
+    # (actually-resting) price too, matching move()'s own ADOPT handling.
+    assert position.last_placed_stop_price == pytest.approx(95.0)
+
+
+def test_reprotect_refuses_when_resting_stop_lookup_unconfirmed():
+    """#1112: an unconfirmed open-orders lookup must fail closed — no
+    placement, position stays UNPROTECTED pending the reconciler backstop."""
+    engine, calls = _make_live_engine(_fail(), sl_fills=(0.0, 0.0), held=True)
+    position = _track(engine, quantity=0.5, current_size=0.5, original_size=0.5)
+    engine.exchange_interface.get_open_orders_checked.return_value = None
+
+    _exit(engine, position)
+
+    engine.exchange_interface.place_stop_loss_order.assert_not_called()
+    assert calls == ["cancel", "close"]  # reprotect refused before attempting placement
 
 
 # --- unchanged paths ------------------------------------------------------------

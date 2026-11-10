@@ -41,6 +41,8 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from src.data_providers.binance_provider import WebSocketState
 from src.database.models import EventType
+from src.infrastructure.live_threads import create_live_thread
+from src.trading.exit_reason import ExitReason, classify_stop_exit
 
 if TYPE_CHECKING:
     from src.engines.live.execution.position_tracker import LivePosition, LivePositionTracker
@@ -77,6 +79,7 @@ class WebSocketHealthEngineState(Protocol):
     _ws_kline_active: bool
     _kline_reconnect_failures: int
     _user_reconnect_failures: int
+    _user_degraded_paged: bool
     _ws_health_thread: threading.Thread | None
     _pending_fill_exits: queue.SimpleQueue
 
@@ -90,6 +93,7 @@ class WebSocketHealthEngineState(Protocol):
         candle_low: float | None,
         candle: Any,
         skip_live_close: bool = ...,
+        exit_category: ExitReason = ...,
     ) -> None: ...
 
     # Engine wrappers the monitor routes sibling calls through so test mocks on
@@ -192,9 +196,7 @@ class WebSocketHealthMonitor:
     def start_ws_health_monitor(self) -> None:
         """Start daemon thread to monitor WebSocket stream health."""
         state = self._state
-        state._ws_health_thread = threading.Thread(
-            target=self.ws_health_loop, daemon=True, name="WSHealthMonitor"
-        )
+        state._ws_health_thread = create_live_thread(self.ws_health_loop, name="WSHealthMonitor")
         state._ws_health_thread.start()
         logger.info("WebSocket health monitor started")
 
@@ -234,7 +236,8 @@ class WebSocketHealthMonitor:
         The user-stream liveness ping (#907) is this loop's first bounded-
         blocking call: on a wall-clock-stale user stream, a cycle may block
         inside ``check_user_stream_health`` for up to the ping timeout (+1 s
-        belt, ≤ ~10 s), delaying the next kline check by that much. Future
+        belt, ≤ ~10 s) and a hard user-stream rebuild up to ~20 s, delaying the next kline check by
+        that much. Future
         reductions of the staleness thresholds or the health interval must
         account for it.
         """
@@ -287,6 +290,9 @@ class WebSocketHealthMonitor:
                     candle_low=None,
                     candle=None,
                     skip_live_close=True,
+                    # Same classifier the in-engine stop check uses, so a trailed
+                    # stop filled on the exchange lands in the same bucket (#1115).
+                    exit_category=classify_stop_exit(position),
                 )
             except Exception as e:
                 # _execute_exit logs and absorbs its own close failures (reconciliation
@@ -424,22 +430,33 @@ class WebSocketHealthMonitor:
         if getattr(exchange, "user_ws_healthy", False):
             self.restore_user_ws_primary()
             state._user_reconnect_failures = 0
-            return
-
-        # RESYNCING (set by the error callback) needs an immediate recovery cycle.
-        if getattr(exchange, "_user_ws_state", None) == WebSocketState.RESYNCING:
-            logger.warning(
-                "User data stream in RESYNCING state — triggering recovery "
-                "(subscription age %s)",
-                self._user_stream_age(exchange),
-            )
-            state._handle_user_stream_disconnect()
+            state._user_degraded_paged = False
             return
 
         from src.config.constants import (
             DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT,
             DEFAULT_WS_USER_STALENESS_THRESHOLD,
         )
+
+        # RESYNCING (set by the error callback, or by a failed subscribe) needs an
+        # immediate recovery cycle. It shares the PRIMARY-stale failure counter and
+        # circuit: a stream that keeps failing to come back must not be rebuilt every
+        # health cycle forever.
+        if getattr(exchange, "_user_ws_state", None) == WebSocketState.RESYNCING:
+            sub_age = self._user_stream_age(exchange)
+            if state._user_reconnect_failures >= DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT:
+                self._open_user_circuit(exchange, sub_age)
+                return
+            state._user_reconnect_failures += 1
+            logger.warning(
+                "User data stream in RESYNCING state — triggering recovery "
+                "(attempt %d/%d, subscription age %s)",
+                state._user_reconnect_failures,
+                DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT,
+                sub_age,
+            )
+            state._handle_user_stream_disconnect(hard=self.should_hard_reconnect_user())
+            return
 
         # REST_DEGRADED: the circuit is open and we are on REST polling. THE FIX —
         # instead of staying absorbed here until restart (#616), keep probing the
@@ -450,12 +467,9 @@ class WebSocketHealthMonitor:
             state._user_reconnect_failures += 1
             if not self.should_probe_user_reconnect(state._user_reconnect_failures):
                 return
-            # Decide the reconnect MODE here, BEFORE _handle_user_stream_disconnect's
-            # stop_user_stream flips state to DISCONNECTED (the handler can no longer
-            # read REST_DEGRADED). hard=True (full teardown + fresh AsyncClient/ws_api,
-            # #723) only when the flag is on AND the kline/user coupling guard passes;
-            # otherwise the cheap in-place re-subscribe. This is the ONLY caller that
-            # may set hard=True.
+            # hard=True (full teardown + fresh AsyncClient/ws_api, #723) whenever the
+            # flag is on AND the kline/user coupling guard passes; otherwise the
+            # in-place re-subscribe.
             hard = self.should_hard_reconnect_user()
             logger.warning(
                 "User data stream degraded — probing WS %s (failure #%d, "
@@ -508,6 +522,7 @@ class WebSocketHealthMonitor:
                         state._user_reconnect_failures,
                     )
                 state._user_reconnect_failures = 0
+                state._user_degraded_paged = False
                 logger.debug(
                     "User data stream quiet (%ds) but transport verified alive — "
                     "holding subscription (age %s, #907)",
@@ -532,40 +547,7 @@ class WebSocketHealthMonitor:
         # throttled-probing, so this is the fast-phase boundary, not a terminal
         # state (#717).
         if state._user_reconnect_failures >= DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT:
-            logger.warning(
-                "User data stream did not recover after %d reconnects — circuit open, "
-                "falling back to REST polling and throttled-probing the WS "
-                "(subscription age %s, #717).",
-                state._user_reconnect_failures,
-                sub_age,
-            )
-            # Tear down the dead user socket BEFORE marking degraded so the terminal
-            # state is REST_DEGRADED, not DISCONNECTED (stop_user_stream sets
-            # DISCONNECTED). Order matters: a DISCONNECTED terminal state would make
-            # the REST_DEGRADED probe branch unreachable. stop_user_stream also halts
-            # the dead socket's asyncio _read_ready spam (~2,100/hr) and bumps the
-            # generation so any in-flight stale callback is dropped (#616/#717).
-            if hasattr(exchange, "stop_user_stream"):
-                exchange.stop_user_stream()
-            if hasattr(exchange, "mark_user_degraded"):
-                exchange.mark_user_degraded()
-            state.order_tracker.enable_polling()
-            # The real-time order/balance push feed is now dead; the bot runs on
-            # slower REST polling until a real event returns it to primary. Page an
-            # operator — degraded fill/balance visibility on a live account was
-            # previously only a logger.warning (#717/#853). Fires once per
-            # circuit-open: while REST_DEGRADED the method returns early above, so
-            # this is edge-triggered by construction (no per-cycle spam).
-            state._record_event(
-                EventType.ALERT,
-                f"User data stream circuit-open after {state._user_reconnect_failures} "
-                "reconnects — REST-degraded; real-time fills/balance updates unavailable "
-                f"(subscription age {sub_age})",
-                severity="critical",
-                component="connectivity",
-                error_code="USER_WS_DEGRADED",
-                alert=True,
-            )
+            self._open_user_circuit(exchange, sub_age)
             return
 
         state._user_reconnect_failures += 1
@@ -577,7 +559,65 @@ class WebSocketHealthMonitor:
             DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT,
             sub_age,
         )
-        state._handle_user_stream_disconnect()
+        state._handle_user_stream_disconnect(hard=self.should_hard_reconnect_user())
+
+    def _open_user_circuit(self, exchange: Any, sub_age: str) -> None:
+        """Stop reconnecting: tear the dead user socket down and run on REST polling (#717).
+
+        Called once ``DEFAULT_WS_USER_RECONNECT_CIRCUIT_LIMIT`` consecutive recovery
+        attempts produced no real event, from both the PRIMARY-stale and RESYNCING
+        paths so neither can rebuild the stream every health cycle forever. The
+        REST_DEGRADED branch of ``check_user_stream_health`` then keeps probing on the
+        exponential-backoff schedule, so this is the fast-phase boundary, not a
+        terminal state.
+        """
+        state = self._state
+        logger.warning(
+            "User data stream did not recover after %d reconnects — circuit open, "
+            "falling back to REST polling and throttled-probing the WS "
+            "(subscription age %s, #717).",
+            state._user_reconnect_failures,
+            sub_age,
+        )
+        # Tear down the dead user socket BEFORE marking degraded so the terminal
+        # state is REST_DEGRADED, not DISCONNECTED (stop_user_stream sets
+        # DISCONNECTED). Order matters: a DISCONNECTED terminal state would make
+        # the REST_DEGRADED probe branch unreachable. stop_user_stream also halts
+        # the dead socket's asyncio _read_ready spam (~2,100/hr) and bumps the
+        # generation so any in-flight stale callback is dropped (#616/#717).
+        if hasattr(exchange, "stop_user_stream"):
+            exchange.stop_user_stream()
+        if hasattr(exchange, "mark_user_degraded"):
+            exchange.mark_user_degraded()
+        if state.order_tracker:
+            state.order_tracker.enable_polling()
+        # The real-time order/balance push feed is now dead; the bot runs on
+        # slower REST polling until a real event returns it to primary. Page an
+        # operator once per outage (#717/#853): a failed degraded probe that lands
+        # back in RESYNCING re-enters here and must not page again.
+        self.page_user_degraded_once(sub_age)
+
+    def page_user_degraded_once(self, sub_age: str) -> None:
+        """Record the critical USER_WS_DEGRADED event once per outage.
+
+        The latch is cleared wherever the failure counter resets (a real event or a
+        verified-alive stream), so the next outage pages again. Also called when a
+        reconnect fails outright and the stream parks on REST without a circuit open.
+        """
+        state = self._state
+        if state._user_degraded_paged:
+            return
+        state._user_degraded_paged = True
+        state._record_event(
+            EventType.ALERT,
+            f"User data stream circuit-open after {state._user_reconnect_failures} "
+            "reconnects — REST-degraded; real-time fills/balance updates unavailable "
+            f"(subscription age {sub_age})",
+            severity="critical",
+            component="connectivity",
+            error_code="USER_WS_DEGRADED",
+            alert=True,
+        )
 
     @staticmethod
     def _user_stream_age(exchange: Any) -> str:
@@ -702,10 +742,11 @@ class WebSocketHealthMonitor:
         """Whether the degraded probe should use a HARD reconnect this cycle (#723).
 
         True only when ALL hold:
-        1. ``FEATURE_WS_USER_HARD_RECONNECT`` is enabled (default OFF — money/stability-
-           adjacent, ships inert per LESSONS §3/§4). A missing env var resolves False.
+        1. ``FEATURE_WS_USER_HARD_RECONNECT`` is enabled (default ON; set it to ``false``
+           to fall back to the in-place re-subscribe, which cannot restore a ws-api margin
+           stream — see ``BinanceProvider.hard_reconnect_user``).
         2. The kline and user streams are on SEPARATE providers (B-VERIFY-1). The hard
-           path does a full ``exchange_interface.stop_streams()``; if a future refactor
+           path does a full TWM teardown (``exchange_interface.hard_reconnect_user()``); if a future refactor
            ever co-located kline on the same provider (``_ws_kline_provider is
            exchange_interface``), that teardown would also kill kline. We REFUSE the
            hard path in that case — log CRITICAL and fall back to the cheap in-place
@@ -718,7 +759,7 @@ class WebSocketHealthMonitor:
         state = self._state
         from src.config.feature_flags import is_enabled
 
-        if not is_enabled("ws_user_hard_reconnect", False):
+        if not is_enabled("ws_user_hard_reconnect", True):
             return False
         if not hasattr(state.exchange_interface, "hard_reconnect_user"):
             return False
@@ -805,16 +846,11 @@ class WebSocketHealthMonitor:
     def handle_user_stream_disconnect(self, *, hard: bool = False) -> None:
         """Handle user data stream failure. Resync orders and attempt reconnect.
 
-        ``hard`` selects the reconnect strategy and MUST be decided by the caller:
-        this handler's first action (``stop_user_stream``) flips ``_user_ws_state`` to
-        DISCONNECTED, so the handler can no longer read "were we REST_DEGRADED?" itself
-        (the codex ordering fix, #723). When ``hard`` is True it does a full
-        teardown + fresh-AsyncClient rebuild (``hard_reconnect_user``); otherwise the
-        cheap in-place re-subscribe (``reconnect_user``). Only the REST_DEGRADED
-        throttled-probe branch passes ``hard=True`` (and only when
-        ``FEATURE_WS_USER_HARD_RECONNECT`` is on AND the kline/user coupling guard
-        passes); the fast-phase, RESYNCING, and PRIMARY-stale callers pass ``hard=False``
-        so a flag-on PRIMARY/RESYNCING cycle still uses the cheap path.
+        ``hard`` selects the reconnect strategy and is decided by the caller from
+        ``should_hard_reconnect_user``. When True it does a full teardown + fresh-TWM
+        rebuild (``hard_reconnect_user``), the only reconnect that can restore a ws-api
+        margin stream; when False (flag off, or the kline/user coupling guard fails) it
+        uses the in-place re-subscribe (``reconnect_user``).
         """
         state = self._state
         from src.engines.live.user_data_processor import UserDataProcessor
@@ -822,7 +858,7 @@ class WebSocketHealthMonitor:
         if not state.enable_live_trading or not state.exchange_interface:
             return
         # 1. Stop the old user socket FIRST to prevent new events arriving. (When
-        #    hard=True the subsequent hard_reconnect_user does a full stop_streams
+        #    hard=True the subsequent hard_reconnect_user does a full TWM
         #    teardown anyway; this early stop_user_stream keeps the state machine /
         #    generation bump identical across both paths and is harmless/idempotent.)
         if hasattr(state.exchange_interface, "stop_user_stream"):
@@ -898,3 +934,4 @@ class WebSocketHealthMonitor:
         if not reconnected:
             state.exchange_interface.mark_user_degraded()
             logger.warning("User stream reconnect failed — order polling resumed")
+            self.page_user_degraded_once(self._user_stream_age(state.exchange_interface))

@@ -130,6 +130,13 @@ _ML_SIGNAL_METADATA_KEYS = (
     "error_type",
     # Live inference-timeout substitutions (see PredictionEngine._run_inference)
     "timed_out",
+    # Decision-bar identity stamped by closed_candle_gate.stamp_decision_signal
+    # in BOTH flag states. Persisted because the closed-candle gating A/B and
+    # the flip-rate soak are measured from these rows — without them the flag
+    # could be flipped with no way to tell whether it changed anything (#1106).
+    "decision_bar_open_time",
+    "decision_bar_close_time",
+    "decision_bar_closed",
 )
 
 # Failure reasons only the ML generators emit. Generic reasons such as

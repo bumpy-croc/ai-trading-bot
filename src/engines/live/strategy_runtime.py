@@ -431,6 +431,31 @@ class StrategyRuntimeCoordinator:
                 )
         return positions
 
+    def runtime_index_for(self, bar_time: Any) -> int | None:
+        """Position of ``bar_time`` in the prepared runtime dataset, or None.
+
+        ``StrategyRuntime.process`` indexes ``dataset.data`` positionally and
+        ignores the frame the caller passes, so a position taken from the
+        loop's post-``dropna`` frame is only valid while the two frames align.
+        Closed-candle gating picks its bar by timestamp, so resolve that
+        timestamp against the dataset that is actually indexed.
+
+        Returns None when there is no dataset or the timestamp is absent, so
+        callers fall back to their own frame position.
+        """
+        dataset = self._state._runtime_dataset
+        data = getattr(dataset, "data", None)
+        if data is None or bar_time is None or len(data) == 0:
+            return None
+        try:
+            pos = data.index.get_loc(bar_time)
+        except (KeyError, TypeError):
+            return None
+        # A non-unique index yields a slice or mask; the gate's bar must be a
+        # single row, and anything else is ambiguous — fall back rather than
+        # guess which duplicate the strategy meant.
+        return pos if isinstance(pos, int) else None
+
     def build_runtime_context(
         self,
         balance: float,

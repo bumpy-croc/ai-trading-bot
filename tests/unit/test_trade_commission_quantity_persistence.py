@@ -20,6 +20,7 @@ import pytest
 
 pytestmark = pytest.mark.fast
 
+from src.engines.live.trade_close_accounting import held_base_quantity
 from src.engines.live.trading_engine import (
     LiveTradingEngine,
     Position,
@@ -218,6 +219,54 @@ def test_closed_base_quantity_none_for_scaled_in_position():
     position = _make_position(quantity=2.5, entry_fee=0.25, size=0.40, current_size=0.40)
     position.original_size = 0.25  # scaled in beyond the original fraction
     assert _closed_base_quantity(position) is None
+
+
+@pytest.mark.parametrize(
+    "qty, current_size, original_size",
+    [
+        (None, 0.25, 0.25),  # unknown quantity
+        (0.0, 0.25, 0.25),  # non-positive quantity
+        (-2.5, 0.25, 0.25),  # negative quantity
+        (float("inf"), 0.25, 0.25),  # non-finite quantity
+        (2.5, 0.25, 0.0),  # non-positive original_size
+        (2.5, 0.25, -0.1),  # negative original_size
+        (2.5, 0.25, float("nan")),  # non-finite original_size
+        (2.5, -0.1, 0.25),  # negative current_size
+        (2.5, float("nan"), 0.25),  # non-finite current_size
+        (2.5, None, 0.25),  # missing current_size
+        (2.5, 0.25, None),  # missing original_size
+    ],
+)
+def test_held_base_quantity_returns_none_for_corrupt_sizing(qty, current_size, original_size):
+    """held_base_quantity mirrors _closed_base_quantity's guard for corrupt inputs,
+    regardless of allow_scale_in."""
+    assert held_base_quantity(qty, current_size, original_size) is None
+    assert held_base_quantity(qty, current_size, original_size, allow_scale_in=True) is None
+
+
+def test_held_base_quantity_allows_zero_current_size():
+    """current_size == 0.0 (a fully-exited, flat slice) is a VALID holding, not corrupt state —
+    unlike _closed_base_quantity's stricter current_f > 0 (that function's own DB-column policy),
+    the general helper returns 0.0 (CODE.md Position Fields: 0.0 is valid, not falsy)."""
+    assert held_base_quantity(2.5, 0.0, 0.25) == pytest.approx(0.0)
+
+
+def test_held_base_quantity_scales_valid_inputs():
+    assert held_base_quantity(2.5, 0.10, 0.25) == pytest.approx(1.0)
+
+
+def test_held_base_quantity_overflow_default_returns_none():
+    """current_size > original_size (scale-in) -> None by default, matching
+    _closed_base_quantity's guard."""
+    assert held_base_quantity(2.5, 0.40, 0.25) is None
+
+
+def test_held_base_quantity_overflow_allow_scale_in_scales_past_one():
+    """allow_scale_in=True computes the scaled (>1.0) value instead of refusing it — the
+    operational-sizing variant used by every reconciliation.py call site except
+    _log_reconciliation_trade: a real scale-in's held amount must still be usable
+    for stop-loss sizing / notional / P&L, not zeroed out."""
+    assert held_base_quantity(2.5, 0.40, 0.25, allow_scale_in=True) == pytest.approx(4.0)
 
 
 def test_recover_active_positions_hydrates_partial_state(monkeypatch):
@@ -467,25 +516,64 @@ def test_reconciler_filled_sl_converts_short_commission_to_usd_and_dedups(monkey
     assert t["order_id"] == "reconcile_sl_77"
 
 
-def test_reconciler_filled_sl_skips_trade_when_db_close_fails(monkeypatch):
-    """If the DB position close fails, NO trade is logged — the row stays OPEN and is
-    re-reconciled later; logging now would duplicate when it is re-recovered."""
+def test_reconciler_filled_sl_leaves_position_tracked_when_atomic_write_fails(monkeypatch):
+    """#1223: the position close, Trade insert and balance delta are ONE atomic write. When it
+    fails nothing is committed, so the position stays tracked (flagged exchange_close_pending)
+    for a retry instead of being left CLOSED with its PnL dropped."""
     from types import SimpleNamespace as NS
 
     db = MockDatabaseManager()
-    reconciler = _make_reconciler(db, fee_rate=0.001)
+    tracker = _tracker_with(_make_position(quantity=2.5, entry_fee=None, entry_price=100.0))
+    reconciler = _make_reconciler(db, fee_rate=0.001, tracker=tracker)
     monkeypatch.setattr(reconciler, "_persist_audit", lambda *a, **k: None)
-    monkeypatch.setattr(db, "close_position", Mock(side_effect=RuntimeError("db down")))
+    monkeypatch.setattr(db, "log_trade", Mock(side_effect=RuntimeError("db down")))
+    close_spy = Mock(wraps=db.close_position)
+    monkeypatch.setattr(db, "close_position", close_spy)
+    no_balance_write = Mock()
+    monkeypatch.setattr(db, "update_balance", no_balance_write)
     position = _make_position(
         quantity=2.5, entry_fee=None, side=PositionSide.SHORT, entry_price=100.0
     )
     position.db_position_id = 88
     position.order_id = "pos-88"
+    _register_open_position(db, position)
     sl_order = NS(average_price=90.0, order_id="sl-88", commission=2.0, commission_asset="USDT")
 
     reconciler._close_position_from_filled_sl(position, sl_order)
 
-    assert len(db._trades) == 0  # DB close failed -> trade not logged (no duplicate risk)
+    assert len(db._trades) == 0
+    close_spy.assert_not_called()  # no separate upfront close transaction
+    no_balance_write.assert_not_called()
+    tracker.remove_position.assert_not_called()
+    assert position.exchange_close_pending is True
+
+
+def test_reconciler_filled_sl_closes_position_only_through_the_atomic_write(monkeypatch):
+    """#1223: on success the position is closed by log_trade(position_id, balance_delta) — the
+    reconciler never issues a separate close_position, which is the crash window."""
+    from types import SimpleNamespace as NS
+
+    db = MockDatabaseManager()
+    position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0)
+    position.db_position_id = 89
+    position.order_id = "pos-89"
+    _register_open_position(db, position)
+    tracker = _tracker_with(position)
+    reconciler = _make_reconciler(db, fee_rate=0.001, tracker=tracker)
+    monkeypatch.setattr(reconciler, "_persist_audit", lambda *a, **k: None)
+    log_spy = Mock(wraps=db.log_trade)
+    monkeypatch.setattr(db, "log_trade", log_spy)
+    close_spy = Mock(wraps=db.close_position)
+    monkeypatch.setattr(db, "close_position", close_spy)
+    sl_order = NS(average_price=90.0, order_id="sl-89", commission=0.2, commission_asset="USDT")
+
+    reconciler._close_position_from_filled_sl(position, sl_order)
+
+    log_spy.assert_called_once()
+    assert log_spy.call_args.kwargs["position_id"] == 89
+    assert log_spy.call_args.kwargs["balance_delta"] == pytest.approx(-25.0 - 0.2)
+    close_spy.assert_not_called()
+    tracker.remove_position.assert_called_once_with("pos-89")
 
 
 def test_reconciler_filled_exit_logs_trade_with_exchange_order_id(monkeypatch):
@@ -538,28 +626,36 @@ def test_reconciler_filled_exit_synthesizes_dedup_key_when_no_exchange_id(monkey
     assert t["order_id"] == "reconcile_exit_56"
 
 
-def test_reconciler_filled_exit_skips_trade_when_db_close_fails(monkeypatch):
-    """If the DB position close fails, NO trade is logged and the balance is NOT corrected — the
-    row stays OPEN and is re-reconciled later (avoids the double balance correction)."""
+def test_reconciler_filled_exit_raises_and_stays_tracked_when_atomic_write_fails(monkeypatch):
+    """#1223: when the atomic close+trade+balance write fails nothing is committed, so the
+    position stays tracked and the failure is raised — the order journal then stays SUBMITTED and
+    the next restart retries, instead of the PnL being silently dropped."""
     db = MockDatabaseManager()
-    monkeypatch.setattr(db, "close_position", Mock(side_effect=RuntimeError("db down")))
+    monkeypatch.setattr(db, "log_trade", Mock(side_effect=RuntimeError("db down")))
+    close_spy = Mock(wraps=db.close_position)
+    monkeypatch.setattr(db, "close_position", close_spy)
     no_balance_write = Mock()
     monkeypatch.setattr(db, "update_balance", no_balance_write)
     position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0)
     position.db_position_id = 57
     position.order_id = "pos-57"
-    reconciler = _make_reconciler(db, fee_rate=0.001, tracker=_tracker_with(position))
+    tracker = _tracker_with(position)
+    reconciler = _make_reconciler(db, fee_rate=0.001, tracker=tracker)
     monkeypatch.setattr(reconciler, "_persist_audit", lambda *a, **k: None)
 
-    reconciler._reconcile_filled_exit(
-        {"position_id": 57, "client_order_id": "atbx_exit_3"},
-        fill_price=90.0,
-        exit_fee=0.2,
-        exit_order_id="EXCH-1",
-    )
+    with pytest.raises(RuntimeError, match="could not be persisted"):
+        reconciler._reconcile_filled_exit(
+            {"position_id": 57, "client_order_id": "atbx_exit_3"},
+            fill_price=90.0,
+            exit_fee=0.2,
+            exit_order_id="EXCH-1",
+        )
 
-    assert len(db._trades) == 0  # DB close failed -> trade not logged (no duplicate risk)
-    no_balance_write.assert_not_called()  # and P&L not realized -> no double balance correction
+    assert len(db._trades) == 0
+    close_spy.assert_not_called()  # no separate upfront close transaction
+    no_balance_write.assert_not_called()
+    tracker.remove_position.assert_not_called()
+    assert position.exchange_close_pending is True
 
 
 def test_reconciler_external_close_spot_logs_balance_neutral_trade(monkeypatch):
@@ -680,9 +776,10 @@ def test_external_close_exit_price_falls_back_to_entry_when_no_provider():
     assert reconciler._external_close_exit_price(position) == pytest.approx(100.0)
 
 
-def test_reconciler_filled_exit_skips_trade_when_db_close_returns_false(monkeypatch):
-    """close_position returns False (row not found / commit rolled back) WITHOUT raising — the gate
-    must treat that as 'not closed' and log no trade (else trades/account_balances diverge)."""
+def test_reconciler_filled_exit_without_usable_price_closes_row_and_raises_on_false(monkeypatch):
+    """With no usable fill price there is no PnL to realize, so the row is closed on its own;
+    close_position returning False (row not found / commit rolled back) WITHOUT raising must be
+    treated as 'not closed' — the position stays tracked and the failure is raised."""
     db = MockDatabaseManager()
     monkeypatch.setattr(db, "close_position", Mock(return_value=False))
     no_balance_write = Mock()
@@ -690,18 +787,21 @@ def test_reconciler_filled_exit_skips_trade_when_db_close_returns_false(monkeypa
     position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0)
     position.db_position_id = 71
     position.order_id = "pos-71"
-    reconciler = _make_reconciler(db, fee_rate=0.001, tracker=_tracker_with(position))
+    tracker = _tracker_with(position)
+    reconciler = _make_reconciler(db, fee_rate=0.001, tracker=tracker)
     monkeypatch.setattr(reconciler, "_persist_audit", lambda *a, **k: None)
 
-    reconciler._reconcile_filled_exit(
-        {"position_id": 71, "client_order_id": "atbx_exit_f"},
-        fill_price=90.0,
-        exit_fee=0.2,
-        exit_order_id="EXCH-F",
-    )
+    with pytest.raises(RuntimeError, match="could not be persisted"):
+        reconciler._reconcile_filled_exit(
+            {"position_id": 71, "client_order_id": "atbx_exit_f"},
+            fill_price=0.0,
+            exit_fee=0.2,
+            exit_order_id="EXCH-F",
+        )
 
-    assert len(db._trades) == 0  # False return -> not persisted -> no trade
+    assert len(db._trades) == 0
     no_balance_write.assert_not_called()
+    tracker.remove_position.assert_not_called()
 
 
 def test_reconciler_external_close_skips_trade_when_db_close_returns_false(monkeypatch):
@@ -873,6 +973,96 @@ def test_reconciler_scale_in_close_nulls_quantity_and_does_not_inflate_commissio
     assert trade["quantity"] is None  # not the over-reported 4.0
     # entry fee is on the ORIGINAL fill (2.5 * 100 * 0.001 = 0.25), not the inflated 4.0.
     assert trade["commission"] == pytest.approx(0.25 + 0.11, abs=0.001)
+
+
+def test_reconciler_logs_null_quantity_for_corrupt_original_size(monkeypatch):
+    """Regression: _log_reconciliation_trade's guard now delegates to
+    held_base_quantity's DEFAULT (no allow_scale_in) semantics, which also nulls a corrupt
+    original_size — not only the narrower current_size > original_size check the manual
+    reimplementation had before. A non-positive original_size means the sizing basis for
+    position.quantity cannot be trusted, so the logged quantity is NULL rather than the
+    caller's (still-valid-looking) qty."""
+    db = MockDatabaseManager()
+    reconciler = _make_reconciler(db, fee_rate=0.001)
+    position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0, current_size=0.10)
+    position.original_size = 0.0  # corrupt: no valid sizing basis
+
+    reconciler._log_reconciliation_trade(
+        position=position,
+        entry_price=100.0,
+        exit_price=110.0,
+        qty=2.5,  # what the caller would have passed pre-guard
+        gross_pnl=25.0,
+        exit_fee=0.11,
+        interest_cost=0.0,
+        reason="stop_loss_filled_offline",
+        exit_order_id="sl-corrupt-original",
+    )
+
+    trade = list(db._trades.values())[0]
+    assert trade["quantity"] is None
+    # Entry fee reconstructed from the raw (unscaled) quantity, matching a scale-in's
+    # fee_base_qty fallback — never fabricated from the untrustworthy scaled qty.
+    assert trade["commission"] == pytest.approx(0.25 + 0.11, abs=0.001)
+
+
+def test_reconciler_logs_quantity_when_sizing_fields_never_set(monkeypatch):
+    """Regression: a position that was never partially exited or
+    scaled in never gets original_size/current_size populated (they are lazily set to
+    ``size`` only inside apply_partial_exit/apply_scale_in), so both can legitimately be
+    None on an otherwise perfectly ordinary close. held_base_quantity's stricter "both
+    required" guard must NOT null the logged quantity for this common case -- it must fall
+    back to ``size`` first, exactly like _closed_base_quantity does, before applying the
+    guard. (A first pass of this refactor missed that fallback and silently nulled
+    trades.quantity for every un-partially-exited, un-scaled-in reconciler close.)"""
+    db = MockDatabaseManager()
+    reconciler = _make_reconciler(db, fee_rate=0.001)
+    position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0)
+    position.original_size = None
+    position.current_size = None
+
+    reconciler._log_reconciliation_trade(
+        position=position,
+        entry_price=100.0,
+        exit_price=110.0,
+        qty=2.5,
+        gross_pnl=25.0,
+        exit_fee=0.11,
+        interest_cost=0.0,
+        reason="stop_loss_filled_offline",
+        exit_order_id="sl-no-sizing-fields",
+    )
+
+    trade = list(db._trades.values())[0]
+    assert trade["quantity"] == pytest.approx(2.5)  # NOT NULL
+    assert trade["commission"] == pytest.approx(0.25 + 0.11, abs=0.001)
+
+
+def test_reconciler_logs_zero_quantity_for_already_flat_slice(monkeypatch):
+    """A flat current_size (0.0) is unchanged (not nulled) behavior: held_base_quantity's
+    default guard treats current_size == 0.0 as a valid holding (unlike
+    _closed_base_quantity's stricter current_f > 0), so the caller's already-zero qty is
+    logged as 0.0 -- exactly the pre-consolidation behavior for this input, since the old
+    manual scaled_in check (current_size > original_size) was never True for current_size
+    == 0.0 either."""
+    db = MockDatabaseManager()
+    reconciler = _make_reconciler(db, fee_rate=0.001)
+    position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0, current_size=0.0)
+
+    reconciler._log_reconciliation_trade(
+        position=position,
+        entry_price=100.0,
+        exit_price=110.0,
+        qty=0.0,  # already-scaled to the flat slice by the caller
+        gross_pnl=0.0,
+        exit_fee=0.0,
+        interest_cost=0.0,
+        reason="stop_loss_filled_offline",
+        exit_order_id="sl-flat-slice",
+    )
+
+    trade = list(db._trades.values())[0]
+    assert trade["quantity"] == pytest.approx(0.0)
 
 
 def test_get_performance_metrics_nets_commission(monkeypatch):

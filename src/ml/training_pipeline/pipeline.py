@@ -30,11 +30,13 @@ from src.config.constants import (
     DEFAULT_STOP_LOSS_PCT,
     DEFAULT_TAKE_PROFIT_PCT,
 )
+from src.ml.model_metadata import enrich_bundle_metadata
 from src.ml.training_pipeline import TrainingContext
 from src.ml.training_pipeline.artifacts import (
     ArtifactPaths,
     create_training_plots,
     evaluate_model_performance,
+    point_latest_at,
     save_artifacts,
     validate_model_robustness,
 )
@@ -268,8 +270,8 @@ def _run_meta_label_pipeline(ctx: TrainingContext) -> TrainingResult:
     through the exam-harness exit geometry, (4) build + encode the
     meta-label feature set, (5) fit LogisticRegression, (6) hand-roll an
     ONNX export (sklearn_onnx_export.py), (7) save artifacts under
-    ``{symbol}/meta_label/{version}/`` with an atomic ``latest`` symlink,
-    mirroring artifacts.py's save_artifacts pattern.
+    ``{symbol}/meta_label/{version}/`` (``latest`` only moves when
+    ``ctx.config.set_latest`` is set, like save_artifacts).
     """
     start_time = perf_counter()
     try:
@@ -405,17 +407,8 @@ def _run_meta_label_pipeline(ctx: TrainingContext) -> TrainingResult:
         with open(feature_schema_path, "w", encoding="utf-8") as f:
             json.dump(feature_schema, f, indent=2)
 
-        # Atomic latest symlink update -- mirrors save_artifacts' TOCTOU-safe
-        # temp-symlink-then-replace pattern.
-        latest_link = type_dir / "latest"
-        temp_link = type_dir / f".latest.{version_dir.name}.tmp"
-        try:
-            if temp_link.exists() or temp_link.is_symlink():
-                temp_link.unlink()
-            temp_link.symlink_to(version_dir.name)
-            temp_link.replace(latest_link)
-        except OSError as e:
-            logger.warning("Failed to update latest symlink for meta_label bundle: %s", e)
+        if ctx.config.set_latest:
+            point_latest_at(version_dir)
 
         artifact_paths = ArtifactPaths(
             directory=version_dir,
@@ -712,6 +705,19 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
             **target_type_metadata,
         }
 
+        # Shared prediction-path contract (model_metadata.py, #1049/#1132): a
+        # regression bundle whose target was fed in rolling-minmax normalized
+        # form (currently only the force_price_only branch above, detected
+        # here from feature_names rather than the branch flag so any future
+        # rolling-minmax producer is covered too) must declare
+        # price_normalization/model_file/framework, or its raw ONNX output
+        # can't be denormalized back to a real price. Writing it here --
+        # instead of leaving it to orchestrator._sync_artifacts's backfill --
+        # means a bundle from this function is already complete before any
+        # cloud sync step runs; the backfill remains as a safety net for
+        # pre-existing/external bundles only.
+        enrich_bundle_metadata(metadata)
+
         output_dir = ctx.paths.models_dir
         version_id = _generate_version_id(output_dir, ctx.config.symbol, metadata["model_type"])
         metadata["version_id"] = version_id
@@ -723,6 +729,7 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
             metadata,
             version_id,
             ctx.config.diagnostics.convert_to_onnx,
+            set_latest=ctx.config.set_latest,
         )
 
         artifact_paths.plot_path = create_training_plots(

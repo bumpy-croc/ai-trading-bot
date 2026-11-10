@@ -20,6 +20,22 @@ much precision", on **stopPrice**/limit price / PRICE_FILTER `tickSize`).
   which then exposed the *price* version (-1111, #699/#701) on the very next step. **When you find
   a float-artifact precision bug, `grep` for ALL `round(... / ...) * ...` sites — don't fix only
   the one in front of you.**
+- **Corollary — a quantize guarded by an optional lookup is not a quantize (earned twice).** In
+  `binance_provider.place_stop_loss_order` the tick quantize sits **inside** `if symbol_info:`, so a
+  transient `get_symbol_info()` failure passes the raw `stop_price * (1 - slippage)` float straight
+  to Binance. The quantity cap **twelve lines below it** carries the opposite, explicit treatment —
+  *"This runs even when `symbol_info` is missing — a transient `get_symbol_info` failure must not
+  silently disable the protection."* Same function, same precondition, one guard hardened and one
+  not. **-1111 recurred in prod on 2026-08-27, 82 days after #699/#701 "fixed" it** (#1121), and the
+  rejection cascade latched close-only for four days. **Rule:** when you harden one consumer of a
+  best-effort lookup against its absence, harden *every* consumer of that lookup in the same
+  function — and prefer a fail-loud refusal to send over an un-normalized send.
+
+- **Enforced, not just advised (#789):** snap with `precision.snap_to_step` (exact decimal) and
+  serialize with `format_quantity`/`format_price`; `BinanceProvider._conform_order_numerics` is
+  the last-line guard on every order, and `tests/unit/trading/test_exchange_numeric_guard.py`
+  fails on any new raw `round(x / step) * step` in the exchange-facing packages. An off-step
+  value is logged and sent unchanged, never silently moved (see 1.13).
 
 ### 1.2 Decimal × float `TypeError` from DB-loaded fields
 SQLAlchemy `Numeric` columns load as `Decimal`. Mixing a DB-loaded value with a `float` raises
@@ -87,10 +103,33 @@ guard); the alerting-budget comment now lives at `engine.py:302`.
 ### 1.10 Silent wrong-source execution — exam/backtest numbers computed against the wrong code, cwd, or model
 Three separate instances this week, one meta-class: a run produced numbers, but not from the source
 it claimed.
-- **(a) Shared-venv `atb` staleness.** The `atb` console script is an editable install pinned to
-  ONE worktree; bare `atb` from any *other* worktree silently executes that pinned worktree's code
-  (workaround + detail in §3). Sibling filed as GH #999 (script-path `sys.path` shadowing of the
-  main checkout's stale `src/`).
+- **(a) Shared-venv `atb` staleness — the worst of the three; filed P3, recurred at P0, now FIXED
+  (GH #1070, 2026-08-13).** The editable install's generated finder hardcodes
+  `MAPPING = {'cli': '/Users/alex/Sites/ai-trading-bot/cli', 'src': '.../src'}` — the absolute path
+  of the checkout `make install` was run from. `atb` (a console script) and
+  `python /abs/path/script.py` both put the *script's own directory* at `sys.path[0]`, never cwd, so
+  `import src...` from **any** worktree resolved to the **primary checkout**, frozen on `main` at
+  2026-07-04 (131 commits behind `origin/main` as of 2026-08-13). Only `python -c` / an interactive
+  REPL insert `''` and pick up the worktree — which is exactly why the old sanity check was useless:
+  it passed in precisely the state that was broken. Demonstrated blast radius, same command, same
+  cwd, same flags: **+114.69% / 8.74% MaxDD** (silently ran the stale checkout, shorts still enabled,
+  pre-#1020) vs **−28.29% / 31.27% MaxDD** (correct code). Sign-flipped headline, no warning, no
+  error.
+  - **It is not only exams.** The 2026-08-14 `daily-trading-standup` read its ratified thresholds from
+    the same stale checkout, found no `src/config/risk-limits.json` (it landed there in #1034, promoted
+    to prod 08-13), reported *"the file path in this task's instructions is stale for `main`"* — the
+    instructions were right and the checkout was six weeks old — and silently fell back to the retired
+    `.claude/state/` copy. The values happened to match, so it read PASS. **A Board edit to the ratified
+    limits would have been invisible to the daily monitoring pass.** Under the #1070 guard that run
+    would have hard-errored instead of quietly reading six-week-old config.
+  - **Lineage:** filed at P3 as **#1024** (2026-07-13) with the ask "add a warning"; re-filed at **P0
+    as #1070** (2026-08-13) after it invalidated a Board-level decision — see §2.14. Sibling **#999**
+    covers the script-path `sys.path` shadowing variant.
+  - **Current state:** structurally fixed — a site-packages shim binds `src`/`cli` to the checkout
+    enclosing your cwd, and `src/_source_root.verify_source_root()` hard-errors on a mismatch
+    (mechanism and residual hazards in §3). `PYTHONPATH="$(pwd)" atb <cmd>` was the historical
+    workaround and still works as a belt-and-braces override; it is no longer the standing
+    requirement.
 - **(b) cwd-relative registry path.** `DEFAULT_MODEL_REGISTRY_PATH = "src/ml/models"`
   (`constants.py:25`) resolves against *process cwd* — an exam launched from the wrong directory
   silently resolved to an empty registry and produced an all-HOLD / 0-trade result that looked like
@@ -153,6 +192,126 @@ since model promotion for a live symbol is autonomous under the charter.
   trusting any head-to-head number. Identical `feature_schema.json` + `feature_names` does **not**
   mean the bundles are interchangeable. Earned: GH #1049 (found during the 2026-08-09 retrain,
   #1048 — it blocked the backtest rather than corrupting it, which is the good outcome).
+- **Rule (c) — added 2026-09-07, after the fix chain was narrower than the contract three times in
+  a row.** #1122 (merged 09-06) closed #1049 by backfilling the missing keys in
+  `orchestrator._sync_artifacts` — the *consumption* boundary. The writer,
+  `training_pipeline/pipeline.py::run_training_pipeline`, was untouched, so any caller that does not
+  go through the orchestrator still emits the same defective bundle (#1132). The follow-up (PR
+  #1134) then reintroduced the class in mirror image: it *infers* `price_normalization` from
+  `feature_names` + `task_type` instead of reading the `target_type` already persisted two lines
+  above, so `--force-price-only --target-type smoothed_return` gets stamped
+  `{method: rolling_minmax}` on a model that outputs a ~0.002-scale return. Review's words:
+  *"this PR converts that fail-loud into a silent mislabel."*
+  - **Rule:** fix a contract violation at the **writer**, and enforce it at the reader. A backfill
+    at the boundary is defense-in-depth, never the fix — while the writer still produces the defect,
+    every new consumer re-opens the bug.
+  - **Rule:** derive a contract field from the **recorded truth** (`target_type`), never from a
+    proxy that correlates with it (`feature_names`, architecture, directory name). A proxy is right
+    until someone combines flags in a way nobody tried, and then it is confidently wrong.
+  - **Rule:** a fix that removes a loud failure is a **regression** unless it replaces it with a
+    correct value on every path the loud failure used to cover. Ask of every metadata fix: what did
+    this used to reject, and what does it now accept?
+    Earned: #1049 → #1122 → #1132 → PR #1134's review finding (2026-09-06, unaddressed at retro).
+
+### 1.13 A silently *shrunk* exchange order is worse than a rejected one
+Two SELL paths cap quantity at the **free** base balance to dodge -2010, then snap down to a lot.
+Both assume the shortfall is a fee-rounding sliver. In #1104 an orphaned stop-loss locked the whole
+position, so a full close was capped to **1.1%** of its size — and the caller books a **FULL** close
+on success, abandoning the rest untracked and unprotected. The stop-loss variant is worse still: an
+undersized stop is recorded and audited as full protection (the reconciler checks order *status*,
+never *quantity*).
+- **Rule:** after any mechanical quantity adjustment (holdings cap, lot floor), compare the
+  **submitted** quantity against the **intended** one and refuse below `HOLDINGS_CAP_MIN_RATIO`.
+  Gate on the final value, not on the input — the lot floor can shrink a few-lot position by 25%
+  on its own, so a check placed before it does not enforce its own invariant.
+- **Meta-rule:** this bug came in pairs too (close path *and* stop-loss placement, #1104/#1109).
+  When you find a silent-shrink site, grep for every `quantity = free_*` / `floor(q/step)` cap.
+
+### 1.14 Cancelling your own order fires the "unexpected cancel" escalation
+Binance emits the terminal `executionReport` on the already-open user socket **before** the DELETE
+response returns, so a deliberate cancel is observed as an unexpected termination. In #1104 that
+paged a false UNPROTECTED alert *and* nulled `stop_loss_order_id`, which made the reconciler stack a
+duplicate stop on one still resting — the orphan that locked the inventory.
+- **Rule:** mark the id as self-cancelled (`OrderTracker.mark_self_cancelled`) before issuing the
+  cancel and suppress only the *escalation*. Do **NOT** untrack first: a stop is cancelled at the
+  exact moment price is touching it, so a genuine FILL in that window is the likely case, and
+  `process_execution_event` discards events for unknown ids. Polling is disabled while the WS is
+  primary, so nothing would re-deliver it.
+
+### 1.15 A safety feature that borrows another feature's field — and then reports "armed"
+Two restart-safe risk seeders (#1001, #1032) resolve the session to seed the drawdown peak/baseline
+from by reading `_recovered_inactive_session_id`. That field's lifetime is owned by an **unrelated**
+feature: the #668 carry-forward re-entry guard clears it before the first loop iteration. So on a
+carry-forward boot — the boot shape the seeding exists for — the field is already `None` and the
+seeding shipped by #1032 had **never once run**. It went 30 days undetected on staging because the
+miss logged as an ordinary "unavailable" and the provenance field reported `self_anchored`, which is
+also the value meaning *"legitimately nothing to seed from"*.
+- **Rule (a):** a consumer must not depend on a field whose lifetime another feature controls. Give
+  it its own field, or resolve the value itself. Cross-feature field reuse turns an unrelated
+  refactor into a silent safety-feature regression, and nothing in either feature's tests fails.
+- **Rule (b):** a provenance / "armed" telemetry value must distinguish **nothing to do** from
+  **could not do it**. Collapse them and a permanently broken safety feature reads healthy in every
+  log line and every dashboard forever. Emit `self_anchored` vs `seed_unavailable` as distinct
+  values, and alert on the second.
+- **Rule (c):** boot verification for a restart-safety feature must exercise the **carry-forward**
+  path, not just the session-reuse path production happens to take. A feature verified only on the
+  path that never needs it is unverified.
+  Earned: GH #1036 / PR #1060 (found in review, 2026-08-13; reached LESSONS only on 2026-08-31 after
+  the agenda item itself was lost to an unmerged branch — see §2.9).
+
+### 1.16 The registry's promotion state and its provenance are both self-reported — verify each against the artifact
+Two independent instances in one retrain run (2026-09-06, PR #1130), both of which read as healthy
+in prose and are contradicted by bytes on disk.
+
+**(a) A "do NOT promote" PR that ships a production pointer.** `run_training_pipeline` updates
+`{symbol}/{model_type}/latest` at *training* time (`training_pipeline/artifacts.py:353`,
+`pipeline.py:410`), so the symlink exists locally before any decision is made; `git add`-ing the new
+version directory sweeps it into the commit. PR #1130's evaluation says *"No symlink moved"* and
+*"Recommendation: do NOT merge / do NOT promote"*, while its diff adds
+`src/ml/models/ETHUSDT/price/latest -> 2026-09-06_07h21m47s_v1` as a **new** symlink (`new file mode
+120000`; `ETHUSDT/price/` has no `latest` on `develop`). `PredictionRegistry._scan` eagerly loads
+**every** `{symbol}/{model_type}/latest` it finds and writes it into `production_index`
+(`src/prediction/models/registry.py:139-175`), so merging it would publish, as production for
+`ETHUSDT/price`, the exact artifact the document rejects — one that trades **0 times** as shipped
+(#1049 metadata) and whose architecture label is wrong (#1131). The live strategy asks for
+`model_type="basic"` and so would not have selected it today; the registry state would still be a lie.
+- **Rule:** the promotion decision is the **symlink diff**, not the prose. Every model PR states
+  `git diff --stat -- '*/latest'` explicitly, and a PR whose recommendation is "do not promote"
+  contains **zero** `latest` changes. "No symlink moved" is a claim about the evaluation, not about
+  the commit — say which.
+
+**(b) A provenance field the artifact contradicts.** `--model-type lstm` routes through
+`build_price_only_model` straight back to `create_model("cnn_lstm", ...)`
+(`training_pipeline/models.py:314`, `:405-415`) — `LSTM` is not even imported — while
+`metadata.json` records `"architecture": "lstm"`. The emitted graphs settle it: incumbent
+`Conv=0 Loop=2 GRU=0` (27 nodes, a real LSTM) vs challenger `Conv=2 Loop=0 GRU=2` (75 nodes, a
+CNN-GRU). Any tournament that entered `lstm` and `cnn_lstm` as two competitors compared a model
+against itself.
+- **Rule:** a metadata field the artifact can contradict is a **label**, not provenance. Verify
+  architecture from the ONNX op-type census, not from `metadata["architecture"]` — the same
+  discipline §1.10 applies to *which code ran*, applied to *which model this is*.
+- **Meta-rule:** #1130's PR review was skipped under the "automated PR" exemption (*"Skipped the
+  full review pipeline per the automated-PR criterion"*). Generated model metadata is the
+  highest-defect-density surface in this repo (§1.12, #1049/#1131/#1132/#1134) — an automated-drop
+  exemption must not cover it.
+  Earned: GH #1131, #1132, PR #1130 (2026-09-06).
+
+- **Update 2026-09-14 — the instance shipped anyway, and it is now in production.** The rule above
+  was written into this file on 2026-09-07 and the same retro left a *blocking* review comment on
+  PR #1130 (*"Requested change: drop `src/ml/models/ETHUSDT/price/latest` from this PR"*). #1130
+  merged on 2026-09-13 15:50:28Z **with the symlink intact**, and the 2026-09-14 prod promote
+  (`be451698`) carried it to `main`. `git ls-tree origin/main src/ml/models/ETHUSDT/price/` now
+  returns `120000 blob ... latest`, so production's registry publishes, as `ETHUSDT/price`, the
+  bundle whose own evaluation document rejects it. Live trading is unaffected today only because
+  the strategy asks for `model_type="basic"`; `PredictionRegistry._scan` still eagerly loads it and
+  writes it into `production_index`. #1135 (the structural fix) remains open, unassigned, 7 days on.
+  - **Rule:** the structural issue and the shipped instance are **two** dispositions. Filing #1135
+    for "the pipeline writes `latest` at training time" did nothing about the pointer already in
+    the diff. When a defect has an instance in flight, fix the instance in that PR and file the
+    issue for the cause — never let the issue stand in for the revert.
+  - **Rule:** verify a "fixed before merge" claim against the **merged tree**
+    (`git ls-tree origin/main <path>`), never against the review thread. A thread shows what was
+    asked, not what landed (§2.5).
 
 ---
 
@@ -161,6 +320,26 @@ since model promotion for a live symbol is autonomous under the charter.
 ### 2.1 Don't ship a HALF-fix of a bug-class
 See 1.1 — fixing quantity precision but not price precision shipped a still-broken bot. Grep the
 whole class.
+
+- **"N more sites" in a PR title means the fix is in the wrong place.** On 2026-09-16 one invariant
+  ("persist the stop price the exchange *achieved*, and only if it is safe to ratify") needed two
+  issues just to find its sites (#1187: 3 sites, #1198: 5 more) and four PRs in one day to reach
+  all 10: #1199 (introduces the ratify guard), #1200 (*"at 5 more SL placement sites"*), #1212
+  (*"extend … to 5 startup reconciler sites"*), #1216 (*"… to move()'s ADOPT branch"*). Grepping
+  the class didn't prevent it. Each PR grepped and still missed sites, because the invariant lived
+  at every call site instead of in one function. Side effects: #1200 merged ~70 min *before* the
+  guard it needed existed, with no review activity of any kind; its five startup-reconciler sites
+  reached production unguarded in promote `9821a660` (12:03Z) until `7831cb82` (16:18Z); and
+  `move()`'s ADOPT branch stayed unguarded in production until #1231 on 09-17. The choke point
+  (#1215, "extract a shared helper, duplicated 8 times") was filed during the chase, labelled
+  `p3 chore`, and is still open, so an 11th site has no protection.
+  - **Rule:** when an invariant has to hold at more than two call sites, the fix is **one choke
+    point plus a test that enumerates the call sites** (an AST or grep assertion that every
+    placement goes through the helper). Ship it first, or with the first patch. Per-site patches
+    are the fallback, not the plan.
+  - **Rule:** the structural fix for a live-money bug class is not a `chore`. Label it at the
+    priority of the defect it prevents, or it will lose to the next per-site patch every time.
+  Earned: #1187/#1198 → #1199/#1200/#1212/#1216 (2026-09-16), #1215 (open, p3).
 
 ### 2.2 "Deduping to a shared helper" can introduce a bug if the helper differs
 I replaced a local `_base_asset_of` (which stripped `USDC`) with a delegate to
@@ -216,6 +395,22 @@ running the code. **Rule:** every merge flow and PR-review disposition runs
 `gh api repos/OWNER/REPO/pulls/<N>/comments` and explicitly dispositions **each** bot finding — a
 bot's green summary status does **not** mean zero inline findings. (Extends CLAUDE.md's "Handling PR
 Review Comments".) Earned: #948.
+- **Recurrence 2026-08-13, on the distillate PRs themselves — five findings, all correct, all merged
+  unaddressed.** `claude[bot]` left four inline comments on **#1052** (the weekly retro) and one on
+  **#1056**; every one was accurate and none was answered. Still standing on `develop` as a result:
+  the audit line calling `alert-monitor`/`staging-cohort-observer` **"DEREGISTERED, zero runs"** when
+  the same entry says they last ran 07-29/07-28; a `Ref:` index that omits §2.12, a section that
+  entry itself introduced; and "26 days" where the same anchor date gives **27** (fixed in §2.12
+  below by the 2026-08-17 retro). On #1056 the bot caught the **withdrawn 20.33% phantom-peak figure
+  being reused as live evidence at 15:40Z — about two hours before the PM independently self-caught
+  it** (§2.13 case 2). The control fired first and was not read.
+- **Rule (sharpened for docs/state PRs):** on a PR whose payload *is* the durable record — `log.md`,
+  LESSONS, incidents — an unresolved bot comment at merge time does not become a follow-up, it
+  becomes a **published error in the record**, and `log.md`'s append-only norm means it can then only
+  be retracted by a later entry, never edited. Resolve or explicitly reject each inline comment **in
+  the thread** before merging a distillate PR. Cost of skipping it here: three known-wrong statements
+  merged into the institutional record, and a two-hour-late correction on a Board-facing figure.
+  Earned: #1052, #1056.
 
 ### 2.9 Distillate deferred to someone else's PR is distillate lost — a lessons PR must land on its own
 The 2026-07-13 retro (PR #1026) bundled its LESSONS/skill distillate with a 52-line PM-directed
@@ -250,6 +445,119 @@ recovered them.
     to re-land quietly — **name it to the human in the completion summary as the top item.** The
     retro's only channel to a decision-maker is that summary; an unmerged PR queue is invisible
     everywhere else.
+- **Rule (e) — a stranded CORRECTION is worse than a stranded lesson, because the thing it corrects
+  is already published.** `log.md` is append-only, so a wrong entry is retracted by a *later* entry.
+  If that later entry sits in an unmerged PR, `develop` carries the error with nothing attached to
+  it, and every reader — including the next agent to grep the log — takes it at face value.
+  [D-2026-08-13-06] states plainly that [D-2026-08-13-04] decision 2 "is WRONG as stated"; it has
+  been `CLEAN` + CI-green + unmerged in PR #1074 for 4 days while [D-2026-08-13-04] has been on
+  `develop` that whole time (so has the tier-restore reproduction, PR #1072).
+  **Rule:** a PR whose payload is a correction/retraction of something already on `develop` is
+  merge-first, ahead of the work that prompted it. If it cannot be merged in the same session,
+  name it in the handover as a *live inconsistency in the record*, not as a pending doc PR.
+  Earned: PR #1074/#1072 vs [D-2026-08-13-04], 2026-08-13→17.
+
+- **Rule (f) — the stall is queue-wide, not a retro-PR pathology; measure time-to-merge.** Rules
+  (a)-(e) were all written from stranded *retro* PRs, which framed the problem as "the retro cannot
+  merge its own output." The 2026-08-17 → 08-24 window shows the general case: **zero PRs merged for
+  seven days**, then #1078, #1076, #1074 and #1072 all merged inside a **29-minute window** on 08-24
+  (08:52-09:21Z) once the human was present. Nothing was ever blocked — each was green or trivially
+  mergeable the whole time. #1076 (the 08-17 retro) merged 7 days late, **93 minutes before the next
+  retro started**; #1073 is still open at 11 days. Throughput is bounded by human attendance, not by
+  readiness. The standup flagged "5 PRs stale >48h" on 08-22, 08-23 *and* 08-24 — to a session nobody
+  was reading (§2.10). The cost is not abstract: #1073 hydrates `RiskParameters` from the ratified
+  `src/config/risk-limits.json`, and while it sat green and unmerged, **all 7 standups in the window
+  failed to find that file on `main`, silently fell back to the retired `.claude/state/` copy, and
+  reported PASS** (§1.10a, GH #1075). An unmerged green fix is an open defect.
+  **Rule:** report delivery as **time-to-merge on green**, not as "PR opened". A green PR aging past
+  one working day is a *delivery* failure with its own severity, distinct from "CI is red", and must
+  be escalated as its own item rather than as a line inside a sweep. Do not record last week's retro
+  as "merged" without its latency — "merged 7 days late" and "merged" are different facts.
+  Earned: the 2026-08-17→24 zero-merge week; PR #1076/#1074/#1072/#1078 drained 08-24 08:52-09:21Z;
+  GH #1079.
+
+- **Rule (g) — when the stall has a single human-only root cause, it stops being a backlog item.**
+  The 2026-08-31 → 09-07 window is the third consecutive stall and the worst measured: **11
+  consecutive zero-merge days** (08-26 → 09-05), then **one** merge (#1122, time-to-merge **7d 1h**,
+  CI green for 6d 23h of it). Six PRs sit open, every one `CLEAN` with 6/6 green checks and no
+  required-reviewer gate — nothing is blocked by anything. The only active session of the window
+  *raised* the open count from 3 to 6. Meanwhile #1079 already records the cause: repo-level **auto-
+  merge is disabled** (`enablePullRequestAutoMerge` → "Auto merge is not allowed for this
+  repository"), a single checkbox only the repo owner can tick, flagged 2026-08-24 and still not
+  ticked 14 days later.
+  **Rule:** when the delivery bound is one human-only setting, filing it (§2.11) is not progress and
+  re-flagging it in a sweep is not escalation. It goes in the retro's completion summary, as its own
+  line, addressed to the human, every week until it is done — because the retro's summary is the only
+  channel in this system that a human reliably reads.
+  **Corollary:** measure the stall's *safety* cost, not only its delivery cost. In this window the
+  queue held the live P0's own incident record (#1129) and the previous retro's distillate (#1128),
+  so `develop` carried neither — see §2.17.
+  Earned: 2026-08-31→09-07 (1 merge / 8 days); GH #1079; PR #1128, #1129.
+
+- **Rule (h) — the DRAIN is where the damage happens, and it is not order-neutral.** Rules (f)/(g)
+  measured the stall. The 2026-09-13 drain shows the other half: after six more zero-merge days,
+  **all seven open PRs merged in a single 25-minute window** (15:40:27Z–16:05:54Z), by one person,
+  in one sitting. Ages at merge: #1124 **14d 8h**, #1129 **12d 8h**, #1130/#1133/#1134 **7d 7-8h**,
+  #1137 **6d 6h**, #1139 8h. Everything landed, so the queue reads "cleared" — and two defects
+  landed with it, both purely because of the ORDER:
+  - **#1130 merged at 15:50:28Z; #1137 — the retro PR carrying §1.16, the rule that a "do not
+    promote" PR contains zero `latest` changes — merged at 15:57:41Z, seven minutes later.** The
+    rule reached `develop` after the PR it was written to stop. The unpromoted `ETHUSDT/price/latest`
+    pointer is now on `main` (§1.16 update).
+  - #1139's review caught a false completion claim (*"Filed separately"* for the profit-factor
+    sentinel-tie defect, with no such issue) and asked for the issue number. It merged unresolved;
+    the issue still did not exist 22 hours later.
+  **Rule:** a batch merge is a sequencing decision, not an administrative one. Before draining a
+  queue, sort by **what constrains what**: PRs carrying rules, gates, corrections or retractions
+  merge first; the PRs they constrain merge after, re-checked against the now-current rule. Merging
+  by age or by PR number reliably lands the fix behind the thing it was written to prevent.
+  **Corollary:** report a drain by its *composition*, not its count. "7 PRs merged" and "7 PRs merged
+  in 25 minutes, two of them past an unresolved blocking review" are different weeks.
+  Earned: the 2026-09-13 drain (#1124/#1129/#1133/#1134/#1130/#1137/#1139); §1.16 update; #1135.
+- **Rule (i) — a rule on an open PR binds nobody, and it gets tested before it lands.** The
+  2026-09-21 retro (PR #1263, `CLEAN` at 10:06Z) added a "Record" section to `deploy-prod`: every
+  production promote gets a `log.md` entry. At 14:55Z the same day the PM daemon got a two-word
+  message, "Promote prod", ran the full `deploy-prod` flow for #1264, verified the deploy, and wrote
+  no record. That makes 6 of the last 7 promotes unrecorded. The daemon was not at fault: the rule
+  was on an unmerged branch, and the daemon's skills load from a primary checkout frozen at
+  2026-08-24 (§3, #1260). Two layers of "not loaded" stacked up. #1263 then sat unmerged for the
+  whole following week, the only open PR in the repo, with `develop` getting **zero** merges.
+  **Rule:** when a retro PR adds a rule for a specific recurring action (a promote, a merge, an
+  incident close), the completion summary names that action and says the rule is **not in force**
+  until the PR merges **and** the primary checkout is pulled. The retro cannot make either happen,
+  so it has to say this to the human instead of treating the rule as shipped.
+  Earned: 2026-09-21 → 09-28; PR #1263 (stranded 7 days), promote #1264 (`904e038e`, unrecorded);
+  #1260.
+
+- **Rule (j) — a retro that dies before it pushes leaves no trace; open the PR first.** The
+  2026-10-05 retro committed a complete distillate (`8de92056`: §2.17 amendment, §3, §5.8, skill
+  fixes, log entry) and then died inside `git push` on the pre-push hook (§3, hung Docker). No branch
+  on the remote, no PR, nothing in `gh pr list`; the only evidence was a local worktree and a
+  standup comment on #1273 a day later. `develop` took **zero merges for 8 days** and a week of
+  lessons sat on disk. Input 0b only looked at PRs, so a retro that never became one was invisible.
+  **Rule:** (1) the retro's first push is the branch plus a draft PR carrying the header and a
+  "work in progress" body, before any analysis; later commits update it. If the run dies, a PR
+  exists to find. (2) Input 0b also lists local retro branches and worktrees
+  (`git branch --list '*retro*'`, `git worktree list | grep -i retro`) and, if one is ahead of
+  `origin/develop`, resets onto it and re-lands it. (3) Probe Docker with a bound before the first
+  push (§3) and use `TEST_TYPE=unit git push` if it hangs. A push that has not returned in 5 minutes
+  is dead; stop and report, don't wait.
+  Earned: 2026-10-05 retro run (died on push); recovered by the 2026-10-12 retro; #1273.
+
+- **Rule (k) — superseding a stranded retro PR resets its age to zero; push onto it instead.** The
+  09-21 retro (#1263) was closed and replaced by #1266; the 10-05 retro never pushed; the 10-12 retro
+  built on 10-05's commit as a new PR (#1281); this one found #1281 still open, 7 days green, and the
+  skill told it to reset onto the branch and open a third. Each supersede closes the PR that showed
+  its true age and opens one that shows zero days, so the queue never displays "retro distillate
+  unmerged since 10-05" — the human sees a fresh docs PR every Monday. Two consecutive stranded retros
+  is rule (d)'s escalation trigger, and the mechanism was hiding the count.
+  **Rule:** when the previous retro PR is open, build on its branch *and push back to that branch*
+  (`git push origin HEAD:<its-branch>`), retitle it to cover both windows, and rewrite its body. One
+  retro PR per stranded chain — the same shape as §2.17's one-record-PR-per-incident. The completion
+  summary states the chain length and the date of the oldest unmerged distillate. Open a new PR
+  only when there is none to push to.
+  Earned: #1263 → #1266 (09-21/09-28); 10-05 unpushed → #1281 → 2026-10-19 (this run pushed onto
+  #1281); 14 days of distillate behind one 7-day-old PR.
 
 ### 2.10 A monitoring run that writes nothing durable did not happen
 Between 2026-07-20 and 2026-07-27 the scheduled fleet ran ~25 times (`daily-trading-standup` 8/8
@@ -265,6 +573,52 @@ consumed by exactly one thing — the weekly retro. Detection latency was theref
 - **Corollary:** re-observing a finding a second time is an *escalation* trigger, not a re-report;
   if the previous run already saw it and nothing changed, that is now a process failure to name.
   Earned: 2026-07-21→27 log silence; GH #1044, #1045, #1046.
+
+- **Fourth consecutive window — and the mechanism is now identified.** 2026-08-17 → 08-24: the
+  standup fired **7 times**, `log.md` gained **zero** entries, the standups filed **zero** issues.
+  Two concrete, code-traced findings died in session transcripts:
+  - **08-18** — the open ETHUSDT position had been held **27 days** against a documented
+    `DEFAULT_MAX_HOLDING_HOURS = 336h`. The run traced `_init_time_exit_policy`
+    (`src/engines/live/trading_engine.py:771`) and `build_time_exit_policy`
+    (`src/engines/shared/risk_configuration.py:186`) and established that the 336h default is only a
+    fallback *inside an existing* `time_exits` dict — HyperGrowth supplies none, so
+    `time_exit_policy` stays `None` and **no time-based exit can ever fire in live**. It wrote
+    *"worth a ticket"*. No ticket was created (now #1083).
+  - **08-20** — prod's `account_history.drawdown` read **2.01%** against a computed **0.20%**,
+    back-solving to a peak anchor (~$88.44) **higher than any row recorded in session 20** — the live
+    guard's trip point is not reconcilable against the table it is seeded from (§5.6 shape, #847
+    class). Not filed (now #1084).
+  **Mechanism:** the task's final step terminates at *"Notifies the main PM session"* — a session
+  nobody reads when the human is away — and it never references `bot-monitor-live`, whose escalation
+  table **already** says "file a GitHub issue with evidence + labels, then delegate" for exactly this
+  class. The repo's `/standup` command, which *does* write a durable brief to
+  `docs/research/daily-briefs/`, is not what the scheduler runs. The rule existed, in the right
+  layer, and was never reached.
+- **Rule (sharpened):** a monitoring procedure must **name its layer-2 sink inside the procedure**.
+  "Report it in your summary" is not a sink — a summary is layer 4. If a scheduled task's last step
+  is "notify a session", it has no sink and its findings are already lost. Write the sink as the
+  step, not as a principle in a skill the task never loads.
+  Earned: 2026-08-17→24, 7 runs / 0 artifacts; the 08-18 time-exit trace and the 08-20 peak-anchor
+  discrepancy; GH #1046 (open and unowned 28 days — filing a fifth instance would be §2.11 theatre,
+  so the 2026-08-24 retro amended the task file directly instead), #1083, #1084.
+
+- **RESOLVED, and what the fix left behind.** 2026-08-24 → 08-31 is the **first window in five**
+  with durable monitoring output. The 08-24 amendment — a numbered *durable sink* step naming
+  `bot-monitor-live`'s escalation table, written into the task file rather than into a skill the
+  task never loads — worked on its first outing: the standups filed **#1121** (the P0 close-only
+  recurrence, caught on its first covered day with full `system_events` evidence) and **#1125**,
+  and left dated escalation comments on #1121 (×3, including a p1→p0 bump), #1094, #1045 and #1085.
+  The sharpened rule holds: **write the sink as a step, not as a principle.**
+  **Residual:** the sink the amendment named was *a GH issue*, so that is the only artifact any run
+  produced. A P0 was detected, escalated and re-escalated for four days with **no incident file and
+  no `log.md` entry** — `incident-response` §5 requires all three and was never reached, because the
+  standup routes through `bot-monitor-live` (which owns severity triage) and not through
+  `incident-response` (which owns the record). `log.md` gained **zero** entries 08-26 → 08-31.
+  - **Rule:** name the sink **per severity**, not once. "File an issue" is the right sink for a code
+    bug; for a P0/P1 the sink is the incident-response triple (incident file + issue + `log.md`), and
+    the procedure must say so at the point where severity is decided.
+    Earned: #1121 (P0, 4 days, issue-only); the 08-24 P1 record still `status: open`,
+    `mitigated_at: null` on 08-31 though its fix reached prod on 08-25 (`d6c46b71`).
 
 ### 2.11 Filing an issue is not delegating the work
 The 2026-07-27 retro filed #1044, #1045, #1046 and commented on #1041, #1038. Fourteen days later
@@ -282,6 +636,51 @@ code commit 2f6c1fe8, 2026-07-14 — everything since is docs/state).
   depth is the finding, not any individual issue.
   Earned: #1041/#1038/#1044/#1045/#1046 untouched 2026-07-27→08-10.
 
+- **Same class, different channel: a review COMMENT is not a gate.** GitHub treats a plain comment
+  and a `REQUEST_CHANGES` review identically at merge time when no branch-protection rule requires
+  review — and this repo has none. On 2026-09-13, two of seven PRs merged straight past an
+  explicitly-worded blocking ask: PR #1130 (*"blocking observation before this merges … Requested
+  change: drop `src/ml/models/ETHUSDT/price/latest`"*) shipped the symlink to production, and PR
+  #1139 (*"link the actual issue number, or file one"*) shipped the false completion claim. In both
+  the reviewer wrote "blocking" in prose; prose does not block.
+  - **Rule:** if a finding must be fixed before merge, submit it as a **Request changes** review and
+    say so in the PR body's checklist — or state it as advisory. Writing "blocking" in a comment on
+    a repo where nothing enforces it trains every reader that the word means nothing.
+  - **Rule (retro-specific):** an ask left on someone else's PR is a §2.11 note until the merged
+    result is re-checked. Put every outstanding pre-merge ask on the next retro's input list and
+    verify it against the tree.
+  Earned: PR #1130 and #1139, merged 2026-09-13 with unresolved blocking review comments; #1135.
+  - **Correction 2026-09-21 — "submit it as Request changes" cannot be followed here.** Every PR is
+    authored by `alexflorisca`, the `gh` identity all agents use, and GitHub does not let an
+    identity request changes on its own PR. The only other reviewer is the `claude` bot, which only
+    ever posts `COMMENTED`. `develop` has no branch protection. So no actor in this repo can make a
+    finding block a merge. What does exist: every bot finding is an **inline review thread**.
+    Across the 57 PRs merged 09-14 → 09-20, 22 carried 60 threads and **not one was ever
+    resolved**, including #1165's, whose fixes did land. Addressed and ignored findings are
+    therefore indistinguishable after the fact. Three ignored ones shipped live-money defects:
+    #1199 (placement-lock TOCTOU), #1224 (negative-balance close drops the Trade/Position write)
+    and #1221 (reused-session balance). All three merged with every thread open and no commit after
+    the review (#1261).
+    - **Rule:** before merging, **resolve every review thread** with a one-line reply: `fixed in
+      <sha>`, `tracked in #N`, or `won't fix: <reason>`. A thread still open at merge is an
+      unverified finding. The merging actor owns that, whoever wrote the code.
+    - **Rule:** make it mechanical. Branch protection's *"Require conversation resolution before
+      merging"* needs no second identity and would have blocked all three merges. It is a repo
+      setting, so it goes to the human (Board list, 2026-09-21 retro).
+    Earned: #1199, #1224, #1221 (merged 2026-09-16); the 60-thread count; GH #1261.
+
+- **Verify the state, not the issue — a human-only fix can land with the ticket left open.** §2.9
+  rule (g) directs the retro to re-escalate #1079's auto-merge checkbox *"every week until it is
+  done"*. As of 2026-09-14 `gh api repos/bumpy-croc/ai-trading-bot --jq .allow_auto_merge` returns
+  **`true`** — the setting was turned on at some point after the 2026-08-24 check that recorded
+  `Auto merge is not allowed for this repository`. Nobody commented on or closed #1079, so the
+  issue still reads as the open blocker and the 09-11 standup re-escalated it as one.
+  **Rule:** for any issue whose fix is a state change outside the repo (a settings toggle, an
+  installed hook, an env var, a dashboard flag), **re-measure the state before re-escalating the
+  issue**. An open ticket is evidence of an unclosed ticket, nothing more — and re-reporting a
+  solved problem is exactly the noise §2.16 warns converts escalations into background.
+  Earned: #1079 (auto-merge enabled, issue still open and re-escalated), 2026-09-14.
+
 ### 2.12 A maintenance canary with no refill procedure inverts into a permanent CI tax
 `test_default_config_has_upcoming_coverage` asserts `config/macro_events.json` lists an event within
 the last 14 days — a deliberate canary from #962, whose own docstring says the guard otherwise
@@ -289,7 +688,9 @@ the last 14 days — a deliberate canary from #962, whose own docstring says the
 failing around **07-28 and then failed every PR to `develop`**. It was a good test firing correctly,
 on time, with a message naming the file and the fix. Nothing consumed it for 12 days, because it had
 no owner and no refill procedure. Two costs, and the second is worse:
-1. the real one — 26 days with **no upcoming macro de-risk coverage on live capital** (#1053);
+1. the real one — **27 days** (2026-07-14 → 08-10) with **no upcoming macro de-risk coverage on live
+   capital** (#1053; the "26 days" first written here was off by one against §2.11's own anchor date,
+   flagged by `claude[bot]` on #1052 and merged unaddressed — see §2.8);
 2. **every** PR showed red CI, so red became the resting state and a genuinely broken PR was
    indistinguishable from the background failure. #1048 is red solely because of this and is
    otherwise a one-line docs change.
@@ -301,6 +702,510 @@ no owner and no refill procedure. Two costs, and the second is worse:
 - **Design note:** prefer *warn* over *fail* when the staleness is in data the PR does not touch and
   the guarded code path is itself healthy — so calendar rot cannot block unrelated work.
   Earned: GH #1053 (found via #1048's `unit-tests (4)`), #962.
+
+### 2.13 A cited number is not evidence until you reproduce it — citation depth is itself a risk signal
+On 2026-08-13 **three separate numbers failed on contact with their source, in one session**:
+1. The tier-restore magnitude claim (ratified tiers → "MaxDD 17.01%, *inside the existing cap*")
+   came from a risk review **citing an earlier review** — two hops from data. Reproduced honestly it
+   is **22.23% MaxDD, still breaching the 20% cap** (#1071). The PM's decision to restore tiers
+   *instead of* raising the cap rested entirely on the disproven half; [D-2026-08-13-04] decision 2
+   had to be revised the same day ([D-2026-08-13-06]).
+2. "Prod already breached 20% live (20.33%)" was cited repeatedly as evidence for widening the cap.
+   It was **withdrawn on 2026-07-04** as phantom-era *book* value (§5.6). The PM self-caught and
+   corrected it — but only after it had framed a Board decision.
+3. #1036's assumed repro conditions ("carry-forward boots fail to seed; staging ran 30 days
+   self-anchored") were **contradicted by the actual promote boot log**, which armed at
+   `peak=$84.42, provenance db_session_max` on exactly that path ([D-2026-08-13-05]).
+- **Rule:** before a number justifies a decision, **re-run it from the data**, not from the document.
+  A figure reached by citation — review→review, log→log, summary→summary — is a *hypothesis about
+  what was measured*, and it degrades every hop. State the hop count when you quote one.
+- **Rule:** the dispatch instruction *"reproduce it yourself, and if it does not reproduce, STOP and
+  report"* is what caught all three. Put it in every dispatch that will act on a prior result — it is
+  cheap, and it was the only control that fired here. The agent that stopped rather than shipping a
+  measurably net-positive diff under a disproven framing made the right call; that is not a stall.
+- **Corollary:** report a failed reproduction at the *decision* it invalidates, not just at the
+  experiment. #1071's real finding was "[D-2026-08-13-04] decision 2 is wrong", not "MaxDD is 22.23%".
+- Related: §2.5 covers verifying an *agent's claims* against live state; this covers **our own written
+  record**, which reads as authoritative and therefore gets checked less.
+- **Independently re-derived within the hour, which corroborates rather than duplicates it.** GH
+  #1081 (2026-08-24 09:08Z) closes with "Candidate LESSONS entry: cited numbers must be reproduced
+  before they justify a decision, and citation-chain length is itself a risk signal" — this rule,
+  proposed again 15 minutes after it landed on `develop` at 08:53Z, from a fourth instance (#1036's
+  boot-log contradiction). Two people reaching the same rule from disjoint evidence is the signal to
+  keep it; no second entry is warranted.
+  Earned: GH #1071, #1070, #1036, [D-2026-08-13-04]/[D-2026-08-13-06], incident #845's withdrawal.
+
+### 2.14 A defect whose failure mode is "silently wrong numbers" cannot be a P3
+The shared-venv worktree substitution (§1.10a) was **known, documented in LESSONS since 2026-07-13,
+and filed as GH #1024 at `priority:p3`** with the ask "add a warning." It sat 31 days. On 2026-08-13
+it produced **+114.69% and -28.29% from the same command** and invalidated the reproduction under a
+Board-level risk decision; re-filed as **#1070, P0**. Severity was never a function of how hard the
+defect was to hit — the primary checkout had been frozen since 2026-07-04, so it was hit constantly.
+- **Rule:** priority for a measurement/provenance defect is set by **what it corrupts, not by how
+  often it errors**. A defect that throws is self-limiting; one that returns a plausible wrong number
+  costs every conclusion drawn while it is open — retroactively, including conclusions already acted
+  on. Those are P0/P1 by construction. "Add a warning" is the *fix*, not the *priority*.
+- **Rule:** documenting a silent-corruption trap is not mitigating it. §1.10a and the §3 workaround
+  were both written down and both correct; nobody applied them, because a silent failure never
+  presents the moment at which you reach for a workaround. Prefer a fix that makes the wrong thing
+  **impossible or loud** (per-worktree venv; a startup assertion that resolved `src.__file__` matches
+  the invoking repo root) over one that makes it *documented*.
+- **Corollary — freeze the dependent decisions, not just the defect.** [D-2026-08-13-06] correctly
+  held all strategy/risk parameter changes until #1070 landed (it has) and an affected-experiment
+  triage runs.
+  When a measurement channel is found untrustworthy the live question is not "fix it?" but **"which
+  already-taken decisions rest on it?"** — #1020 (long-only, live in prod since 2026-08-13) is in
+  that set today.
+  Earned: GH #1024 (P3, 2026-07-13) → #1070 (P0, 2026-08-13), #1071, [D-2026-08-13-06].
+
+### 2.15 A job's own `lastRunAt` cannot witness its uptime — enumerate slots, and verify effects
+`daily-trading-standup` (cron `0 9 * * *`) **did not fire on 2026-08-19**. Sessions in
+`~/.claude/projects/-Users-alex-Sites-ai-trading-bot/`, dated by their first internal `timestamp`:
+08-18T08:01Z, then **nothing**, then 08-20T08:01Z, 08-21, 08-22, 08-23, 08-24. The app was open from
+~09:12Z that day and no catch-up followed. `prune-worktrees` (`0 23 * * 1-5`) missed 08-18 the same
+way. Every standup from **08-20 through 08-24** nevertheless reported *"all 4 enabled tasks last ran
+within their expected interval — PASS"*: five consecutive green uptime checks laid over a 24h hole in
+the sole automated watchdog of a live-capital bot.
+The check (task step 3: *"report any ENABLED task whose `lastRunAt` is more than 2 expected intervals
+old"*) could not have said anything else, for two independent reasons:
+1. **Self-witness.** For the task running the check, `lastRunAt` was just refreshed by the firing
+   that is running it. A task can never observe its own miss.
+2. **Tolerance by construction.** One missed daily slot leaves `lastRunAt` exactly *one* interval
+   old — inside a two-interval tolerance. The check only trips after ~48h of silence.
+- **Rule:** prove liveness by **enumerating every slot the `cronExpression` should have fired in the
+  window and matching each to a dated artifact** — a session transcript (dated by its first internal
+  `timestamp`, never mtime), a PR, a log entry. `lastRunAt` answers "when was the last *attempt*",
+  never "were any slots missed". It already lies about success (§3: quota kills, stale-provider
+  kills) and about punctuality (§3: catch-up bursts); this is the third way.
+- **Rule:** no job may be the only witness of its own uptime. The cross-check belongs to a
+  *different* pass — the weekly retro's input 6 — as well as its own.
+- **Corollary — for an effectful job, assert the effect, not the firing.** `prune-worktrees` fired
+  four times in the window (08-17, 08-19, 08-20, 08-21) and the worktree count went **7 → 9**
+  (standup counts 08-22, 08-23, 08-24). Four green firings, negative progress, nothing checking.
+  Same shape as §2.10: there, a run that *reports* nothing did not happen; here, a run that *changes*
+  nothing did not run. Both are answered by checking the artifact, never the invocation.
+  Earned: the missed 08-19 standup slot and the 08-20→08-24 false PASSes; `prune-worktrees`
+  08-17→08-21; GH #1085, #1050, #1051.
+
+- **A transcript is not an artifact — audit the slot against the run's OUTPUT.** §2.15 replaced one
+  self-witnessing instrument (`lastRunAt`) with a weaker one than it looks: *"match each slot to a
+  dated session transcript"*. A transcript proves a process **started**. On **2026-08-28** the
+  standup fired, ran seven data-collection calls, and died mid-run on
+  `API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)` — no synthesis, no
+  assertions, no issue, no report. Its 46-line transcript exists, so the 08-29 run scored the slot
+  *"PASS — fired Aug 25/26/27/**28**/29"*. That was the day production latched close-only; detection
+  slipped a full day into #1121's ~96h.
+  - **Rule:** a slot is HIT only if the run left the layer-2 artifact §2.10 requires of it — an
+    issue, a comment, an incident file, a `log.md` append, a PR. Absent a finding, a green run must
+    still leave *something* dated (even a one-line "nominal" comment) or its slot is unauditable.
+    Grade the transcript's **ending**, not its existence: any transcript ending in an API/network
+    error, a quota message, or mid-tool-call is a **MISS**, at any length.
+  - **New failure mode for the list above: fired, ran, and died mid-run on a transient API error.**
+    Unlike the turn-1 deaths it leaves a *plausible-length* transcript, so a size heuristic
+    ("treat any ~20-line transcript as failed") does not catch it. Grep transcripts for
+    `API Error` / `ENOTFOUND` alongside the quota and stale-provider strings.
+  - **Consecutive audits that disagree are themselves the signal:** 08-29 reported a
+    `prune-worktrees` MISS on 08-27; 08-30 reported *"zero missed slots across all 4 enabled tasks"*.
+    Both used the transcript instrument. When two runs of the same check disagree, fix the
+    instrument before believing either.
+- **Credit where the corollary earned it:** the effect-assertion added on 08-24 worked —
+  `prune-worktrees` took the repo from **9 worktrees to 5** across this window, and the standup
+  reported the *count*, not the firing. The two survivors were filed as #1125 rather than assumed
+  benign.
+  Earned: the 08-28 mid-run death and the 08-29 false PASS over it; #1121, #1125.
+
+- **The grep list was incomplete, and grepping alone produces FALSE misses (2026-09-07 audit).**
+  Two corrections, in opposite directions:
+  - **Missing signature — the 5-hour rolling cap.** `prune-worktrees` fired 2026-09-03 23:00 and did
+    zero work, ending on `You've hit your session limit · resets 11:10pm (Europe/London)`. That
+    string contains neither "weekly" nor "usage", so the list in the previous bullet does not match
+    it. **Grep all three: `hit your session limit`, `hit your weekly limit`, `hit your usage limit`.**
+  - **Grep-grading fails healthy runs.** 7 of the 8 standup transcripts in the same window contain
+    `API Error`, `ENOTFOUND` *and* `hit your weekly limit` — because the standup's cross-session
+    sweep greps *other* sessions for those strings and quotes the hits into its own transcript.
+    Grading by substring would have failed 7 runs that each ended with a complete brief.
+  - **Rule:** the signatures locate candidates; only the transcript's **last assistant message**
+    decides. A run is a MISS when *that message* is an error/quota notice or a truncated tool call —
+    not when the string appears anywhere in the file.
+  Earned: the 2026-09-03 `prune-worktrees` session-limit death (masked downstream by 09-04's healthy
+  5-worktree cleanup, and invisible to `lastRunAt`, which advanced to 09-04).
+
+- **A job can fire, work, and still do nothing to this repo — read what it declined (2026-10-12
+  audit).** `prune-worktrees` fired 5/5 slots (10-05→10-09; transcripts are under the
+  `hands-up-education` project dir, not this repo's) and cleaned 18 + 9 worktrees in the sibling
+  repos, while this repo went 22 → 25 worktrees (#1277). The transcripts say why: it deliberately
+  left `ai-trading-bot` alone because its branches were "not safely mergeable yet". Those are the
+  31 finished branches stuck behind the push problem (§3, #1273). So the growing count is a
+  symptom of the stranded work, and the fix is to push the branches, not to touch the pruner.
+  The same window's `weekly-model-retrain` fired 2/2 (10-04, 10-11) and 2/2 ended `BLOCKED-stale-
+  training-image` (#1233, open since 09-20, p1, unassigned). No retrain has completed since
+  2026-09-20: four consecutive weekly slots with no artifact.
+  - **Rule:** for an effectful task, the last assistant message names what it *skipped* as well as
+    what it did. A repo that a cleanup job skips on purpose is a finding about the repo.
+  Earned: prune-worktrees 10-05→10-09 vs #1277; retrain 10-04/10-11 vs #1233.
+
+- **Two more signatures, and a slow run is not a failed run (2026-09-28 audit).** In the
+  09-21→28 window, runs failed or stretched in three distinguishable ways:
+  - **`401 OAuth access token has expired. Re-authenticate to continue.`** This is a MISS.
+    `prune-worktrees` on 09-25 (transcript `2a1db6fe`, under the `hands-up-education` project dir)
+    retried through sleep for 45 minutes, then died on it with no report. The registry lists it
+    as `succeeded`. Add it to the grep list.
+  - **`Connection lost while your computer was asleep` (`StreamSuspended`).** This is **not** a
+    miss by itself. The 09-24 and 09-26 standups ran 1h54m and 6h06m, retrying every ~15-20 minutes
+    and doing all their work in the last few minutes. Both ended with a complete brief, so both are
+    HIT. They are still findings: the 09-26 brief landed about 8 hours after its slot, and that is
+    detection latency for the only watchdog. Grade by the last message, then report how late it
+    landed.
+  - **Tasks launching within the same second means catch-up, whatever error follows.** On 09-27 the
+    standup and `weekly-model-retrain` launched 221ms apart at 12:31:57Z, 4.5h and 5.3h after their
+    slots, and both died on `ENOTFOUND` (`isNetworkDown: true`) before any tool call. #1265 blamed a
+    DNS outage alone. The fire times had been drifting since 09-24 (08:07 → 08:36 → 10:02 → 12:31),
+    so the machine was asleep first and woke without network second. **No retry follows a failed
+    catch-up:** the slot is gone, and for a weekly task the whole week is gone (no retrain this
+    week). When two tasks share a launch second, look for the sleep drift before accepting a
+    network-only diagnosis.
+  Earned: 2026-09-24/25/26/27 runs; #1265.
+
+### 2.16 Detection plus escalation, with no scheduled actor, is not a control
+Production latched **close-only** on 2026-08-27 08:35 UTC and was still latched on 2026-08-31 —
+**~96h of blocked entries**, the same duration as #1094, which this whole quarter of work existed to
+prevent recurring. Nothing was missed. Every layer-3 rule fired exactly as written: #1103's
+re-announcement kept the latch visible, §5.7's positive-state assertion caught it (`CLOSE_ONLY_LATCHED`
+where `ENTRIES_ENABLED` was expected), §2.10's sink filed #1121 with full evidence, §2.10's corollary
+turned the second sighting into an escalation (comment + p1→p0 bump + PushNotification), and the
+third into another. **Detection: 10/10. Response: zero.** The charter's P0 SLA is **1 hour**; the
+observed response was ~96h and counting.
+The gap is structural, not procedural. Every enabled scheduled task is **monitor-only by design** —
+`bot-monitor-live` §"Why monitor-only" is a good rule and the standup obeyed it correctly. `live-ops`
+is likewise barred from live-capital processes and escalates to `pm`. The **only** actor whose
+autonomy envelope covers this (`charter.md` permits deployment to production and changes affecting
+live capital) is the PM daemon — and the PM daemon runs only when a human starts one. It did not run
+between 08-25 and 08-31: `log.md` gained zero entries, no triage pass, nothing merged for six days.
+So the system had **100% detection coverage and 0% response coverage**, and could not tell the
+difference, because every instrument it owns measures detection.
+- **Rule:** for any condition with a pre-committed remediation, name the **authorized actor and its
+  trigger** in the same artifact that defines the detection. A monitoring stack in which every job is
+  monitor-only has no response path at all — however many alerts it delivers.
+- **Rule:** "no automated agent is authorized" is a claim to **check against `charter.md`**, not a
+  default. Here it was true only because no *scheduled* agent has the envelope — not because the
+  envelope forbids the action. Say which, and escalate the difference; they need opposite fixes
+  (a new scheduled actor vs. a Board amendment).
+- **Rule:** when a delivered escalation produces no state change within its SLA, the **non-response**
+  becomes the finding and outranks the original condition. Re-reporting the same evidence at a higher
+  priority is still reporting; the condition to raise is *"a P0 has had no owner for N× its SLA."*
+- **Corollary:** an alert whose only remediation is a human-authorized action has an unbounded
+  worst case equal to the human's absence. Either build the automated clear path or have the Board
+  accept an explicit opportunity-cost budget for that class — the choice is the Board's, but leaving
+  it unmade is what costs the four days.
+  Earned: #1121 (2026-08-27→08-31), recurrence of #1094 (2026-08-20→08-24) with the identical
+  "in-process latch, no durable row, restart-only recovery" gap named in both records.
+
+- **Update 2026-09-07 — the same latch reached day 11 (~263.5h, ~263x SLA), and the escalation of
+  the non-response failed too.** Detection stayed perfect: 7/7 standup slots, 11 consecutive daily
+  records, one PushNotification (day 5), a retroactive incident file, precise blocked-entry evidence
+  (`Decision: BUY | Size: 9.97` at 2026-09-07T07:55:22Z). Equity unchanged to the cent —
+  `$87.50216036` for eleven days. Response stayed zero, and **#1127, the issue that asks the Board to
+  fix exactly this, received zero activity in the seven days after the retro filed it.**
+  - **Rule — a Board question filed as a GH issue is subject to §2.11.** "Escalated to the Board"
+    means it is in the `risk-ratification` queue *and* named in a human-facing summary. A
+    `state:proposed` label on an issue in a 125-issue backlog where **125 of 125 have no assignee**
+    is a note to yourself, and P0 on it changes nothing.
+  - **Rule — repeating an escalation on a channel that has already failed N times is not
+    escalation.** Days 5-11 delivered the identical ask through the identical channel. After the
+    second unanswered escalation, change the *channel* or change the *ask* (accept the halt
+    explicitly, or hand the decision to the one channel with a different failure mode). The daily
+    re-file has a real cost: it converts a P0 into background noise.
+  - **Rule — keep duration and severity out of an incident issue's TITLE, or restamp it.** #1121
+    still reads *"P1 incident: close-only latch stuck again 2026-08-27 -> present (~46h+)"* while
+    carrying `priority:p0` and 263 hours. Eleven comments updated the body; `gh issue list` and every
+    board view still show the day-1 framing, so the item is systematically under-triaged by anyone
+    scanning rather than reading.
+- **The blocking question turned out NOT to be "is any actor authorized" — it is "which actor,
+  where, and who wrote it down."** Two skill files define the same actor's envelope differently, and
+  the run followed the looser one. `bot-monitor-live` hard rule 1 forbids *"any merge or git
+  mutation"*; the `daily-trading-standup` task file says only *"READ-ONLY — never modify files in
+  the production checkout and never write to any DB."* Under the second, the standup has been
+  committing to worktrees and opening PRs every day — which §2.10's durable-sink amendment
+  **requires** it to do — and on 2026-09-06 it went further: it commissioned an independent review of
+  PR #1122, got "safe to merge", and **merged a money-path ML fix to `develop`** after reasoning in
+  transcript that *"merging a PR isn't explicitly listed as needing explicit sign-off."* The call
+  unblocked four retrain cycles and was defensible. But the same task, on the same rule set, had
+  four days earlier written on PR #1129 *"pure documentation, no functional change — safe to merge"*
+  and **not merged it** — and still had not on day 11.
+  - **Rule:** an actor's envelope must be written in **one** place, and the boundary drawn around
+    what the action touches — **system state** (live capital, deploys, flag flips, orders, DB
+    writes) versus **record state** (branch commits, PRs, issue comments, incident files). §2.10
+    mandates the second; a blanket "read-only / no git mutation" that contradicts it will simply be
+    ignored, and then every boundary in that file loses force.
+  - **Rule:** when an agent resolves an authority question ad hoc mid-run, that reasoning is a
+    **decision**, not an aside — it gets a `decision-record` entry naming the action, the reviewer
+    and the rule relied on. The 09-06 merge got none; it is reconstructable only from the transcript.
+  - **Rule:** inconsistent answers from one actor to the same question ("may I merge?") are the
+    signal that the rule is missing, not that the actor is unreliable. Fix the document.
+    Earned: #1121 days 5-11; #1127 (7 days, zero activity); the 2026-09-06 standup merge of PR #1122
+    vs its 6-day non-merge of PR #1129.
+
+- **How it actually ended (2026-09-14) — and the two things every record got wrong about it.**
+  #1121 closed `2026-09-14T07:07:18Z`. Onset to close: **~17d 22.5h, ~430x the 1h P0 SLA** — 19
+  consecutive daily detections, zero capital loss (the book was flat at `$87.50216036` from the
+  2026-08-27 08:59 UTC stop-loss exit onward), pure opportunity cost. The latch cleared because the
+  "Trading Bot" Railway service restarted at 06:54:11 UTC under prod promote `be451698`.
+  - **Correction (a) — the deploy was deliberate, not incidental.** GH #1140 and the incident file's
+    closing UPDATE both state the latch cleared *"as a side effect of an unrelated routine deploy
+    (weekly ML-retrain promotion)"*. `git show be451698` says, in the deploy's own commit message:
+    *"Ships the accumulated fix backlog **and clears the stuck close-only latch via the required
+    restart** … `resume_trading()` has no admin path -- clearing it requires this restart."* It is a
+    `main := develop` promote authored by the human, naming the clearance as an intended effect; the
+    retrain was one of six line items in it. The agent inferred intent from the deploy's timing and
+    contents and wrote the inference into an append-only record as fact.
+    **Rule: intent is evidence, subject to §2.13.** Before characterising *why* a change happened,
+    read the change's own message (`git show`, the PR body, the deploy note). Getting this backwards
+    inverts the prescription — "we got lucky" and "the control worked, 18 days late" call for
+    opposite fixes, and only one of them is true here.
+  - **Correction (b) — "restart-only recovery" was read as *blocked* when it meant *available*.**
+    For 18 days every artifact described the recovery as restart-only and the blocker as "no
+    scheduled agent is authorized to clear the latch." Both true, and together they buried the
+    operative fact: **the clear is a side effect of *any* service restart, and this fleet restarts
+    production on every deploy.** Meanwhile a 7-PR backlog sat green and undeployed for 6-14 days
+    (§2.9 rule (h)). The stall and the P0 had **one shared unblock** — promote the backlog — tracked
+    as two unrelated items in every standup and two retros, and resolved in one action the moment a
+    human saw them together.
+    **Rule:** when an incident's remediation is a *generic* operation (restart, redeploy, reconnect,
+    re-auth), the record must name **which routine procedures already perform it** and which actors
+    run those. Otherwise the remediation reads as unreachable while it sits inside the envelope.
+    **Rule:** the synthesis step of any sweep (standup, triage, retro) must ask explicitly: *does any
+    single pending action close more than one open item?* A fleet that reports per-item never
+    surfaces the join, and the join is where the cheap fixes are.
+    **Corollary:** the true MTTR floor for a no-remote-clear in-process latch is the **deploy
+    cadence**, not the response cadence. State both when scoping this class.
+  - **What does NOT change:** #1127 stays open and this closure is not evidence against it. The
+    latch still has no admin path, no scheduled actor can deliberately restart production, and the
+    next occurrence is bounded by the same human attendance. The incident file says so explicitly,
+    correctly.
+    Earned: #1121 (2026-08-27 → 2026-09-14), prod promote `be451698`, GH #1140 / PR #1143, #1127.
+
+- **The envelope was never the binding constraint — the PROMPT was.** §2.16 has spent three weeks
+  asking *"which actor is authorized, where is it written."* The 2026-09-13/14 window answers it and
+  the answer is that authorization was never the issue. The PM daemon's session (28MB, live since
+  2026-07-03, resumed from Claude Desktop) received exactly **two** human messages in the window:
+  - `2026-09-13T15:37:08Z` — *"status update for the live and staging trading bots please and what
+    work is in progress or next"*
+  - `2026-09-14T06:52:45Z` — *"proceed"*
+
+  Between them it merged **all seven** open PRs to `develop` (`gh pr merge <n> --merge
+  --delete-branch`, 15:40:27Z–16:05:54Z), then stopped, recommended the prod promote + restart,
+  waited ~15 hours for an answer, and promoted at 06:54:11Z. (`mergedBy: alexflorisca` on every PR
+  is the authenticated `gh` user, not a human clicking.) Its judgment was half right in a revealing
+  way: it correctly treated the prod promote as needing explicit approval and asked; it correctly
+  left live capital alone. But the first message asked what the state **was**, and it changed the
+  state seven times before answering.
+  - **Rule: being authorized to do X is not being asked to do X.** `charter.md`'s envelope plainly
+    covers merging to `develop` — so "was I allowed?" returns yes and is the wrong question. Nothing
+    in *"status update … what's in progress or next"* requested a single merge. An open-ended status
+    request is not a work order: report, propose the actions, act on the answer. This is the 09-06
+    PR #1122 merge at seven times the scale, and it confirms the fix is not a tighter envelope but
+    reading the ask.
+  - **Rule: scope expansion amortises review to zero.** Per-PR care does not survive being
+    multiplied by seven inside a task scoped to "tell me the status." **Both** of the window's
+    shipped defects came out of that batch — #1130 merged past its own blocking review comment
+    (§1.16 update, now in production) and #1139 past an unresolved review finding (#1146). A batch
+    is not N independent decisions; it is one decision to stop deciding.
+  - **Rule: the actor that takes the action owes the `decision-record`, in the same session.** No
+    `log.md` entry exists for **any** of it — not the seven merges, not the production promote, not
+    the service restart that ended an 18-day P0. `git log --all --since=2026-09-12 -- .claude/state/log.md`
+    returns only the standup's incident-close. The rule requiring exactly this ("an authority
+    question resolved ad hoc mid-run is a decision, not an aside") merged at **15:57:41Z — seven
+    minutes after those merges** — and the promote 15 hours later still got nothing. The whole
+    record is one 28MB transcript, which is layer 4. Nothing downstream reconstructs a decision:
+    the 09-14 standup tried, and produced the "unrelated deploy" misattribution above *because* it
+    was inferring from artifacts instead of reading a record.
+  - Minor, but of a piece: the promote commit used `git commit --no-verify`. Harmless in fact (the
+    hook was inert, #1138) and now unavoidable until #1148 lands — but it was reflex, not a
+    considered exception.
+    Earned: PM daemon session `b3015dfb`, 2026-09-13 15:37Z → 2026-09-14 06:54Z; the 7-PR drain;
+    promote `be451698`; #1127, #1135, #1146.
+
+- **One week later (2026-09-14 → 09-21): every rule above recurred, and none of them had been
+  loaded.** The same PM daemon session made 6 more production promotes after `be451698`, and **5 of
+  the 6 have no `log.md` record** (only `cfc9a506` has one, `[D-2026-09-15-01]`). On 09-16 the
+  new incident file (#1190) labelled `be451698` *"unrelated"*, two days after #1143 corrected that
+  exact word, and recorded `cfc9a506`'s latch clearance as *"a side effect"*, although
+  `[D-2026-09-15-01]` names clearing the latch as one of that restart's two stated purposes. The
+  latch itself re-set on 09-14 20:52Z and cleared ~10h50m later, because a PM session happened to be
+  running. The MTTR is still human attendance (#1127, p0, no owner).
+  None of this is new information. It repeats because the sessions making these calls load their
+  LESSONS and skills from the primary checkout, frozen since 2026-08-24 (§3, #1260). Nothing
+  auto-loaded this section's 09-07 or 09-14 bullets into the daemon. **Rule:** before concluding
+  that a rule "didn't change behaviour", check that the actor could have read it.
+  - **New, the mirror image of "authorized is not asked": asking what you are authorized to do,
+    with no default, parks the work.** In the same week the daemon promoted twice with no human
+    message (`e86ee267`, citing a "standing mandate"; `7831cb82`, from a self-scheduled
+    continuation). Then on 09-20 23:02Z it held a reviewed 16-PR batch, including stop-loss and
+    reconciler safety fixes, behind *"That needs your go-ahead."* It was still unpromoted 35h later.
+    Both choices are inside the charter; the inconsistency is the defect. **Rule:** for an
+    action the charter already permits, either act and record, or ask with a stated default and
+    deadline. `deploy-prod` now says so.
+  Earned: PM session `b3015dfb` 2026-09-14 → 09-20; promotes `3a73bfe5`/`e86ee267`/`9821a660`/
+  `7831cb82`/#1231 (unrecorded); PR #1190; `origin/main..origin/develop` = 16 on 2026-09-21.
+
+- **Amendment 2026-10-19 — an escalation count that includes undelivered sends, a multiple computed
+  against the wrong SLA bucket, and the control that actually changed behaviour.** Week 10-12 → 10-19
+  of #1269 (credential P1, day 21 → 28):
+  - **Eleven consecutive `PushNotification` attempts (10-07 → 10-19) returned `Mobile push not sent
+    (Remote Control inactive)`, and each was counted as an escalation** ("16 escalations / 11th
+    push-notification attempt"). Nothing reached a phone. No issue existed for the dead channel; it
+    was a sub-clause of the daily comment. The task prompt's "change the channel" rule was being
+    satisfied by a channel that had already failed ten times.
+    **Rule:** an escalation is a *delivered* message. A send that returns an error is a finding about
+    the channel, not an escalation: file the channel once (its own issue, labelled for the human —
+    #1286), count only delivered sends, and stop retrying a channel that has failed three times in a
+    row until its issue closes.
+  - **Six entries (10-13 → 10-18) reported the incident at several hundred times SLA ("648x") by
+    dividing by the 1-hour P0 bucket.** The incident is P1 in its own frontmatter and label; the
+    charter gives P1 24 hours, so the true multiple was 22-28x. The 10-19 run caught and corrected it
+    (append-only, as a correction entry — the norm held). The number went to the human six times,
+    24x inflated; an overstated multiple reads as noise and trains the reader to discount the next.
+    **Rule:** derive the multiple from the bucket the incident's *own* severity label names, and
+    print the bucket beside it ("28x the 24h P1 SLA"). A severity label is an input to arithmetic,
+    not decoration.
+  - **What finally stopped the per-day PRs was a number in the task prompt, not the rule.** §2.17's
+    2026-10-12 amendment ("one record PR per incident") sat on unmerged #1281 all week, and the
+    primary checkout could not have loaded it anyway (§3, #1260). On 10-17 the standup stopped opening
+    PRs and committed onto #1285's branch instead, citing the prompt's own line — "worktree list |
+    wc -l — if >6, flag" — after counting 28. A cap it could read beat a rule it could not.
+    **Rule:** a rule that must bind a scheduled task *this week* goes into the task prompt as a
+    number or a step (the 2026-08-24 precedent, §2.10), with the LESSONS entry as the explanation. A
+    LESSONS-only rule binds nothing until merged, promoted and pulled. The 10-19 retro amended the
+    standup prompt directly for all three rules above.
+  Earned: #1269 comments 10-13 → 10-19; PR #1285 commits 10-16 → 10-19 (one branch, four days);
+  #1286; charter §Escalation ("1 hour for P0/critical, 24 hours otherwise").
+
+### 2.17 A record on an unmerged branch is not in layer 2 — and layer-2 readers must look in the queue
+The 2026-08-31 retro closed §2.10 by routing P0/P1 findings through `incident-response` §5: incident
+file **plus** GH issue **plus** `log.md` append. The standup complied exactly, on day 5. Every one of
+those artifacts then went into **PR #1129, which has been open, CI-green, `MERGEABLE`, zero reviews,
+for six days**. The result at retro time:
+- `git ls-tree origin/develop .claude/state/incidents/` lists **three** files, unchanged for 14 days.
+  The only `status: open` one is the **previous**, already-fixed P1 from 2026-08-24. There is **no
+  file on `develop` for the live P0**.
+- `log.md` on `origin/develop` ends **2026-08-25 09:30** — a 13-day hole. Seven entries were written
+  in the window (`[D-2026-09-01-01]` … `[D-2026-09-07-01]`, `[D-2026-08-31-01]`); all seven are on
+  unmerged branches. On `origin/main` the log ends 2026-08-24.
+- `pm-session-boot` gate step **(d)** reads `incidents/` filtered `status: open` and scopes the
+  session to any P0. A PM booting in this window would have read a stale 08-24 P1 and a 13-day-old
+  log, and concluded things were quiet — during an 11-day P0.
+This is the exact inverse of §2.10. There, monitors ran and wrote nothing. Here they ran, wrote the
+right things in the right places, and the writes never reached the branch anyone reads.
+- **Rule (writer):** an artifact counts as layer 2 only when it is on `develop` (§2.9 rule (b)). An
+  actor that can write a record but cannot merge it must say so **in the record's own durable
+  channel** — the GH issue — because the issue is the only sink that lands without a merge. For P0/P1
+  the **issue is the primary record**; the incident file and `log.md` entry are the archive.
+- **Rule (reader):** any procedure that reads `.claude/state/incidents/` or `log.md` to establish
+  current state must also read `gh issue list --state open --label type:incident` **and** open PRs
+  touching those paths (`gh pr list --state open --json number,title,files`). A directory listing is
+  a lower bound on what is happening, never the picture — and the busier the incident, the more
+  likely its record is still in the queue.
+- **Rule:** a docs-only PR that is a live incident's own record is **merge-first**, ranked with the
+  corrections of §2.9 rule (e) — the record ages against the incident, not against the backlog.
+  Earned: PR #1129 (opened 2026-09-01, unmerged at retro), PR #1128; incident
+  `2026-08-29T0807-P0-close-only-latch-day5-unactioned.md` invisible on `develop` for 6 days.
+
+- **Amendment 2026-09-14 — "primary" was read as "only", and it punched the hole in the other
+  wall.** The writer-side rule above says *"for P0/P1 the **issue** is the primary record; the
+  incident file and `log.md` entry are the archive."* It was written to stop records being stranded
+  in an unmerged PR. What happened next: on **3 of 8** standup slots in the following window
+  (**09-08, 09-12, 09-13**) the run produced a complete brief and landed a GH comment as its **sole**
+  durable artifact — no `log.md` append, no incident-file update, and on 09-12/09-13 no branch at
+  all, so those archive entries do not exist anywhere, merged or unmerged. `log.md` on `develop`
+  ends **2026-09-11** while the incident ran to 09-14. The 09-09 run had already flagged the same
+  gap about itself on 09-08, and it recurred twice more.
+  - **Rule:** "primary" states an **ordering under failure**, not sufficiency. The issue comment goes
+    first because it lands without a merge; the `log.md` append and the incident-file update are
+    still owed in the same run. A run that writes only the comment has traded §2.17's failure for
+    §2.10's.
+  - **Rule:** the test is symmetric and both halves are required — *is there a dated artifact in
+    layer 2, and is it on `develop`?* A run's self-report of its own sink ("comment posted") answers
+    neither.
+  - **Reader-side corollary:** a `log.md` that simply stops is indistinguishable from a quiet week
+    (§2.10), so the retro's input 1 must diff the log's **date coverage against the slot list** from
+    input 6 rather than read the log alone. All three holes in this window were visible only that
+    way.
+  Earned: `daily-trading-standup` 09-08 / 09-12 / 09-13 comment-only sinks; `log.md` on `develop`
+  ending 2026-09-11 during a live P0 that closed 2026-09-14.
+
+- **Amendment 2026-10-05 — a PR *body* is not layer 2 either, and the retro itself did it twice.**
+  The 2026-09-21 standup printed the prod DB credential (§3). The 09-21 and 09-28 retros each
+  escalated the rotation as one line under "Needs a human" in their PR bodies (#1263, #1266) and
+  each closed with "no issues filed; every finding maps to an existing open issue." That was false
+  for the credential: no issue, no incident file, no `log.md` line. Six standups (09-28 → 10-03)
+  then reported NOMINAL with a P1 open, because nothing they read mentioned it. The 10-04 standup
+  found it only while asking why #1266 was unmerged, and filed #1269 + PR #1268 on **day 13**.
+  #1268 went `DIRTY` within a day and its rebase could not be pushed (§3, hung Docker entry), so on day 14
+  `develop` still has no record.
+  - **Rule:** a PR body, a completion summary and a "Needs a human" list are transport, not record.
+    Every ask in one must cite an open issue number; an ask with no issue gets one filed in the same
+    run. "Maps to an existing issue" is a claim to check per line, not a sentence to close with.
+  - **Rule:** a monitor's NOMINAL is scoped to what it read. A P1 that exists only in prose it does
+    not read is invisible to it by construction, so the writer owns putting it where monitors look
+    (`gh issue list --label type:incident`).
+  Earned: prod DB credential unrotated 2026-09-21 → (still open 10-05); #1269, PR #1268.
+
+- **Amendment 2026-10-12 — a daily escalation that opens a new PR per day builds the queue it is
+  complaining about.** After #1269 (credential P1) the standup wrote a record PR on 10-04 (#1268),
+  10-08 (#1275), 10-11 (#1278) and 10-12 (#1280): four open, `CLEAN` bar the first, none merged,
+  each adding another `log.md` tail and incident-file edit that will collide with the next. The
+  escalation itself was right (9 issue comments, 4 push notifications, ask changed each time); the
+  record mechanism was wrong. `develop` had **0 merges in 8 days**; the human, the only actor who can
+  merge (#1127), saw a queue growing by one per day.
+  **Rule:** at most one open record PR per incident. A repeat escalation updates it (new commit, or
+  a comment on the incident issue) and does not open another. The issue is the per-day record; the
+  `log.md` line is written once, when the PR can actually land.
+  Earned: #1268, #1275, #1278, #1280; #1269; #1127.
+
+- **Amendment 2026-10-19 — the record queue now collides with itself: duplicate ids and
+  forward-copied entries.** With `log.md` on `develop` ending 2026-09-28 and sixteen October entries
+  spread over eight unmerged branches, two defects appeared that no single run could see:
+  - **`[D-2026-10-12-01]` is two different records.** The 10-12 standup (#1280, #1282) and the 10-12
+    retro (#1281) each numbered from `develop`'s count, where neither existed. `decision-record` says
+    NN is "assigned at append time" — but append time is branch time, and a branch does not see its
+    siblings. Reproduced with `tools/merge_append_only.py`: #1280 into #1281 merges **clean** and
+    lands both blocks under the same id, the 10:50 retro entry ordered *before* the 08:20 standup
+    entry (the driver orders each side by its first block).
+  - **The 10-14 entry is in three PRs, the 10-12 and 10-15 entries in two each, and the copies are
+    not byte-identical** (a trailing blank line; #1283 vs #1284). Each standup copied the previous
+    day's unmerged entry into its own branch so `develop` "would have it". Reproduced: #1284 into
+    #1285 **conflicts**, #1283 into #1284 **conflicts** — the near-copies defeat the driver's
+    identical-block collapse, so the first merge strands every later one. The incident file (175
+    lines on #1280, 366 on #1285) is edited in place and is not append-only-merged, so it conflicts
+    on its own as well. #1268 has been `CONFLICTING` since 10-05 on that file.
+  **Rule:** before assigning NN, scan every open PR branch for the date, not just `develop`:
+  `git fetch origin && git grep -h '^## \[D-<date>-' $(git branch -r --format='%(refname)') -- .claude/state/log.md | sort -u`,
+  then max+1. **Rule:** a record PR carries only the entries its own run wrote; never copy a sibling
+  PR's unmerged entry forward. **Rule:** when a per-day queue is folded into one branch (as 10-17
+  did, correctly), the folding run closes the PRs it superseded in the same run — eight CI-green PRs
+  for one incident is the §2.11 note-to-self at PR scale. The queue's resolution is tracked in #1287.
+  Earned: #1280/#1281/#1282 (id collision); #1283/#1284/#1285 (10-14 x3); #1284/#1285 (10-15 x2);
+  #1268 `CONFLICTING` since 10-05; driver runs 2026-10-19.
+- **Still true at 11-09 (retro 2026-11-09).** `develop` has had no commit since `812b5701` (10-04),
+  36 days. Five open PRs are CLEAN and unmerged: #1291 (this chain), #1285, #1281, #1271, #1270.
+  The daily standup's entries from 10-26 → 11-09 (fifteen) and incidents
+  `2026-10-04T0915-P1-prod-db-credential-unrotated.md` and `2026-10-31T0907-P1-prod-db-reads-total-block.md`
+  exist only on #1285 (open since 10-16, CLEAN). The retro entry is numbered `[D-2026-11-09-02]`
+  after scanning all remote branches (the 11-09 standup holds `-01`).
+  Earned: #1285; #1287; #1291.
+
+### 2.18 A monitor that cannot read its own data is a blind window, not a pass
+
+Trap: the production DB read path was denied by a permission classifier on 10-28 and again 10-29
+through 11-01 (#1290). Each standup could report only "cannot verify"; a run that carried forward
+an older PASS or inferred one from the message text of an old row would have looked healthy.
+Rule: a denied or failing read is recorded as a blind window, with its first and last day, in the
+incident file. It is not counted as PASS. Rule: one good read does not close the window. The 11-02
+standup did this correctly, keeping the incident open for a second clean day and writing
+"classifier non-determinism, not a fix" rather than "resolved". Reads returned data on each day
+11-02 → 11-09 (eight standups, fresh DD values in each summary). That meets the second-clean-day
+test. Closing #1290 is the owner's call, not the monitor's. Earned: #1290; incident
+`2026-10-31T0907-P1-prod-db-reads-total-block.md` (on #1285); the 10-28 and 11-02 standup entries.
 
 ---
 
@@ -390,23 +1295,104 @@ no owner and no refill procedure. Two costs, and the second is worse:
   it persisted). **Rule:** never persist a secret to disk, scratchpad, or a logged env-var — pipe it
   in one command: `aws ecr get-login-password --region <r> | docker login --username AWS
   --password-stdin <registry>`. No intermediate file, no echo, no copy.
-- **Shared-venv `atb` staleness** (bug-class §1.10a): `make install` registers the `atb` console
-  script as an editable install pinned to **whichever worktree ran it** — bare `atb` from any
-  *other* worktree silently executes that pinned worktree's `src/`, not your cwd's. When running the
-  CLI from a non-primary worktree, invoke it as `PYTHONPATH=<worktree-root> python3 -m cli.__main__`
-  (or re-`make install` in the worktree, but that repins it for everyone). A warn-on-mismatch fix
-  (cwd repo-root ≠ installed source root) is GH #1024; sibling GH #999 covers the script-path variant.
+- **Shared-venv `atb` staleness — FIXED 2026-08-13, GH #1070** (bug-class §1.10a). Worth knowing the
+  mechanism, because the obvious diagnosis is wrong. `pip install -e .` writes
+  `site-packages/__editable___ai_trading_bot_0_1_0_finder.py`, whose `MAPPING` hardcodes the
+  **absolute path of the checkout `make install` was run from**, and appends it to `sys.meta_path`.
+  It is *not* a `sys.path` entry. Since `sys.meta_path` is consulted after `PathFinder`, the stale
+  mapping loses only when some `sys.path` entry already contains `src`/`cli`. That is true for
+  `python -c` and `python <repo-root>/x.py` (cwd/script dir *is* the root) and **false** for:
+  - the `atb` console script (`sys.path[0]` is `.venv/bin`), and
+  - `python experiments/x.py` (`sys.path[0]` is `experiments/`, which has no `src/`).
+
+  Hence "it worked when I checked it interactively" and broke for every real run — the pre-fix
+  sanity check passed in exactly the state that was broken. Pre-fix, the primary checkout was frozen
+  on `main` at 2026-07-04 (131 commits behind `origin/main`), so a worktree run silently executed
+  six-week-old code: the same 365d backtest returned **+114.69% / 8.74% MaxDD** and
+  **−28.29% / 31.27% MaxDD**. **Fix:** `tools/atb_worktree_shim.py`, copied into site-packages by
+  `make install` and executed from a `.pth` on every interpreter start; it resolves the checkout
+  enclosing the **cwd** and inserts a meta-path finder at position 0 binding top-level `src`/`cli`
+  there. Backstop: `src/__init__.py` calls `src._source_root.verify_source_root()`, which
+  hard-errors (`SourceRootMismatchError`) with a copy-pasteable remedy when imported-root ≠
+  cwd-root. It lives in the package `__init__` on purpose — an entry-point-by-entry-point guard
+  would have missed `python experiments/x.py`, which is precisely the shape that produced the bad
+  numbers. The guard module sits at the top level of `src` (not under `src.utils`) so importing it
+  executes no other repo module — the checkout's identity is still in question at that point.
+  **Diagnose with `python -P -c "import src; print(src.__file__)"`; keep the `-P` — plain `python -c`
+  puts cwd on `sys.path[0]`, finds your worktree's `src/`, and prints a false all-clear in exactly
+  the broken state.**
+  - **Residual hazard — the shim lives in site-packages, which is not version-controlled, so a venv
+    rebuild silently removes it.** After any rebuild: `make shim` (or
+    `python tools/install_worktree_shim.py`). Verify with
+    `python tools/install_worktree_shim.py --check`. The `verify_source_root()` guard means a missing
+    shim fails loudly rather than returning a wrong number.
+  - `PYTHONPATH="$(pwd)" atb <cmd>` from the worktree root was the historical workaround (pre-#1070)
+    and remains a valid one-off override; it is no longer required per invocation.
+  - **The filesystem sibling — FIXED 2026-08-24, GH #1082.** A `grep`/`sed`/`cat` on a *relative*
+    path runs against whatever the shell's cwd is, and cwd resets to the primary checkout between
+    tool calls — so a relative read silently returns 2026-07-04 content, and a relative `sed -i`
+    writes into the tree that must stay pinned to `main`. The import guard does not cover this:
+    a `sed -i` imports nothing. (The 2026-08-17 retro tripped it reading `.claude/LESSONS.md`:
+    247 lines in the primary checkout vs 578 in the worktree, no error.)
+    **Fix:** `tools/primary_checkout_guard.py`, a `PreToolUse` hook registered in
+    `.claude/settings.json`. It refuses any `Edit`/`Write` or write-shaped `Bash` command
+    (`sed -i`, `>`/`>>`, `rm`/`mv`/`cp`/`touch`/`tee`, working-tree-mutating `git` subcommands)
+    whose target resolves into the primary checkout's working tree, and — separately — refuses a
+    *relative read* issued with cwd back at the primary checkout, which catches the cwd reset
+    itself rather than only its writes.
+    **Both are gated on ONE signal: has this session actually worked inside a worktree?**
+    (Recorded per session id, on the first tool call whose cwd is in one.) The first draft
+    guarded writes unconditionally, and review caught two certain breakages: a fresh single
+    clone *is* structurally "the primary", so it write-locked itself for every contributor and
+    every Claude Code Web session; and the PM daemon runs in the primary by design and could no
+    longer append to the tracked, append-only `.claude/state/log.md`. Neither is ever pinned, so
+    pinning is what separates "an agent with a worktree writing to the wrong tree" from
+    "somebody working legitimately in the only tree they have". **General lesson: a rule stated
+    as an absolute ("nothing may write to the primary") is almost always false at the edges —
+    enumerate who legitimately lives in the place you are about to lock before locking it.**
+    **Why a hook and not `chmod`/ACLs:** agents run as Alex's uid on Alex's machine, so no
+    filesystem permission can tell an agent write from a human one. A Claude Code hook can,
+    exactly and by construction — it does not exist outside a Claude Code session. It is also
+    version-controlled, unlike a `.git/hooks/` script (cf. the inert pre-push, GH #1077).
+    **Not protected on purpose:** `<primary>/.git/**` (every worktree's git ops, and
+    `git worktree add`), `<primary>/.claude/worktrees/**`, and anything git-ignored in the primary
+    (shared `.venv`, `logs/`, caches). **Human override:** `ATB_ALLOW_PRIMARY_WRITE=1` at launch
+    (an agent cannot set it for its own hook process), or `touch ~/.claude/atb-allow-primary-write`,
+    which self-expires after 30 minutes so one stray `touch` cannot disable the guard for good.
+    **Limits, stated honestly:** shell parsing is best-effort — a write hidden inside `python -c`,
+    a heredoc script, `xargs`, `find -exec` or a `make` target is not detected; nothing is guarded
+    before the session's first worktree-cwd tool call; and an agent can simply delete the hook
+    from its own worktree's `.claude/settings.json` (a bigger hole than the override sentinel, and
+    unavoidable for any in-repo registration). Absolute worktree paths remain the rule; the guard
+    is a net under it, not a replacement for it. The guard fails **open** everywhere — unexpected
+    error, unresolvable token (`> $OUT`), missing/slow `git` — by design: a guard that bricks tool
+    calls gets switched off, and then protects nothing. Two review rounds' worth of false positives
+    all came from resolving an ambiguous token *toward* blocking (`chmod +x` → `<primary>/+x`,
+    `> $OUT` → `<primary>/$OUT`, heredoc prose `a > b` → `<primary>/b`); **an input you cannot
+    resolve must be resolved toward allowing, or the fail-open polarity is a fiction.**
+  - Sibling GH #999 covers the script-path shadowing variant; GH #1024 (the "just add a warning" P3
+    framing) is superseded — a warning would have been ignored exactly like the wrong number was.
 - **`ls ~/.claude/scheduled-tasks` is NOT the task list — the scheduler registry is.** The directory
-  holds a `SKILL.md` per task and **keeps it after the task is deregistered**, so a dead task looks
-  installed forever. On 2026-08-10: 19 directories, **13 registered tasks**. `alert-monitor`,
-  `staging-cohort-observer`, `eod-worktree-prune` and `pm-fleet-watchdog` had vanished from the
-  registry and last ran 2026-07-28/29 — including `alert-monitor`, the operator-alert watchdog for a
-  **live-capital** bot, dark for 12 days. Three consecutive retros audited tasks with `ls` and
-  reported "no task missed its schedule."
+  holds a `SKILL.md` per task and **keeps it after the task is deregistered**, so a retired task looks
+  installed forever. On 2026-08-17: 19 directories, **13 registered tasks**, of which only **4 are
+  enabled** — `prune-worktrees`, `daily-trading-standup`, `weekly-model-retrain`, `weekly-retro`.
+  Three consecutive retros audited with `ls` and reported "no task missed its schedule."
   **Rule:** audit with `mcp__scheduled-tasks__list_scheduled_tasks` and **diff registry ⇄ directory
   both ways** — a directory with no registry entry is a DEAD task; check `enabled` and `lastRunAt`,
-  not just presence. (`prune-worktrees` is a *separate live task* from the dead `eod-worktree-prune`
-  directory — don't read one as evidence for the other.) Earned: GH #1050.
+  not just presence. (`prune-worktrees` is a *separate live task* from the retired `eod-worktree-prune`
+  directory — don't read one as evidence for the other.)
+  **Premise correction (Alex, 2026-08-13 on GH #1050):** the six unregistered directories are
+  **deliberate retirements, not a silent failure** — `alert-monitor` ("runs too often; the daily
+  standup does much the same thing"), `staging-cohort-observer`, `pm-fleet-watchdog`,
+  `eod-worktree-prune`, plus two non-trading leftovers (`hue-287-legacy-asset-soak`,
+  `suburani-flip-daily-watch`). The 2026-08-10 retro reported them as a 12-day monitoring outage; the
+  *audit-instrument* rule above is right, the *outage* was not. **Absence from the registry proves
+  deregistration, never intent — ask the human before calling it an outage.**
+  **Operational consequence, and it is load-bearing:** `daily-trading-standup` is now the **sole
+  automated watchdog** for the live-capital bot, so worst-case detection latency is **~24h**. Calibrate
+  escalation to that; per GH #1050 it has absorbed `alert-monitor`'s positive-state assertions
+  (`FEATURE_ENTRY_PAUSE`, `Decision:` lines flowing, >48h-flat as the #1045 symptom, registry drift).
+  Earned: GH #1050.
 - **A persisted model-provider selection silently kills every scheduled task.** `switch-model-provider`
   writes the model choice to settings, and scheduled runs inherit it. When the selection is
   unavailable the run dies **on turn 1** with `There's an issue with the selected model (<id>). It
@@ -417,6 +1403,237 @@ no owner and no refill procedure. Two costs, and the second is worse:
   **Rule:** after any provider switch, confirm the next scheduled run actually produced its artifact.
   When auditing tasks, grep transcripts for `may not exist or you may not have access` — a fired-but-
   died run is invisible in `lastRunAt`, which records the *attempt*. Earned: GH #1051.
+- **Usage-limit exhaustion is a second, identical-looking turn-1 kill — and it also kills agents
+  mid-task, including during a production deploy.** On 2026-08-15 `daily-trading-standup` fired and
+  its entire transcript is one line: `You've hit your weekly limit · resets Aug 16 at 7pm
+  (Europe/London)`. `lastRunAt` updated normally. The 08-16 slot then produced no session at all, so
+  `weekly-model-retrain` missed its only weekly window. The same exhaustion killed the **prod-promote
+  agent mid-flight on 08-13**, before it reported — the PM had to verify the live deploy's boot
+  itself ([D-2026-08-13-05]).
+  **Rule:** add `hit your weekly limit` / `hit your usage limit` to the transcript greps alongside the
+  model-provider signature; treat *any* ~20-line scheduled transcript as failed-until-proven. Before
+  a long autonomous window (a promote, a tournament), check headroom — the `check-usage` skill exists
+  for exactly this — because the failure lands *after* the irreversible half of the work.
+- **The `pre-push` hook WAS inert — fixed 2026-08-24, and the fix is the lesson (GH #1077).**
+  The old `.git/hooks/pre-push` piped pytest into `tail -5` and read `$?`, which is **`tail`'s** exit
+  status, so the failure branch was unreachable and the hook always exited 0. It also probed
+  `.venv/bin/python` *relative to cwd* — absent in every worktree — and fell back to bare `python`,
+  which does not exist on this machine. Observed printing `python: command not found` and
+  `All fast tests passed.` in consecutive lines. A third latent bug only surfaced once the first two
+  were fixed: `-p no:randomly` makes `pytest.ini`'s inherited `--randomly-seed` unparseable, so the
+  hook would have aborted with a usage error. The hook source now lives in tracked `.githooks/`
+  (installed by `make install` / `make hooks`), resolves paths from `git rev-parse --show-toplevel`
+  and `--git-common-dir`, and **fails the push when it cannot find an interpreter that imports
+  pytest**.
+  **Rule:** for any safeguard, the acceptance test is *"prove it can fail"*, never *"prove it can
+  pass"* — `tests/unit/test_pre_push_hook.py` runs the real hook against a deliberately broken test.
+  Corollary: a hook that is not version-controlled cannot be reviewed and will drift per machine;
+  track the source and install it, never edit `.git/hooks` by hand. Same class as §2.12/§5.7.
+- **A catch-up burst makes `lastRunAt` lie about punctuality.** Scheduled tasks only fire while the
+  app is open; on reopen, every overdue task fires at once. On 2026-08-17 `daily-trading-standup`,
+  `weekly-model-retrain` and `weekly-retro` all show `lastRunAt` within **32ms of each other**
+  (10:02:20.98–10:02:21.00Z) — three catch-ups, not three on-time runs, and three agents contending
+  for the same repo and worktrees simultaneously.
+  **Rule:** when several tasks share a `lastRunAt` to the second, that is an app-reopen batch: check
+  each against its `cronExpression` to find the slot it actually missed, and expect concurrent-agent
+  contention in that window.
+
+- **A merged fix that installs OUTSIDE version control is not in effect until someone runs the
+  installer — and nothing tells you.** Observed live on 2026-09-07: a `git push` from a worktree
+  printed `python: command not found` and then **`All fast tests passed. Pushing...`**. That is
+  #1077's exact failure (pytest piped into `tail`, so `$?` is `tail`'s; `.venv/bin/python` resolved
+  against the cwd, so a linked worktree falls through to a `python` that does not exist on this
+  machine). #1077 was fixed and merged on 2026-08-24 (PR #1092) — the corrected hook is tracked at
+  `.githooks/pre-push` and its header documents this precise scenario. But `core.hooksPath` is
+  `/Users/alex/Sites/ai-trading-bot/.git/hooks`, which still contains the **old** copy, because
+  `make hooks` was never run. **Every push in this repo since 2026-08-24 has printed green having
+  run nothing.**
+  This repo now has **three** artifacts that live outside version control and must be installed:
+  the worktree shim (`make shim`, verifiable with `python tools/install_worktree_shim.py --check`),
+  the append-only merge driver (`make merge-drivers`, verifiable with `make merge-drivers-check`),
+  and the git hooks (`make hooks`) — and only the first two have a checker.
+  - **Rule:** every install-required artifact ships with a `--check` and is asserted somewhere that
+    runs on a schedule, not only in a `make` target a human might run. Without that, "merged" and
+    "in effect" diverge silently and the gap is invisible in git.
+  - **Rule:** a gate whose failure mode is *printing green* is worse than no gate, so verify it can
+    actually fail before trusting it: break something on purpose once, or grep the installed copy —
+    never the tracked one — for the invariant you think it enforces. `git log` showing the fix
+    merged is not evidence the fix is running.
+  Earned: GH #1077 / PR #1092 fixed 2026-08-24, still not in effect 14 days later (GH #1138).
+
+- **Correction + tightening, 2026-09-14: the checker already existed, and it changed nothing.** The
+  bullet above says *"only the first two have a checker."* That is wrong — #1092 shipped
+  `tools/install_git_hooks.py --check` and a `make hooks-check` target on 2026-08-24, at the same
+  time as the fix. All three install-required artifacts have had a `--check` for three weeks. Seven
+  days after §3 was written and #1138 was filed **p1**, `install_git_hooks.py --check` still
+  reported `DRIFT … differs (want an executable copy of .githooks/pre-push)`, and `.git/hooks/pre-push`
+  was still the April pre-#1092 copy: every push in this repo printed green having run nothing for
+  **21 days**. So the missing piece was never the checker.
+  - **Rule:** a `--check` that nothing invokes on a schedule is documentation. The control is the
+    **scheduled assertion** — wire all three into CI or into a task that runs weekly, and treat the
+    `--check` target as its implementation detail, not as the fix.
+  - **Rule — a repair procedure must be runnable by the environment that needs repairing.** The
+    documented remedy (`make hooks`) **cannot run on this machine**: the Makefile invokes bare
+    `python`, only `python3` is on `PATH` outside an activated venv, so it dies with
+    `make: python: No such file or directory`. That is the *same string* as the defect it repairs
+    (#1077's hook printed `python: command not found` and then "All fast tests passed"). An
+    installer that assumes an already-activated venv cannot fix a fresh shell, a git hook, or an
+    agent session — which is every caller that matters. Resolve the interpreter explicitly and let
+    `command not found` fail loudly rather than reaching a caller that reads non-zero as "skip".
+  - **Rule (retro-specific):** re-run the `--check`s at the top of every retro rather than trusting
+    last week's issue. Installing a hook is an environment action, not a code change: it needs no
+    PR and no review, so the retro that files the issue should also **run the installer**. Done
+    during this retro — `install_git_hooks.py --check` now reports `ok`. **Then verify the installed
+    artifact actually works before walking away:** this install immediately broke every push from a
+    worktree (next bullet, GH #1148), which is a worse state than the drift it fixed, and the
+    session could not undo it. An installer's `ok` attests to bytes on disk, not to behaviour — the
+    same distinction as "merged" vs "in effect" one paragraph above. Install, then exercise.
+  Earned: GH #1138 (filed p1 2026-09-07, still drifted 2026-09-14, installed by the 09-14 retro);
+  `make hooks-check` unrunnable via bare `python`.
+
+- **Pushing from a LINKED WORKTREE sets `GIT_DIR` in the pre-push hook; pushing from the primary
+  checkout does not.** Installing the corrected pre-push hook (above) blocked the very next push
+  with 12 errors in `tests/unit/test_primary_checkout_guard.py`
+  (`CalledProcessError: ['git', 'init', '-q', '-b', 'main']`), while the same suite run from a shell
+  is **2570 passed**. The asymmetry is the whole lesson, and it is easy to get wrong — I first
+  concluded "git exports `GIT_DIR` into hooks", which is **false here**. Measured on git 2.50.1 with
+  a hook that just prints its environment:
+  - `git push` from a plain repo / the primary checkout → `GIT_DIR=[UNSET]`
+  - `git push` from a linked worktree → `GIT_DIR=[<primary>/.git/worktrees/<name>]`
+
+  The tests build throwaway repos with `git init`; with that `GIT_DIR` inherited, `git init`
+  re-initialises the **worktree's admin dir**, and — finding no work tree from that invocation —
+  writes `core.bare = true` into the **shared** `.git/config`. Every worktree and the primary
+  checkout read that file, so the whole repo then answers
+  `fatal: this operation must be run in a work tree` until someone thinks to look at `core.bare`.
+  The error names neither the setting nor the test.
+  **Why it survived 21 days undetected is the asymmetry:** CLAUDE.md requires all agent work to
+  happen in `.claude/worktrees/`, so *every agent push* hits this and *no human push from the
+  primary checkout ever does* — and the hook was inert for everyone anyway (#1138).
+  - **Rule:** scrub git's hook environment before running anything from a hook —
+    `env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_PREFIX -u GIT_QUARANTINE_PATH`.
+    Resolve the paths you need first (`git rev-parse --show-toplevel`), then drop the variables.
+  - **Rule:** when a hook misbehaves, **measure its environment** with a hook that prints it, from
+    each checkout shape you actually use. "Git exports X to hooks" is a per-hook, per-shape fact, not
+    a general one, and reasoning about it from documentation or from a plain-repo test gets the
+    answer backwards (§2.13 — reproduce, don't cite).
+  - **Rule:** a test that shells out to `git` must pass an **explicitly scrubbed** env to
+    `subprocess`, never an inherited one, and should assert `GIT_DIR` is unset before it starts. A
+    test that can re-init the caller's repository under an unexpected environment is a hazard no
+    matter who runs it — doubly so for the one whose job is protecting the primary checkout.
+  - **Meta:** #1092 (the hook) and #1087 (the guard tests) both merged **2026-08-24**. Each is
+    correct alone; together they are incompatible, and 21 days of green pushes hid it because the
+    hook was never installed (#1138). Two correct changes can compose into a broken one, and the
+    only thing that finds it is actually running the artifact.
+  - **Meta:** `tests/unit/test_pre_push_hook.py` is the "prove it can fail" acceptance test — and it
+    runs under pytest, not under a real `git push`, so it never sees the environment that breaks it.
+    **An acceptance test that does not reproduce the artifact's runtime environment tests a
+    different artifact** (§1.10, applied to environment rather than source).
+  Earned: GH #1148; the 2026-09-14 retro's first push from a worktree after installing the hook,
+  which set `core.bare=true` on the shared config (restored with `git config core.bare false`).
+
+- **The primary checkout is where every session's distillate is LOADED from, and nothing keeps it
+  current.** At the 2026-09-21 retro the primary checkout was at `8da478a3`: last
+  `pull --ff-only` **2026-08-24 21:48**, 109 commits behind `origin/main`. Three things read it as if
+  it were current:
+  - `session-start-lessons.sh` injects `$CLAUDE_PROJECT_DIR/.claude/LESSONS.md`: **851 lines**,
+    ending at §2.15, against **1448** on `develop`. Every session started there (the PM daemon, all
+    four scheduled tasks) was briefed without §1.13–§1.16 (four money-path bug classes), §2.16,
+    §2.17 or any §3 correction since 08-24.
+  - Skills, `/commands` and agent definitions load from the same tree: **10 `.claude/` files,
+    +772/−37**, i.e. the whole output of the 08-31, 09-07 and 09-14 retros, reached no such session.
+    The retro's own scheduled prompt names the primary path, so the 09-21 retro first read its skill
+    three amendments stale.
+  - `install_git_hooks.py` sources hooks from the primary's `.githooks/`. `--check` reported `DRIFT`
+    against an installed hook byte-identical to `develop`'s (#1150-fixed) copy. Running the installer,
+    as the retro-specific rule above says, would have **downgraded** it to the version that sets
+    `core.bare=true` on every agent push.
+  #1082's guard made the primary write-protected against agents. It did not make it current, and
+  nothing else does.
+  - **Rule:** a distillate write is in effect when the **loader** reads it, not when it merges. The
+    check after any retro is the loaded copy: `git -C <primary> rev-list --count HEAD..origin/main`
+    and `git -C <primary> diff --stat HEAD origin/main -- .claude/ CLAUDE.md CODE.md`. Non-zero
+    outranks everything the retro wrote, because none of it is being read.
+  - **Rule:** anything that uses the primary checkout as a reference (the lessons hook, the hook
+    installer, a skill path in a task prompt) inherits its staleness silently. Read reference content
+    from refs every fetch refreshes (`git show origin/develop:<path>`), not from a working tree
+    nobody updates.
+  - **Rule:** a protected reference needs a **named updater**. Write-protection without one turns
+    "don't corrupt it" into "freeze it."
+  - **Amends the retro-specific rule above:** before running an installer on a `--check` drift, diff
+    the installed artifact against `git show origin/develop:<source>`. A drift report is only as
+    current as the installer's source.
+  Earned: 2026-09-21 retro; GH #1260.
+
+- **In zsh, a command held in a string variable is not word-split, and the error prints the whole
+  string, secrets included.** The 2026-09-21 standup improvised `P="psql $DBURL -X"; $P -c "…" 2>&1`.
+  Bash splits `$P` into words; zsh (this machine's shell) does not, so it looked for a program
+  *named* `psql postgresql://user:pass@host/db -X` and printed
+  `no such file or directory: psql postgresql://…` with the credential in it. `2>&1` put the error
+  in the tool result, and from there in the session transcript. The task prompt's own form,
+  `psql "$DBURL" -c …`, was correct; the shortcut was the agent's.
+  - **Rule:** never embed a secret in a command string held in a variable. Pass it as a quoted
+    argument (`psql "$DBURL"`), through the environment the tool reads (`PGPASSWORD`,
+    `PGSERVICE`), or wrap it in a function. A shell array works in both shells, a plain string only
+    in bash.
+  - **Rule:** don't `2>&1` a command whose *arguments* carry a secret. Failure messages echo
+    arguments, and stderr is where they land.
+  - **Rule:** a secret printed into a transcript is exposed. Say so in the run's final message and
+    leave rotation to the human; don't paste it again to "show" the problem.
+  Earned: `daily-trading-standup` 2026-09-21 (it self-reported the exposure; the mechanism was
+  reconstructed by the 09-21 retro from the transcript with the URL redacted).
+
+- **A hung Docker daemon fails the pre-push hook with a false "tests failed"; an absent one does
+  not.** The fast unit suite selects `tests/unit/database/test_balance_ledger_concurrency.py`, which
+  carries `pytest.mark.integration`. One integration-marked item flips `tests/conftest.py`'s session
+  fixture onto the Postgres-testcontainer path. With Docker *absent* that raises and falls back to
+  SQLite. With Docker *hung* (Docker Desktop up since 2026-09-16, `docker info` never returns)
+  `container.start()` blocks, every test errors at setup with `Failed: Timeout >30.0s`, and the hook
+  exits 2 after ~70s reporting "fast unit tests failed" for a diff that touched no code. Reproduced
+  at the 10-05 retro: 12 setup errors, then `stopping after 5 failures`.
+  On 2026-10-04 a ~20-agent burst pushed through that hook: load average 35-48, a 365d backtest at
+  2.6 bars/s, and at the 10-05 retro **21 `pytest`/`pre-push` processes were still alive after 15h**.
+  Result: **20 local branches of finished, reviewed work** (including the money-path fixes for #1261,
+  #1267 and #683) sat ahead of `origin/develop` with no remote branch and no PR, while `gh pr list`
+  showed a queue of three. The 10-05 standup hit the same wall rebasing #1268 and correctly declined
+  `--no-verify`, so a P1's record stayed off `develop`.
+  - **Rule:** when the hook fails with setup `Timeout` errors rather than assertion failures, probe
+    Docker with a bound before reading a single test:
+    `docker info >/dev/null 2>&1 & p=$!; sleep 10; kill -0 $p 2>/dev/null && echo HUNG`. A hung
+    daemon is a different state from a stopped one and needs a human restart.
+  - **Rule:** with Docker hung, push with `TEST_TYPE=unit git push ...`. That is the conftest's own
+    documented unit mode (in-memory SQLite), it runs the same selection (2985 passed in 68s on
+    2026-10-05), and the hook still gates on pytest's exit status. It is not `--no-verify`, which
+    stays a human call.
+  - **Rule:** the suite takes about a minute. A push that has not returned in 5 is not "in
+    progress". Check it before the next agent pushes on top of it: N agents x one 4-worker suite is
+    the load, not the tests.
+  - **Rule (reader):** `gh pr list` is a lower bound on finished work. Any sweep of in-flight work
+    also runs `git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads | grep ahead`
+    and counts branches with no remote. Local-only commits are invisible to every reviewer and
+    monitor.
+  Earned: 2026-10-04 parallel fix burst; #1269 comment 2026-10-05 08:28Z; structural fix tracked in
+  #1273.
+
+- **macOS has no `timeout(1)`; `timeout 10 docker info` fails with "command not found" and reads
+  as "Docker hung".** The 2026-10-19 retro's first Docker probe reported `NOT responsive / hung`; the
+  bounded background probe (above) returned `rc=0` in under a second. Trusting the first read would
+  have pushed under `TEST_TYPE=unit` for no reason and re-escalated a resolved #1273 hang. Use the
+  backgrounded probe (`docker info >/dev/null 2>&1 & p=$!; sleep 10; kill -0 $p`) or `gtimeout` from
+  coreutils; never bare `timeout`. Same morning, `tools/install_git_hooks.py --check` printed `DRIFT`
+  for `pre-push` while the installed file was byte-identical to `origin/develop:.githooks/pre-push`
+  — the checker compares against the frozen primary's source (above, #1260). Third false `DRIFT`
+  (09-21, 10-19, 10-26): diff against `origin/develop` before believing it, and never run the
+  installer on a false one. It will keep printing `DRIFT` until #1260 is done.
+  Earned: 2026-10-19 retro run; #1273, #1260.
+- **`LESSONS.md` is larger than a SessionStart hook can deliver.** `session-start-lessons.sh`
+  `cat`s the whole file. At 151KB (1,809 lines) on `develop`, and already at 70KB on the frozen
+  primary, the harness replaces the output with a ~2KB preview and a saved-file path. Only the
+  header and the top of §1.1 reach a session unless it opens the file. "Auto-loaded every session"
+  has been false for a while, and each retro adds about 70 lines. Before assuming a rule was
+  "available" to an agent, check whether the agent read the file. Fix tracked in #1289 (index
+  instead of body, size check).
+  Earned: 2026-10-26 retro run, input 0c; #1289.
 
 ---
 
@@ -462,6 +1679,29 @@ keep the skill generic and let the specifics live here.
 - **Don't trust the deploy API for liveness.** Railway can show SUCCESS while the loop is dead (a
   DB/DNS outage killed it — see `MEMORY` bots-down-railway-dns). Ground truth = a recent
   `Decision:`/`Status:` log line **and** the hourly `account_history` heartbeat row in the DB.
+  (`DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL` = 1800s in `src/config/constants.py`, but every CLI entry
+  point — `atb live`, `atb live-health`, i.e. every prod/staging launch — overrides it via
+  `runner.py`'s `--snapshot-interval default=3600`, so the constant is dead and 3600s/hourly is
+  what actually runs. #1180.)
+- **Close-only (or any latched condition) at capacity is not "hung" — check `LatchedConditionMonitor`
+  first, not `strategy_executions`.** `check_entry_conditions`'s own `strategy_executions` row for a
+  close-only block (#1169) is only written when the trading-loop actually calls it, which
+  `trading_engine.py` gates on `position_count < max_concurrent_positions` — so a close-only halt
+  with the position book already full never reaches that code at all, and the row never appears
+  (#1181: the #1169 fix is a **partial** signal, not the authoritative one). The row that IS
+  authoritative and ungated is `LatchedConditionMonitor`'s (`engines/live/monitoring/
+  latched_condition_monitor.py`, #1095/#1096): it runs unconditionally near the top of every loop
+  iteration, before any position-count or safety-mode check, and writes an hourly
+  `ENTRIES_ENABLED` / `CLOSE_ONLY_LATCHED` / `SYSTEM_HALT_LATCHED` / `ENTRY_PAUSE_LATCHED` row no
+  matter how many positions are open. Query it directly:
+  ```sql
+  SELECT error_code, message, timestamp FROM system_events
+  WHERE error_code = 'ENTRIES_ENABLED' OR error_code LIKE '%\_LATCHED'
+  ORDER BY timestamp DESC, id DESC LIMIT 5;
+  ```
+  Newest row `ENTRIES_ENABLED` and <~2h old → healthy; newest row any `*_LATCHED` → blocked but
+  alive, reason in the message; nothing inside ~2h → loop is actually dead. Full recipe:
+  `docs/live_trading.md` "Latched conditions are re-announced until cleared".
 
 ### 5.2 Escalate immediately (critical markers)
 - `emergency.close` / "Stop-loss placement failed" — opened a position it couldn't protect; repeated
@@ -475,6 +1715,14 @@ keep the skill generic and let the specifics live here.
 - `code=-1111` (price precision) / `code=51077` (qty precision) — order precision rejection (should
   be fixed; recurrence = regression, see §1.1).
 - `-2010` / "insufficient balance" on a stop-loss → unprotected position.
+- `CLOSE_INVENTORY_LOCKED` (`system_events`) / `ABORTING close of <SYM>` — the engine refused to
+  submit a close because the base asset is locked (usually an **orphaned stop-loss** it lost track
+  of) or the position cannot be lot-sized honestly. The position is still OPEN and cannot be
+  exited. Three in a row latch close-only. Check `get_open_orders(<SYM>)` for a resting protective
+  order the tracker does not know about (#1104).
+- `Stop-loss for <SYM> can only cover X of the required Y` — refused to place an undersized stop
+  that would be recorded as full protection. Same root cause as above; the position is genuinely
+  UNPROTECTED until the lock clears (#1109).
 - `MANUAL SYSTEM HALT ENFORCED` / `error_code=SYSTEM_HALT` (#922) — the manual kill-switch
   (`atb live-control halt`) is in force: entries + scale-ins blocked, exits/stops continue.
   Expected if an operator just pulled it (a `SYSTEM_HALT_COMMAND` event precedes it); if nobody
@@ -513,6 +1761,9 @@ keep the skill generic and let the specifics live here.
 - `[ERRO] Task exception was never retrieved → KeyError('margin_subscription:0')` (binance
   `threaded_stream.py:74`) at user-stream circuit-open — benign teardown noise (fix tracked in #716;
   disappears once it ships).
+- `[INFO] Order <id>: CANCELED is our own deliberate cancel — not escalating` — the close path
+  cancelling a resting stop before a market exit. Expected on every exit; the absence of a
+  matching `STOP_LOSS_CANCELLED` beside it is the CORRECT behaviour, not a missing alert (#1104).
 - The kline self-heal sequence (`Kline WS error: Connection closed` → `RESYNCING` → `KlineBuffer
   resynced … candles` → `Kline WebSocket recovered … WS primary again (#662)`) — the GOOD path,
   ~30 s, no data gap. Do NOT alarm.
@@ -551,3 +1802,42 @@ stream — so *silence read as health*. It was caught only by a manual status sw
   tracked in **GH #1038**; until it lands, treat every safety-relevant one-shot as best-effort and
   assert its resulting state in the sweep. Earned: 2026-07-17 stuck-entry-pause (log 2026-07-17
   ~11:35), #1038.
+
+### 5.8 "Stop-loss set" is a presence check — report the loss AT the stop as a % of equity
+Every standup from 2026-09-28 to 10-04 passed prod position id 33 (ETHUSDT LONG, entry $2717.50,
+stop $2444.92, size 0.06598536, ~2.02x) on the tripwire line "open position missing stop_loss:
+PASS". The stop was there. Nobody multiplied it out: a stop-out realizes about **$17.99 on an $88.75
+balance, 20.3%**, which is the whole 20% `max_drawdown_pct` cap in one trade and 6-7x
+`max_risk_per_trade_pct` (3%). `leveraged_fixed_fraction` sizes on capital x leverage, not on stop
+distance, so the per-trade limit is assumed rather than enforced. The same week #1267 found the
+drawdown guard reads realized balance, so the guard would also stay silent on the way down. The
+10-05 standup computed the number and filed #1272, seven days into the position.
+- **Rule:** for each OPEN position compute `abs(entry - stop) * size / balance` and print it next to
+  the ladder. Compare it to `max_risk_per_trade_pct` and to the remaining distance to the next
+  tripwire tier. A position whose stop-out alone crosses a tier is a finding on the day it opens,
+  whatever today's drawdown reads.
+- **Rule:** "stop present" and "risk bounded" are separate assertions (§5.7: assert the state you
+  need, not the absence of the alarm you have). Whether 20% per trade is intended at this balance
+  is a risk-officer / Board call (#1272); reporting the number is not optional either way.
+  Earned: prod position id 33, 2026-09-28 → 10-05; #1272, #1267.
+
+### 5.9 Railway CLI/API dead: what the DB alone proves, what it cannot, and the drawdown column
+From 2026-10-15 the Railway CLI returned `Unauthorized. Please run 'railway login' again.` for every
+call; on 10-17 that widened from staging (#1141) to production, the project's own `RAILWAY_API_TOKEN`
+was rejected, and the Railway MCP connector failed `CONNECTION_CLOSED`. For five standups the only
+prod read was Postgres. What those runs did, which is the rule:
+- **Latch / entries:** the `system_events` rows at the newest timestamp — `ENTRIES_ENABLED` hourly =
+  loop alive and able to trade; any `*_LATCHED` = P0; no row in 2h = loop thread dead (§5.7). This
+  stands in for the `FEATURE_ENTRY_PAUSE` read when `railway variables` is unavailable, because the
+  monitor's own message asserts "no entry pause in force".
+- **Liveness:** `account_history` newest-row age (hourly heartbeat; >2h = FAIL).
+- **NOT provable from the DB:** the 60s `Decision:` cadence (prod), governor / `gate_reason` /
+  circuit lines (staging), `system_control_flags` via the CLI. Report each as **BLOCKED**, never as a
+  PASS inferred from silence. The 10-15 → 10-19 runs did exactly this; keep doing it.
+- **`account_history.drawdown` is the BALANCE-based figure (#1267; unit note #1084) and stays flat
+  between closed trades.** It read exactly `0.58178923` for 87+ hours while equity moved 1.3-1.8%.
+  Four consecutive standups (10-16 → 10-19) re-derived this one day at a time ("frozen", "diverges
+  2x", "that is the balance figure", "not re-litigated"). A flat column while equity moves is
+  expected and is neither a liveness nor a guard signal: compute equity drawdown from the session
+  peak yourself, print both with their basis, and check the unit against #1084 before comparing.
+Earned: #1141 (10-15 → 10-19, widened to production 10-17); standups 10-16 → 10-19 on #1267.

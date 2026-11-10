@@ -6,6 +6,7 @@ existing ConfigManager system to load prediction engine settings.
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from src.config.config_manager import get_config
 from src.config.constants import (
@@ -28,6 +29,7 @@ from src.config.constants import (
     DEFAULT_PREDICTION_CACHE_TTL,
     DEFAULT_PREDICTION_HORIZONS,
 )
+from src.infrastructure.runtime.paths import get_project_root
 
 
 @dataclass
@@ -66,6 +68,15 @@ class PredictionConfig:
     prediction_cache_enabled: bool = DEFAULT_PREDICTION_CACHE_ENABLED
     prediction_cache_ttl: int = DEFAULT_PREDICTION_CACHE_TTL
     prediction_cache_max_size: int = DEFAULT_PREDICTION_CACHE_MAX_SIZE
+
+    def __post_init__(self) -> None:
+        # A relative registry path would resolve against the process cwd, so a
+        # run launched from another directory sees an empty registry and
+        # silently produces an all-HOLD result. Anchor it to the project root, the same base the write side uses
+        # (get_model_registry_root).
+        path = Path(self.model_registry_path)
+        if not path.is_absolute():
+            self.model_registry_path = str(get_project_root() / path)
 
     @classmethod
     def from_config_manager(cls) -> "PredictionConfig":

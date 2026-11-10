@@ -16,6 +16,7 @@ from src.config.constants import (
     DEFAULT_REGIME_LOOKBACK_BUFFER,
     DEFAULT_REGIME_WARMUP_CANDLES,
 )
+from src.strategies import call_strategy_factory
 
 if TYPE_CHECKING:
     from src.engines.live.regime_strategy_switcher import RegimeStrategySwitcher
@@ -28,6 +29,11 @@ logger = logging.getLogger(__name__)
 REGIME_LOOKBACK_BUFFER = DEFAULT_REGIME_LOOKBACK_BUFFER
 REGIME_CHECK_FREQUENCY = DEFAULT_REGIME_CHECK_FREQUENCY
 REGIME_WARMUP_CANDLES = DEFAULT_REGIME_WARMUP_CANDLES
+
+# Switch targets that load no ML model when built with factory defaults (the
+# handler never overrides ``signal_source``), so a model pin has nothing to
+# apply to and must not block the switch.
+MODEL_FREE_SWITCH_TARGETS = frozenset({"momentum_leverage", "leveraged_regime"})
 
 
 def compute_regime_lookback(regime_switcher: Any) -> int:
@@ -83,6 +89,7 @@ class RegimeHandler:
         initial_strategy_name: str,
         check_frequency: int = REGIME_CHECK_FREQUENCY,
         warmup_candles: int = REGIME_WARMUP_CANDLES,
+        model_version: str | None = None,
     ) -> None:
         """Initialize regime handler.
 
@@ -92,16 +99,25 @@ class RegimeHandler:
             initial_strategy_name: Name of the initial strategy.
             check_frequency: How often to check regime (in candles).
             warmup_candles: Minimum candles before first check.
+            model_version: The run's model pin, applied to every switched-in
+                strategy. None means the run is unpinned.
         """
         self.regime_switcher = regime_switcher
         self.strategy_manager = strategy_manager
         self.initial_strategy_name = initial_strategy_name
         self.check_frequency = check_frequency
         self.warmup_candles = warmup_candles
+        self.model_version = model_version
 
         self.regime_history: list[dict] = []
         self.strategy_switches: list[dict] = []
         self._current_strategy_name = initial_strategy_name
+        # Loads that failed for a (name, symbol, timeframe); not retried every check.
+        self._failed_loads: set[tuple[str, str | None, str | None]] = set()
+        # Switches the regime switcher asked for that could not be built, so a
+        # refused switch is visible in the results instead of reading as
+        # "the regime never triggered".
+        self.failed_switches: list[dict] = []
 
     @property
     def current_strategy_name(self) -> str:
@@ -129,6 +145,7 @@ class RegimeHandler:
         timeframe: str,
         balance: float,
         current_strategy: ComponentStrategy,
+        symbol: str | None = None,
     ) -> tuple[ComponentStrategy | None, bool, dict | None]:
         """Analyze market regime and switch strategy if needed.
 
@@ -139,6 +156,7 @@ class RegimeHandler:
             timeframe: Candle timeframe.
             balance: Current account balance.
             current_strategy: Currently active strategy.
+            symbol: Traded symbol, threaded to the switched-in strategy.
 
         Returns:
             Tuple of (new_strategy_or_None, switched, switch_info).
@@ -181,13 +199,24 @@ class RegimeHandler:
                 "reason": switch_decision["reason"],
                 "balance_at_switch": balance,
             }
-            self.strategy_switches.append(switch_info)
-
             # Load new strategy
-            new_strategy = self._load_strategy(new_strategy_name)
+            new_strategy = self._load_strategy(
+                new_strategy_name, symbol=symbol, timeframe=timeframe
+            )
             if new_strategy is None:
                 logger.warning("Failed to load strategy %s", new_strategy_name)
-                return None, False, switch_info
+                self.failed_switches.append(
+                    {
+                        "timestamp": current_time,
+                        "candle_index": candle_index,
+                        "target_strategy": new_strategy_name,
+                        "regime": switch_decision["new_regime"],
+                        "model_version": self.model_version,
+                    }
+                )
+                return None, False, None
+
+            self.strategy_switches.append(switch_info)
 
             logger.info(
                 "Strategy switch at %s (candle %d): %s -> %s (regime: %s)",
@@ -264,11 +293,29 @@ class RegimeHandler:
             }
         )
 
-    def _load_strategy(self, strategy_name: str) -> ComponentStrategy | None:
+    def _load_strategy(
+        self,
+        strategy_name: str,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+    ) -> ComponentStrategy | None:
         """Load strategy by name.
+
+        The run's symbol and timeframe are threaded to the factory so the
+        switched-in ML strategy selects the same model bundle as the strategy
+        it replaces. A missing bundle fails the load (returns None, no switch)
+        rather than falling back to the factory's 1h/default-symbol model.
+
+        Under a model pin the same version is requested from the factory, and
+        an ML factory that cannot honor it (no ``model_version`` parameter)
+        fails the load too: the alternative is a switched-in strategy that
+        silently scores with ``latest`` inside a "pinned" run. Model-free
+        targets (``MODEL_FREE_SWITCH_TARGETS``) are built without the pin.
 
         Args:
             strategy_name: Name of strategy to load.
+            symbol: Traded symbol.
+            timeframe: Run candle timeframe.
 
         Returns:
             Strategy instance, or None on failure.
@@ -291,6 +338,10 @@ class RegimeHandler:
             ),
         }
 
+        load_key = (strategy_name, symbol, timeframe)
+        if load_key in self._failed_loads:
+            return None
+
         if strategy_name not in strategy_factories:
             logger.warning("Unknown strategy for switching: %s", strategy_name)
             return None
@@ -299,9 +350,18 @@ class RegimeHandler:
             module_path, factory_name = strategy_factories[strategy_name]
             module = __import__(module_path, fromlist=[factory_name])
             factory_function = getattr(module, factory_name)
-            return factory_function()
+            pin = None if strategy_name in MODEL_FREE_SWITCH_TARGETS else self.model_version
+            return call_strategy_factory(
+                factory_function, symbol=symbol, model_version=pin, timeframe=timeframe
+            )
         except Exception as e:
-            logger.error("Failed to load strategy %s: %s", strategy_name, e)
+            logger.error(
+                "Failed to load strategy %s (model pin %s): %s",
+                strategy_name,
+                self.model_version,
+                e,
+            )
+            self._failed_loads.add(load_key)
             return None
 
     def _execute_switch(
@@ -340,6 +400,7 @@ class RegimeHandler:
             "final_strategy": self._current_strategy_name,
             "initial_strategy": self.initial_strategy_name,
             "total_strategy_switches": len(self.strategy_switches),
+            "failed_switches": self.failed_switches,
         }
 
     @staticmethod
@@ -354,4 +415,5 @@ class RegimeHandler:
             "strategy_switches": [],
             "regime_history": [],
             "total_strategy_switches": 0,
+            "failed_switches": [],
         }

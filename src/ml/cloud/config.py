@@ -75,6 +75,9 @@ class CloudTrainingConfig:
         provider: Cloud provider name (sagemaker, vertex_ai, local)
         job_name_prefix: Prefix for job names (helps with filtering in console)
         auto_sync_artifacts: Automatically sync artifacts to local registry on completion
+        set_latest: Point ``{type}/latest`` at the synced bundle. Off by default: the
+            registry loads every ``latest`` as a production model, so a candidate must
+            not get one before a promotion decision.
         docker_image_uri: ECR image URI for training container (provider-specific)
         input_data_s3_uri: Optional S3 URI for pre-downloaded training data (avoids API blocking)
     """
@@ -85,6 +88,7 @@ class CloudTrainingConfig:
     provider: str = "sagemaker"
     job_name_prefix: str = "atb-training"
     auto_sync_artifacts: bool = True
+    set_latest: bool = False
     docker_image_uri: str | None = None
     input_data_s3_uri: str | None = None
 

@@ -70,6 +70,31 @@ jobs:
           coverage.xml
         retention-days: 7
 
+  # Type check - one mypy run over src/ and cli/. The backlog is zero, so the
+  # whole tree is gated; any new type error fails the job.
+  type-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+        cache-dependency-path: requirements.txt
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run mypy
+      run: python bin/run_mypy.py
+
   # Integration tests - run in parallel with unit tests
   integration-tests:
     runs-on: ubuntu-latest

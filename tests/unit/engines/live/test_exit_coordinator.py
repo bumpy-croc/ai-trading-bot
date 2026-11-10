@@ -23,6 +23,7 @@ from src.engines.live.execution.exit_coordinator import (
     LiveExitCoordinator,
     LiveExitEngineState,
 )
+from src.engines.live.execution.exit_handler import LiveExitResult
 from src.engines.shared.models import PositionSide
 
 pytestmark = pytest.mark.fast
@@ -221,6 +222,53 @@ def test_execute_exit_locked_returns_on_failed_close():
     assert state.completed_trades == []
 
 
+def test_execute_exit_locked_signals_stop_just_cancelled_after_confirmed_cancel():
+    """#1165: the live close must tell the execution engine a stop was just
+    cancelled so it retries a stale post-cancel balance read instead of
+    aborting on Binance's eventually-consistent margin wallet."""
+    position = _make_position()
+    position.stop_loss_order_id = "SL1"
+    state = _make_state(position, _make_exit_check(should_exit=False))
+    state.live_position_tracker.has_position.return_value = True
+    state.enable_live_trading = True
+    state.data_provider = MagicMock()
+    state._check_stop_loss_filled.return_value = (False, None)
+    state._stop_loss_filled_quantity.return_value = 0.0
+    state._cancel_stop_loss_order.return_value = True
+    failed = MagicMock(success=False, error="boom")
+    state.live_exit_handler.execute_exit.return_value = failed
+
+    LiveExitCoordinator(engine_state=state).execute_exit_locked(
+        position, "stop_loss", None, 50100.0, None, None, None
+    )
+
+    state.live_exit_handler.execute_exit.assert_called_once()
+    assert state.live_exit_handler.execute_exit.call_args.kwargs["stop_just_cancelled"] is True
+    # A failed close after a confirmed cancel must still re-protect immediately (#710).
+    state._reprotect_position.assert_called_once_with(position)
+
+
+def test_execute_exit_locked_does_not_claim_a_stop_cancel_that_never_happened():
+    """No resting stop to cancel -> the flag must stay False, never default-True."""
+    position = _make_position()
+    position.stop_loss_order_id = None  # nothing to cancel
+    state = _make_state(position, _make_exit_check(should_exit=False))
+    state.live_position_tracker.has_position.return_value = True
+    state.enable_live_trading = True
+    state.data_provider = MagicMock()
+    state._check_stop_loss_filled.return_value = (False, None)
+    failed = MagicMock(success=False, error="boom")
+    state.live_exit_handler.execute_exit.return_value = failed
+
+    LiveExitCoordinator(engine_state=state).execute_exit_locked(
+        position, "stop_loss", None, 50100.0, None, None, None
+    )
+
+    state.live_exit_handler.execute_exit.assert_called_once()
+    assert state.live_exit_handler.execute_exit.call_args.kwargs["stop_just_cancelled"] is False
+    state._cancel_stop_loss_order.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # ml_predictions logging (#914): signal-metadata prediction context must reach
 # the strategy_executions row instead of the historical always-null value.
@@ -352,3 +400,237 @@ def test_check_exit_conditions_logs_prediction_error_details_end_to_end():
     assert kwargs["ml_predictions"]["prediction_failed"] is True
     assert kwargs["ml_predictions"]["error"] == "ONNX session timed out"
     assert kwargs["ml_predictions"]["error_type"] == "TimeoutError"
+
+
+# ---------------------------------------------------------------------------
+# atomic_close_with_balance / balance_delta (#736, #1224 review findings F/G):
+# a normal exit with a persisted position closes balance+trade+position in
+# ONE log_trade(balance_delta=...) call, then re-reads the balance from the
+# DB. The re-read must not be able to turn a successful close into a logged
+# failure if it raises.
+# ---------------------------------------------------------------------------
+
+
+def _make_closable_position() -> MagicMock:
+    """A position with concrete numeric sizing/fee fields (not auto-Mock
+    attributes) so the close-accounting helpers (_closed_base_quantity,
+    _close_entry_fee_usd, _close_position_portion) take their normal numeric
+    paths instead of falling back on a TypeError from a MagicMock."""
+    position = _make_position()
+    position.db_position_id = 55
+    position.quantity = 0.1
+    position.original_size = 0.1
+    position.current_size = 0.1
+    position.entry_balance = 1000.0
+    position.metadata = {"entry_fee": 0.5, "entry_slippage_cost": 0.0}
+    return position
+
+
+def _make_closing_state(position: MagicMock, **overrides) -> MagicMock:
+    state = _make_state(position, _make_exit_check(should_exit=False), **overrides)
+    state.trading_session_id = 7
+    state.live_position_tracker.has_position.return_value = True
+    state.live_execution_engine = MagicMock()
+    state.live_execution_engine.calculate_entry_fee.return_value = 0.5
+    state.performance_tracker = MagicMock()
+    return state
+
+
+def test_execute_exit_locked_logs_trade_with_balance_delta_on_atomic_close():
+    """A normal exit with a db_position_id and a trading session folds the
+    balance change into log_trade's balance_delta, then re-reads the ledger."""
+    position = _make_closable_position()
+    state = _make_closing_state(position)
+    exit_result = LiveExitResult(
+        success=True,
+        realized_pnl=10.0,
+        realized_pnl_percent=1.0,
+        exit_price=50100.0,
+        exit_fee=0.05,
+        slippage_cost=0.0,
+    )
+    state.live_exit_handler.execute_filled_exit.return_value = exit_result
+    state.db_manager.get_current_balance.return_value = 1010.0
+
+    LiveExitCoordinator(engine_state=state).execute_exit_locked(
+        position, "take_profit", None, 50100.0, None, None, None, skip_live_close=True
+    )
+
+    state.db_manager.log_trade.assert_called_once()
+    kwargs = state.db_manager.log_trade.call_args.kwargs
+    assert kwargs["balance_delta"] == pytest.approx(9.95)  # realized_pnl - exit_fee
+    assert kwargs["position_id"] == 55
+    # Authoritative post-commit re-read (the happy path of Finding F).
+    state.db_manager.get_current_balance.assert_called_once_with(7)
+    assert state.current_balance == 1010.0
+
+
+def test_execute_exit_locked_falls_back_to_delta_when_balance_reread_fails():
+    """#1224 review finding F: the close already committed by the time the
+    post-close balance re-read runs. If that re-read raises, it must not
+    propagate into the generic except handler (which would log a false
+    "failed to close" for an exit that actually succeeded) — current_balance
+    must fall back to applying the known realized-PnL delta in-memory."""
+    position = _make_closable_position()
+    state = _make_closing_state(position)
+    exit_result = LiveExitResult(
+        success=True,
+        realized_pnl=10.0,
+        realized_pnl_percent=1.0,
+        exit_price=50100.0,
+        exit_fee=0.05,
+        slippage_cost=0.0,
+    )
+    state.live_exit_handler.execute_filled_exit.return_value = exit_result
+    state.db_manager.get_current_balance.side_effect = RuntimeError("pool exhausted")
+    balance_before_close = state.current_balance  # 1000.0, per _make_state default
+
+    LiveExitCoordinator(engine_state=state).execute_exit_locked(
+        position, "take_profit", None, 50100.0, None, None, None, skip_live_close=True
+    )
+
+    # The close itself must still be recorded — no crash, no swallowed trade log.
+    state.db_manager.log_trade.assert_called_once()
+    # Balance falls back to pre-close balance + the same delta the atomic commit
+    # already applied (realized_pnl - exit_fee = 9.95), not left stale.
+    assert state.current_balance == pytest.approx(balance_before_close + 9.95)
+
+
+def test_execute_exit_locked_persists_close_when_ledger_rejects_negative_balance(caplog):
+    """#1261: the exchange close already filled, so a realized loss that would
+    take the ledger negative must not abort the Trade insert / Position CLOSED
+    flip, which would leave the DB position OPEN while the exchange position is
+    gone. Runs against a real DatabaseManager so the whole atomic write is
+    exercised, not a mock."""
+    from src.database.manager import DatabaseManager
+    from src.database.models import Position, PositionStatus, Trade, TradeSource
+
+    db = DatabaseManager("sqlite:///:memory:")
+    session_id = db.create_trading_session(
+        strategy_name="TestStrategy",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        mode=TradeSource.PAPER,
+        initial_balance=10.0,
+    )
+    db.update_balance(10.0, "seed", "test", session_id)
+    db_position_id = db.log_position(
+        symbol="BTCUSDT",
+        side="long",
+        entry_price=50000.0,
+        size=0.1,
+        strategy_name="TestStrategy",
+        entry_order_id="order-1",
+        quantity=0.1,
+        entry_balance=10.0,
+        session_id=session_id,
+    )
+
+    position = _make_closable_position()
+    position.db_position_id = db_position_id
+    state = _make_closing_state(position, db_manager=db)
+    state.trading_session_id = session_id
+    state.current_balance = 10.0
+    state.live_position_tracker.mfe_mae_tracker.get_position_metrics.return_value = None
+    state.live_exit_handler.execute_filled_exit.return_value = LiveExitResult(
+        success=True,
+        realized_pnl=-500.0,
+        realized_pnl_percent=-10.0,
+        exit_price=45000.0,
+        exit_fee=0.05,
+        slippage_cost=0.0,
+    )
+
+    with caplog.at_level("ERROR"):
+        LiveExitCoordinator(engine_state=state).execute_exit_locked(
+            position, "stop_loss", None, 45000.0, None, None, None, skip_live_close=True
+        )
+
+    with db.get_session() as session:
+        assert session.query(Trade).filter(Trade.session_id == session_id).count() == 1
+        closed = session.query(Position).filter(Position.id == db_position_id).one()
+        assert closed.status == PositionStatus.CLOSED
+    assert db.get_current_balance(session_id) == pytest.approx(10.0)
+    assert state.current_balance == pytest.approx(10.0)
+    assert len(db.get_audit_events(session_id, severity="CRITICAL")) == 1
+    assert "Failed to close position" not in caplog.text
+    # The ledger no longer matches the exchange, so new entries must stop.
+    state._enter_close_only_mode.assert_called_once()
+
+
+def test_ledger_rejected_close_does_not_apply_the_refused_delta_in_memory(caplog):
+    """If the post-close balance re-read also fails, the fallback must not add a delta the
+    ledger refused to the in-memory balance."""
+    from src.database.manager import DatabaseManager
+    from src.database.models import TradeSource
+
+    db = DatabaseManager("sqlite:///:memory:")
+    session_id = db.create_trading_session(
+        strategy_name="TestStrategy",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        mode=TradeSource.PAPER,
+        initial_balance=10.0,
+    )
+    db.update_balance(10.0, "seed", "test", session_id)
+    db_position_id = db.log_position(
+        symbol="BTCUSDT",
+        side="long",
+        entry_price=50000.0,
+        size=0.1,
+        strategy_name="TestStrategy",
+        entry_order_id="order-1",
+        quantity=0.1,
+        entry_balance=10.0,
+        session_id=session_id,
+    )
+    position = _make_closable_position()
+    position.db_position_id = db_position_id
+    state = _make_closing_state(position, db_manager=db)
+    state.trading_session_id = session_id
+    state.current_balance = 10.0
+    state.live_position_tracker.mfe_mae_tracker.get_position_metrics.return_value = None
+    state.live_exit_handler.execute_filled_exit.return_value = LiveExitResult(
+        success=True,
+        realized_pnl=-500.0,
+        realized_pnl_percent=-10.0,
+        exit_price=45000.0,
+        exit_fee=0.05,
+        slippage_cost=0.0,
+    )
+    db.get_current_balance = MagicMock(side_effect=RuntimeError("pool exhausted"))
+
+    LiveExitCoordinator(engine_state=state).execute_exit_locked(
+        position, "stop_loss", None, 45000.0, None, None, None, skip_live_close=True
+    )
+
+    assert state.current_balance == pytest.approx(10.0)
+
+
+def test_execute_exit_locked_tolerates_a_close_already_booked_by_another_closer(caplog):
+    """When the reconciler booked the position first, the engine's trade write is refused
+    with DuplicateCloseError: no failure is logged, and the in-memory balance follows the
+    ledger the other closer moved."""
+    from src.database.manager import DuplicateCloseError
+
+    position = _make_closable_position()
+    state = _make_closing_state(position)
+    state.live_exit_handler.execute_filled_exit.return_value = LiveExitResult(
+        success=True,
+        realized_pnl=-10.0,
+        realized_pnl_percent=-1.0,
+        exit_price=49000.0,
+        exit_fee=0.05,
+        slippage_cost=0.0,
+    )
+    state.db_manager.log_trade.side_effect = DuplicateCloseError("already booked")
+    state.db_manager.get_current_balance.return_value = 989.95
+
+    with caplog.at_level("WARNING"):
+        LiveExitCoordinator(engine_state=state).execute_exit_locked(
+            position, "stop_loss", None, 49000.0, None, None, None, skip_live_close=True
+        )
+
+    assert state.current_balance == pytest.approx(989.95)
+    assert "already booked by another closer" in caplog.text
+    assert "Failed to close position" not in caplog.text

@@ -129,6 +129,18 @@ class FlatRiskManager(RiskManager):
         # Flat risk — no further confidence/strength scaling
         return balance * self.risk_fraction
 
+    def explain_zero_size(
+        self,
+        signal: Signal,
+        balance: float,
+        regime: RegimeContext | None = None,
+        **context: Any,
+    ) -> str | None:
+        """Name the confidence floor when it is what zeroed the size."""
+        if signal.confidence < self.min_confidence:
+            return f"confidence_{signal.confidence:.3f}_below_min_{self.min_confidence:.3f}"
+        return None
+
     def should_exit(
         self,
         position: Any,
@@ -204,6 +216,7 @@ def create_hyper_growth_strategy(
     early_cut_evaluation_window_hours: float | None = None,
     model_version: str | None = None,
     allow_shorts: bool | None = None,
+    timeframe: str | None = None,
 ) -> Strategy:
     """Create hyper-growth strategy targeting high annual returns.
 
@@ -321,6 +334,7 @@ def create_hyper_growth_strategy(
             name=f"{name}_signals",
             model_type="basic",
             symbol=symbol,
+            timeframe=timeframe,
             model_version=model_version,
             allow_shorts=resolved_allow_shorts,
         )

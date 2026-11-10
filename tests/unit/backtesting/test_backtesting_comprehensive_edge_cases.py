@@ -23,9 +23,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.config.constants import DEFAULT_STRATEGY_BASE_FRACTION
 from src.data_providers.data_provider import DataProvider
 from src.engines.backtest.engine import Backtester
 from src.risk.risk_manager import RiskParameters
+from src.strategies.components import (
+    FixedFractionSizer,
+    Signal,
+    SignalDirection,
+    SignalGenerator,
+)
 from src.strategies.ml_basic import create_ml_basic_strategy
 
 # ============================================================================
@@ -44,6 +51,41 @@ def mock_data_provider():
 def minimal_strategy():
     """Create a minimal strategy for fast testing"""
     return create_ml_basic_strategy()
+
+
+class _AlternatingSignalGenerator(SignalGenerator):
+    """Deterministic, model-free signals: BUY, hold, SELL, hold, repeat.
+
+    Gives scale and robustness tests a strategy that really opens and closes positions
+    without ML inference on every candle, so their runtime is the engine's own cost.
+    """
+
+    def __init__(self):
+        super().__init__("alternating_generator")
+
+    def generate_signal(self, df, index, regime=None) -> Signal:
+        self.validate_inputs(df, index)
+        phase = index % 4
+        if phase == 0:
+            direction = SignalDirection.BUY
+        elif phase == 2:
+            direction = SignalDirection.SELL
+        else:
+            direction = SignalDirection.HOLD
+        return Signal(direction, strength=1.0, confidence=1.0, metadata={})
+
+    def get_confidence(self, df, index) -> float:
+        return 1.0
+
+
+@pytest.fixture
+def cheap_trading_strategy():
+    """Real engine-side risk management and ml_basic-sized positions, with cheap deterministic
+    signals and regime detection."""
+    strategy = create_ml_basic_strategy(fast_mode=True)
+    strategy.signal_generator = _AlternatingSignalGenerator()
+    strategy.position_sizer = FixedFractionSizer(fraction=DEFAULT_STRATEGY_BASE_FRACTION)
+    return strategy
 
 
 @pytest.fixture
@@ -377,7 +419,7 @@ class TestExtremePriceMovements:
         # Should trigger stop losses and protective exits
         assert results["max_drawdown"] >= 0
 
-    def test_historical_crash_november_2022_ftx(self, mock_data_provider, minimal_strategy):
+    def test_historical_crash_november_2022_ftx(self, mock_data_provider, cheap_trading_strategy):
         """Simulate Nov 2022 FTX collapse crash"""
         # Rapid decline similar to FTX event
         pre_crash = create_ohlcv_data(100, start_price=21000, volatility=0.02)
@@ -389,7 +431,7 @@ class TestExtremePriceMovements:
         mock_data_provider.get_historical_data.return_value = data
 
         backtester = Backtester(
-            strategy=minimal_strategy,
+            strategy=cheap_trading_strategy,
             data_provider=mock_data_provider,
             initial_balance=10000,
             log_to_database=False,
@@ -398,6 +440,7 @@ class TestExtremePriceMovements:
         results = backtester.run("BTCUSDT", "1h", datetime(2022, 11, 1))
 
         assert isinstance(results, dict)
+        assert results["total_trades"] > 0
         assert results["final_balance"] > 0
 
 
@@ -660,14 +703,15 @@ class TestLongRunningBacktests:
     """Test performance and reliability with large datasets"""
 
     @pytest.mark.slow
-    @pytest.mark.timeout(300)  # Extended timeout for 10k candles
-    def test_very_large_dataset_10000_candles(self, mock_data_provider, minimal_strategy):
-        """10,000 candles (~1.1 years of hourly data)"""
-        large_data = create_ohlcv_data(10000, start_price=50000)
+    @pytest.mark.timeout(300)  # Extended timeout for 4k candles
+    def test_very_large_dataset_4000_candles(self, mock_data_provider, cheap_trading_strategy):
+        """4,000 candles (~5.5 months of hourly data); the engine alone costs ~10-20ms per
+        candle, so the size is kept inside the timeout on a busy machine."""
+        large_data = create_ohlcv_data(4000, start_price=50000)
         mock_data_provider.get_historical_data.return_value = large_data
 
         backtester = Backtester(
-            strategy=minimal_strategy,
+            strategy=cheap_trading_strategy,
             data_provider=mock_data_provider,
             initial_balance=10000,
             log_to_database=False,
@@ -676,8 +720,8 @@ class TestLongRunningBacktests:
         results = backtester.run("BTCUSDT", "1h", datetime(2024, 1, 1))
 
         assert isinstance(results, dict)
-        assert results["total_trades"] >= 0
-        # Should complete in reasonable time (pytest will timeout if too slow)
+        # The alternating strategy trades throughout, so this guards against a silent no-op run
+        assert results["total_trades"] > 100
 
     @pytest.mark.slow
     @pytest.mark.skip(reason="Very slow (>2 min) - run manually for performance testing")
@@ -699,16 +743,14 @@ class TestLongRunningBacktests:
         # Should handle large dataset without memory issues
         assert results["total_trades"] >= 0
 
-    def test_many_rapid_trades_1000_plus(self, mock_data_provider):
+    def test_many_rapid_trades_1000_plus(self, mock_data_provider, cheap_trading_strategy):
         """Simulate scenario generating 1000+ trades"""
-        # Create very volatile data that triggers many entries/exits
+        # Very volatile data; the alternating strategy enters/exits every other candle
         volatile_data = create_ohlcv_data(2000, start_price=50000, volatility=0.05)
         mock_data_provider.get_historical_data.return_value = volatile_data
 
-        strategy = create_ml_basic_strategy()
-
         backtester = Backtester(
-            strategy=strategy,
+            strategy=cheap_trading_strategy,
             data_provider=mock_data_provider,
             initial_balance=10000,
             log_to_database=False,
@@ -718,7 +760,7 @@ class TestLongRunningBacktests:
 
         assert isinstance(results, dict)
         # Should handle many trades without issues
-        assert results["total_trades"] >= 0
+        assert results["total_trades"] > 100
         assert results["final_balance"] >= 0
 
 
@@ -809,7 +851,9 @@ class TestRiskManagementEdgeCases:
     """Test edge cases in risk management logic"""
 
     def test_max_drawdown_exceeded_early_stop(self, mock_data_provider, minimal_strategy):
-        """Backtest should stop when max drawdown exceeded"""
+        """Backtest should stop when max drawdown exceeded, and results must
+        say so via the explicit ``early_stopped`` marker (#1102) -- not just
+        a possibly-None ``early_stop_reason`` string."""
         # Create data that causes large drawdown
         crash_data = create_ohlcv_data(100, start_price=50000, trend=-0.60)  # 60% decline
         mock_data_provider.get_historical_data.return_value = crash_data
@@ -826,10 +870,163 @@ class TestRiskManagementEdgeCases:
 
         results = backtester.run("BTCUSDT", "1h", datetime(2024, 1, 1))
 
+        # Default mode is "enforce" and results must be tagged as such.
+        assert results["drawdown_cap_mode"] == "enforce"
         # Should have early stopped
         if results["early_stop_reason"]:
+            assert results["early_stopped"] is True
             assert "drawdown" in results["early_stop_reason"].lower()
             assert results["early_stop_date"] is not None
+            assert results["drawdown_cap_breached"] is True
+            assert results["drawdown_cap_threshold"] == pytest.approx(0.20)
+        else:
+            assert results["early_stopped"] is False
+
+    def test_drawdown_cap_mode_measure_does_not_truncate(self, mock_data_provider):
+        """'measure' mode must run the full window and report the breach as
+        a metric instead of stopping the run there (#1102).
+
+        Uses a deterministic scripted strategy (BUY at the start of each
+        cycle, SELL at the end, full allocation, no fees/slippage) instead
+        of ml_basic so the drawdown trajectory -- and hence which trade
+        crosses the cap -- is exact rather than dependent on ML inference
+        against random data.
+        """
+        from src.strategies.components import Strategy
+        from src.strategies.components.position_sizer import PositionSizer
+        from src.strategies.components.risk_manager import RiskManager as ComponentRiskManager
+
+        class CycleSignalGenerator(SignalGenerator):
+            """BUY at the start of each 2-row cycle, SELL (exit) at the end."""
+
+            def __init__(self):
+                super().__init__("cycle_generator")
+
+            def generate_signal(self, df, index, regime=None) -> Signal:
+                self.validate_inputs(df, index)
+                if index % 2 == 0:
+                    return Signal(SignalDirection.BUY, strength=1.0, confidence=1.0, metadata={})
+                return Signal(SignalDirection.SELL, strength=1.0, confidence=1.0, metadata={})
+
+            def get_confidence(self, df, index) -> float:
+                return 1.0
+
+        class FullAllocationRiskManager(ComponentRiskManager):
+            def __init__(self):
+                super().__init__("full_allocation_risk")
+
+            def calculate_position_size(self, signal, balance, regime=None) -> float:
+                if balance <= 0 or signal.direction == SignalDirection.HOLD:
+                    return 0.0
+                return balance
+
+            def should_exit(self, position, current_data, regime=None) -> bool:
+                return False
+
+            def get_stop_loss(self, entry_price, signal, regime=None) -> float:
+                # Stop far away -- exits are driven by the SELL signal, not SL.
+                return (
+                    entry_price * 0.01
+                    if signal.direction == SignalDirection.BUY
+                    else (entry_price * 100)
+                )
+
+        class PassThroughSizer(PositionSizer):
+            def __init__(self):
+                super().__init__("pass_through_sizer")
+
+            def calculate_size(self, signal, balance, risk_amount, regime=None) -> float:
+                self.validate_inputs(balance, risk_amount)
+                if signal.direction == SignalDirection.HOLD:
+                    return 0.0
+                return self.apply_bounds_checking(
+                    risk_amount, balance, min_fraction=0.0, max_fraction=1.0
+                )
+
+        def build_strategy() -> Strategy:
+            strategy = Strategy(
+                name="CycleCrashStrategy",
+                signal_generator=CycleSignalGenerator(),
+                risk_manager=FullAllocationRiskManager(),
+                position_sizer=PassThroughSizer(),
+            )
+            # Strategy applies its own hardcoded 25%-of-balance position cap
+            # (src/strategies/components/strategy.py) on top of whatever the
+            # sizer/risk_manager return. Remove it so this test's precise
+            # per-trade loss ratios translate directly into balance drawdown.
+            strategy._max_position_pct = 1.0
+            return strategy
+
+        # 6 cycles of [entry_row, exit_row], each losing ~15% of balance.
+        # Compounding losses cross the 20% cap within the first couple of
+        # trades (exact timing depends on engine fill-price mechanics, which
+        # this test does not try to hand-replicate), leaving several more
+        # cycles of data for "measure" mode -- which must not truncate -- to
+        # run through that "enforce" mode never reaches.
+        prices = []
+        price = 1000.0
+        for _ in range(6):
+            prices.append(price)  # entry row
+            price *= 0.85
+            prices.append(price)  # exit row
+        timestamps = pd.date_range(datetime(2024, 1, 1), periods=len(prices), freq="1h")
+        df = pd.DataFrame(
+            {
+                "open": prices,
+                "high": prices,
+                "low": prices,
+                "close": prices,
+                "volume": np.ones(len(prices)),
+            },
+            index=timestamps,
+        )
+        mock_data_provider.get_historical_data.return_value = df
+
+        risk_params = RiskParameters(max_drawdown=0.20, max_position_size=1.0)
+
+        enforced = Backtester(
+            strategy=build_strategy(),
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+            risk_parameters=risk_params,
+            log_to_database=False,
+            fee_rate=0.0,
+            slippage_rate=0.0,
+            drawdown_cap_mode="enforce",
+        ).run("BTCUSDT", "1h", df.index[0], df.index[-1])
+
+        measured = Backtester(
+            strategy=build_strategy(),
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+            risk_parameters=RiskParameters(max_drawdown=0.20, max_position_size=1.0),
+            log_to_database=False,
+            fee_rate=0.0,
+            slippage_rate=0.0,
+            drawdown_cap_mode="measure",
+        ).run("BTCUSDT", "1h", df.index[0], df.index[-1])
+
+        assert enforced["early_stopped"] is True, "fixture must actually breach the cap"
+        assert measured["early_stopped"] is False
+        assert measured["drawdown_cap_mode"] == "measure"
+        assert measured["drawdown_cap_breached"] is True
+        assert measured["drawdown_cap_breach_date"] is not None
+        # "measure" must run past the point "enforce" stopped at, proving it
+        # actually kept going instead of also truncating.
+        assert measured["total_trades"] > enforced["total_trades"]
+        # And the two must agree on WHEN the cap was first crossed, since
+        # "measure" is supposed to observe the same event without acting on it.
+        assert measured["drawdown_cap_breach_date"] == enforced["early_stop_date"]
+
+    def test_drawdown_cap_mode_rejects_invalid_value(self, mock_data_provider, minimal_strategy):
+        """An invalid drawdown_cap_mode must fail fast, not silently fall
+        back to a mode the caller didn't ask for."""
+        with pytest.raises(ValueError, match="drawdown_cap_mode"):
+            Backtester(
+                strategy=minimal_strategy,
+                data_provider=mock_data_provider,
+                drawdown_cap_mode="yolo",  # type: ignore[arg-type]
+            )
 
     def test_stop_loss_at_zero(self, mock_data_provider, minimal_strategy):
         """Stop loss at 0 (impossible price) should not crash"""
@@ -952,18 +1149,19 @@ class TestConcurrentPositions:
 class TestTimeframeEdgeCases:
     """Test various timeframe configurations"""
 
-    def test_one_minute_timeframe(self, mock_data_provider, minimal_strategy):
+    def test_one_minute_timeframe(self, mock_data_provider, cheap_trading_strategy):
         """1-minute timeframe (very granular)"""
-        # 1440 candles = 1 day of 1m data
+        # 360 candles = 6 hours of 1m data; enough to cover 1m timeframe handling without
+        # paying the engine's per-candle cost for a full day
         minute_data = create_ohlcv_data(
-            1440, start_price=50000, start_time=datetime(2024, 1, 1, 0, 0)
+            360, start_price=50000, start_time=datetime(2024, 1, 1, 0, 0)
         )
-        minute_data.index = pd.date_range(datetime(2024, 1, 1), periods=1440, freq="1min")
+        minute_data.index = pd.date_range(datetime(2024, 1, 1), periods=360, freq="1min")
 
         mock_data_provider.get_historical_data.return_value = minute_data
 
         backtester = Backtester(
-            strategy=minimal_strategy,
+            strategy=cheap_trading_strategy,
             data_provider=mock_data_provider,
             initial_balance=10000,
             log_to_database=False,
@@ -972,6 +1170,7 @@ class TestTimeframeEdgeCases:
         results = backtester.run("BTCUSDT", "1m", datetime(2024, 1, 1))
 
         assert isinstance(results, dict)
+        assert results["total_trades"] > 0
 
     def test_one_day_timeframe(self, mock_data_provider, minimal_strategy):
         """1-day timeframe (very coarse)"""
@@ -1009,3 +1208,20 @@ class TestTimeframeEdgeCases:
         results = backtester.run("BTCUSDT", "1w", datetime(2024, 1, 1))
 
         assert isinstance(results, dict)
+
+
+class TestEarlyStopThresholdSingleSource:
+    """Reported drawdown cap must equal the one enforced (#1089)."""
+
+    def test_bare_backtester_uses_hydrated_risk_manager_limit(
+        self, minimal_strategy, mock_data_provider
+    ):
+        backtester = Backtester(
+            strategy=minimal_strategy,
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+            log_to_database=False,
+        )
+
+        assert backtester._early_stop_max_drawdown == pytest.approx(0.20)
+        assert backtester._early_stop_max_drawdown == backtester.risk_manager.params.max_drawdown

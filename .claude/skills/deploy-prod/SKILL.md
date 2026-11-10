@@ -74,6 +74,21 @@ railway logs -e production -s "Trading Bot" | grep -iE \
   (single-row `alembic_version` write, GH #1025) — never treat schema-match + stale stamp as a
   deploy blocker.
 
+## Record (part of done, same session)
+
+A promote is not finished until `log.md` has a `decision-record` entry for it: the develop sha, what
+ships, the authority relied on (quote the human's message, or "charter autonomy"), whether the
+restart cleared any in-process latch (a restart always does — say so as an intended or incidental
+effect, read from your own commit message), and the post-deploy check result. The commit message
+does not replace it. Earned: 2026-09-14 → 09-17, 5 of 6 promotes unrecorded (LESSONS §2.16).
+
+**Ask or act — pick one and say which.** The charter lets the daemon deploy to production without
+asking. If you still choose to ask, the ask carries a default and a deadline ("promoting at 09:00Z
+unless you object"), and that choice goes in the record. An open question with no default parks
+reviewed safety fixes indefinitely: on 2026-09-20 a 16-PR batch that included stop-loss and
+reconciler fixes waited 35h+ on an unanswered "that needs your go-ahead", in the same week the
+daemon had promoted twice without asking.
+
 **Gotcha:** prod REUSES its active session row across restarts — do NOT wait for a new
 `trading_sessions` row as a health signal; watch the startup banner, status ticks, and
 the hourly `account_history` heartbeat instead. Read-only DB ground truth:

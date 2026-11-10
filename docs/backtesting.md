@@ -138,6 +138,8 @@ The shared modules under `src/engines/shared/` keep the bulk of the financial ma
 - **Tick-size / step-size rounding.** The live engine rounds asset quantities down to the exchange's `step_size` (`src/engines/live/execution/execution_engine.py:_normalize_quantity`). Backtest uses raw float quantities. For strategies sizing 1%+ of balance on liquid pairs the gap is sub-cent, but micro-cap strategies or very small accounts may see a small fill-size drift; treat backtest fill precision as an upper bound.
 - **Margin / borrow interest.** Live deducts realized margin interest via `MarginInterestTracker`. Backtest models interest only when `Backtester(..., annual_margin_interest_rate=0.05)` is set; the default `0.0` preserves spot-mode behaviour. A margin-mode strategy backtested without setting the rate will silently overstate returns by the carry cost — set the parameter to your venue's effective borrow APR.
 - **Concurrent positions.** The backtest engine is single-position by design — its `PositionTracker` holds at most one `ActiveTrade`. The live engine tracks N positions keyed by `order_id` and respects `risk_manager.get_max_concurrent_positions()`. A multi-symbol strategy will only model the first symbol that signals in backtest; validate live behaviour separately rather than inferring it from backtest.
+- **Scale-in cost basis.** The backtest books P&L, fees and the equity sample from the quantity-weighted average cost of the position (`ActiveTrade.cost_basis_price`), so a scale-in slice earns from its own (slipped) fill. Partial-exit targets, trailing activation and breakeven stay measured from `entry_price` (the first fill); moving them to the average cost is an open owner decision. The live tracker does not blend cost yet; it is dormant while live scale-ins are disabled.
+- **Partial-exit trade outcomes.** Backtest `win_rate`, `profit_factor`, and average win/loss report whole-position outcomes: a trade's P&L includes the slices banked by partial exits (gross of exit fees, net of slippage), and fees are reported separately. The live engine still records only the final leg, so these stats are not comparable to live for partial-exit strategies until #1234 lands.
 
 The `Backtester` class docstring (`src/engines/backtest/engine.py`) carries the canonical version of this list — keep the two in sync when adjusting parity guidance.
 
@@ -197,6 +199,9 @@ Notes:
   never silently fall back to `latest`. Mainline support: `ml_basic` and
   `hyper_growth`; exam strategies accept `--model-version` via
   `ATB_MODEL_VERSION_OVERRIDE`.
+- Regime switching (`Backtester(enable_regime_switching=True, model_version=...)`) applies the
+  same pin to every switched-in strategy; a switch target that cannot honor it is refused
+  (logged at error level, no switch) rather than built against `latest`.
 - The live trading path is unaffected: it always resolves `latest` and cannot
   be pinned by env var or config.
 
@@ -211,10 +216,26 @@ command.
 - `ensemble_weighted` mixes the ML strategies and shares the same timeframe expectations.
 - `momentum_leverage` targets high-volatility regimes; prefer shorter lookbacks (≤ 180 days) when comparing against ML baselines.
 
-## Safety limits
+## Safety limits and the drawdown cap (`--drawdown-cap-mode`)
 
-Backtests stop early when max drawdown exceeds 50% to surface unbounded risk profiles. The run prints the stop reason, time, and
-candle index so you can inspect the raw data or adjust risk parameters (`--risk-per-trade`, `--max-drawdown`) before re-running.
+By default (`--drawdown-cap-mode enforce`) a backtest halts the instant drawdown crosses `--max-drawdown` (the ratified
+`portfolio.max_drawdown_pct`, 0.20, unless overridden) — this matches what prod actually does at the cap and is the correct,
+safe mode for any live-representative or promotion backtest. The CLI prints a loud `WARNING: RUN WAS TRUNCATED` banner and the
+results dict carries an explicit `early_stopped: true` marker, plus `early_stop_reason`, `early_stop_date`, and
+`early_stop_candle_index` — check `early_stopped`, not whether `early_stop_reason` happens to be truthy, since that field is
+only meaningful once you already know a stop occurred.
+
+**Truncation used to be silent.** Before #1102, a run whose true drawdown exceeded the cap simply stopped and reported the
+metrics accumulated up to that point, with no error and no marker — so a research backtest characterising a strategy's
+drawdown profile (rather than simulating what prod would actually do) could not distinguish a complete run from a partial
+one. If you are running a **research / characterisation** backtest and want to see the full drawdown profile without
+truncation, pass `--drawdown-cap-mode measure`: the run completes the full requested window, and the results report whether
+and when the cap *would* have been breached (`drawdown_cap_breached`, `drawdown_cap_breach_date`,
+`drawdown_cap_breach_candle_index`) instead of stopping there. **Never use `measure`-mode results to justify a promotion
+decision** — they describe a strategy running past the risk envelope prod actually enforces. Every result also carries
+`drawdown_cap_mode` and `drawdown_cap_threshold` so a truncated run can never be mistaken for a complete one, and the
+experimentation reporter (`src/experiments/reporter.py`) surfaces the same warnings on suite rows, including a mismatch
+warning when a variant was truncated and its baseline was not (or vice versa) — exactly the confusion that motivated #1102.
 
 ## Best practices
 

@@ -12,6 +12,949 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **External write-gap watchdog** (#689, #669). `atb live-control watchdog` (run every 30 minutes
+  by `.github/workflows/heartbeat-monitor.yml`, superseding the account_history-only
+  `scripts/check_heartbeat.py`) pages when
+  `account_history` or the hourly loop-state `system_events` row stops being written. It writes
+  `HEARTBEAT_GAP` / `HEARTBEAT_GAP_CLEARED` rows, pages the webhook, and re-pages on the shared
+  escalating schedule (`src/infrastructure/paging_schedule.py`, now also used by
+  `LatchedConditionMonitor`). See `docs/monitoring.md`.
+- **`AUDIT_WRITE_FAILED`, `DB_UNREACHABLE` and `DB_OUTAGE_RECOVERED` events** (#689, #669).
+  `DatabaseManager.log_audit_event` no longer raises (a failed audit write used to abort the
+  balance heal it documented) and reports failures to the engine; a sustained database outage
+  pages after 5 minutes and leaves a durable recovery row.
+- **Model artifact retention policy and `atb models cleanup`** (#792). Lists old version
+  directories under `src/ml/models/` that no `latest` symlink, config, `docs/research` note, or
+  newest-N rule protects, with the bytes each frees. Dry run by default; deletes only with
+  `--apply`; aborts on a dangling or out-of-tree symlink; never touches a symlink. Policy documented
+  in `docs/prediction.md`.
+### Changed
+- **Docs archived and refreshed** (#793). The three `PHASE1_*` docs, all nine ExecPlans and the four
+  `docs/issues/` write-ups moved to `docs/archive/`, each with a header naming the archive date and
+  the doc that supersedes it. `docs/technical_debt.md` is rewritten from measured state (the stale
+  2025-11-21 snapshot is kept in `docs/archive/`). `docs/README.md` indexes every doc and defines the
+  ExecPlan lifecycle (active in `.agents/plans/`, closed in `docs/archive/execplans/`).
+
+### Removed
+- **`Optimizer MVP` workflow** (#793). It ran `scripts/run_optimizer.py`, which was deleted in #335,
+  so every daily scheduled run was failing.
+### Removed
+- **Stale migration backup directory under `migrations/`** (#791). 15 pre-baseline migrations,
+  including a duplicate `0001_initial_schema`, are gone from the tree (still in git history).
+  Nothing referenced the directory; `alembic heads` still returns the single head
+  `0015_balance_session_id_idx`.
+  `docs/database.md` now documents the migration workflow.
+### Added
+- **mypy now runs in CI** (#1111). New `type-check` job in `.github/workflows/tests.yml` runs
+  `python bin/run_mypy.py` over `src/` and `cli/`. Measured backlog on `develop` is zero errors
+  across 358 files, so the whole tree is gated. `bin/run_mypy.py` now makes a single mypy
+  invocation instead of one process per file, and `tests/unit/test_run_mypy.py` proves it fails on a
+  type error.
+
+### Fixed
+- **Restart adopts OPEN positions only after exchange verification** (#683). In live mode
+  `carry_forward_open_positions` now checks every OPEN DB row for the traded symbol, strategy
+  and mode, in the current session or any ended session, against the exchange before loading it
+  (`ExchangePositionVerifier`, `src/engines/live/position_adoption.py`). The base-asset
+  holding (margin long `netAsset`, margin short borrowed, spot wallet total) is allocated
+  across the rows newest first, so two same-symbol rows can no longer both be backed by one
+  balance. Real inventory is adopted (resized through `current_size` when only part remains,
+  with its stop ensured by the startup reconciler), a phantom is closed through the
+  reconciler's balance-neutral external-close path and paged (`PHANTOM_POSITION_CLOSED`),
+  dust below the exchange minimum is treated as a phantom, and an unconfirmed lookup adopts
+  and closes nothing, pages (`ADOPTION_UNVERIFIED`) and latches close-only. This replaces the
+  previous-session-only carry-forward (#677) for live mode, so a real position stranded under
+  an older session is adopted too; crash restarts verify the reused session's own rows the
+  same way. Paper mode keeps the previous-session carry-forward.
+- **Live max-drawdown hard cap now sees unrealized losses** (#1267). The guard compared only
+  realized balance with its peak, so an open position could run deep underwater while the cap
+  stayed silent. It now trips on `max(balance leg, equity leg)`: the balance leg is the old
+  condition (never looser), the equity leg is mark-to-market equity vs its own session peak
+  (seeded from `account_history.equity`). The equity leg is skipped with a WARNING (and a page
+  after `DRAWDOWN_MARK_MAX_AGE_SECONDS`) when marks are invalid, stale, or not yet re-priced
+  after a restart; its peak and an equity-only breach each need two consecutive distinct marks;
+  new confirmed equity peaks are snapshotted to `account_history`; the balance leg now also
+  runs on market-data-gap iterations; a partial exit rescales the open mark immediately.
+  `account_history.drawdown` now uses the same worse-of-both basis. New
+  `LivePositionTracker.mark_reading()` exposes unrealized P&L with an explicit freshness flag.
+- **A ledger-rejected close no longer undoes an already-filled exchange close** (#1261). When
+  `log_trade(balance_delta=...)` is refused by the ledger (the resulting balance would be
+  negative), the Trade insert and Position CLOSED flip still commit; the ledger is left
+  unchanged and a CRITICAL `reconciliation_audit_events` row is written in the same
+  transaction, and the live exit path enters close-only mode (the ledger no longer matches the
+  exchange). Previously the abort left the DB position OPEN after the exchange position was
+  gone (phantom position). `log_trade(balance_delta=...)` also refuses, under the ledger lock,
+  to book a position that already has a terminal Trade (`DuplicateCloseError`).
+- **Offline-SL and reconcile-exit closes commit the position close, Trade and balance in one
+  transaction** (#1223). `_close_position_from_filled_sl` and `_reconcile_filled_exit` no longer
+  close the row in a separate upfront transaction, so a crash can no longer leave a CLOSED
+  position with its PnL dropped. A failed write now leaves the position OPEN and tracked for
+  retry (`_reconcile_filled_exit` raises so the order journal stays SUBMITTED).
+- **Margin user-data WebSocket now actually re-establishes without a restart** (#723, #616, #729).
+  Root cause, reproduced against the real python-binance stack with a fake ws-api server: an
+  in-place re-subscribe reuses one cached `KeepAliveWebsocket`, so the previous listener's exit
+  unsubscribes the NEW subscription; the first margin socket's key is `None` so `stop_socket`
+  was never called for it; and a subscribe racing the ws-api reconnect times out and kills the
+  listener silently while a ws-api ping (the #907 liveness check) keeps passing. Recovery now
+  rebuilds the stream on a fresh TWM by default (`FEATURE_WS_USER_HARD_RECONNECT` default on),
+  a failed subscribe flags RESYNCING immediately, RESYNCING recovery shares the circuit breaker
+  and backoff instead of rebuilding every cycle, and teardown is clean: the ws-api is quiesced
+  before `twm.stop()` (no `Error stopping client`), the loop is drained before closing (no
+  `Task was destroyed but it is pending`), listener keys of dead tasks are released so the
+  manager thread exits, and the TWM thread is a daemon. `stop_streams()` and rebuilds are
+  serialised so a shutdown can no longer be followed by a stray rebuilt TWM.
+- **REST-fallback freshness is candle-aware, and a stale-data streak is announced** (#983). With
+  the kline WebSocket down the loop reads REST frames whose tail bar is the forming candle; its
+  open time was compared against a flat 120s, so a 1h strategy passed the freshness gate only
+  for the first ~2 minutes of each hour and the loop `continue`d past entries AND in-engine
+  exits (trailing stops, strategy/time exits) the rest of the time, with only a debug line. The
+  limit is now `interval + 120s` (a tail bar older than that still means the current candle is
+  missing; unknown timeframe keeps the strict 120s), and a gate failing for over 10 minutes
+  latches a `MARKET_DATA_STALE` row/page through the latched-condition monitor until it clears.
+- **All exchange-bound numerics go through one precision module** (#789).
+  `snap_to_step` (exact decimal) replaces every `round(x / step) * step` / `math.floor(x / step)
+  * step` site (stop/limit price, SL quantity, entry/close lot normalization, close sizing).
+  `BinanceProvider.place_order` and `place_stop_loss_order` pass quantity, `price` and `stopPrice`
+  through a final guard that strips float noise (WARNING with the corrected value), logs an
+  off-step value at ERROR without moving it, and serializes fixed-point strings. Previously
+  `place_order` sent raw floats for `price`/`stopPrice` and `place_stop_loss_order` used
+  `str(float)` (scientific notation below 1e-4). Margin repay amounts and Coinbase order bodies
+  are fixed-point too. `test_exchange_numeric_guard.py` fails on any new raw step-snap.
+- **An ended trading session no longer leaves OPEN position rows silently** (#1044, #1232).
+  `DatabaseManager.end_trading_session` now handles the session's OPEN rows in the same
+  transaction: PAPER sessions the engine stops keep them for restart carry-forward (listed on the
+  `ENGINE_STOP` event); PAPER/BACKTEST sessions ended without carry-forward close them
+  balance-neutrally (no trade row, no ledger write, one `reconciliation_audit_events` row each,
+  `SESSION_ENDED_OPEN_POSITIONS_CLOSED` event); LIVE sessions never touch the rows and record a
+  critical `LIVE_SESSION_ENDED_WITH_OPEN_POSITIONS` event. New
+  `get_open_positions_in_ended_sessions()` is the monitoring check, run at engine startup
+  (`OPEN_POSITIONS_IN_ENDED_SESSIONS` event). New `atb db close-stale-positions` lists such rows
+  and, only with `--apply`, closes the non-LIVE ones balance-neutrally.
+- **Correlated-exposure cap now binds in `compute_size_reduction_factor`; admin login rejects
+  backslash open redirects** (#750). The old `max / projected` scaling only enforced the cap
+  when the group was empty (group at the 0.10 cap + candidate 0.10 left 0.15). The candidate
+  now shrinks to the remaining headroom `(max - current) / candidate`, so existing + new never
+  exceeds the cap, including for callers that skip the later clamp
+  (`calculate_position_fraction(correlation_ctx=...)`, live only). Backtest sizing is
+  unchanged: the handler clamp already bound the cap there. The admin `is_safe_redirect_url` is a module-level allow-list check (single
+  leading `/`, no backslash or control characters, no `//`, also after percent-decoding), so
+  `/\evil.com` and encoded variants fall back to the admin index.
+- **Local training no longer promotes a model as a side effect** (#1242). `save_artifacts`, the
+  meta-label export and the legacy price trainer used to point `{symbol}/{type}/latest` at every
+  trained bundle, so any local run (and `atb train cloud --provider local`) published a candidate to
+  the registry, which serves every `latest` as production. `TrainingConfig.set_latest` (default
+  off) now gates the symlink; opt in with `atb train model|price --set-latest`, or
+  `atb live-control train --auto-deploy`, which trains without touching `latest` and then gates the
+  new bundle (in the registry namespace it was written to) through the #801 gate; a failed first
+  model is left with no `latest` instead of being served. `atb train cloud --set-latest` now also covers the local provider. A bare
+  `live-control train` no longer leaves an unvalidated `latest` behind; promote with `deploy-model`.
+  A new `model-promotion-check` workflow (`tools/check_promotion_log.py`) fails a PR whose
+  `docs/research/model-promotions.md` adds a `NO CHANGE` entry while a `src/ml/models/**/latest`
+  pointer also changes.
+- **Regime switches in a pinned backtest honor the model pin** (#1258). `Backtester` takes a
+  `model_version` (`atb backtest` passes the resolved pin) and hands it to `RegimeHandler`, which
+  threads it through `call_strategy_factory`. A switched-in `ml_basic` scores with the pinned
+  version; an ML target whose factory cannot honor the pin (`ml_adaptive`, `ml_sentiment`,
+  `ensemble_weighted`) is refused with an error log instead of silently resolving `latest`, and
+  the refusal is listed under `failed_switches` in the regime results. `momentum_leverage` and
+  `leveraged_regime` (momentum mode) load no model and switch normally. The CLI does not enable
+  regime switching today, so this applies to programmatic `Backtester(enable_regime_switching=True)`.
+- **Backtest scale-in slices are booked from their own fill price** (#734). The backtest engine
+  measured every slice from the first entry, so a scale-in at +3% that then reached +4% was booked
+  at +4% instead of ~+0.97%. `ActiveTrade` now carries a quantity-weighted `avg_cost_price`
+  (`cost_basis_price`); the final close, per-leg partial-exit P&L and fees, the exit fee notional,
+  margin interest and the unrealized-P&L equity sample use it. `entry_price` and every trigger
+  (partial-exit targets, trailing activation, breakeven) are unchanged. Backtests of strategies
+  that scale in (hyper_growth) will report different returns; runs without a scale-in are
+  unchanged. The live tracker has the same booking error, but live scale-ins are disabled.
+- **Drained positions no longer read back as full size in the DB** (#734). `apply_partial_exit_update`
+  and `apply_scale_in_update` used `position.current_size or position.size`, so a `current_size` of
+  0.0 (fully consumed by partial exits) was treated as the full `size` on the next update. They now
+  fall back to `size` only when the column is NULL.
+- **Developer-tooling guards no longer fail silently** (#1138, #1147, #1136, #1151).
+  The Makefile resolves its interpreter (`$VIRTUAL_ENV`, `.venv`, the primary's `.venv`, then
+  `python3`) instead of invoking bare `python`, so `make hooks` runs in a fresh shell, and fails
+  loudly when none exists. `tools/install_git_hooks.py` installs and checks against
+  `origin/develop` rather than the primary checkout (held on `main`), which used to downgrade a
+  fixed hook and report false drift. New `tools/check_install_state.py` / `make install-check`
+  runs the shim, hook and merge-driver `--check`s together, and `.githooks/pre-push` runs it on
+  every push as a non-blocking warning. The hook also serialises runs behind a per-user lock
+  (stale and dead-owner takeover) and kills its pytest process group when the `git push` that
+  started it is gone, so overlapping pushes no longer pile up orphaned suites.
+  `tools/primary_checkout_guard.py` no longer treats a
+  redirect (`2>/dev/null`) as a relative operand, and now also pins a session by the worktree its
+  calls touch (`cd <worktree>`, a mutating `git -C`, an `Edit` inside one), so a session whose shell cwd
+  resets to the primary on every call is guarded. That inferred pin refuses writes to the primary
+  but leaves `.claude/state/`, standup briefs and the retro agenda writable and skips the
+  relative-read check, because the PM daemon has the same shape.
+- **Account sync no longer warns about the bot's own stop-loss order** (#1259). Protective stops
+  are stored on `positions.stop_loss_order_id`, never in `orders`, so the hourly sync logged
+  "New order found on exchange" for every resting stop. `_sync_orders` now skips ids that equal an
+  open position's `stop_loss_order_id`; a genuinely foreign order still warns.
+- **Zero-size BUY/SELL decisions name the component that zeroed them** (#1045). `Strategy` adds
+  `size_zero_reason` (`risk_manager(<name>):<detail>` or `position_sizer(<name>):<detail>`) to the
+  decision metadata and a `ZeroSizeReason:` suffix to the `Decision:` log line.
+  `RiskManager`/`PositionSizer` gained a side-effect-free `explain_zero_size` hook, implemented for
+  `FlatRiskManager` (confidence floor), `ConfidenceWeightedSizer` and `LeveragedPositionSizer`
+  (zero-leverage regime). The live entry coordinator persists the reason and the entry handler's
+  block reasons in `strategy_executions.reasons`, and logs when a downstream gate (correlation,
+  dynamic risk, exposure cap) takes a sized entry to zero.
+- **Regression test for the Decimal load boundary** (#675). A real-database round trip asserts
+  `get_active_positions` and `LivePositionTracker.recover_positions` never yield a `Decimal`.
+- **Pre-push fast suite no longer fails under machine load.** The session DB fixture decided
+  whether to start a Postgres container from the list *before* `-m`/`-k` deselection, so
+  `-m fast` over `tests/unit` started one container per xdist worker and the 30s per-test
+  timeout failed the first test on each worker. It now looks at the tests that will actually run.
+  Wall-clock tests (rate limit, circuit breaker, WS filter, feature/model caches, live-timeout
+  escalation) use injected clocks or hung-until-teardown calls instead of real sleeps; the
+  backtest scale tests use a model-free strategy and smaller datasets; `tests/benchmark` is
+  skipped unless requested (`pytest tests/benchmark`, `-m benchmark`, or `ATB_RUN_BENCHMARKS=1`).
+- **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
+  `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
+  a 4h run selects a 4h model bundle; a missing bundle aborts the switch instead of using 1h.
+- **Run timeframe now reaches ML strategy presets** (#1253). `call_strategy_factory` takes a
+  `timeframe` (threaded only to factories that declare it), and `atb backtest`, `atb live`, the
+  live `StrategyManager` and the experiment runners pass it. `ml_adaptive`, `hyper_growth` and
+  `ensemble_weighted` gained a `timeframe` parameter, so a 4h run selects a 4h model bundle and
+  fails at startup when none exists instead of scoring with the 1h default.
+- **ML pipeline / evaluation integrity fixes** (#1023, #1135, #1146, #1154, #1003).
+  `PredictionConfig.model_registry_path` is anchored to the repo root instead of the process
+  cwd, and `PredictionModelRegistry` raises when the directory is missing, so an exam run from
+  another directory can no longer report an all-HOLD/0-trade result. Cloud artifact sync no
+  longer moves any `latest` symlink unless `atb train cloud --set-latest` is passed (the
+  registry loads every `latest` as production), and a `{symbol}/{type}` directory without `latest` is
+  no longer served by `select_bundle` (explicit version pinning still works). New `src/ml/promotion_gate.py`
+  scores the weekly-retrain 2-of-3 gate with NO_RESULT legs (profit factor with fewer than 3
+  losing trades, return differences below 0.5pp/$1) and an INCONCLUSIVE verdict that retains the
+  incumbent. `uses_rolling_minmax_features` derives price-scale targets from
+  `task_types.PRICE_SCALE_TARGET_TYPES` and warns on unknown target types. The meta-label
+  fire-generation checkpoint fingerprint now includes the resolved primary-model bundle key
+  (`MLBasicSignalGenerator.resolved_model_identity()`), so a retrained primary never resumes
+  stale fires.
+- **Periodic reconciler detects an OPEN DB position missing from the tracker even with no
+  stop resting** (#1245). A per-cycle, two-sighting id comparison against
+  the new lightweight `get_open_position_refs` (account-sync `exchange_sync` rows excluded) pages CRITICAL and latches close-only, like the orphan-sweep's
+  stop-based finding. Re-adoption remains a restart/operator action.
+- **Restart recovery keeps trailing-stop state, remaining exposure and MFE/MAE peaks**
+  (#742, #993). `LiveSessionRecoverer.recover_active_positions` now restores
+  `trailing_stop_activated`/`trailing_stop_price`/`breakeven_triggered`, registers the risk
+  manager at `current_size` (not the original size), and both recovery paths seed the
+  `MFEMAETracker` from the persisted `mfe`/`mae` columns so the first post-restart persist no
+  longer overwrites the stored peaks.
+- **A close aborted because its quantity is unsellable now records a durable, paged event**
+  (#1240). Once `min_notional` was known locally, a sub-minimum close stopped reaching Binance
+  (no more -1013 `system_events` row) and only logged. `_close_live_order` now writes one
+  `CLOSE_QUANTITY_UNSELLABLE` event (critical) plus an alert per (symbol, cause), carrying the
+  reason (`min_notional`, `min_qty`, `lot_sizing`), re-announced hourly. A zero quantity caused
+  by the holdings cap now records `CLOSE_INVENTORY_LOCKED` and feeds the close-only latch.
+- **Data downloads no longer silently fall back to CoinGecko, and the cache validates on
+  load** (#982). `atb data download|prefill-cache|preload-offline` pin the Binance provider
+  and fail loudly on Binance errors. `CachedDataProvider` sorts and de-duplicates (keep last)
+  cached candles on load, persists the repair, and warns; `atb data cache-manager audit`
+  scans existing parquet files for duplicate/unsorted timestamps.
+- **Direct-`ComponentStrategy` live entry path now enforces the `enter_short` opt-in**
+  (#1031). It routes through the shared `extract_entry_plan` chokepoint, so a SELL
+  without `enter_short` metadata can no longer open a short on that path.
+- **Live engine logs the resolved time-exit policy at boot** (#1083). A strategy with
+  no `time_exits` config has no time-based exit (same in backtest); the log makes
+  that explicit. Behavior is unchanged.
+- **Backtest trade records now carry the whole position's P&L when partial exits were taken** (#837).
+  A position fully consumed by partial exits was recorded as a zero-P&L trade, and a
+  winner stopped out after partials as a loser, so `win_rate`/`profit_factor` disagreed with
+  `total_return`. `PositionTracker` accumulates banked partial P&L on the trade and
+  `close_position` adds it to the recorded `Trade.pnl`/`pnl_percent`; the balance is still credited
+  per leg, so `final_balance` is unchanged. `Trade.pnl` stays gross of exit fees/interest (banked
+  partials are net of slippage, gross of fee), so `sum(trade.pnl)` differs from
+  `final_balance - initial_balance` when fees > 0; partial-exit fees/slippage are added to the
+  reported fee totals and DB `commission`. Positions fully consumed by partials persist at their
+  original size (the final-leg size is zero and `log_trade` rejects it). Live still records the
+  final leg only (#1234); DB `trades.pnl_percent` ignores banked partials (#1249).
+- **`Backtester` early-stop drawdown threshold always comes from the hydrated risk manager** (#1089).
+  A bare `Backtester` used a hardcoded 0.5 instead of the ratified 20% cap.
+- **`BinanceProvider.get_symbol_info` now reads the `NOTIONAL` filter** (falling back to
+  legacy `MIN_NOTIONAL`) — Binance no longer returns `MIN_NOTIONAL`, so `min_notional` was
+  always 0 and the execution engine's pre-trade minimum-notional guard was dead (#1062).
+- **One Binance order-type mapping table** (`src/data_providers/binance_order_types.py`)
+  shared by the REST and WebSocket parsing paths; unknown types now log a warning instead of
+  silently becoming MARKET (#1158).
+
+### Changed
+- **Entry-path stop-loss placement now threads `reason_code` through and defers on a
+  terminal UNCONFIRMED refusal instead of always emergency-closing, but only when the
+  periodic reconciler is confirmed alive** (#1218, follow-up to #1160).
+  `LiveStopLossManager.place_protection()` now returns a `StopLossPlacementResult`
+  (`order_id` + `refuse_reason_code`) instead of a bare `str | None`, capturing the full
+  `StopPlacementDecision` from the guard instead of just its free-text `reason`. When all
+  `DEFAULT_STOP_LOSS_MAX_RETRIES` placement attempts terminate in an `UNCONFIRMED` guard
+  refusal (the exchange open-orders lookup itself couldn't be confirmed — a transient
+  blip, not a genuine conflict) AND `PeriodicReconciler.is_running` is true,
+  `entry_coordinator.py`'s post-entry flow now leaves the freshly-opened position tracked
+  for the next periodic-reconciler pass instead of emergency-market-selling it, mirroring
+  #1160's startup-recovery fix. Unlike #1160's recovered-position case, a fresh position
+  is skipped by `exit_coordinator.py`'s same-bar-entry guard for the rest of the bar it
+  was entered on, so the live loop's in-memory `_check_exit_conditions` is *not* active
+  during the defer window either — the actual backstop is the periodic reconciler
+  re-placing the exchange-side stop on its next pass (~`interval` seconds), which is why
+  deferring is gated on that reconciler actually being alive; when it is not, this falls
+  through to the same emergency-close path a confirmed conflict
+  (`AMBIGUOUS`/`WRONG_SIDE`/`PRICE_MISMATCH`/`NO_ACCESSOR`) always takes.
+- **Consolidated the duplicated "held quantity" scaling in `reconciliation.py`** (#1208).
+  ~17 independent inline reimplementations of `qty * (current_size / original_size)` —
+  used for stop-loss re-placement sizing, external-close/margin-position threshold checks,
+  balance-notional estimates, and P&L on close — had inconsistent (or missing) overflow
+  and finiteness guards. Extracted one shared `held_base_quantity()` helper (in
+  `trade_close_accounting.py`, alongside the existing `_closed_base_quantity`) and routed
+  every call site, plus `LiveStopLossManager.held_protection_quantity`, through it.
+
+  The new helper mirrors `_closed_base_quantity`'s guard semantics and adds an
+  `allow_scale_in` flag: operational sizing sites (stop-loss protection, notional,
+  P&L) pass `allow_scale_in=True` to preserve their pre-existing behavior of scaling
+  past 1.0 for a scale-in, while `_log_reconciliation_trade` (which feeds the persisted
+  `trades.quantity` audit column) keeps the strict default that nulls it, matching
+  `_closed_base_quantity`'s own no-fabrication policy. Every consolidated site also gained
+  a guard that did not exist before: a non-finite or negative `current_size` now falls
+  back to the unscaled quantity instead of silently propagating a NaN or negative value
+  into a stop-loss order, a notional estimate, or a P&L calculation.
+
+### Added
+- **Closed-candle gating for live signal decisions** (#1106; parity plan decision D1,
+  `docs/refactor/backtest_live_parity_plan.md` §2 divergence #1). Live rewrites the
+  kline-buffer tail on every WebSocket tick and the trading loop decided on `df.iloc[-1]`
+  — a partially formed candle — while backtest is inherently closed-bar. The forming-bar
+  flip-rate study (`docs/research/experiments/2026-07-06_forming-bar-fliprate.md`) measured
+  **43.2% of decisions at minute 5 disagreeing** with the closed-bar decision, driven
+  entirely by the floating reference price (`predicted_return`'s denominator; the ML
+  feature window was already closed-bars-only in both engines).
+
+  Behind the `closed_candle_gating` feature flag (**default OFF**, so the merge is inert),
+  the loop evaluates the strategy signal exactly once per newly closed bar, at that bar's
+  index, freezing the reference price to that bar's final close. `KlineBuffer` now tracks
+  `last_closed_bar_time` from the Binance kline `x: true` flag, and `Signal.metadata` is
+  stamped with the decision bar's identity in **both** flag states so a staging/prod A/B can
+  attribute every decision.
+
+  **Protective paths stay tick-driven and ungated in both modes** — stop-loss, trailing
+  stops, exit checks, partial operations, PnL/MFE-MAE updates, reconciliation, drawdown
+  guard and account monitoring all continue to run on the forming bar every tick. Gating
+  never delays protection. Only the two entry call sites consume the gated index.
+
+  Hardening from the review round: the closed-bar frontier is captured in the
+  **same lock acquisition** as the frame it describes (`KlineBuffer.snapshot`), closing a
+  race where a bar closing during indicator/ML prep let the gate decide on a floating
+  close while reporting `decision_bar_closed=True`; a closed bar's OHLCV can no longer be
+  rewritten by a late duplicate WebSocket event; incomparable timestamps (mixed
+  tz-awareness after a degraded REST fallback) fail closed with a latched warning instead
+  of escaping into `consecutive_errors`; the decision bar resolves against the dataset the
+  strategy runtime actually indexes rather than the loop's post-`dropna` frame; the bar is
+  consumed only **after** entry execution has had its attempt, so a failed entry retries on
+  the next tick instead of losing a full timeframe; a strategy hot-swap clears the cached
+  decision and the evaluated-bar high-water mark; and the decision-bar keys are persisted
+  through `extract_ml_predictions_from_signal` so the staging A/B has a data source.
+
+  A stalled gate is now **observable**: its only symptom is the absence of a decision,
+  which is indistinguishable from a quiet market (the #1094/#1095 failure shape), so
+  `LatchedConditionMonitor` gained a `CLOSED_CANDLE_GATE_STALLED` condition asserting the
+  gate is still evaluating.
+
+  Decision parity is now pinned by `tests/unit/engines/live/test_closed_candle_parity.py`:
+  the same data through the backtest runtime and through the gated live loop produces the
+  same decision, on the same bar, at the same reference price — with a control test proving
+  the ungated path still diverges.
+
+### Fixed
+- **Periodic reconciler stop-loss coherence** (#739, #714, #1194, #1217, #1214, #1201).
+  The per-position stop verify/re-place step now runs under the per-base-asset lock the
+  close/entry paths use and re-checks the tracker once it holds it, so it can neither
+  race an active close (orphan/double stop) nor re-arm a stop for a position removed
+  earlier in the same cycle (a naked BUY stop for a short). Every reconciler path that
+  removes a position (entry ghost, spot/margin external close) now cancels and forgets
+  its resting stop. Reconciler-issued cancels mark the order self-cancelled first, so a
+  deliberate cancel no longer pages a false `STOP_LOSS_CANCELLED`. The orphan-order sweep
+  no longer cancels the stop-loss of a position the DB still shows OPEN but the tracker
+  doesn't hold: it leaves the stop in place, escalates CRITICAL (close-only) and names
+  the condition. An adopted stop resting looser than intended (which no later pass can
+  correct, since the drift check shares the adopt tolerance) now pages an operator
+  instead of logging a misleading "next pass will fix it" line. The drift-correction
+  re-placement passes `just_cancelled=True`.
+- **Startup reconciler stop-loss robustness** (#1193, #1201, #1219, #1005, #1194).
+  `PositionReconciler` now receives the engine's `OrderTracker` (wired in `recovery.py`,
+  and via `PeriodicReconciler`'s delegate): every stop it places or adopts is registered
+  for fill/cancel routing, and its deliberate cancels (partial-exit resize, price-drift
+  correction, phantom removal) are marked self-cancelled. An unconfirmed cancel in the
+  resize path now keeps the old stop instead of placing a second one. Post-cancel
+  re-placements pass `just_cancelled=True`. A resting stop with a NaN/inf/non-positive
+  `stop_price` is now refused by the placement guard (unverifiable, retryable) instead of
+  adopted, and the shared capture (`adopted_stop_price`, also used by
+  `LiveStopLossManager`) ignores and logs such a price, so it can no longer poison
+  `last_placed_stop_price`. Reconcilers untrack a dead stop id they replace, an
+  unconfirmed phantom-stop cancel and a failed post-resize re-placement now page, and the
+  failed-DB-close page names its context (external close vs margin phantom). The entry-fill
+  quantity correction keeps a scaled-in position's >1 current/original fraction, and the
+  startup failed-DB-close twins now page (`RECONCILE_DB_CLOSE_FAILED`) like the periodic path.
+- **A -1003 exchange-wide rate-limit ban hitting the stop-placement guard's own
+  open-orders lookup — rather than the placement call itself — never reached the
+  `on_rate_limit_ban` close-only escalation** (#738 review follow-up). The prior fix
+  only detected the ban when `place_stop_loss_order` itself raised -1003, but a real
+  IP-wide ban fails EVERY REST call identically, so `guard_stop_placement`'s
+  `get_open_orders_checked` lookup usually hits it first — REFUSE(unconfirmed=True)
+  with no placement attempt ever made, and the callback never fired.
+  `BinanceProvider.get_open_orders_checked` now re-raises (instead of swallowing to
+  `None`) when the lookup itself fails with a rate-limit ban code; a new
+  `StopPlacementRefuseReason.RATE_LIMIT_BAN` classifies that REFUSE, and
+  `_resolve_stop_placement_attempt` invokes `on_rate_limit_ban` and aborts the retry
+  budget from that path too, not just the placement-exception path. Also: adding
+  -1003/-1015 to `DEFINITIVE_REJECT_CODES` made a rate-limited emergency close raise
+  `ValueError` instead of returning `None`, which fell through the two
+  `entry_coordinator.py` emergency-close call sites' weaker generic `except Exception`
+  handler (log-only) instead of the `None`-return branch's `_enter_close_only_mode`
+  escalation — both sites now catch `ValueError` explicitly and escalate the same way.
+- **Startup-recovery stop-loss placement emergency-closed a recovered position on a
+  transient, unconfirmed exchange lookup, not just a genuine conflict** (#1160).
+  `StopPlacementDecision.reason` was free text only, so `_reconcile_filled_entry`'s
+  `sl_placed` check could not tell an `UNCONFIRMED` `guard_stop_placement` refusal (the
+  open-orders lookup returned `None`, raised, or hit the `exclude_order_id`
+  eventual-consistency lag — a network blip that might clear on the very next attempt)
+  from a confirmed `AMBIGUOUS`/`WRONG_SIDE`/`PRICE_MISMATCH` conflict — both collapsed
+  into the same `sl_placed = False` and triggered an emergency market-sell of the
+  recovered position. Added a machine-readable `StopPlacementRefuseReason` enum and a new
+  `reason_code` field on `StopPlacementDecision` (additive — `reason` and `unconfirmed`
+  keep their exact prior meaning), and wired the startup-recovery call site's existing
+  `on_refuse` hook to capture the decision: an `UNCONFIRMED` refusal now logs and leaves
+  the position tracked for the next periodic reconciler pass instead of emergency-closing;
+  `AMBIGUOUS`/`WRONG_SIDE`/`PRICE_MISMATCH` still emergency-close exactly as before.
+- **Order quantity sent to Binance as a raw float serialized as scientific notation
+  for values below 1e-4** (#745). python-binance urlencodes order params, and Python's
+  default float-to-str conversion renders small floats in scientific notation
+  (`str(0.00009) == "9e-05"`), which Binance rejects with -1100 ("illegal characters").
+  Any exchange-bound quantity in `[1e-5, 1e-4)` — realistic on BTCUSDT (stepSize `1e-5`)
+  at small account sizes, or as a post-partial-exit remainder — independently broke
+  entries, stop-loss placement, and closes in `place_order`/`place_stop_loss_order`
+  (`src/data_providers/binance_provider.py`), since `stopPrice`/`price` were already
+  `str()`-ed but `quantity` was not. Added `format_quantity()` to
+  `src/trading/precision.py`, which formats using the decimal count implied by the
+  symbol's step size (never a fixed guess, avoiding the LESSONS.md §1.1 float-artifact
+  bug class), and applied it at both order-placement call sites.
+- **A close order confirmed EXPIRED with zero fill reported `success=True`, popping the
+  position from tracking with a simulated PnL while the exchange still held the real
+  inventory** (#744; found by a June 2026 code audit). `LiveExecutionEngine.execute_exit`
+  fetches the close order's status after placement, but only branched on the FILLED/
+  PARTIALLY_FILLED case — any other *confirmed* terminal status (e.g. `EXPIRED` from book
+  exhaustion) fell through the same path as "pending" and returned success with the
+  pre-computed simulated price. Since the resting stop-loss is already cancelled before a
+  live close is submitted (#710's cancel-then-close sequence), this left the position
+  genuinely naked and untracked until a reconciler sweep eventually noticed the divergence.
+  A confirmed non-fill status (order details fetched, status present and not a fill) now
+  returns `success=False` with the exchange-reported filled quantity, so the caller
+  (`LiveExitCoordinator.execute_exit_locked`) keeps the position tracked and its existing
+  `_reprotect_position` backstop re-places the stop-loss instead. `ExitExecutionResult`
+  gains a `filled_quantity` field so a caller can tell a zero-fill expiry apart from a
+  partial-fill-then-expire. The FILLED/PARTIALLY_FILLED paths, and the ambiguous case where
+  the order-detail fetch itself fails (ineligible for a confirmed non-fill verdict — see
+  CODE.md "Exchange `None` Returns"), are unchanged.
+- **`DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL` was dead code, shadowed by `runner.py`'s hardcoded
+  `--snapshot-interval` default** (#1184). The constant claimed 1800s (30 min), but every real
+  entry point (`atb live`, `atb live-health`, prod's Railway `startCommand`) goes through
+  `runner.py`, which hardcodes `default=3600` and never imports the constant — so every actual
+  deployment snapshots hourly, not every 30 minutes. This previously caused a real docs
+  regression (PR #1180, closed unmerged) that "corrected" ops docs from the true "hourly" to
+  the false "30-minute" value, trusting the unreachable constant over the deployed behavior.
+  No behavior change: the constant now reads 3600, matching what has always actually run.
+- **Trailing-stop ratchets never moved the exchange-side stop-loss order** (#1167; found
+  root-causing #1165's abort storm). `LiveExitHandler.update_trailing_stops` updated
+  `position.stop_loss` in memory and the DB as the trail ratcheted, but the resting exchange
+  order stayed at its original (lower) price forever — a real protection gap, since the
+  position was never actually protected at the price the engine (and the DB) believed. It was
+  also the direct trigger of #1165: `_check_stop_loss` evaluates the *engine-side*
+  `position.stop_loss` against the candle low every loop iteration, so the engine's own exit
+  condition kept re-firing every ~66s against a stop the exchange would never hit at that
+  price. `LiveStopLossManager` gains a `move()` method that cancels the resting order and
+  places a new one at the ratcheted price through the same guarded placement path as
+  `reprotect()` (#1112's fail-closed resting-stop check, with `exclude_order_id` so the
+  just-cancelled order is never re-adopted); `update_trailing_stops` calls it only when the
+  tracked stop price itself changed AND the move clears a `MIN_TRAILING_STOP_MOVE_FRACTION`
+  (0.05%) floor, not on activation/breakeven-flag-only updates or sub-tick noise. `move()`'s
+  cancel-guard-place round-trip serialises on the same per-base-asset lock
+  (`state._base_asset_locks`) as `execute_entry`/`execute_exit` and the periodic reconciler's
+  own SL re-placement — without it, a ratchet mid cancel-guard-place could race a
+  reconciliation cycle and both observe the naked post-cancel window, stacking two resting
+  stops on one held quantity (the #1104/#1108 class); the reconciler's own re-placement paths
+  now take the same lock. Cancel-succeeded/re-place-failed also writes a persisted CRITICAL
+  audit row (`write_unprotected_audit`, shared with the reconciler's `_audit_unprotected`),
+  not just a log line + alert. The reconciler's stop-loss audit still checks order status/fill
+  only, not price — tracked separately in #1172 as defense-in-depth for `move()`'s own
+  conservative failure path (a failed cancel leaves the old order resting rather than risk
+  stacking a duplicate).
+- **Two integrity gaps in #1167's own base-asset-lock fix** (#1179, round 4 of the same PR).
+  (1) `move()` captured `stop_loss_order_id` *before* acquiring the base-asset lock and reused
+  that stale snapshot as `exclude_order_id` deep inside the locked cancel-guard-place sequence;
+  since the periodic reconciler's Step-2 re-placement now serialises on the same lock, a
+  reconciler cycle could swap the tracked order id while `move()` waited for the lock, and
+  `move()` would then exclude the wrong (already-dead) id — letting a lagging exchange
+  open-orders view make it ADOPT an order it (or the reconciler) had just cancelled. Fixed by
+  re-reading `stop_loss_order_id` fresh *inside* the lock for both the cancel and the exclusion
+  filter; the reconciler's own null/set of that field is now inside its matching lock scope too
+  (it previously nulled before acquiring the lock and set the new id after releasing it — an
+  unsynchronised write racing `move()`'s in-lock read). (2) The trailing-stop min-move floor
+  compared each ratchet against the *tracked* `position.stop_loss`, which advances every cycle
+  regardless of whether the floor passes — so a monotonic run of sub-threshold ratchets never
+  accumulated past the floor, letting `stop_loss` drift arbitrarily far from the exchange's real
+  resting price with no real `move()` ever firing. A new `LivePosition.last_placed_stop_price`
+  (updated on every successful placement/reprotect/move, including the achieved price on an
+  ADOPT) is now the floor's baseline instead, so sub-threshold increments correctly accumulate
+  and eventually cross it. Both fixes are covered by real-thread concurrency tests (a reconciler
+  stand-in swapping the order id while `move()` waits on the lock) and a monotonic sub-threshold
+  drift simulation, each with a discrimination check confirming the specific failure mode
+  reproduces when the fix is reverted. Also: `move()`'s guard-REFUSE-after-cancel path now
+  writes the same persisted CRITICAL audit row as its cancel-succeeded/re-place-failed sibling;
+  the reconciler's unlocked-fallback path (no `lock_registry` wired) now logs a one-time WARNING
+  instead of degrading silently.
+- **Reconciler stop-loss audit checked order status only, never price** (#1172, follow-up to
+  #1167). `PositionReconciler._verify_stop_loss` (startup) and `PeriodicReconciler._reconcile_cycle`
+  (runtime, every ~120s) confirmed a resting stop-loss order existed and read its fill/cancel
+  status, but never compared its actual `stop_price` against the tracked `position.stop_loss`.
+  A trailing-stop ratchet advances the tracked stop before cancelling and re-placing the
+  exchange order; if that cancel fails or is unconfirmed, the old order is deliberately left
+  resting (to avoid stacking a duplicate) while the tracked price has already moved — and
+  nothing caught the resulting divergence. Both verification paths now compare the resting
+  order's price against the tracked stop within the existing `_ADOPT_PRICE_TOLERANCE_FRACTION`
+  (2%) tolerance, escalate CRITICAL (audit row + alert) on divergence, and attempt the same
+  cancel-then-guarded-replace correction used elsewhere (`place_or_adopt_stop_loss`) — skipping
+  the re-place if the cancel itself cannot be confirmed, so a duplicate is never stacked.
+- **`exit_reason` was free text with substring-matched control flow** (#1115). The backtest
+  engine chose an exit's order type with `if "Stop loss" in exit_reason:`, so the `stop_loss`
+  and `stop_loss_filled_offline` spellings silently skipped it and exited as market orders with
+  no stop-gap pricing; the live engine used a *different*, case-insensitive matcher, so the two
+  engines disagreed about what counted as a stop exit. A closed `ExitReason` StrEnum
+  (`src/trading/exit_reason.py`) now backs every exit decision in both engines, and every
+  substring match is an enum comparison. `trades.exit_category` (migration
+  `0014_add_exit_category`) persists it; `exit_reason` keeps its exact historical values,
+  which the `account_balances` ledger key and a pre-registered experiment metric depend on.
+  Crucially the taxonomy distinguishes `stop_loss` (a protective stop took the planned loss)
+  from `trailing_stop` (a trailing stop banked a gain) — classified from the position's
+  trailing/breakeven flags, not from the prose. Prod through 2026-08-20 re-reads as trailing
+  stops 11/11 positive (+$6.18) and protective stops 0/2 (−$1.99), a split the old vocabulary
+  hid. Historical rows are not rewritten: `v_trades_exit_category` resolves a category at read
+  time and flags inferred rows, and `agents/research/1115-exit-taxonomy.md` records the per-row
+  prod mapping. The dashboard's "failed orders" tile, which filtered on an `exit_reason` value
+  no producer ever wrote, now counts `emergency_close`.
+- **Stop-loss re-placement loop that left a live ETHUSDT position repeatedly unprotected**
+  (#1104, #1109; incident #1094). On 2026-08-19 thirteen stop-loss orders were placed and
+  killed ~66s apart while the position stayed open. The cadence was the **trading loop**
+  (`DEFAULT_CHECK_INTERVAL`, 60s), not the reconciler (120s): the 15:00 hourly candle's low
+  dipped through the trailing stop, so the strategy re-emitted exit reason `"Stop loss"` on
+  every iteration until the candle rolled at 16:00. The user-stream degradation was not the
+  cause — `USER_WS_RECOVERED` fired four seconds after the first alert and twelve of the
+  thirteen events happened with the stream healthy. Three defects compounded:
+  1. `LiveStopLossManager.cancel` gave `OrderTracker` no way to tell our own pre-close cancel
+     from an unexpected one. Binance emits the terminal `executionReport` on the open user
+     socket before the DELETE response returns, so the tracker escalated our cancel as an
+     unexpected termination — a false UNPROTECTED page — and that handler nulls
+     `position.stop_loss_order_id`, which made the reconciler stack a **duplicate** stop on
+     one still resting and orphan it. Fixed with `OrderTracker.mark_self_cancelled`, which
+     suppresses only the escalation; the order stays **tracked** across the cancel, because a
+     stop is cancelled at the exact moment price is touching it and a genuine fill in that
+     window must still be processed.
+  2. The orphaned stop locked the position's base inventory, so the free-base cap in
+     `LiveExecutionEngine._close_live_order` silently shrank every close to the leftover dust
+     (0.00009419 of 0.0087 ETH — 1.1%). Since the caller books a **full** close on success,
+     a filled partial would have abandoned the remainder untracked and unprotected; it only
+     failed safe because $0.196 is under Binance's `MIN_NOTIONAL`. The cap now compares the
+     **submitted** quantity (after both the holdings cap and the lot floor) against the
+     intended one, aborts below `HOLDINGS_CAP_MIN_RATIO`, records `CLOSE_INVENTORY_LOCKED`
+     in `system_events`, pages the operator, and latches close-only after
+     `CLOSE_ABORT_CLOSE_ONLY_STREAK` consecutive aborts on a symbol so it cannot become an
+     alert storm of its own shape.
+  3. Under that same condition `BinanceProvider.place_stop_loss_order` would place a stop
+     covering only the dust and return an id, which is then recorded and audited as full
+     protection — the reconciler's SL check reads order *status*, never *quantity*. It now
+     refuses and returns `None`, so the honest UNPROTECTED escalation fires instead (#1109).
+
+  Full investigation with the prod evidence:
+  `agents/research/1104-sl-replacement-loop-investigation.md`.
+- **Backtests no longer silently truncate at the drawdown cap with no marker** (#1102). PR
+  #1073 made `RiskParameters()` default-hydrate `max_drawdown` from the ratified
+  `src/config/risk-limits.json` (0.20); the backtest engine has always early-stopped a run once
+  drawdown crosses that threshold, so any arm whose true drawdown exceeds the cap — e.g.
+  HyperGrowth's honest 365d backtest at ~21.8% MaxDD — reported partial results with no error
+  and no way to tell from the output that the run was cut short. `Backtester` gained a
+  `drawdown_cap_mode` parameter (`"enforce"`, the default and safe choice for any
+  live-representative/promotion run — halts at the cap exactly as before) and `"measure"`
+  (research/characterisation only — runs the full window and reports whether/when the cap
+  *would* have been breached instead of stopping there). Results now always carry an explicit
+  `early_stopped: bool` marker (not just the possibly-absent `early_stop_reason` string), plus
+  `drawdown_cap_mode`, `drawdown_cap_threshold`, `drawdown_cap_breached`,
+  `drawdown_cap_breach_date`, and `drawdown_cap_breach_candle_index`. `atb backtest` gained
+  `--drawdown-cap-mode` and now prints a loud truncation warning instead of staying silent;
+  `ExperimentConfig`/`ExperimentResult` (`src/experiments/`) plumb the same fields through so a
+  preregistered research run can opt into `measure` explicitly, and the suite reporter flags
+  both a truncated variant and a truncation *mismatch* against its baseline — the exact
+  confusion that caused the #1081 Step-2 re-run to report unexplained mismatches before being
+  root-caused. Default behavior for every existing caller is unchanged. See
+  `agents/research/1102-backtest-truncation.md` for the full analysis, including other
+  silent-cap paths found but not fixed (`#1089`).
+- **Latched conditions now re-announce themselves until a human clears them, and the entry
+  state is asserted positively** (#1095, #1096; incident #1094). On 2026-08-20 production
+  latched close-only after a stop-loss re-placement failure, paged Slack correctly at minute
+  zero — and then sat halted for four days. Nothing re-raised the alert, nothing tracked
+  whether the "manual review" it demanded ever happened, and the daily standup reported
+  NOMINAL every one of those days because its "engine alive" check greps `Decision:` log
+  lines, which keep flowing at normal cadence: signal generation runs *before* the close-only
+  gate in `entry_coordinator.check_entry_conditions`. A new `LatchedConditionMonitor`
+  (`src/engines/live/monitoring/latched_condition_monitor.py`) runs once per trading-loop
+  iteration and writes **one `system_events` state row per pass** (at most hourly):
+  `ENTRIES_ENABLED` when nothing is blocking, or `CLOSE_ONLY_LATCHED` /
+  `SYSTEM_HALT_LATCHED` / `ENTRY_PAUSE_LATCHED` when something is, with a `*_LATCH_CLEARED`
+  row on resolution. Because the healthy case writes a row too, the *absence* of rows
+  unambiguously means the loop thread is dead — so a single query separates "trading",
+  "blocked" and "loop dead" with no external cross-check. This is also the detection fix:
+  the close-only latch is an in-process bool never written to `system_control_flags`, so
+  before this there was **no** durable signal a monitor could query. On top of the rows, a
+  bounded operator page fires at 1h, 4h and 12h after the latch, then once per 24h — at most
+  three re-pages in the first day and one a day thereafter, so a month-long latch produces
+  ~31 pages rather than ~720; pages past day one are prefixed `STILL BLOCKED — DAY N` so
+  day four does not read identically to day zero. "Are entries blocked?" is read from
+  `EntryPauseGate.entry_blocks()`, the same authority the entry and scale-in paths gate on
+  (lifted out of the former private `_active_cause`), so the monitor cannot report a state
+  the enforcement path disagrees with — including the fail-closed case where the `system_halt`
+  flag has never been successfully read, which blocks entries while still reading
+  `active=False`. The gate reports *every* active lever, not just the one that wins the skip
+  log: escalating from `FEATURE_ENTRY_PAUSE` to the manual kill switch used to write a
+  strictly newer `ENTRY_PAUSE_LATCH_CLEARED` row reading "new entries are enabled again"
+  while the halt was in force. Elapsed time for the manual halt comes from the flag row's durable
+  `updated_at` (mirrored into `SystemHaltState.since`), so a restart cannot re-announce a
+  four-day halt as "45m" — close-only is in-process by nature and `FEATURE_ENTRY_PAUSE` has
+  no DB row, so for those two elapsed remains process-relative and the accumulated
+  `*_LATCHED` rows are the durable source. The first observation of any latch writes its row immediately
+  rather than an hour later, so an engine in a restart loop cannot stay blocked while
+  emitting nothing. `_enter_close_only_mode()` takes an optional `reason`, threaded through
+  from every trip site (reconciliation CRITICAL findings — deduped and capped via
+  `_format_findings` — the drawdown hard cap, the account circuit breaker, prolonged DB
+  outage, unconfirmed emergency closes, ambiguous order submissions), so the message still
+  explains itself days later when the log line that carried the detail has rotated out of the
+  platform's retention. Alert delivery runs on a short-lived daemon thread, each condition is
+  evaluated in its own `try`, and the whole check is fault-isolated — re-announcement can
+  neither stall the trading loop nor take it down.
+
+- **Append-only state files no longer conflict on every concurrent append** (#1079;
+  near-loss case #1090). `.claude/state/log.md` is written by every agent and the PM,
+  so two branches that each record something collided at EOF on nearly every PR —
+  ~8 hand-resolutions in one 2026-08-13 session, ~7 more on 2026-08-24, each one
+  mechanically identical and each one a chance to silently drop an entry from a record
+  whose entire purpose is that entries are never dropped. `.gitattributes` now maps
+  `.claude/state/log.md` and `.claude/skills/weekly-retro/AGENDA.md` to a custom
+  `append-only` merge driver (`tools/merge_append_only.py`). It splits each side into
+  entries (H2 heading / top-level bullet), runs git's own three-way merge over them, and
+  re-merges each conflict region at entry granularity: concurrent appends are all kept and
+  ordered by their timestamps, deliberate deletions are honoured (the retro's `AGENDA.md`
+  clear stands, while an item appended during the retro survives it), and **edits still
+  conflict** — entries are identified by their first line, so the same entry with two
+  bodies is an edit, not two appends (a first-line edit, which would otherwise read as a
+  delete plus an add, is caught by pairing the vanished and arrived entries on body
+  similarity). Deliberately not git's built-in `union` driver, which cannot tell those apart.
+  Entry boundaries are guessed from prose, which cannot be done reliably — a quoted header
+  can satisfy every shape rule — so correctness rests on two properties instead: one side's
+  contribution is never reordered or split internally, and the finished result is verified
+  against the inputs (each side's added lines must survive verbatim and unbroken) before it
+  is accepted, falling back to an ordinary conflict otherwise. Measured over 800 randomised
+  merges: zero corruptions; on realistic bodies 393/400 still merge cleanly. The fuzz harness
+  that found the last defect ships as `tools/fuzz_append_only_merge.py`, since code review
+  demonstrably was not a reliable filter for this design. Registration is guarded: git does not write conflict markers when a
+  driver exits non-zero, so a command that cannot run would leave the file as ours' content
+  with no markers, reading as a clean merge; the registered command tests for the script and
+  interpreter and otherwise falls through to `git merge-file`, and the script writes markers
+  before exiting on an internal crash. `docs/changelog.md` is excluded on purpose: entries are prepended
+  into shared `###` sections and `[Unreleased]` is rewritten at release time, so two branches
+  really do edit the same region. Registration is the invisible half — `merge.<name>.driver`
+  is a local config key, and without it git ignores `.gitattributes` **without saying so**
+  (#1077's class), so `tools/install_merge_drivers.py` runs from `make install` alongside the
+  hook and shim installers, and `make merge-drivers-check` reports an unregistered or stale
+  driver as drift.
+- **The `pre-push` hook can now fail** (#1077). It was inert: pytest's output was
+  piped into `tail`, so `EXIT_CODE=$?` captured `tail`'s status and the gate exited
+  0 no matter what the tests did, and `.venv/bin/python` was resolved relative to
+  the cwd, so a push from a linked worktree (which has no `.venv`) fell through to
+  a bare `python` that does not exist on macOS. Every push printed
+  `python: command not found` followed by `All fast tests passed. Pushing...`. The
+  hook now runs pytest unpiped, resolves the repo root via
+  `git rev-parse --show-toplevel` and the primary checkout via
+  `--git-common-dir`, requires an interpreter that can actually import pytest, and
+  **aborts the push when it cannot verify** (documented skip: `git push
+  --no-verify`). It also drops `-p no:randomly`, which conflicted with the
+  `--randomly-seed` in `pytest.ini`'s `addopts` and would have aborted the hook
+  with a usage error even after the other two fixes. Hook sources moved into a
+  tracked `.githooks/` with an installer (`make hooks`, wired into `make install`)
+  so they are reviewable rather than drifting per machine. Hooks are **copied**, and sourced
+  from the primary checkout, because `$GIT_COMMON_DIR/hooks` is shared while `make install`
+  runs inside ephemeral agent worktrees — a symlink into one dangles when it is pruned, and
+  git skips a dangling hook silently with exit 0. The hook also runs `-n 4` (48s
+  instead of 76s serial; `-n auto` measured no better than serial, since per-worker import
+  overhead eats the gain — a hook slow enough to bypass is the inert hook again) and classifies
+  pytest's exit codes, so a usage/collection error is not reported as a test failure.
+  Drift detection compares the **executable bit** as well as content: git ignores a
+  non-executable hook and the push succeeds, so a content-only check would have printed
+  `ok` over the very always-pass the tool exists to prevent.
+  `tests/unit/test_pre_push_hook.py` proves the hook fails on a broken test, from a
+  subdirectory, and from a worktree; that an installed hook still blocks a bad push after
+  the worktree it was installed from is pruned; and that a `chmod -x`'d hook is reported as
+  drift and repaired.
+
+- **Exchange order rejections are now durably diagnosable** (#1094). Prod latched
+  close-only on 2026-08-20 after five consecutive stop-loss placement failures and
+  the reason was unrecoverable: `BinanceProvider.place_stop_loss_order` caught every
+  exception, wrote one `logger.error(...)` and returned `None`, so the Binance error
+  code reached neither `system_events` nor `reconciliation_audit_events` — the
+  reconciler recorded only the generic "exchange returned no order id", and Railway
+  stdout aged out hours later. A safety-critical failure was therefore permanently
+  undiagnosable. Order helpers now record an `ExchangeOrderError` (exchange error
+  code, message, error type, and the rejected order parameters — symbol, side,
+  quantity, stopPrice, price, timeInForce, plus the tick/step filters and free base
+  balance that shaped them) on every failure path of `place_stop_loss_order`,
+  `place_order`, `cancel_order` and `cancel_all_orders`. The live engine wires a
+  sink so each lands as a `system_events` row (`STOP_LOSS_PLACEMENT_FAILED` at
+  CRITICAL, `ORDER_PLACEMENT_FAILED` at error) with the full payload in `details`,
+  and the reconciler's unprotected-position audit row now names the exchange code
+  instead of "no order id" — but only when the record provably belongs to that
+  position's stop-loss attempt in the cycle in flight (matched on symbol AND
+  operation AND an age below the reconcile interval), because ``last_order_error``
+  is a single slot on the shared exchange instance and a confidently wrong pointer
+  in an incident artifact is worse than the honest generic string. Codes with a documented root cause (51077 LOT_SIZE
+  stepSize precision, -1111 PRICE_FILTER tickSize precision, -2010 insufficient
+  balance) are annotated in the event so the next reader does not re-derive them.
+  Observability only: every helper returns exactly what it returned before —
+  `None`/`False` on failure, `ValueError` on a definitive reject — so the close-only
+  latch behaviour is unchanged, and both the recording and the sink are fault-isolated
+  (a failed durable write logs at WARNING and never reaches the trading path).
+  Credentials, signatures and request headers are never recorded.
+- **The primary checkout is now write-protected against agent mutation** (#1082;
+  filesystem sibling of #1070). An agent shell's cwd is silently reset to the
+  primary checkout mid-task, after which every *relative* path resolves there
+  instead of in the agent's worktree — a read returns stale content (recorded:
+  247 lines of a 578-line file, no error) and a `sed -i` writes into the tree
+  that must stay pinned to `main`. The #1070 import guard cannot cover this: a
+  `sed -i` imports nothing. `tools/primary_checkout_guard.py` runs as a
+  `PreToolUse` hook (registered in `.claude/settings.json`) and refuses, with a
+  banner naming both paths and the remedy, any `Edit`/`Write` or write-shaped
+  `Bash` command targeting the primary checkout's working tree, plus a relative
+  read issued from the primary checkout. Both are gated on whether the session
+  has actually worked inside a worktree, so an ordinary single clone (every
+  contributor, Claude Code Web) and the PM daemon writing `.claude/state/log.md`
+  in the primary are never guarded. `<primary>/.git/**`, `<primary>/.claude/worktrees/**` and git-ignored
+  paths (shared `.venv`, `logs/`) stay writable. A hook — not `chmod`/ACLs —
+  because agents run as the human's uid, so only "am I inside a Claude Code
+  session?" separates the two; the human's editor and terminal are unaffected.
+  Deliberate override: `ATB_ALLOW_PRIMARY_WRITE=1` at launch, or
+  `touch ~/.claude/atb-allow-primary-write`. Fails open by design.
+- **Worktree commands no longer silently execute another checkout's code** (#1070,
+  P0; supersedes #1024). `pip install -e .` writes a `sys.meta_path` finder whose
+  `MAPPING` hardcodes the absolute path of the checkout `make install` was run
+  from. Because `sys.meta_path` is consulted *after* `PathFinder`, that stale
+  mapping only loses when a `sys.path` entry already contains `src`/`cli` — true
+  for `python -c` and `python <repo-root>/x.py`, and **false** for the `atb`
+  console script (`sys.path[0]` is `.venv/bin`) and for `python experiments/x.py`
+  (`sys.path[0]` is `experiments/`). Every worktree shares one venv, so those two
+  shapes silently ran the primary checkout's branch. Observed impact: the same
+  365d HyperGrowth backtest returned `+114.69%` and `-28.29%` on consecutive runs
+  from the same directory, with no warning. Two layers now close this:
+  `tools/atb_worktree_shim.py`, installed into site-packages by `make install`
+  (also `make shim`) and executed from a `.pth` on every interpreter start, binds
+  top-level `src`/`cli` to the checkout enclosing the **cwd**; and `src/__init__.py`
+  calls `src._source_root.verify_source_root()`, which raises
+  `SourceRootMismatchError` with a copy-pasteable remedy whenever the imported
+  source root differs from the invoking checkout. The guard sits in the package
+  `__init__` rather than in each entry point so that `atb`, `pytest`,
+  `python experiments/*.py` and ad-hoc scripts are all covered without opting in.
+  The guard module sits at the top level of `src` rather than under `src.utils` so
+  that importing it executes no other repo module — at that moment the checkout's
+  identity is precisely what is in doubt. Root detection stops at the first
+  directory holding a `.git` entry, so a momentarily-invalid worktree cannot let
+  the walk-up climb into the primary checkout that encloses it. It is a deliberate no-op for non-editable site-packages installs (production
+  containers) and when the cwd is outside any checkout. Escape hatches:
+  `ATB_DISABLE_WORKTREE_SHIM=1` (skip the shim), `ATB_ALLOW_SOURCE_ROOT_MISMATCH=1`
+  (downgrade the guard to a stderr warning). **The shim lives in site-packages,
+  which is not version-controlled — re-run `make shim` after any venv rebuild;
+  `python tools/install_worktree_shim.py --check` verifies it.** A failed shim
+  install (read-only site-packages, system python) warns and continues rather than
+  breaking `make install`; only `--check` reports it through the exit code.
+  Diagnose with `python -P -c "import src; print(src.__file__)"` — the `-P` matters,
+  since plain `-c` puts the cwd on `sys.path` and prints a false all-clear.
+
+### Changed
+- **Deduped `LiveStopLossManager`'s guard+ADOPT+REFUSE+retry logic and closed an
+  audit gap** (#1185). `place_protection()`, `reprotect()`, and `move()` each
+  inlined their own copy of the sequence: consult `guard_stop_placement()`,
+  branch on REFUSE/ADOPT/PROCEED, and on PROCEED run a 3-attempt
+  exponential-backoff retry against `exchange.place_stop_loss_order`. The
+  canonical `place_or_adopt_stop_loss()` (`src/engines/live/reconciliation.py`,
+  used by the periodic reconciler) grew opt-in `max_attempts`/`retry_delay`
+  parameters (default: a single attempt, matching every existing call site
+  exactly) plus an `on_adopt` hook so `move()` can still capture the actual
+  adopted stop price without re-running the guard itself; all three
+  `LiveStopLossManager` methods now delegate to it instead of duplicating the
+  sequence. `reprotect()` and `place_protection()` now also call
+  `write_unprotected_audit()` on total placement failure, matching `move()`'s
+  existing cancel-succeeded/re-place-failed escalation — closing the same
+  observability gap for the entry and post-close-failure paths. Since a
+  fail-closed REFUSE and an exhausted-retries failure leave an identical real
+  state once delegated (the cancel, where one happened, already succeeded),
+  both now escalate identically, so a REFUSE that previously only alerted
+  gets a persisted audit row too.
+- **Closed a duplicate-stop gap in `place_or_adopt_stop_loss()`'s retry loop**
+  (#1186, review follow-up to #1185). `guard_stop_placement()` was only
+  consulted once, before the retry loop started: if an attempt raised on
+  something like a network timeout the exchange nonetheless accepted (the
+  same ambiguous-submission case the entry path already handles explicitly),
+  the next attempt placed a SECOND protective stop on the same held
+  quantity, orphaning the first as an untracked resting stop — the exact
+  #1104/#1108 duplicate-stop class the guard exists to prevent. The retry
+  loop (extracted into `_place_with_retry()`) now re-consults the guard at
+  the top of every attempt after the first, adopting a just-landed order
+  instead of stacking a duplicate. `on_adopt` is now fault-isolated
+  (`try/except` + `logger.error`, matching `write_unprotected_audit()`), and
+  a new `on_refuse` callback threads the guard's specific refuse reason back
+  to `LiveStopLossManager`'s callers so `reprotect()`/`move()`/
+  `place_protection()` alerts and `write_unprotected_audit()`'s
+  `exchange_reason` carry the real cause instead of a generic message.
+  `DEFAULT_STOP_LOSS_MAX_RETRIES`/`DEFAULT_STOP_LOSS_RETRY_DELAY`
+  (previously-unused constants in `src/config/constants.py`) now back the
+  three `LiveStopLossManager` call sites and `entry_coordinator.py`'s
+  retry-exhaustion log message instead of duplicated literals.
+- **Closed a second `place_or_adopt_stop_loss()` gap: the pre-loop guard check
+  itself bypassed the whole retry budget** (#1186, review follow-up to the
+  fix above). That fix re-consulted the guard on every retry attempt *after*
+  the first, but `place_or_adopt_stop_loss()` still ran one guard check
+  itself, before ever entering the retry loop, and treated every REFUSE from
+  that check as terminal — including an unconfirmed one (the guard's own
+  lookup failing, or the just-cancelled-order eventual-consistency lag).
+  A single transient lookup failure on that first check returned `None` with
+  **zero** placement attempts ever made, regardless of `max_attempts` — worse
+  than the bug the prior fix closed, and more likely to fire, since that
+  check runs immediately after a confirmed cancel in `move()`/`reprotect()`,
+  exactly when the exchange's view is most likely still lagging. The pre-loop
+  check is gone: `place_or_adopt_stop_loss()`'s `max_attempts > 1` path now
+  delegates to `_place_with_retry()` unconditionally, which consults the
+  guard on attempt 0 exactly like every later attempt via a new
+  `_resolve_stop_placement_attempt()` helper (also flattening the loop back
+  down from 5 nesting levels). The `max_attempts <= 1` path used by the
+  periodic reconciler's seven call sites is untouched — still a single guard
+  check, single placement attempt, exceptions still propagate. Also fixed:
+  the "retry budget preserved" warning could log immediately before a
+  contradictory "exhausted retry attempts" critical for the same attempt
+  (now the exhaustion check runs first); the exhaustion message's "without
+  ever confirming the guard check" was misleading when an earlier attempt HAD
+  confirmed PROCEED and only a later one went unconfirmed (reworded to name
+  the final attempt specifically); and a stale comment referencing a literal
+  "3-attempt budget" now names `DEFAULT_STOP_LOSS_MAX_RETRIES` like its
+  neighbors.
+- **`src/config/risk-limits.json` now governs the running system** (#986, design
+  §3.5 "Hydration"). The Board-ratified limits file was previously **inert**: its
+  loader (`src/config/risk_limits.py`, shipped in #1034) had zero consumers in
+  `src/`, so the values that actually drove the engines came from
+  `src/config/constants.py`. The Board ratified a file that controlled nothing,
+  and changing a limit required a code deploy. Now `RiskParameters` defaults the
+  six ratified risk-limit fields (`base_risk_per_trade`, `max_risk_per_trade`,
+  `max_position_size`, `max_daily_risk`, `max_drawdown`,
+  `max_correlated_exposure`) to a sentinel hydrated from `get_risk_limits()` in
+  `__post_init__`, so every bare `RiskParameters()` yields ratified values by
+  construction. Explicit constructor arguments still win (strategy/caller intent,
+  clamped downstream by the engines).
+- **Fail-closed boot**: the live runner, the backtest CLI, and `ExperimentRunner`
+  call `get_risk_limits()` before any provider/exchange construction. A missing,
+  unreadable, or schema-invalid limits file now stops the engine before it can
+  reach a venue, instead of silently falling back to a constant.
+- **Risk flags on the live and backtest CLIs default to `None`** ("use the
+  ratified value") instead of hardcoded literals. This retires the drifted
+  backtest defaults, which ran at **half** live risk and 2.5x live drawdown
+  tolerance: `--risk-per-trade` 0.01 -> 0.02, `--max-risk-per-trade` 0.02 -> 0.03,
+  `--max-drawdown` 0.5 -> 0.20. Live values are unchanged (constants and the
+  ratified JSON already agreed at 0.02 / 0.03 / 0.20).
+- **BEHAVIOURAL CHANGE — a bare `Backtester` now caps positions at the ratified
+  20%, not 10%** (#1073 follow-up). `Backtester.max_position_size` used to
+  *report* `DEFAULT_MAX_POSITION_SIZE` (0.10) whenever `risk_parameters is None`,
+  while the entry/exit handlers were built from
+  `risk_manager.params.max_position_size` — which #1073 hydrated to 0.20. The
+  reported cap and the enforced cap therefore disagreed, and the regression guard
+  (`tests/unit/test_backtest_live_parity.py`) kept passing because it compared the
+  reported value against the same 0.10 literal. Measured on
+  `Backtester(strategy, data_provider, initial_balance=10_000)`:
+
+  | | before #1073 | #1073 as merged | now |
+  |---|---|---|---|
+  | `.max_position_size` (reported) | 0.10 | 0.10 | **0.20** |
+  | `risk_manager.params` (enforced) | 0.10 | **0.20** | **0.20** |
+  | entry/exit handler | 0.10 | **0.20** | **0.20** |
+
+  The property now reads `risk_manager.params.max_position_size`
+  unconditionally, so reported == enforced by construction. **0.20 is the
+  intended default**: parity with live is the whole point of the single-source
+  design, and a backtest that silently sizes differently from the ratified live
+  cap is the measurement error this change exists to remove. The parity test now
+  asserts reported == enforced == the loader's value, so it cannot pass vacuously
+  again.
+
+  **Consequence for existing results (relevant to #1081) — the blast radius
+  differs by call path, because only two seams consult a strategy's
+  `max_fraction`.** `resolve_strategy_max_position_size` is applied at exactly
+  two sites, `cli/commands/backtest.py` and `src/experiments/runner.py`;
+  **`Backtester.__init__` never calls it**, and there is no other `max_fraction`
+  consumer anywhere under `src/engines/backtest/`. So:
+  - **Via `atb backtest` or `ExperimentRunner`** (the seam applies): only
+    strategies that declare no `max_fraction` shift. Auditing
+    `src/strategies/*.py`, that is **`ml_adaptive` and `ensemble_weighted`**
+    alone — their default backtests move 0.10 -> 0.20.
+  - **Via direct `Backtester(...)` construction** (research harnesses, ad-hoc
+    scripts, and `cli/commands/migration.py`, which builds
+    `RiskParameters(base_risk_per_trade=…, max_risk_per_trade=…)` with no
+    `max_position_size`): **every strategy shifts**, `max_fraction` regardless.
+    A bare `Backtester(AdaptiveTrend(), ...)` ran at 0.10 and now runs at 0.20 —
+    never at its declared 0.95. Every stored `atb migration` baseline is on this
+    path.
+
+  A result is therefore only safe to compare across this boundary if it came
+  through the CLI/harness seam **and** the strategy declares `max_fraction`.
+  Direct-construction results are not comparable across the boundary for any
+  strategy.
+
+  **"Unaffected" here means reproducible, not comparable to live.**
+  `src/strategies/ml_basic.py` and `ml_sentiment.py` declare
+  `"max_fraction": DEFAULT_MAX_POSITION_SIZE`, pinning themselves to the
+  now-retired 0.10 constant — so through the CLI seam they keep backtesting at
+  0.10 against a ratified **live** cap of 0.20. Their numbers still reproduce;
+  they are not live-representative. Whether that tighter sizing is deliberate or
+  an accidental dependency on a constant slated for deletion in #986 step 7 is
+  tracked for an explicit decision in #1089, not settled here.
+- **Live behaviour: the enforced bounds are unchanged, but scale-in accounting
+  and the short-entry cap move.** The drawdown guard's cap resolves to 0.20
+  before and after (matching the deployed prod boot log `hard cap=20.0%`), and
+  the effective live position bound stays 0.20 (`railway.json` pins
+  `--max-position 0.20`). Two live-reachable paths do read
+  `params.max_position_size`, so "no live sizing path is affected" was too
+  strong:
+  - *Scale-in accounting.* `PortfolioRiskManager.adjust_position_after_scale_in`
+    clamps tracked exposure to `max(0.0, params.max_position_size - current)` and
+    charges the difference to `daily_risk_used`. It is reached from
+    `src/engines/live/execution/exit_handler.py` on every scale-in, and
+    `hyper_growth` configures `scale_in_thresholds` with `max_scale_ins: 2`. With
+    the field moving 0.10 -> 0.20, the *tracked* headroom doubles. Executed size is
+    still clamped by the engine-level `--max-position 0.20`, so this is arguably a
+    fix — the accounting ceiling and the execution ceiling now agree instead of the
+    accounting one under-counting — but it is a live behavioural delta, not a no-op.
+  - *Short entries.* `entry_coordinator` bounds a short by
+    `min(short_fraction, state.max_position_size)` on the branch gated by
+    `overrides.get("position_sizer")`, which `ComponentStrategy.get_risk_overrides()`
+    always populates — so the gate is truthy for every component strategy. The
+    effective short cap therefore moves 0.10 -> 0.20 the moment shorts are
+    re-enabled on a strategy that does not set the field explicitly. This is
+    dormant today only because of #1030's long-only **config flag**, not because of
+    any code guarantee — and long-only's evidence base is itself under
+    re-examination ([D-2026-08-13-06], #1081), so treat it as a near-term state.
+
+### Added
+- Parity tripwire tests (design §3.9.4): `RiskParameters()` must equal the
+  ratified loader values field-by-field, so any future drift between the file the
+  Board signs and the values the engines construct fails CI
+  (`tests/unit/config/test_risk_parameters_hydration.py`), plus boot-wiring and
+  fail-closed tests for the three entry points
+  (`tests/unit/config/test_risk_limits_boot_wiring.py`).
 - **HyperGrowth/ETHUSDT is long-only by explicit configuration** (#1020,
   board-approved proposal 2026-07-12-01): `MLBasicSignalGenerator` gains an
   `allow_shorts` flag (default `True`) that, when `False`, withholds the
@@ -101,6 +1044,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behavior change when neither flag is passed; the live path cannot be pinned.
 
 ### Fixed
+- **Restart-safe peak/baseline seeding now works on carry-forward boots** (#1036):
+  both durable-history seeders — the `MaxDrawdownGuard` peak (#1001) and the
+  `AccountCircuitBreaker` daily baseline + drawdown peak (#1032) — read
+  `_recovered_inactive_session_id` to find the prior session holding the
+  `account_history` rows. That field's lifetime belongs to the #668
+  carry-forward re-entry guard, which clears it during startup BEFORE the first
+  loop iteration, so on exactly the boot path a mid-drawdown restart takes
+  (clean restart → NEW session → positions carried forward) both seeders read an
+  empty value, silently self-anchored to the post-restart balance, and logged
+  "account_history peak unavailable" as if that were normal — for 30 days on
+  staging. Fixed with a dedicated `_history_seed_session_id`, written once by
+  `LiveSessionRecoverer` when a prior session is found and never cleared, and
+  resolved through the new `src/engines/live/monitoring/seed_lineage.py`; the
+  lineage is now owned by the seeders' need rather than by an unrelated guard.
+  The documented ~3s first-snapshot race is handled deterministically instead of
+  by timing: an empty-but-successful read is terminal only when NO prior session
+  exists (a genuinely fresh account, unchanged behaviour), and is retried within
+  the existing `MAX_SEED_ATTEMPTS` budget when history was expected — the guard
+  arms provisionally from the current balance so the cap is never unarmed and
+  ratchets the peak UP via the new `MaxDrawdownGuard.raise_peak`, while the
+  breaker keeps evaluating (its `seed_peak` only ever raises). Seeding
+  provenance now tells the truth: the `peak_seed` field on breaker trip/dry-run
+  events gains a third value, `seed_unavailable`, for "durable history was
+  expected but could not be obtained" — a defect logged at WARNING — so it can
+  no longer be confused with `self_anchored`, which means "there was genuinely
+  nothing to seed from". The guard logs the same provenance when it arms.
+  Prod boots are unaffected (they reuse the active session, whose peak already
+  resolved); the 2026-07-14 staging boot would have armed at the durable
+  $1015.98 rather than $1015.84, which flips no historical trip decision.
+  Review round: the in-line pre-order gate (`check_before_new_risk`) now
+  ratchets a provisionally-armed peak too — it previously evaluated against the
+  stale boot balance and could admit the entry that the loop check tripped
+  close-only on moments later, re-opening the one-iteration leak that gate
+  exists to close (the same stale peak also under-throttled `_durable_peak_balance`
+  dynamic sizing). The upgrade retries get their own attempt counter, consumed
+  only by the once-per-iteration loop check, so the several chokepoint calls per
+  iteration cannot burn the 10-attempt budget in seconds. A recovery lookup that
+  RAISES now sets `_history_seed_lookup_failed`, so an undetermined lineage
+  expects history and latches `seed_unavailable` instead of laundering a failed
+  lookup into a legitimate `self_anchored`. `MAX_DRAWDOWN_BREACH` risk events now
+  carry `peak_seed`, matching the breaker, so a breach measured off a provisional
+  peak is distinguishable in `system_events` from one measured off durable
+  history. The legacy `_recovered_inactive_session_id` fallback and its Protocol
+  members are gone, making the decoupling unconditional. Finally, a session-REUSE
+  boot that finds no snapshots no longer logs "durable seeding FAILED … measuring
+  from the depressed value" — there was nothing to seed from, and the wording now
+  says so.
+
 - **Macro-event calendar refilled through Jan 2027** (#1053): `config/macro_events.json`
   had no event newer than 2026-07-14, so the macro de-risk guard had zero upcoming
   coverage and its staleness canary

@@ -15,6 +15,21 @@ logger = logging.getLogger(__name__)
 CACHE_FILE_EXTENSION = ".parquet"
 
 
+def count_index_defects(data: pd.DataFrame) -> tuple[int, bool]:
+    """Return ``(duplicate_timestamps, is_unsorted)`` for a candle frame's index."""
+    if not isinstance(data.index, pd.DatetimeIndex):
+        return 0, False
+    return int(data.index.duplicated().sum()), not data.index.is_monotonic_increasing
+
+
+def repair_index(data: pd.DataFrame) -> pd.DataFrame:
+    """Sort by time and drop duplicate timestamps, keeping the last row."""
+    if not isinstance(data.index, pd.DatetimeIndex):
+        return data
+    data = data[~data.index.duplicated(keep="last")]
+    return data.sort_index()
+
+
 class CachedDataProvider(DataProvider):
     """
     A wrapper around any DataProvider that caches fetched data to disk using year-based caching.
@@ -166,6 +181,19 @@ class CachedDataProvider(DataProvider):
         except Exception as e:
             logger.warning(f"Failed to load cache from {cache_path}: {e}")
             return None
+
+        duplicates, unsorted = count_index_defects(data)
+        if duplicates or unsorted:
+            logger.warning(
+                "Cache file %s failed integrity check (%d duplicate timestamps, unsorted=%s) "
+                "- repairing on load (sort, keep last)",
+                cache_path,
+                duplicates,
+                unsorted,
+            )
+            data = repair_index(data)
+            # Persist so the file is healed once instead of re-repaired every load.
+            self._save_to_cache(cache_path, data)
 
         if isinstance(data.index, pd.DatetimeIndex) and data.index.freq is None:
             try:

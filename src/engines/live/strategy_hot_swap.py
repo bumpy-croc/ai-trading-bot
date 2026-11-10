@@ -37,6 +37,7 @@ from src.position_management.partial_manager import PartialExitPolicy
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.risk.risk_manager import RiskParameters
 from src.strategies.components import Strategy as ComponentStrategy
+from src.trading.exit_reason import ExitReason
 
 if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
@@ -87,6 +88,7 @@ class HotSwapEngineState(Protocol):
         candle_low: float | None,
         candle: Any,
         skip_live_close: bool = ...,
+        exit_category: ExitReason = ...,
     ) -> None: ...
 
     def _send_alert(self, message: str) -> object: ...
@@ -145,6 +147,7 @@ class StrategyHotSwapCoordinator:
                     None,
                     None,
                     None,
+                    exit_category=ExitReason.STRATEGY_CHANGE,
                 )
         else:
             logger.info("📊 Keeping existing positions during strategy swap")

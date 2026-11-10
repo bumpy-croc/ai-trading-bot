@@ -381,9 +381,39 @@ class TestRunMetaLabelPipeline:
         # under training_params.
         assert metadata.get("timeframe") == "1h"
 
+        assert not (result.artifact_paths.directory.parent / "latest").is_symlink()
+
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_set_latest_points_latest_at_the_new_bundle(
+        self, mock_download, mock_signal_cls, tmp_path
+    ):
+        mock_download.return_value = self._synthetic_price_df()
+        mock_signal_cls.return_value = self._StubPrimarySignalGenerator()
+        ctx = self._make_ctx(tmp_path, set_latest=True)
+
+        result = run_training_pipeline(ctx)
+
+        assert result.success is True
         latest_link = result.artifact_paths.directory.parent / "latest"
         assert latest_link.is_symlink()
         assert latest_link.resolve() == result.artifact_paths.directory.resolve()
+
+    @patch("src.ml.training_pipeline.pipeline.point_latest_at")
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_failed_latest_update_fails_the_run_when_requested(
+        self, mock_download, mock_signal_cls, mock_point, tmp_path
+    ):
+        mock_download.return_value = self._synthetic_price_df()
+        mock_signal_cls.return_value = self._StubPrimarySignalGenerator()
+        mock_point.side_effect = RuntimeError("Failed to update 'latest' symlink")
+        ctx = self._make_ctx(tmp_path, set_latest=True)
+
+        result = run_training_pipeline(ctx)
+
+        assert result.success is False
+        assert "latest" in result.metadata["error"]
 
     @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
     @patch("src.ml.training_pipeline.pipeline.download_price_data")
@@ -410,6 +440,7 @@ class TestRunMetaLabelPipeline:
         mock_download.return_value = self._synthetic_price_df()
         always_hold = MagicMock()
         always_hold.warmup_period = 5
+        always_hold.resolved_model_identity.return_value = "ETHUSDT:1h:basic:v1"
         always_hold.generate_signal.return_value = Signal(
             direction=SignalDirection.HOLD, strength=0.0, confidence=0.0, metadata={}
         )
@@ -742,6 +773,23 @@ class TestRunTrainingPipeline:
         # live-loaded basic/latest symlink as a training side effect)
         assert mocks["save_artifacts"].call_args.args[2] == "price"
 
+        # #1132 root-cause regression: run_training_pipeline itself (not
+        # orchestrator._sync_artifacts's backfill) must already carry the
+        # prediction-path contract for a rolling-minmax bundle -- this is the
+        # in-memory dict handed to save_artifacts, i.e. exactly what would be
+        # persisted to metadata.json.
+        assert result.metadata["price_normalization"] == {
+            "method": "rolling_minmax",
+            "window": 10,
+            "target_feature": "close",
+        }
+        assert result.metadata["model_file"] == "model.onnx"
+        assert result.metadata["framework"] == "onnx"
+        assert result.metadata["feature_strategy"] == "price_only_rolling_minmax"
+        assert mocks["save_artifacts"].call_args.args[4] is result.metadata
+        # Training never promotes on its own: `latest` is an explicit opt-in.
+        assert mocks["save_artifacts"].call_args.kwargs["set_latest"] is False
+
     def test_default_path_regresses_raw_close(self, tmp_path):
         """Without force_price_only the existing contract is unchanged.
 
@@ -787,6 +835,9 @@ class TestRunTrainingPipeline:
         _, target_array, _ = mocks["create_sequences"].call_args.args
         np.testing.assert_allclose(target_array, feature_df["close"].to_numpy(dtype=np.float32))
         assert result.metadata["model_type"] == "price"
+        # create_robust_features' "close_scaled" feature is globally-scaled,
+        # not rolling-minmax -- the #1132 enrichment must not fire here.
+        assert "price_normalization" not in result.metadata
 
     @patch("src.ml.training_pipeline.pipeline.download_price_data")
     def test_handles_download_failure(self, mock_download, tmp_path):

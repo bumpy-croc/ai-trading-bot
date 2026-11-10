@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 import pandas as pd
 
 from src.config.constants import BORROW_DUST_EPSILON
+from src.database.manager import DuplicateCloseError
 from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.live.trade_close_accounting import (
     _close_entry_fee_usd,
@@ -45,6 +46,7 @@ from src.engines.shared.validation import is_same_bar_entry
 from src.infrastructure.logging.events import log_order_event
 from src.performance.metrics import Side, pnl_percent
 from src.tech.adapters.row_extractors import extract_ml_predictions_from_signal
+from src.trading.exit_reason import ExitReason, coerce_exit_category
 
 if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
@@ -103,6 +105,8 @@ class LiveExitEngineState(Protocol):
 
     def _reprotect_position(self, position: Position) -> None: ...
 
+    def _enter_close_only_mode(self, reason: str | None = None) -> None: ...
+
     def _log_trade(self, trade: Trade) -> None: ...
 
     # Mocked in tests via patch.object(engine, ...); routed through state so those
@@ -117,6 +121,7 @@ class LiveExitEngineState(Protocol):
         candle_low: float | None,
         candle: Any,
         skip_live_close: bool = ...,
+        exit_category: ExitReason = ...,
     ) -> None: ...
 
 
@@ -302,6 +307,7 @@ class LiveExitCoordinator:
                     candle_high,
                     candle_low,
                     candle,
+                    exit_category=coerce_exit_category(getattr(exit_check, "exit_category", None)),
                 )
 
     def execute_exit(
@@ -314,11 +320,16 @@ class LiveExitCoordinator:
         candle_low: float | None,
         candle: Any,
         skip_live_close: bool = False,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
+        close_notional_override: float | None = None,
     ) -> None:
         """Serialise the close on the position's base-asset lock, then execute it (#703).
 
         Re-entrant: an entry that already holds the lock (its SL-failed emergency
         close routes here) re-acquires it on the same thread without deadlock.
+
+        close_notional_override: see ``LiveExitHandler.execute_exit`` — passed
+        through unchanged for the partial-exit-complete route (#1183).
         """
         state = self._state
         from src.engines.live.reconciliation import PositionReconciler
@@ -334,6 +345,8 @@ class LiveExitCoordinator:
                 candle_low,
                 candle,
                 skip_live_close=skip_live_close,
+                exit_category=exit_category,
+                close_notional_override=close_notional_override,
             )
 
     def execute_exit_locked(
@@ -346,6 +359,8 @@ class LiveExitCoordinator:
         candle_low: float | None,
         candle: Any,
         skip_live_close: bool = False,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
+        close_notional_override: float | None = None,
     ) -> None:
         """Close a position using shared execution modules."""
         state = self._state
@@ -396,6 +411,8 @@ class LiveExitCoordinator:
                     exit_reason=reason,
                     filled_price=base_price,
                     current_balance=state.current_balance,
+                    exit_category=exit_category,
+                    close_notional_override=close_notional_override,
                 )
             else:
                 # #710: On margin a resting stop-loss order reserves the position's
@@ -456,6 +473,9 @@ class LiveExitCoordinator:
                     candle_high=candle_high,
                     candle_low=candle_low,
                     data_provider=state.data_provider,
+                    exit_category=exit_category,
+                    stop_just_cancelled=protective_order_cancelled,
+                    close_notional_override=close_notional_override,
                 )
                 if not exit_result.success and protective_order_cancelled:
                     # The close failed after we cancelled a clean (zero-fill) stop, so
@@ -512,8 +532,29 @@ class LiveExitCoordinator:
                         e,
                     )
 
-            # Atomic balance update with full audit trail for realized P&L
-            if state.trading_session_id is not None:
+            # Resolve the position's DB row id up front: when both it and a trading
+            # session exist, the balance write is deferred and folded into the
+            # single atomic log_trade(balance_delta=...) call below instead of
+            # being committed here as its own transaction (#736) — a separate
+            # balance commit followed by a separate trade/position-close commit
+            # is exactly the split that let a crash between them double-apply or
+            # drop this PnL on recovery. That atomic write is also correctly
+            # serialized against every other balance writer (#735).
+            close_position_id = getattr(position, "db_position_id", None)
+            atomic_close_with_balance = (
+                state.trading_session_id is not None and close_position_id is not None
+            )
+
+            if state.trading_session_id is not None and not atomic_close_with_balance:
+                # No db_position_id (position was never persisted, e.g. DB logging
+                # failed at entry, or a test double) — an atomic close+balance isn't
+                # possible, fall back to a standalone atomic balance update.
+                logger.warning(
+                    "Closing %s (%s) without db_position_id — balance will be updated "
+                    "standalone, not atomically with the trade/position-close.",
+                    position.symbol,
+                    position.order_id,
+                )
                 try:
                     with state.db_manager.atomic_balance_update(
                         balance_change=realized_pnl,
@@ -531,7 +572,7 @@ class LiveExitCoordinator:
                     )
                     # Continue processing to log the trade even if balance update fails
                     # This allows for manual reconciliation
-            else:
+            elif state.trading_session_id is None:
                 # No trading session - update balance directly (testing/paper trading mode)
                 state.current_balance += realized_pnl
                 if state.current_balance < 0:
@@ -584,6 +625,7 @@ class LiveExitCoordinator:
                 pnl=gross_pnl,
                 pnl_percent=pnl_percent,
                 exit_reason=reason,
+                exit_category=exit_category,
             )
 
             # Include margin interest in performance tracker fees so
@@ -612,8 +654,8 @@ class LiveExitCoordinator:
                 # (_recover_active_positions). It may legitimately be None for a
                 # position that was never persisted (e.g. db logging failed, or
                 # tests without a DB); in that case log_trade falls back to its
-                # original behaviour (insert trade only, no status flip).
-                close_position_id = getattr(position, "db_position_id", None)
+                # original behaviour (insert trade only, no status flip), and the
+                # balance was already updated standalone above.
                 if close_position_id is None:
                     logger.warning(
                         "Closing %s (%s) without db_position_id — position row "
@@ -622,45 +664,99 @@ class LiveExitCoordinator:
                         position.symbol,
                         position.order_id,
                     )
-                state.db_manager.log_trade(
-                    symbol=position.symbol,
-                    side=position_side.value,
-                    entry_price=position.entry_price,
-                    exit_price=exit_price,
-                    size=float(
-                        position.current_size
-                        if position.current_size is not None
-                        else position.size
-                    ),
-                    pnl=gross_pnl,
-                    strategy_name=state._strategy_name(),
-                    exit_reason=reason,
-                    entry_time=position.entry_time,
-                    exit_time=datetime.now(UTC),
-                    session_id=state.trading_session_id,
-                    position_id=close_position_id,
-                    mfe=(metrics.mfe if metrics else None),
-                    mae=(metrics.mae if metrics else None),
-                    mfe_price=(metrics.mfe_price if metrics else None),
-                    mae_price=(metrics.mae_price if metrics else None),
-                    mfe_time=(metrics.mfe_time if metrics else None),
-                    mae_time=(metrics.mae_time if metrics else None),
-                    # trades.commission is the round-trip fee in USD (entry + exit),
-                    # the same values booked to account_balances: entry_fee as the
-                    # entry_fee_<symbol> ledger event, exit_fee folded into the
-                    # realized_pnl_<symbol> event. Deliberately NOT orders.actual_commission
-                    # (raw exchange commission in the received asset — ETH on buys, USDT on
-                    # sells — with no commission_asset column, populated asynchronously by
-                    # reconciliation, so unit-ambiguous and unreliable at close time).
-                    # The entry leg is scaled to the closed portion so a partial final
-                    # close's commission matches its portion-level size/quantity/pnl
-                    # (ratio is 1.0 for a full close). Reuses the same scaled total fed
-                    # to performance_tracker.record_trade above so the metrics and the
-                    # DB ledger never diverge.
-                    commission=total_fee,
-                    quantity=_closed_base_quantity(position),
-                    margin_interest_cost=interest_cost,
-                )
+                ledger_result: dict[str, Any] = {}
+                try:
+                    state.db_manager.log_trade(
+                        symbol=position.symbol,
+                        side=position_side.value,
+                        entry_price=position.entry_price,
+                        exit_price=exit_price,
+                        size=float(
+                            position.current_size
+                            if position.current_size is not None
+                            else position.size
+                        ),
+                        pnl=gross_pnl,
+                        strategy_name=state._strategy_name(),
+                        exit_reason=reason,
+                        exit_category=exit_category,
+                        entry_time=position.entry_time,
+                        exit_time=datetime.now(UTC),
+                        session_id=state.trading_session_id,
+                        position_id=close_position_id,
+                        mfe=(metrics.mfe if metrics else None),
+                        mae=(metrics.mae if metrics else None),
+                        mfe_price=(metrics.mfe_price if metrics else None),
+                        mae_price=(metrics.mae_price if metrics else None),
+                        mfe_time=(metrics.mfe_time if metrics else None),
+                        mae_time=(metrics.mae_time if metrics else None),
+                        # trades.commission is the round-trip fee in USD (entry + exit),
+                        # the same values booked to account_balances: entry_fee as the
+                        # entry_fee_<symbol> ledger event, exit_fee folded into the
+                        # realized_pnl_<symbol> event. Deliberately NOT orders.actual_commission
+                        # (raw exchange commission in the received asset — ETH on buys, USDT on
+                        # sells — with no commission_asset column, populated asynchronously by
+                        # reconciliation, so unit-ambiguous and unreliable at close time).
+                        # The entry leg is scaled to the closed portion so a partial final
+                        # close's commission matches its portion-level size/quantity/pnl
+                        # (ratio is 1.0 for a full close). Reuses the same scaled total fed
+                        # to performance_tracker.record_trade above so the metrics and the
+                        # DB ledger never diverge.
+                        commission=total_fee,
+                        quantity=_closed_base_quantity(position),
+                        margin_interest_cost=interest_cost,
+                        # Deferred from the block above (#736): balance, trade insert, and
+                        # position-close all commit in this ONE transaction when a
+                        # db_position_id is available. When it isn't, the balance was
+                        # already applied standalone above and balance_delta stays None.
+                        balance_delta=(realized_pnl if atomic_close_with_balance else None),
+                        ledger_result=ledger_result,
+                    )
+                except DuplicateCloseError:
+                    # Another closer (the reconciler) already booked this position's PnL
+                    # and closed its row, so nothing is written here; the balance re-read
+                    # below picks up the ledger it moved.
+                    logger.warning(
+                        "Close of %s (%s) was already booked by another closer — skipping the "
+                        "duplicate trade/PnL write.",
+                        position.symbol,
+                        position.order_id,
+                    )
+                ledger_rejected = "rejected_reason" in ledger_result
+                if ledger_rejected:
+                    # The close and trade are persisted but the ledger refused the delta, so
+                    # its balance no longer matches the exchange: stop sizing new entries off
+                    # it until an operator reconciles (exits and stops keep running).
+                    state._enter_close_only_mode(
+                        f"ledger rejected the realized PnL {realized_pnl:+.2f} of the "
+                        f"{position.symbol} close ({ledger_result['rejected_reason']}) — "
+                        "refusing new entries until the balance ledger is reconciled"
+                    )
+                if atomic_close_with_balance:
+                    # Authoritative post-commit read: the atomic write above is
+                    # what actually moved the ledger, so re-read rather than
+                    # approximate in memory. The close itself already committed
+                    # successfully by this point, so a failure here (pool
+                    # pressure, a CRITICAL_READ timeout) must not unwind into
+                    # the generic except below and log a false "failed to close"
+                    # — fall back to applying the same delta the atomic commit
+                    # already applied in-memory instead.
+                    try:
+                        state.current_balance = state.db_manager.get_current_balance(
+                            state.trading_session_id
+                        )
+                    except Exception as read_err:
+                        # A refused delta never reached the ledger, so applying it in
+                        # memory would diverge from it.
+                        if not ledger_rejected:
+                            state.current_balance += realized_pnl
+                        logger.warning(
+                            "Post-close balance re-read failed for %s: %s — kept the "
+                            "in-memory balance consistent with the ledger instead of "
+                            "re-reading.",
+                            position.symbol,
+                            read_err,
+                        )
 
             # NOTE(#710): the resting stop-loss is now cancelled BEFORE the market
             # close (see the close path above) so it cannot reserve the base asset

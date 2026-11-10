@@ -39,6 +39,16 @@ startCommand for weeks before #835/#836 caught it). Known traps from the 2026-07
 Three-way rule: JSON ↔ constants.py ↔ as-deployed. Any mismatch goes in the diff with its
 evidence line.
 
+**Known-divergent during the #986 migration — do NOT raise as a P0:** since #1073, the six
+ratified fields hydrate `RiskParameters` from the JSON, so **the JSON wins over
+`constants.py`** for them. `max_position_size` is deliberately divergent
+(`risk-limits.json` 0.20 vs `DEFAULT_MAX_POSITION_SIZE = 0.1`, which is now dead weight for
+this field): the mirror is being retired, not broken. `$source_of_truth_note` still carries
+the pre-#986 "must match constants.py / any divergence is a P0" wording; its replacement is
+packaged for the human in design §3.10 and lands via a Board edit, since the JSON is
+human-owned. Treat that note as stale, flag it as a ratification item, and resume normal P0
+handling once #986 step 7 deletes the mirrored constants.
+
 ## 3. Package one reviewable diff
 
 For each proposed change: current value → proposed value → evidence (issue/experiment/incident

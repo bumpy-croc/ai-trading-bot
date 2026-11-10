@@ -27,6 +27,7 @@ from src.strategies.components import (
 from src.strategies.components.position_sizer import PositionSizer
 from src.strategies.components.risk_manager import RiskManager
 from src.strategies.components.signal_generator import SignalGenerator
+from src.trading.exit_reason import ExitReason
 
 pytestmark = pytest.mark.integration
 
@@ -711,6 +712,7 @@ class TestStopLossTakeProfitParity:
         exit_result = engine.live_exit_handler.execute_exit(
             position=position,
             exit_reason="Stop loss",
+            exit_category=ExitReason.STOP_LOSS,
             current_price=98.0,
             limit_price=sl_level,
             current_balance=10_000.0,

@@ -1,9 +1,28 @@
 """Portfolio max-drawdown hard-cap enforcement for the live engine.
 
-``MaxDrawdownGuard`` tracks the session peak balance and classifies the
-current drawdown into escalation tiers (risk-limits.json ``escalation``):
-WARNING at 50% of the cap, CRITICAL at 80%, and a latched BREACH at the cap
-itself (``portfolio.max_drawdown_pct``).
+``MaxDrawdownGuard`` tracks two drawdown legs and classifies the WORSE of them
+into escalation tiers (risk-limits.json ``escalation``): WARNING at 50% of the
+cap, CRITICAL at 80%, and a latched BREACH at the cap itself
+(``portfolio.max_drawdown_pct``).
+
+- Balance leg: realized balance vs the session peak balance. This is the
+  original guard, unchanged — it can only move on realized fills.
+- Equity leg: mark-to-market equity (balance + unrealized P&L of open
+  positions) vs its own session peak equity, so a position running deep
+  underwater trips the cap before it is stopped out. The equity peak is floored
+  at the balance peak, so with no open position the legs coincide until equity
+  has set a higher confirmed peak (giving back open profit then counts).
+
+Breach is ``max(balance leg, equity leg) >= cap``: the old balance condition is
+a literal disjunct, so the guard can never be looser than the balance-only
+version. The equity leg is skipped (never guessed) when no trustworthy mark is
+available — invalid price, position recovered but not yet re-marked, or a stale
+price feed — and escalates to a CRITICAL alert if that persists. Both the equity
+peak and an equity-leg breach need two consecutive distinct marks to agree (the
+peak ratchets to the lower, the drawdown is read off the higher), so a single
+bad tick can neither inflate the peak nor latch a halt that only an operator
+restart clears. The first mark after boot or after a blind spell stands alone,
+so a restart mid-drawdown re-trips immediately.
 
 ``MaxDrawdownEnforcer`` runs the guard on every trading-loop iteration and, on
 breach, trips the EXISTING close-only mode, which gates every exposure
@@ -19,15 +38,24 @@ in the same iteration — e.g. a stop-loss fill — blocks that iteration's entr
 instead of leaking one bar of fresh exposure (2026-07-12 risk audit P1).
 
 Peak-equity source: the AUTHORITATIVE baseline is the ``account_history``
-session max (active session plus the recovered inactive session on clean
-restarts), recomputed on boot so a restart cannot reset the drawdown baseline
-— a bot restarted mid-breach re-trips naturally on its first loop iteration.
-Fallback order is DB session max → current recovered balance; the in-memory
-PerformanceTracker peak is NEVER a seed candidate (it can initialize from the
-CONFIGURED balance — the optimistic book value that mis-seeded prod at $100
-vs true equity ~$84 on 2026-07-04). A failed DB read defers seeding to the
-next cycle (bounded by ``MAX_SEED_ATTEMPTS``) instead of latching a
-half-seeded baseline.
+session max (active session plus the prior session on clean restarts, resolved
+via ``seed_lineage``), recomputed on boot so a restart cannot reset the
+drawdown baseline — a bot restarted mid-breach re-trips naturally on its first
+loop iteration. Fallback order is DB session max → current recovered balance;
+the in-memory PerformanceTracker peak is NEVER a seed candidate (it can
+initialize from the CONFIGURED balance — the optimistic book value that
+mis-seeded prod at $100 vs true equity ~$84 on 2026-07-04). A failed DB read
+defers seeding to the next cycle (bounded by ``MAX_SEED_ATTEMPTS``) instead of
+latching a half-seeded baseline.
+
+When the durable peak is EXPECTED (a prior session exists) but the read comes
+back empty — the first-snapshot race of #1036, where the new session's opening
+``account_history`` row lands seconds after the first loop iteration — the
+guard arms provisionally from the current balance so the cap is never unarmed,
+records ``peak_seed=seed_unavailable``, and keeps retrying to ratchet the peak
+UP (``raise_peak``) until the durable value is readable or the attempt budget
+is spent. An empty read with NO prior session is a genuinely fresh account and
+self-anchors terminally, as before.
 
 Baseline policy (PM decision, 2026-07-04): the peak baseline is the peak TRUE
 equity since the last reconciled reset — i.e. session-scoped history, NOT
@@ -61,6 +89,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import TYPE_CHECKING, Protocol
@@ -68,14 +97,23 @@ from typing import TYPE_CHECKING, Protocol
 from src.config.constants import (
     DRAWDOWN_CRITICAL_AT_PCT_OF_LIMIT,
     DRAWDOWN_GUARD_LOG_INTERVAL_SECONDS,
+    DRAWDOWN_MARK_MAX_AGE_SECONDS,
     DRAWDOWN_WARNING_AT_PCT_OF_LIMIT,
 )
 from src.config.feature_flags import is_enabled
 from src.database.models import EventType
+from src.engines.live.monitoring.seed_lineage import (
+    PEAK_SEED_DB_SESSION_MAX,
+    PEAK_SEED_SELF_ANCHORED,
+    PEAK_SEED_UNAVAILABLE,
+    HistoryLineage,
+    resolve_history_lineage,
+)
 from src.infrastructure.logging.events import log_risk_event
 
 if TYPE_CHECKING:
     from src.database.manager import DatabaseManager
+    from src.engines.live.execution.position_tracker import MarkReading
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +130,15 @@ RESET_PEAK_FLAG = "max_drawdown_reset_peak"
 # is never left unarmed indefinitely.
 MAX_SEED_ATTEMPTS = 10
 
+# Seconds the equity leg may stay blind (no fresh mark) with a position open before the
+# operator is paged: the balance leg alone cannot see the unrealized loss it exists to catch.
+MARK_BLIND_ESCALATE_SECONDS = DRAWDOWN_MARK_MAX_AGE_SECONDS
+
+# A new confirmed equity peak is written to account_history once it exceeds the last
+# persisted one by this fraction: the hourly snapshot would otherwise lose intra-hour
+# highs on restart. Stepped so a rally does not write a row every iteration.
+EQUITY_PEAK_PERSIST_STEP = 0.0025
+
 
 class DrawdownTier(IntEnum):
     """Escalation tier for the current drawdown, ordered by severity."""
@@ -106,10 +153,14 @@ class DrawdownTier(IntEnum):
 class DrawdownAssessment:
     """One drawdown reading: level, peak it was measured from, and tier."""
 
-    drawdown: float  # fraction of peak (0..1)
+    drawdown: float  # worst leg, fraction of that leg's peak (0..1)
     peak_balance: float
     tier: DrawdownTier
     tripped: bool  # latched hard-cap breach
+    balance_drawdown: float = 0.0
+    equity_drawdown: float = 0.0
+    equity_peak: float = 0.0
+    equity: float | None = None  # None: equity leg not evaluated for this sample
 
 
 class MaxDrawdownGuard:
@@ -137,6 +188,11 @@ class MaxDrawdownGuard:
         self._critical_threshold = self.max_drawdown_pct * critical_at_pct_of_limit
         self._log_interval = log_interval_seconds
         self._peak = 0.0
+        self._equity_peak = 0.0
+        # Consecutive distinct marks, so a lone bad tick cannot ratchet the equity peak.
+        self._prev_equity: float | None = None
+        self._cur_equity: float | None = None
+        self._equity_mark_sequence: int | None = None
         self._seeded = False
         self._tripped = False
         self._last_tier_log: float | None = None
@@ -157,16 +213,33 @@ class MaxDrawdownGuard:
         """Current peak balance the drawdown is measured from."""
         return self._peak
 
-    def seed_peak(self, current_balance: float, *history_candidates: float | None) -> None:
-        """Establish the peak baseline from boot-time candidates.
+    @property
+    def equity_peak(self) -> float:
+        """Peak mark-to-market equity the equity leg is measured from.
+
+        Floored at the balance peak: equity equals balance with no open
+        position, so the equity leg can never sit on a lower peak than the
+        balance leg.
+        """
+        return max(self._equity_peak, self._peak)
+
+    def seed_peak(
+        self,
+        current_balance: float,
+        *history_candidates: float | None,
+        equity_peak: float | None = None,
+    ) -> None:
+        """Establish the peak baselines from boot-time candidates.
 
         Takes the max of the current balance and any finite positive
         candidates (persisted account_history peak, performance-tracker peak).
+        ``equity_peak`` is the persisted session equity max for the equity leg.
         Under ``FEATURE_MAX_DRAWDOWN_RESET_PEAK`` the history is ignored and
-        the peak re-baselines to the current balance — the documented operator
+        both peaks re-baseline to the current balance — the documented operator
         override for clearing a drawdown halt.
         """
-        if is_enabled(RESET_PEAK_FLAG, default=False):
+        reset = is_enabled(RESET_PEAK_FLAG, default=False)
+        if reset:
             self._peak = max(self._as_valid(current_balance) or 0.0, 0.0)
             logger.critical(
                 "FEATURE_MAX_DRAWDOWN_RESET_PEAK active — drawdown peak re-baselined "
@@ -181,7 +254,33 @@ class MaxDrawdownGuard:
                 if v is not None
             ]
             self._peak = max(valid, default=0.0)
+        self._equity_peak = self._peak
+        if not reset:
+            self._equity_peak = max(self._peak, self._as_valid(equity_peak) or 0.0)
         self._seeded = True
+
+    def raise_peak(self, candidate: float | None) -> bool:
+        """Ratchet the peak UP from a late-arriving durable candidate (#1036).
+
+        Used when the boot-time ``account_history`` read came back empty
+        because the session's first snapshot had not landed yet: the guard arms
+        immediately from the current balance (never unarmed) and the true peak
+        is raised as soon as it becomes readable. Only ever raises — a stale or
+        lower candidate can never erase drawdown already observed.
+        """
+        value = self._as_valid(candidate)
+        if value is None or value <= self._peak:
+            return False
+        self._peak = value
+        return True
+
+    def raise_equity_peak(self, candidate: float | None) -> bool:
+        """Ratchet the equity peak UP from a late-arriving durable candidate."""
+        value = self._as_valid(candidate)
+        if value is None or value <= self.equity_peak:
+            return False
+        self._equity_peak = value
+        return True
 
     @staticmethod
     def _as_valid(candidate: float | None) -> float | None:
@@ -196,8 +295,25 @@ class MaxDrawdownGuard:
             return None
         return value
 
-    def observe(self, balance: float) -> DrawdownAssessment:
-        """Record a balance sample; ratchet the peak and classify the tier."""
+    def observe(
+        self,
+        balance: float,
+        equity: float | None = None,
+        mark_sequence: int | None = None,
+        flat: bool = False,
+    ) -> DrawdownAssessment:
+        """Record a sample; ratchet the peaks and classify the tier.
+
+        Args:
+            balance: Realized balance (drives the balance leg).
+            equity: Mark-to-market equity, or None when no trustworthy mark is
+                available — the equity leg is then skipped, never guessed.
+            mark_sequence: Identifies the price mark ``equity`` was built from;
+                repeated reads of one mark do not count as confirmation of the
+                equity peak. None treats every call as a new mark.
+            flat: No position is open, so ``equity`` is realized balance and
+                needs no two-mark confirmation.
+        """
         if not self._seeded:
             self.seed_peak(balance)
         if not math.isfinite(balance):
@@ -208,7 +324,27 @@ class MaxDrawdownGuard:
 
         if balance > self._peak:
             self._peak = balance
-        drawdown = (self._peak - balance) / self._peak if self._peak > 0 else 0.0
+        balance_drawdown = (self._peak - balance) / self._peak if self._peak > 0 else 0.0
+
+        valid_equity = equity if equity is not None and math.isfinite(equity) else None
+        equity_drawdown = 0.0
+        if valid_equity is None:
+            # Without a trustworthy mark nothing may build toward a peak.
+            self._prev_equity = self._cur_equity = self._equity_mark_sequence = None
+        else:
+            if flat:
+                self._prev_equity = self._cur_equity = self._equity_mark_sequence = None
+            self._confirm_equity_peak(valid_equity, mark_sequence)
+            peak_equity = self.equity_peak
+            if peak_equity > 0:
+                # Read the drawdown off the better of the last two distinct marks.
+                confirmed = (
+                    valid_equity
+                    if self._prev_equity is None
+                    else max(self._prev_equity, valid_equity)
+                )
+                equity_drawdown = max((peak_equity - confirmed) / peak_equity, 0.0)
+        drawdown = max(balance_drawdown, equity_drawdown)
 
         tier = DrawdownTier.NONE
         if drawdown + _TIER_EPSILON >= self.max_drawdown_pct:
@@ -221,10 +357,37 @@ class MaxDrawdownGuard:
         if self._tripped:
             tier = DrawdownTier.BREACH  # latched: recovery below the cap does not un-trip
 
-        self._log_tier(tier, drawdown, balance)
-        return DrawdownAssessment(drawdown, self._peak, tier, self._tripped)
+        self._log_tier(tier, drawdown, balance, balance_drawdown, equity_drawdown, valid_equity)
+        return DrawdownAssessment(
+            drawdown,
+            self._peak,
+            tier,
+            self._tripped,
+            balance_drawdown=balance_drawdown,
+            equity_drawdown=equity_drawdown,
+            equity_peak=self.equity_peak,
+            equity=valid_equity,
+        )
 
-    def _log_tier(self, tier: DrawdownTier, drawdown: float, balance: float) -> None:
+    def _confirm_equity_peak(self, equity: float, mark_sequence: int | None) -> None:
+        """Track the last two distinct marks; ratchet the peak to the lower of them."""
+        if mark_sequence is None or mark_sequence != self._equity_mark_sequence:
+            self._prev_equity, self._cur_equity = self._cur_equity, equity
+            self._equity_mark_sequence = mark_sequence
+        else:
+            self._cur_equity = equity
+        if self._prev_equity is not None and self._cur_equity is not None:
+            self.raise_equity_peak(min(self._prev_equity, self._cur_equity))
+
+    def _log_tier(
+        self,
+        tier: DrawdownTier,
+        drawdown: float,
+        balance: float,
+        balance_drawdown: float,
+        equity_drawdown: float,
+        equity: float | None,
+    ) -> None:
         """Log the active tier: immediately on escalation, else rate-limited."""
         if tier is DrawdownTier.NONE:
             if self._last_logged_tier is not DrawdownTier.NONE:
@@ -247,9 +410,15 @@ class MaxDrawdownGuard:
         self._last_logged_tier = tier
         self._last_tier_log = now
 
+        equity_part = (
+            f"equity ${equity:,.2f} {equity_drawdown * 100:.2f}% of peak ${self.equity_peak:,.2f}"
+            if equity is not None
+            else "equity leg not evaluated (no fresh mark)"
+        )
         detail = (
-            f"drawdown {drawdown * 100:.2f}% of peak ${self._peak:,.2f} "
-            f"(balance ${balance:,.2f}, hard cap {self.max_drawdown_pct * 100:.1f}%)"
+            f"drawdown {drawdown * 100:.2f}% (balance ${balance:,.2f} "
+            f"{balance_drawdown * 100:.2f}% of peak ${self._peak:,.2f}; {equity_part}; "
+            f"hard cap {self.max_drawdown_pct * 100:.1f}%)"
         )
         if tier is DrawdownTier.BREACH:
             logger.critical(
@@ -278,11 +447,16 @@ class DrawdownEngineState(Protocol):
 
     current_balance: float
     trading_session_id: int | None
-    _recovered_inactive_session_id: int | None
+    # Durable seeding lineage (#1036): set once at recovery, never cleared.
+    # ``_recovered_inactive_session_id`` is deliberately NOT part of this
+    # contract — the #668 carry-forward guard clears it before the first loop
+    # iteration, and depending on it is what disarmed the seeders.
+    _history_seed_session_id: int | None
+    _history_seed_lookup_failed: bool
     db_manager: DatabaseManager
     _close_only_mode: bool
 
-    def _enter_close_only_mode(self) -> None: ...
+    def _enter_close_only_mode(self, reason: str | None = None) -> None: ...
 
     def _record_event(
         self,
@@ -305,21 +479,69 @@ class MaxDrawdownEnforcer:
     failure cannot leave the account unprotected.
     """
 
-    def __init__(self, engine_state: DrawdownEngineState, guard: MaxDrawdownGuard) -> None:
-        """Bind to the engine's live state (see protocol for the surface)."""
+    def __init__(
+        self,
+        engine_state: DrawdownEngineState,
+        guard: MaxDrawdownGuard,
+        *,
+        mark_provider: Callable[[], MarkReading] | None = None,
+        snapshot_writer: Callable[[], None] | None = None,
+    ) -> None:
+        """Bind to the engine's live state (see protocol for the surface).
+
+        Args:
+            engine_state: Live engine state.
+            guard: The drawdown state machine.
+            mark_provider: Returns the open positions' unrealized P&L with a
+                freshness verdict. ``None`` runs the balance leg only.
+            snapshot_writer: Persists an ``account_history`` snapshot (must not
+                raise). Called when the confirmed equity peak rises, so a
+                restart re-seeds from it rather than from a lower hourly row.
+        """
         self._state = engine_state
         self._guard = guard
+        self._mark_provider = mark_provider
+        self._snapshot_writer = snapshot_writer
+        self._persisted_equity_peak = 0.0
+        self._last_equity: float | None = None
+        self._mark_blind_since: float | None = None
+        self._mark_blind_alerted = False
         self._breach_notified = False
         self._seed_attempts = 0
+        # Separate budget from _seed_attempts: the pre-order chokepoint runs the
+        # upgrade too (so it never gates on a stale provisional peak), and several
+        # chokepoint calls land per iteration. Sharing one counter would let them
+        # burn the budget within seconds and forfeit the durable peak.
+        self._upgrade_attempts = 0
+        self._peak_seed_provenance = PEAK_SEED_SELF_ANCHORED
+        self._history_upgrade_pending = False
 
     @property
     def guard(self) -> MaxDrawdownGuard:
         """The underlying drawdown guard (exposed for status/diagnostics)."""
         return self._guard
 
+    @property
+    def peak_seed_provenance(self) -> str:
+        """Where the armed peak came from (see ``seed_lineage`` constants)."""
+        return self._peak_seed_provenance
+
     def check(self) -> None:
         """Assess current drawdown; enforce the hard cap on breach."""
         self._run_check(count_seed_deferral=True)
+        # After enforcement, and only from the loop: a DB write has no place in
+        # the pre-order gate that runs under the base-asset lock.
+        self._persist_equity_peak()
+
+    def check_during_data_gap(self) -> None:
+        """Realized-balance check for loop iterations that skip the loop body.
+
+        A market-data gap leaves position marks unrefreshed, so the equity leg
+        is not read (and its blind-mark accounting not advanced); the balance
+        leg still catches realized losses such as stop fills. Does not consume
+        the seeding attempt budgets, which a long outage would otherwise burn.
+        """
+        self._run_check(count_seed_deferral=False, use_marks=False)
 
     def check_before_new_risk(self) -> None:
         """In-line pre-order variant of :meth:`check` for exposure chokepoints.
@@ -331,23 +553,38 @@ class MaxDrawdownEnforcer:
         #807 in-line circuit-breaker gate — so the cap binds on the SAME
         iteration, including the first iteration after a mid-breach restart.
 
-        Identical enforcement, but a deferred seeding attempt is NOT counted
-        against ``MAX_SEED_ATTEMPTS``: the bounded current-balance fallback
-        stays owned by the once-per-iteration loop check, so several
-        chokepoint calls per iteration cannot burn through the deferral
-        budget prematurely.
+        Identical enforcement — including ratcheting a provisionally-armed peak
+        up to the durable one, so the gate never admits an entry against a
+        stale peak the loop check is about to trip on. Neither the deferred
+        seeding attempt nor the upgrade attempt is counted against
+        ``MAX_SEED_ATTEMPTS``: both budgets stay owned by the once-per-iteration
+        loop check, so several chokepoint calls per iteration cannot burn
+        through them prematurely.
         """
         self._run_check(count_seed_deferral=False)
 
-    def _run_check(self, *, count_seed_deferral: bool) -> None:
+    def _run_check(self, *, count_seed_deferral: bool, use_marks: bool = True) -> None:
         state = self._state
         try:
             balance = float(state.current_balance)
-            if not self._guard.seeded and not self._try_seed(
-                balance, count_deferral=count_seed_deferral
-            ):
+            was_seeded = self._guard.seeded
+            if not was_seeded and not self._try_seed(balance, count_deferral=count_seed_deferral):
                 return  # seeding deferred (DB/session not ready); retry next cycle
-            assessment = self._guard.observe(balance)
+            # Only once the guard is already armed: re-reading the same DB state
+            # inside the call that just armed provisionally cannot tell us
+            # anything new. The pre-order chokepoint upgrades too — otherwise it
+            # would admit an entry against the stale provisional peak that the
+            # loop check trips on moments later (the very leak it exists to
+            # close) — but without consuming the attempt budget.
+            if was_seeded and self._history_upgrade_pending:
+                # Armed provisionally from the current balance; keep trying to
+                # ratchet up to the durable peak.
+                self._upgrade_peak_from_history(count_attempt=count_seed_deferral)
+            equity, mark_sequence, unrealized, flat = (
+                self._read_equity(balance) if use_marks else (None, None, None, False)
+            )
+            self._last_equity = equity
+            assessment = self._guard.observe(balance, equity, mark_sequence, flat=flat)
         except Exception as e:
             # Monitoring must never take down the trading loop.
             logger.error("Max-drawdown check failed: %s", e, exc_info=True)
@@ -362,12 +599,24 @@ class MaxDrawdownEnforcer:
         # also re-fires if close-only is cleared while the breach persists, so
         # resume_trading() alone cannot silently restart entries mid-breach.
         try:
-            state._enter_close_only_mode()
+            state._enter_close_only_mode(
+                f"max-drawdown hard cap breached: drawdown "
+                f"{assessment.drawdown * 100:.2f}% >= limit "
+                f"{self._guard.max_drawdown_pct * 100:.1f}%"
+            )
             self._breach_notified = True
+            equity_part = (
+                f"; equity leg {assessment.equity_drawdown * 100:.2f}% "
+                f"(peak ${assessment.equity_peak:,.2f} → equity ${assessment.equity:,.2f}, "
+                f"unrealized ${unrealized:,.2f})"
+                if assessment.equity is not None and unrealized is not None
+                else ""
+            )
             message = (
                 f"MAX DRAWDOWN HARD CAP BREACHED: drawdown {assessment.drawdown * 100:.2f}% "
                 f">= limit {self._guard.max_drawdown_pct * 100:.1f}% "
-                f"(peak ${assessment.peak_balance:,.2f} → balance ${balance:,.2f}). "
+                f"(balance leg {assessment.balance_drawdown * 100:.2f}%: peak "
+                f"${assessment.peak_balance:,.2f} → balance ${balance:,.2f}{equity_part}). "
                 "Close-only mode in force — no new entries; exits and stop-losses remain "
                 "active. Operator action required: see docs/live_trading.md "
                 "(max-drawdown hard cap) to review and clear."
@@ -378,7 +627,17 @@ class MaxDrawdownEnforcer:
                 drawdown=assessment.drawdown,
                 peak_balance=assessment.peak_balance,
                 balance=balance,
+                balance_drawdown=assessment.balance_drawdown,
+                equity_drawdown=assessment.equity_drawdown,
+                equity=assessment.equity,
+                peak_equity=assessment.equity_peak,
+                unrealized_pnl=unrealized,
                 max_drawdown_pct=self._guard.max_drawdown_pct,
+                # Container stdout is ephemeral; without this a breach measured
+                # from a provisional/unseeded peak is indistinguishable in
+                # system_events from one measured off durable history (mirrors
+                # the breaker's `peak_seed` on trip/dry-run payloads).
+                peak_seed=self._peak_seed_provenance,
             )
             state._record_event(
                 EventType.ALERT,
@@ -394,6 +653,111 @@ class MaxDrawdownEnforcer:
                 e,
                 exc_info=True,
             )
+
+    def _persist_equity_peak(self) -> None:
+        """Snapshot when the confirmed equity peak has risen past what is persisted."""
+        peak = self._guard.equity_peak
+        if self._persisted_equity_peak <= 0:
+            self._persisted_equity_peak = peak  # seeded baseline is already durable
+            return
+        if self._snapshot_writer is None or self._mark_provider is None:
+            return
+        if peak <= self._persisted_equity_peak * (1 + EQUITY_PEAK_PERSIST_STEP):
+            return
+        # The row records the live equity: only write while that is itself at
+        # the confirmed peak, so a bad tick cannot be persisted as the baseline.
+        equity = self._last_equity
+        if equity is None or equity > peak * (1 + EQUITY_PEAK_PERSIST_STEP):
+            return
+        try:
+            self._snapshot_writer()
+        except Exception as e:  # noqa: BLE001 - persistence must never break the check
+            logger.warning("Could not persist new equity peak snapshot: %s", e)
+            return
+        self._persisted_equity_peak = peak
+
+    def _read_equity(self, balance: float) -> tuple[float | None, int | None, float | None, bool]:
+        """Mark-to-market ``(equity, mark_sequence, unrealized, flat)``; Nones when blind.
+
+        Fault-isolated: an unavailable or non-fresh mark degrades the check to
+        the balance leg alone (exactly the pre-equity behaviour) with a WARNING
+        on the transition, and pages once if the blindness outlasts
+        ``MARK_BLIND_ESCALATE_SECONDS`` while a position is open.
+        """
+        provider = self._mark_provider
+        if provider is None:
+            return None, None, None, False
+        reason: str | None = None
+        reading: MarkReading | None = None
+        try:
+            reading = provider()
+            if not reading.fresh:
+                reason = "position marks are stale or missing"
+            elif not math.isfinite(reading.unrealized_pnl):
+                reason = f"non-finite unrealized P&L {reading.unrealized_pnl}"
+        except Exception as e:  # noqa: BLE001 - the mark read must never crash the check
+            reason = f"mark read failed: {e}"
+
+        if reason is None and reading is not None:
+            if self._mark_blind_since is not None:
+                logger.info("Drawdown equity leg: fresh position marks restored")
+            self._mark_blind_since = None
+            self._mark_blind_alerted = False
+            return (
+                balance + reading.unrealized_pnl,
+                reading.sequence,
+                reading.unrealized_pnl,
+                reading.flat,
+            )
+
+        self._note_blind(reason or "unknown")
+        return None, None, None, False
+
+    def _note_blind(self, reason: str) -> None:
+        """Log the equity-leg blind spot; page the operator once if it persists."""
+        now = time.monotonic()
+        if self._mark_blind_since is None:
+            self._mark_blind_since = now
+            logger.warning(
+                "Drawdown equity leg blind (%s) — guarding on realized balance only "
+                "until fresh marks return",
+                reason,
+            )
+            return
+        blind_for = now - self._mark_blind_since
+        if self._mark_blind_alerted or blind_for < MARK_BLIND_ESCALATE_SECONDS:
+            return
+        self._mark_blind_alerted = True
+        message = (
+            f"Drawdown guard equity leg blind for {blind_for:.0f}s with open positions "
+            f"({reason}): unrealized losses are NOT being measured; only the realized "
+            "balance leg is active."
+        )
+        logger.critical("🚨 %s", message)
+        try:
+            self._state._record_event(
+                EventType.ALERT,
+                message,
+                severity="critical",
+                component="risk",
+                error_code="DRAWDOWN_EQUITY_MARK_UNAVAILABLE",
+                alert=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error("Failed to record equity-leg blind alert: %s", e, exc_info=True)
+
+    def _read_equity_peak(
+        self, session_id: int | None, lineage: HistoryLineage
+    ) -> tuple[bool, float | None]:
+        """Durable session equity max as ``(read_ok, peak)``; never raises."""
+        try:
+            peak = self._state.db_manager.get_session_peak_equity(
+                session_id=session_id, fallback_session_id=lineage.fallback_session_id
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Could not read session peak equity from account_history: %s", e)
+            return False, None
+        return True, peak
 
     def _try_seed(self, balance: float, *, count_deferral: bool = True) -> bool:
         """Seed the peak baseline; the DB session max is AUTHORITATIVE.
@@ -421,6 +785,7 @@ class MaxDrawdownEnforcer:
 
         if count_deferral:
             self._seed_attempts += 1
+        lineage = resolve_history_lineage(state)
         session_id = state.trading_session_id
         db_read_ok = False
         db_peak: float | None = None
@@ -435,11 +800,11 @@ class MaxDrawdownEnforcer:
             try:
                 db_peak = state.db_manager.get_session_peak_balance(
                     session_id,
-                    fallback_session_id=state._recovered_inactive_session_id,
+                    fallback_session_id=lineage.fallback_session_id,
                 )
-                # None here means the read SUCCEEDED but the session has no
-                # snapshots yet — a fresh session legitimately baselines at
-                # the current balance.
+                # None here means the read SUCCEEDED but neither session has a
+                # snapshot yet — legitimate for a genuinely fresh session, a
+                # DEFECT (or the first-snapshot race) when history was expected.
                 db_read_ok = True
             except Exception as e:
                 logger.warning(
@@ -449,6 +814,10 @@ class MaxDrawdownEnforcer:
                     MAX_SEED_ATTEMPTS,
                     e,
                 )
+
+        equity_read_ok, db_equity_peak = False, None
+        if db_read_ok and session_id is not None:
+            equity_read_ok, db_equity_peak = self._read_equity_peak(session_id, lineage)
 
         if not db_read_ok:
             if not count_deferral or self._seed_attempts < MAX_SEED_ATTEMPTS:
@@ -460,14 +829,116 @@ class MaxDrawdownEnforcer:
                 self._seed_attempts,
                 balance,
             )
+            self._arm(balance, None, session_id, lineage, PEAK_SEED_UNAVAILABLE)
+            return True
 
-        self._guard.seed_peak(balance, db_peak)
-        logger.info(
-            "Max-drawdown guard armed: peak=$%.2f, hard cap=%.1f%% (session %s, "
-            "account_history peak %s)",
-            self._guard.peak_balance,
-            self._guard.max_drawdown_pct * 100,
+        if db_peak is None and lineage.history_expected:
+            # The durable peak is expected but not readable yet (the documented
+            # first-snapshot race, or a lost lineage). Arm NOW from the current
+            # balance so the cap is never left unarmed, flag the provenance
+            # honestly, and keep ratcheting toward the durable peak.
+            self._history_upgrade_pending = True
+            self._arm(balance, None, session_id, lineage, PEAK_SEED_UNAVAILABLE, db_equity_peak)
+            return True
+
+        if not equity_read_ok:
+            # Balance leg seeds normally; keep retrying the equity peak so a lost
+            # read cannot silently leave the equity leg on a lower baseline.
+            self._history_upgrade_pending = True
+        self._arm(
+            balance,
+            db_peak,
             session_id,
-            f"${db_peak:,.2f}" if db_peak is not None else "unavailable",
+            lineage,
+            PEAK_SEED_DB_SESSION_MAX if db_peak is not None else PEAK_SEED_SELF_ANCHORED,
+            db_equity_peak,
         )
         return True
+
+    def _arm(
+        self,
+        balance: float,
+        db_peak: float | None,
+        session_id: int | None,
+        lineage: HistoryLineage,
+        provenance: str,
+        db_equity_peak: float | None = None,
+    ) -> None:
+        """Seed the guard's peaks and log where the baseline came from."""
+        self._guard.seed_peak(balance, db_peak, equity_peak=db_equity_peak)
+        self._peak_seed_provenance = provenance
+        log = logger.warning if provenance == PEAK_SEED_UNAVAILABLE else logger.info
+        log(
+            "Max-drawdown guard armed: peak=$%.2f, equity peak=$%.2f, hard cap=%.1f%% "
+            "(session %s, %s, account_history peak %s, peak_seed=%s)",
+            self._guard.peak_balance,
+            self._guard.equity_peak,
+            self._guard.max_drawdown_pct * 100,
+            session_id,
+            lineage.describe,
+            f"${db_peak:,.2f}" if db_peak is not None else "unavailable",
+            provenance,
+        )
+
+    def _upgrade_peak_from_history(self, *, count_attempt: bool = True) -> None:
+        """Retry the durable peak read after a provisional self-anchored arm.
+
+        Bounded by ``MAX_SEED_ATTEMPTS`` against its OWN counter, consumed only
+        by the loop check. The pre-order chokepoint calls this with
+        ``count_attempt=False``: it must see the ratcheted peak, but it can run
+        several times per iteration and would otherwise exhaust the budget in
+        seconds. Success ratchets the peak UP (never down) and corrects the
+        provenance; exhaustion stops the retries and leaves a WARNING naming
+        the sessions that were searched, so a silently self-anchored cap is
+        never mistaken for a seeded one.
+        """
+        state = self._state
+        if count_attempt:
+            self._upgrade_attempts += 1
+        lineage = resolve_history_lineage(state)
+        session_id = state.trading_session_id
+        db_peak: float | None = None
+        read_ok = False
+        if state.db_manager is not None and session_id is not None:
+            try:
+                db_peak = state.db_manager.get_session_peak_balance(
+                    session_id, fallback_session_id=lineage.fallback_session_id
+                )
+                read_ok = True
+            except Exception as e:
+                logger.warning("Max-drawdown guard peak upgrade read failed: %s", e)
+
+        if read_ok and db_peak is not None:
+            equity_read_ok, db_equity_peak = self._read_equity_peak(session_id, lineage)
+            if equity_read_ok:
+                self._guard.raise_equity_peak(db_equity_peak)
+                # The durable rows already hold it: nothing new to snapshot.
+                self._persisted_equity_peak = max(
+                    self._persisted_equity_peak, self._guard.equity_peak
+                )
+            if equity_read_ok or (count_attempt and self._upgrade_attempts >= MAX_SEED_ATTEMPTS):
+                self._history_upgrade_pending = False
+            self._peak_seed_provenance = PEAK_SEED_DB_SESSION_MAX
+            raised = self._guard.raise_peak(db_peak)
+            logger.info(
+                "Max-drawdown guard peak seeded from account_history after a deferred "
+                "read: $%.2f (%s) — peak now $%.2f%s",
+                db_peak,
+                lineage.describe,
+                self._guard.peak_balance,
+                "" if raised else " (already higher; unchanged)",
+            )
+            return
+
+        if count_attempt and self._upgrade_attempts >= MAX_SEED_ATTEMPTS:
+            self._history_upgrade_pending = False
+            logger.warning(
+                "Max-drawdown guard: durable account_history peak never became available "
+                "after %d attempts (session %s, %s) — the cap stays anchored to the "
+                "boot balance $%.2f (peak_seed=%s)",
+                self._upgrade_attempts,
+                session_id,
+                lineage.describe,
+                self._guard.peak_balance,
+                PEAK_SEED_UNAVAILABLE,
+            )

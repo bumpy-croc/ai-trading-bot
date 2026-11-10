@@ -3,10 +3,12 @@ Tests for prediction engine configuration.
 """
 
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from src.infrastructure.runtime.paths import get_project_root
 from src.prediction.config import PredictionConfig
 
 
@@ -38,7 +40,7 @@ class TestPredictionConfig:
             assert config.max_prediction_latency == 0.05
 
             # Test string values
-            assert config.model_registry_path == "custom/ml/path"
+            assert config.model_registry_path == str(get_project_root() / "custom/ml/path")
 
             # Test boolean parsing
             assert config.enable_sentiment is True
@@ -69,7 +71,7 @@ class TestPredictionConfig:
             assert config.prediction_horizons == [1]
             assert config.min_confidence_threshold == 0.6
             assert config.max_prediction_latency == 0.1
-            assert config.model_registry_path == "src/ml/models"
+            assert config.model_registry_path == str(get_project_root() / "src/ml/models")
             assert config.enable_sentiment is False
             assert config.enable_market_microstructure is False
             assert config.feature_cache_ttl == 3600
@@ -258,3 +260,39 @@ class TestPredictionConfig:
             assert prediction_config.prediction_horizons == [1, 10]
             assert prediction_config.min_confidence_threshold == 0.75
             assert prediction_config.enable_sentiment is True
+
+
+class TestModelRegistryPathAnchoring:
+    """The default registry path must not depend on the process cwd (#1023)."""
+
+    def test_relative_path_resolves_to_repo_root_from_any_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+
+        cfg = PredictionConfig()
+
+        resolved = Path(cfg.model_registry_path)
+        assert resolved.is_absolute()
+        assert resolved.parts[-3:] == ("src", "ml", "models")
+        assert resolved.is_dir()
+
+    def test_absolute_path_is_preserved(self, tmp_path):
+        cfg = PredictionConfig(model_registry_path=str(tmp_path))
+
+        assert cfg.model_registry_path == str(tmp_path)
+
+    def test_registry_raises_when_directory_missing(self, tmp_path):
+        from src.prediction.models.registry import PredictionModelRegistry
+
+        cfg = PredictionConfig(model_registry_path=str(tmp_path / "absent"))
+
+        with pytest.raises(FileNotFoundError):
+            PredictionModelRegistry(cfg)
+
+
+def test_missing_registry_is_fatal_for_ml_basic_strategy(tmp_path):
+    """A missing registry must stop strategy construction, not degrade to all-HOLD (#1023)."""
+    from src.strategies.components.ml_signal_generator import MLBasicSignalGenerator
+
+    with patch.dict(os.environ, {"MODEL_REGISTRY_PATH": str(tmp_path / "absent")}):
+        with pytest.raises(FileNotFoundError):
+            MLBasicSignalGenerator(symbol="ETHUSDT", model_type="basic", timeframe="1h")

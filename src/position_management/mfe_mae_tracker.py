@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from src.performance.metrics import Side, pnl_percent
@@ -114,6 +114,34 @@ class MFEMAETracker:
 
             self._cache[position_key] = metrics
             return metrics
+
+    def seed_metrics(self, position_key: str | int, metrics: MFEMetrics) -> None:
+        """Install previously persisted peaks, keeping any larger in-memory ones.
+
+        Non-finite persisted values are treated as absent so a corrupt row cannot
+        freeze the running max or be written back.
+        """
+        mfe = metrics.mfe if math.isfinite(metrics.mfe) else 0.0
+        mae = metrics.mae if math.isfinite(metrics.mae) else 0.0
+        seeded = replace(metrics, mfe=mfe, mae=mae)
+        with self._lock:
+            existing = self._cache.get(position_key)
+            if existing is not None:
+                if existing.mfe > seeded.mfe:
+                    seeded = replace(
+                        seeded,
+                        mfe=existing.mfe,
+                        mfe_price=existing.mfe_price,
+                        mfe_time=existing.mfe_time,
+                    )
+                if existing.mae < seeded.mae:
+                    seeded = replace(
+                        seeded,
+                        mae=existing.mae,
+                        mae_price=existing.mae_price,
+                        mae_time=existing.mae_time,
+                    )
+            self._cache[position_key] = seeded
 
     def get_position_metrics(self, position_key: str | int) -> MFEMetrics | None:
         """Get metrics for a position without lock.

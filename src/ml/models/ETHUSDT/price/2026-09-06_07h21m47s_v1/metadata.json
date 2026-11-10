@@ -1,0 +1,50 @@
+{
+  "symbol": "ETHUSDT",
+  "model_type": "price",
+  "timeframe": "1h",
+  "training_date": "2026-09-06T07:21:47.896573+00:00",
+  "feature_names": [
+    "close_normalized",
+    "volume_normalized",
+    "high_normalized",
+    "low_normalized",
+    "open_normalized"
+  ],
+  "sequence_length": 120,
+  "has_sentiment": false,
+  "sentiment_assessment": {
+    "recommendation": "price_only",
+    "quality_score": 0.0,
+    "reason": "Sentiment disabled or unavailable"
+  },
+  "robustness_results": {
+    "base_performance": {
+      "mse": 0.004575207829475403,
+      "rmse": 0.0676402822136879
+    }
+  },
+  "training_params": {
+    "epochs": 50,
+    "batch_size": 256,
+    "timeframe": "1h",
+    "start_date": "2017-08-17T00:00:00+00:00",
+    "end_date": "2026-09-06T00:00:00+00:00",
+    "architecture": "lstm",
+    "architecture_variant": "default",
+    "target_type": "regression"
+  },
+  "evaluation_results": {
+    "train_loss": 0.004281681030988693,
+    "test_loss": 0.004575209226459265,
+    "train_rmse": 0.06543455272912979,
+    "test_rmse": 0.0676402896642685,
+    "mape": 55.01502990722656
+  },
+  "diagnostics": {
+    "plots": false,
+    "robustness": true,
+    "onnx": true
+  },
+  "task_type": "regression",
+  "version_id": "2026-09-06_07h21m47s_v1"
+}

@@ -102,6 +102,13 @@ class TrainingConfig:
     # REAL training pipeline end-to-end without a network dependency.
     use_mock_data: bool = False
 
+    # Point ``{symbol}/{type}/latest`` at the trained bundle. Off by default:
+    # the registry serves every ``latest`` as a production model and does not
+    # serve a ``{symbol}/{type}`` directory without one, so training must not
+    # promote on its own. Only an explicit deploy decision (``--set-latest``,
+    # ``live-control train --auto-deploy``) turns it on.
+    set_latest: bool = False
+
     # Valid model types and variants for validation
     _VALID_MODEL_TYPES = frozenset(
         {

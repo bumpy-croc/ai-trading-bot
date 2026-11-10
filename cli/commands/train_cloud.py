@@ -235,6 +235,12 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         help="Submit job and exit immediately (don't wait for completion)",
     )
     parser.add_argument(
+        "--set-latest",
+        action="store_true",
+        help="Point {type}/latest at the synced bundle (default: leave latest untouched; "
+        "the registry treats every latest as a production model)",
+    )
+    parser.add_argument(
         "--no-sync",
         action="store_true",
         help="Don't sync artifacts to local registry after completion",
@@ -313,6 +319,7 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
     cloud_config = CloudTrainingConfig.from_env(training_config)
     cloud_config.instance_config = instance_config
     cloud_config.auto_sync_artifacts = not args.no_sync
+    cloud_config.set_latest = args.set_latest
     cloud_config.input_data_s3_uri = args.input_data_s3
 
     # Print job summary

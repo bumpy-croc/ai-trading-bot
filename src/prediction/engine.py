@@ -30,6 +30,14 @@ MIN_SEQUENCE_LENGTH = 120
 # growth while maintaining enough samples for reliable average calculations.
 MAX_INFERENCE_SAMPLES = 1000
 
+# Sanity bounds for a rolling-minmax "price" prediction (GH #1145). A genuine
+# normalized price is trained to land in [0, 1] with only mild model-error
+# overshoot; a misclassified non-price target (e.g. a smoothed_return bundle
+# wrongly carrying this metadata) is not bounded that way. Widened past [0, 1]
+# to tolerate real overshoot without false-positiving on it.
+ROLLING_MINMAX_SANITY_MIN = -0.5
+ROLLING_MINMAX_SANITY_MAX = 1.5
+
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
 from src.infrastructure.timeout import run_with_timeout
 from src.regime.detector import RegimeConfig, RegimeDetector
@@ -45,7 +53,11 @@ from .exceptions import (
 )
 from .features.pipeline import FeaturePipeline
 from .features.selector import FeatureSelector
-from .inference_context import InferenceContext, get_inference_context
+from .inference_context import (
+    InferenceContext,
+    get_inference_context,
+    is_unscoped_in_live_process,
+)
 from .models.onnx_runner import ModelPrediction
 from .models.registry import PredictionModelRegistry, StrategyModel
 from .utils.caching import PredictionCacheManager
@@ -80,6 +92,8 @@ class PredictionEngine:
         accessed without locks:
         - _model_inference_times: dict of deques tracking inference performance
         - _last_cache_hit: boolean tracking last cache lookup result
+        - _warned_misclassified_bundles: set of bundle keys already warned for
+          an out-of-range rolling-minmax denormalization (GH #1145)
 
         For concurrent usage, callers should either:
         1. Create separate PredictionEngine instances per thread
@@ -99,6 +113,13 @@ class PredictionEngine:
         """
         self.config = config or PredictionConfig.from_config_manager()
         self.config.validate()
+
+        # Bundle keys already warned for an out-of-range rolling-minmax denormalization
+        # (GH #1145). The condition is a per-bundle property, not a per-call one, so it
+        # only needs saying once -- an unthrottled warning would log on every inference
+        # for a genuinely misclassified bundle (the log-spam shape already fixed nearby
+        # in onnx_runner.py for #948).
+        self._warned_misclassified_bundles: set[str] = set()
 
         # Initialize prediction cache manager if enabled
         self.cache_manager = None
@@ -924,6 +945,10 @@ class PredictionEngine:
         """
         if get_inference_context() is InferenceContext.LIVE:
             return self.config.live_inference_timeout
+        # Fail closed: a live-process thread that never chose a policy must
+        # not infer without a deadline.
+        if is_unscoped_in_live_process():
+            return self.config.live_inference_timeout
         return None
 
     def _run_inference(self, func: Callable[..., Any], args: tuple, operation_name: str) -> Any:
@@ -1184,6 +1209,30 @@ class PredictionEngine:
         if price_norm.get("method") != "rolling_minmax":
             # Not a rolling minmax model, return as-is (handled by ONNX runner)
             return normalized_price
+
+        # Defense in depth (GH #1145): a rolling-minmax price target is trained
+        # to land inside its own window's [0, 1], with only mild overshoot from
+        # model error. A target misclassified as price (e.g. a smoothed_return
+        # bundle wrongly carrying this metadata) is not bounded that way and
+        # can be negative or far outside [0, 1]. This can't catch every
+        # misclassification -- a small positive return looks like a plausible
+        # normalized value -- so it only logs; the actual fix is refusing to
+        # stamp price_normalization on a non-price target in the first place
+        # (model_metadata.py::uses_rolling_minmax_features).
+        if not ROLLING_MINMAX_SANITY_MIN <= normalized_price <= ROLLING_MINMAX_SANITY_MAX:
+            # bundle.key is an always-present, non-empty property on the only type
+            # this method is ever called with (StrategyModel) -- no fallback needed.
+            bundle_key = bundle.key
+            if bundle_key not in self._warned_misclassified_bundles:
+                self._warned_misclassified_bundles.add(bundle_key)
+                logger.warning(
+                    "Rolling-minmax prediction %.6f for %s is far outside the expected "
+                    "[0, 1] normalized-price range. This may indicate price_normalization "
+                    "metadata was stamped on a non-price target (see GH #1145). Logged "
+                    "once per bundle; further occurrences for this bundle are suppressed.",
+                    normalized_price,
+                    bundle_key,
+                )
 
         # Get target feature (typically "close")
         target_feature = price_norm.get("target_feature", "close")

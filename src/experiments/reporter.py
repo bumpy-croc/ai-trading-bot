@@ -375,6 +375,48 @@ def _detect_identical_to_baseline(
     ]
 
 
+def _detect_truncation_warnings(
+    result: ExperimentResult,
+    name: str,
+    baseline: ExperimentResult | None = None,
+) -> list[str]:
+    """Return warnings when a result was truncated by the drawdown cap (#1102).
+
+    A truncated run's headline metrics cover only the candles before the
+    stop, not the full requested window — comparing it against an
+    untruncated result (e.g. a re-run whose drawdown profile changed enough
+    to no longer cross the cap) silently produces "numbers don't reproduce"
+    confusion. This is exactly what happened in the #1081 Step-2 re-run
+    before it was root-caused; surface it in the report instead of relying
+    on the reader to notice.
+    """
+    warnings: list[str] = []
+    if result.early_stopped:
+        threshold = (
+            f"{result.drawdown_cap_threshold:.1%}"
+            if result.drawdown_cap_threshold is not None
+            else "the configured cap"
+        )
+        warnings.append(
+            f"{name}: TRUNCATED — drawdown crossed {threshold} and the run "
+            "stopped early (drawdown_cap_mode='enforce'). Every metric above "
+            "covers only the candles before the stop, not the full "
+            "requested window. Re-run with drawdown_cap_mode='measure' to "
+            "see the full drawdown profile (research use only — do not use "
+            "'measure' results for a promotion decision)."
+        )
+    if baseline is not None and result.early_stopped != baseline.early_stopped:
+        warnings.append(
+            f"{name}: TRUNCATION MISMATCH vs baseline — this variant "
+            f"{'was' if result.early_stopped else 'was NOT'} truncated by the "
+            f"drawdown cap but the baseline "
+            f"{'was' if baseline.early_stopped else 'was NOT'}. Comparing "
+            "these results directly is misleading; re-run both with the "
+            "same drawdown_cap_mode before drawing conclusions."
+        )
+    return warnings
+
+
 class ExperimentReporter:
     """Build a :class:`SuiteReport` from a :class:`SuiteResult`."""
 
@@ -396,6 +438,7 @@ class ExperimentReporter:
                 ranking_confidence=None,
                 verdict=Verdict.HOLD,
                 is_baseline=True,
+                warnings=_detect_truncation_warnings(baseline, suite_result.config.baseline.name),
             )
         ]
 
@@ -427,7 +470,9 @@ class ExperimentReporter:
             )
             confidence = _ranking_confidence(baseline, result, settings.target_metric)
             verdict = _classify(baseline, result, settings, confidence)
-            warnings = _detect_identical_to_baseline(baseline, result, spec.name)
+            warnings = _detect_identical_to_baseline(
+                baseline, result, spec.name
+            ) + _detect_truncation_warnings(result, spec.name, baseline)
             rows.append(
                 VariantReport(
                     name=spec.name,

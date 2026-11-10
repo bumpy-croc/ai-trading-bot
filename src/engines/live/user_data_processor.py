@@ -9,6 +9,8 @@ import logging
 import queue
 import threading
 
+from src.prediction.inference_context import InferenceContext, inference_scope
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,7 +47,11 @@ class UserDataProcessor(threading.Thread):
             self._queue.put(event)
 
     def run(self) -> None:
-        """Process events from the queue until stopped."""
+        """Process events from the queue until stopped, under the LIVE inference scope."""
+        with inference_scope(InferenceContext.LIVE):
+            self._run_loop()
+
+    def _run_loop(self) -> None:
         self._running = True
         logger.info("UserDataProcessor started")
         while self._running and not self._stop_event.is_set():

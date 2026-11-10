@@ -140,3 +140,66 @@ class TestRunnerReportsEffectiveSizing:
     def test_missing_effective_sizing_defaults_to_empty_dict(self):
         _, result = _run_and_capture_risk_params(_StubStrategy(None))
         assert result.effective_sizing == {}
+
+
+class TestRunnerDrawdownCapModePlumbing:
+    """#1102: ExperimentRunner must forward drawdown_cap_mode to the
+    Backtester and surface the truncation markers on the result -- a
+    preregistered research run must be able to opt into 'measure' and every
+    result must say whether it was truncated, not just the ones that were.
+    """
+
+    def test_drawdown_cap_mode_defaults_to_enforce(self):
+        """The harness default must match the live-representative/safe
+        default -- omitting the field must never silently switch a study to
+        the untruncated research mode."""
+        runner = ExperimentRunner()
+        with (
+            patch.object(ExperimentRunner, "_load_strategy", return_value=_NoOverrideStrategy()),
+            patch("src.experiments.runner.Backtester", autospec=True) as mock_backtester,
+        ):
+            mock_backtester.return_value.run.return_value = dict(_BACKTEST_RESULTS)
+            runner.run(_config())
+        assert mock_backtester.call_args.kwargs["drawdown_cap_mode"] == "enforce"
+
+    def test_explicit_measure_mode_is_forwarded(self):
+        config = _config(drawdown_cap_mode="measure")
+        runner = ExperimentRunner()
+        with (
+            patch.object(ExperimentRunner, "_load_strategy", return_value=_NoOverrideStrategy()),
+            patch("src.experiments.runner.Backtester", autospec=True) as mock_backtester,
+        ):
+            mock_backtester.return_value.run.return_value = dict(_BACKTEST_RESULTS)
+            runner.run(config)
+        assert mock_backtester.call_args.kwargs["drawdown_cap_mode"] == "measure"
+
+    def test_truncated_backtester_result_marks_experiment_result(self):
+        """A truncated Backtester result must produce an ExperimentResult
+        that says so explicitly -- this is the actual defect in #1102: a
+        preregistered study silently comparing a truncated arm against a
+        complete one with no signal either result was partial."""
+        results = dict(_BACKTEST_RESULTS)
+        results.update(
+            {
+                "early_stopped": True,
+                "drawdown_cap_mode": "enforce",
+                "drawdown_cap_breached": True,
+                "drawdown_cap_breach_date": datetime(2026, 1, 5, tzinfo=UTC),
+                "drawdown_cap_threshold": 0.20,
+            }
+        )
+        _, result = _run_and_capture_risk_params(_NoOverrideStrategy(), results=results)
+        assert result.early_stopped is True
+        assert result.drawdown_cap_mode == "enforce"
+        assert result.drawdown_cap_breached is True
+        assert result.drawdown_cap_breach_date == datetime(2026, 1, 5, tzinfo=UTC)
+        assert result.drawdown_cap_threshold == 0.20
+
+    def test_complete_backtester_result_defaults_result_markers_false(self):
+        """A run that never breached the cap must report early_stopped=False
+        explicitly, not merely omit the field -- the whole point of #1102 is
+        that "no marker" and "definitely not truncated" must never look the
+        same."""
+        _, result = _run_and_capture_risk_params(_NoOverrideStrategy())
+        assert result.early_stopped is False
+        assert result.drawdown_cap_breached is False

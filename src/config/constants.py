@@ -105,6 +105,9 @@ DEFAULT_MAX_CONSECUTIVE_ERRORS = 10  # Maximum errors before shutdown
 # loop stops opening new positions (close-only) while it keeps retrying, to
 # avoid order churn during a prolonged outage. Exits and server-side stops still run.
 DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS = 1800  # 30 minutes
+# A continuous outage this long pages an operator (well before close-only) so a
+# multi-minute outage is never silent; shorter blips are recorded on recovery.
+DEFAULT_DB_OUTAGE_ALERT_SECONDS = 300  # 5 minutes
 
 # Health Monitor Constants (distinct from CPU optimization intervals)
 DEFAULT_HEALTH_BASE_CHECK_INTERVAL = 60  # Base health check interval in seconds
@@ -127,6 +130,22 @@ BORROW_DUST_EPSILON = 1e-8  # Borrowed amounts at/below this are treated as zero
 ORPHANED_BORROW_SWEEP_COOLDOWN_SECONDS = 300  # Min seconds between sweep attempts per base asset
 ENTRY_PAUSE_WARNING_INTERVAL_SECONDS = 300  # Min seconds between entry-pause skip warnings
 
+# Exchange-bound SELL quantities are capped at the free base balance so a fee-rounding
+# sliver cannot trigger -2010, then snapped down to a whole lot. Both steps must only
+# ever shave a sliver. If the quantity actually submitted falls below this fraction of
+# the quantity intended, the base asset is locked by an order we do not know about (an
+# orphaned stop-loss, #1104) or the position is too small to lot-size honestly — and
+# submitting the remainder is the dangerous branch: a close is booked as a FULL exit,
+# and a stop-loss is recorded as full protection. Refuse instead, and let the honest
+# UNPROTECTED escalation fire. Applies to both the close path and stop-loss placement.
+HOLDINGS_CAP_MIN_RATIO = 0.98
+
+# Consecutive aborted closes on one symbol before latching close-only. The exit signal
+# re-fires every trading-loop iteration, so without a latch the abort pages once per
+# ~66s — the alert-storm shape #1104 itself had. Two aborts can be transient; three
+# means the position is stuck open and needs an operator.
+CLOSE_ABORT_CLOSE_ONLY_STREAK = 3
+
 # Core Trading Defaults (used across backtest and live engines)
 DEFAULT_STOP_LOSS_PCT = 0.05  # 5% stop loss
 DEFAULT_MIN_STOP_LOSS_PCT = 0.01  # 1% minimum stop loss
@@ -143,6 +162,10 @@ DEFAULT_MAX_DRAWDOWN = 0.20  # 20% maximum drawdown (fraction)
 DRAWDOWN_WARNING_AT_PCT_OF_LIMIT = 0.50  # WARNING at 50% of the cap (10% drawdown at 0.20)
 DRAWDOWN_CRITICAL_AT_PCT_OF_LIMIT = 0.80  # CRITICAL at 80% of the cap (16% drawdown at 0.20)
 DRAWDOWN_GUARD_LOG_INTERVAL_SECONDS = 900  # Min seconds between repeated drawdown-tier logs
+# A position mark older than this is stale for the drawdown guard's equity leg: twice the
+# slowest trading-loop interval (DEFAULT_MAX_CHECK_INTERVAL = 300s), so one slow cycle never
+# reads as stale but a stuck price feed does.
+DRAWDOWN_MARK_MAX_AGE_SECONDS = 600
 
 # Account-level circuit breakers (#807). Hard halts enforced independent of
 # strategy logic. Graduated drawdown throttling stays with dynamic-risk; these
@@ -245,8 +268,9 @@ DEFAULT_CHECK_INTERVAL = 60  # Base check interval in seconds
 DEFAULT_MIN_CHECK_INTERVAL = 30  # Minimum check interval (high activity)
 DEFAULT_MAX_CHECK_INTERVAL = 300  # Maximum check interval (low activity)
 DEFAULT_PERFORMANCE_MONITOR_INTERVAL = 30  # Performance monitoring interval
+DEFAULT_STATUS_LOG_INTERVAL = 60  # Status heartbeat log interval in seconds
 DEFAULT_SLEEP_POLL_INTERVAL = 0.5  # Sleep polling interval (reduced from 0.1s)
-DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL = 1800  # Account snapshot interval (30 minutes)
+DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL = 3600  # Account snapshot interval (1 hour) — matches runner.py's --snapshot-interval default, the only value actually deployed anywhere (#1184)
 DEFAULT_DATA_FRESHNESS_THRESHOLD = 120  # Skip processing if data is older than 2 minutes
 DEFAULT_MARKET_DATA_STALENESS_THRESHOLD = 3600  # Consider market data stale after 1 hour
 DEFAULT_MARKET_DATA_LIMIT = 500  # Default number of candles to fetch
@@ -343,6 +367,13 @@ DEFAULT_TRAILING_DISTANCE_ATR_MULT = 1.5
 DEFAULT_BREAKEVEN_THRESHOLD = 0.02  # 2.0%
 DEFAULT_BREAKEVEN_BUFFER = 0.001  # 0.1%
 
+# Minimum ratchet move (as a fraction of price) before a trailing stop's resting
+# exchange order is actually cancelled and re-placed (#1167). Without this floor,
+# every loop iteration past activation does a real cancel+place round-trip even
+# for sub-tick price noise, needlessly multiplying exposure to the naked window
+# between cancel and re-placement.
+MIN_TRAILING_STOP_MOVE_FRACTION = 0.0005  # 0.05%
+
 # Correlation Control Defaults
 DEFAULT_CORRELATION_WINDOW_DAYS = 30
 DEFAULT_CORRELATION_THRESHOLD = 0.7
@@ -385,6 +416,24 @@ DEFAULT_EXPOSURE_PRECISION_DECIMALS = 8  # Decimal places for exposure/position 
 DEFAULT_STOP_LOSS_MAX_RETRIES = 3  # Maximum retry attempts for stop-loss placement
 DEFAULT_STOP_LOSS_RETRY_DELAY = 1.0  # Initial delay between retries (seconds)
 DEFAULT_RETRY_BACKOFF_MULTIPLIER = 2  # Exponential backoff multiplier
+
+# Max TOTAL attempts (not additional retries) to read account equity during the
+# cold-boot startup account sync (a transient None/exception/non-positive read
+# here can mean the exchange client isn't fully ready yet). Unlike the
+# neighbouring DEFAULT_STARTUP_BAN_MAX_RETRIES (retries AFTER the first
+# attempt, N+1 reads total), this constant IS the full read count: N=3 means
+# 3 reads total, not 3 retries plus an initial read.
+DEFAULT_STARTUP_EQUITY_MAX_RETRIES = 3
+# Base delay between startup equity-read retries (seconds); backs off by
+# DEFAULT_RETRY_BACKOFF_MULTIPLIER between attempts (1s, 2s, ...).
+DEFAULT_STARTUP_EQUITY_RETRY_DELAY = 1.0
+
+# Bounds how many additional loop-driven attempts the live trading loop itself
+# will make (via LiveTradingEngine._check_pending_startup_equity_retry) to
+# resolve a cold-boot margin-equity skip before giving up until the next
+# scheduled periodic sync. Keeps a permanently-broken equity endpoint from
+# retrying forever.
+DEFAULT_STARTUP_EQUITY_LOOP_MAX_ATTEMPTS = 5
 
 # Regime Multiplier Fallback
 DEFAULT_REGIME_UNKNOWN_MULTIPLIER = 0.5  # Conservative multiplier for unknown regimes
@@ -465,6 +514,12 @@ DEFAULT_WS_HEALTH_CHECK_INTERVAL = 30  # Seconds between health monitor checks
 # keepalive traffic on the ws-api TCP path (~1 ping per staleness window).
 DEFAULT_WS_USER_LIVENESS_PROBE_TIMEOUT = 10
 DEFAULT_WS_RECONNECT_MAX_RETRIES = 3  # Maximum reconnect attempts before REST_DEGRADED
+# TWM teardown bounds (#729). The transport-close timeout caps closing the ws-api
+# socket from the loop side; the join timeout covers the listeners' 3 s recv poll
+# plus the loop's exit after ``stop()``, and is applied twice when a dead listener
+# pins the manager thread.
+DEFAULT_WS_TWM_TRANSPORT_CLOSE_TIMEOUT = 2
+DEFAULT_WS_TWM_JOIN_TIMEOUT = 4
 # Consecutive unproductive user-stream reconnects (stale again with no real event)
 # before the watchdog opens a circuit breaker: stop the futile ~2-min reconnect loop
 # and run REST-polling-only. python-binance's start_margin_socket is fire-and-forget
@@ -513,6 +568,15 @@ DEFAULT_WS_KLINE_RECONNECT_CIRCUIT_LIMIT = 3
 DEFAULT_WS_KLINE_DEGRADED_PROBE_EVERY = 10
 DEFAULT_STARTUP_BAN_MAX_WAIT = 600  # Max seconds to wait for an IP ban to lift during startup
 DEFAULT_STARTUP_BAN_MAX_RETRIES = 3  # Max retry attempts for ban-related startup failures
+
+# Binance error code for an exchange-wide (IP) rate-limit ban: every REST call
+# fails identically for its duration, including an open-orders lookup used by
+# a safety guard that has nothing else to do with Binance specifically (#738).
+# Named here rather than inlined so reconciliation.py's stop-placement guard
+# (deliberately exchange-agnostic, `exchange: Any`) doesn't couple to a bare
+# magic number; binance_provider.py's own RATE_LIMIT_ERROR_CODES set is the
+# source of truth for retry/reject classification and includes this code.
+EXCHANGE_IP_RATE_LIMIT_BAN_CODE = -1003
 
 # TFT (Temporal Fusion Transformer) Model Defaults
 DEFAULT_TFT_N_HEADS = 4  # Number of attention heads in the temporal decoder

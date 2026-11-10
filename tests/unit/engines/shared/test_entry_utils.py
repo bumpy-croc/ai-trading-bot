@@ -215,3 +215,11 @@ def test_resolve_sl_tp_partial_overrides() -> None:
     # Assert - SL from risk_overrides (15%), TP from attribute (4%)
     assert sl_pct == pytest.approx(0.15), f"Expected 15% SL from risk_overrides, got {sl_pct}"
     assert tp_pct == pytest.approx(0.04), f"Expected 4% TP from attribute, got {tp_pct}"
+
+
+@pytest.mark.parametrize("bad_size", [float("nan"), float("inf")])
+def test_extract_entry_plan_non_finite_size_returns_none(bad_size: float) -> None:
+    """NaN/inf sizing must not clamp to a full-cap entry."""
+    decision = _decision(SignalDirection.BUY, bad_size)
+
+    assert extract_entry_plan(decision, balance=1000.0) is None

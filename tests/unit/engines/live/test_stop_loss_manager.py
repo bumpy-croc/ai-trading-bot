@@ -6,26 +6,51 @@ the engine wrappers; these tests cover the manager's own contract — dynamic
 engine-state reads, placement retry/registration, and offline-fill detection.
 """
 
+import threading
+import time
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import pytest
 
 from src.data_providers.exchange_interface import OrderSide, SideEffectType
 from src.data_providers.exchange_interface import OrderStatus as ExchangeOrderStatus
 from src.engines.live.execution.stop_loss_manager import LiveStopLossManager
+from src.engines.live.reconciliation import BaseAssetLockRegistry, StopPlacementRefuseReason
 from src.engines.shared.models import PositionSide
 
 pytestmark = pytest.mark.fast
 
 
+def make_exchange(**overrides):
+    """Exchange stand-in that, by default, confirms no resting stop for any
+    symbol (#1112's guard_stop_placement PROCEED case) so existing placement
+    tests keep exercising the actual placement path unless a test overrides
+    ``get_open_orders_checked`` to probe the guard's ADOPT/REFUSE branches.
+    """
+    exchange = Mock()
+    exchange.get_open_orders_checked.return_value = []
+    for key, value in overrides.items():
+        setattr(exchange, key, value)
+    return exchange
+
+
 def make_state(**overrides):
-    """Engine-state stand-in with the attributes the manager reads at call time."""
+    """Engine-state stand-in with the attributes the manager reads at call time.
+
+    ``_base_asset_locks`` is a real (not mocked) ``BaseAssetLockRegistry`` by
+    default so ``move()``'s lock-for-the-duration-of-the-mutation behavior
+    (#1167 P0) is exercised for real rather than through a mock that would
+    silently accept any usage, including a missing lock.
+    """
     state = SimpleNamespace(
         enable_live_trading=True,
-        exchange_interface=Mock(),
+        exchange_interface=make_exchange(),
         order_tracker=Mock(),
         live_position_tracker=Mock(),
+        db_manager=Mock(),
+        trading_session_id=1,
+        _base_asset_locks=BaseAssetLockRegistry(),
     )
     for key, value in overrides.items():
         setattr(state, key, value)
@@ -46,6 +71,47 @@ def make_position(**overrides):
     for key, value in overrides.items():
         setattr(position, key, value)
     return position
+
+
+class TestHeldProtectionQuantity:
+    """held_protection_quantity delegates to the shared held_base_quantity."""
+
+    def test_scales_by_partial_exit(self):
+        position = make_position(quantity=1.0, current_size=0.5, original_size=1.0)
+        assert LiveStopLossManager.held_protection_quantity(position) == pytest.approx(0.5)
+
+    def test_scales_past_one_for_scale_in(self):
+        """allow_scale_in=True: unchanged from the previous unguarded scaling — a
+        real scale-in's held amount must still be protectable, not zeroed out."""
+        position = make_position(quantity=1.0, current_size=1.5, original_size=1.0)
+        assert LiveStopLossManager.held_protection_quantity(position) == pytest.approx(1.5)
+
+    def test_falls_back_to_raw_quantity_when_sizing_missing(self):
+        position = make_position(quantity=0.5, current_size=None, original_size=None)
+        assert LiveStopLossManager.held_protection_quantity(position) == pytest.approx(0.5)
+
+    def test_zero_quantity_returns_zero(self):
+        position = make_position(quantity=0.0, current_size=0.0, original_size=0.02)
+        assert LiveStopLossManager.held_protection_quantity(position) == 0.0
+
+    def test_corrupt_current_size_falls_back_to_raw_quantity(self):
+        """Regression: a non-finite/negative current_size is a NEW guard the shared
+        helper adds — the previous inline check (`current is not None and original is not
+        None and original > 0`) did not validate current_size's sign/finiteness at all, so a
+        corrupted current_size would have silently scaled by a garbage ratio."""
+        position = make_position(quantity=0.5, current_size=float("nan"), original_size=0.02)
+        assert LiveStopLossManager.held_protection_quantity(position) == pytest.approx(0.5)
+
+    def test_non_finite_quantity_returns_zero(self):
+        """Regression: NaN quantity previously slipped past `not quantity or quantity
+        <= 0` (both comparisons against NaN are False), and could have handed the exchange a
+        NaN stop-loss order quantity. It is now rejected and returns 0.0."""
+        position = make_position(quantity=float("nan"), current_size=None, original_size=None)
+        assert LiveStopLossManager.held_protection_quantity(position) == 0.0
+
+    def test_negative_quantity_returns_zero(self):
+        position = make_position(quantity=-0.5, current_size=None, original_size=None)
+        assert LiveStopLossManager.held_protection_quantity(position) == 0.0
 
 
 class TestDynamicStateReads:
@@ -72,7 +138,7 @@ class TestPlaceProtection:
         manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
         position = make_position(stop_loss_order_id=None)
 
-        sl_order_id = manager.place_protection(
+        result = manager.place_protection(
             position=position,
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -80,16 +146,24 @@ class TestPlaceProtection:
             stop_price=48000.0,
         )
 
-        assert sl_order_id == "sl-99"
+        assert result.order_id == "sl-99"
+        assert result.refuse_reason_code is None
         state.exchange_interface.place_stop_loss_order.assert_called_once_with(
             symbol="BTCUSDT",
             side=OrderSide.SELL,
             quantity=0.5,
             stop_price=48000.0,
+            client_order_id=ANY,  # #740: atbsl_-prefixed, generated fresh per placement
             side_effect_type=SideEffectType.AUTO_REPAY,
+            just_cancelled=False,
         )
         state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
             "entry-1", "sl-99"
+        )
+        # #1179: the trailing-stop min-move floor's baseline must be seeded
+        # at initial placement, not just on a later move().
+        state.live_position_tracker.set_last_placed_stop_price.assert_called_once_with(
+            "entry-1", 48000.0
         )
         state.order_tracker.track_order.assert_called_once_with("sl-99", "BTCUSDT")
 
@@ -109,7 +183,7 @@ class TestPlaceProtection:
         call = state.exchange_interface.place_stop_loss_order.call_args
         assert call.kwargs["side"] == OrderSide.BUY
 
-    @patch("src.engines.live.execution.stop_loss_manager.time.sleep")
+    @patch("src.engines.live.reconciliation.time.sleep")
     def test_retries_on_exception_then_succeeds(self, mock_sleep):
         state = make_state()
         state.exchange_interface.place_stop_loss_order.side_effect = [
@@ -118,7 +192,7 @@ class TestPlaceProtection:
         ]
         manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
 
-        sl_order_id = manager.place_protection(
+        result = manager.place_protection(
             position=make_position(),
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -126,16 +200,17 @@ class TestPlaceProtection:
             stop_price=48000.0,
         )
 
-        assert sl_order_id == "sl-after-retry"
+        assert result.order_id == "sl-after-retry"
+        assert result.refuse_reason_code is None
         assert state.exchange_interface.place_stop_loss_order.call_count == 2
 
-    @patch("src.engines.live.execution.stop_loss_manager.time.sleep")
+    @patch("src.engines.live.reconciliation.time.sleep")
     def test_returns_none_after_exhausting_retries_without_registration(self, mock_sleep):
         state = make_state()
         state.exchange_interface.place_stop_loss_order.return_value = None
         manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
 
-        sl_order_id = manager.place_protection(
+        result = manager.place_protection(
             position=make_position(),
             symbol="BTCUSDT",
             side=PositionSide.LONG,
@@ -143,10 +218,751 @@ class TestPlaceProtection:
             stop_price=48000.0,
         )
 
-        assert sl_order_id is None
+        assert result.order_id is None
+        # The guard PROCEEDed every attempt -- place_stop_loss_order itself
+        # returning falsy is a different failure class than a guard REFUSE,
+        # so no reason_code is captured (#1218).
+        assert result.refuse_reason_code is None
         assert state.exchange_interface.place_stop_loss_order.call_count == 3
         state.live_position_tracker.set_stop_loss_order_id.assert_not_called()
         state.order_tracker.track_order.assert_not_called()
+        # #1185: exhausting retries must persist an UNPROTECTED audit row, not
+        # just leave the caller's emergency-close as the only trail.
+        state.db_manager.log_audit_event.assert_called_once()
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert audit_call["severity"] == "CRITICAL"
+        assert audit_call["field"] == "stop_loss_order_id"
+
+    def test_success_does_not_write_an_unprotected_audit(self):
+        state = make_state()
+        state.exchange_interface.place_stop_loss_order.return_value = "sl-99"
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        manager.place_protection(
+            position=make_position(),
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            quantity=0.5,
+            stop_price=48000.0,
+        )
+
+        state.db_manager.log_audit_event.assert_not_called()
+
+    def test_rate_limit_ban_enters_close_only_mode(self):
+        """#738: a -1003 exchange-wide rate-limit ban on stop-loss placement
+        must escalate to close-only mode, not just the ordinary UNPROTECTED
+        audit — during the ban, the caller's own emergency-close would hit
+        the identical failure, so the engine must stop opening new positions
+        rather than keep failing loudly at the old retry budget."""
+        state = make_state(_enter_close_only_mode=Mock())
+        ban_error = Exception("Too many requests")
+        ban_error.code = -1003  # type: ignore[attr-defined]
+        state.exchange_interface.place_stop_loss_order.side_effect = ban_error
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        result = manager.place_protection(
+            position=make_position(),
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            quantity=0.5,
+            stop_price=48000.0,
+        )
+
+        assert result.order_id is None
+        # No retry against a live IP-wide ban: one placement attempt only.
+        assert state.exchange_interface.place_stop_loss_order.call_count == 1
+        state._enter_close_only_mode.assert_called_once()
+        reason = state._enter_close_only_mode.call_args.args[0]
+        assert "BTCUSDT" in reason
+        assert "-1003" in reason
+        # The existing UNPROTECTED escalation still runs unchanged alongside
+        # the new close-only mode -- this is additive, not a replacement.
+        state.db_manager.log_audit_event.assert_called_once()
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_non_ban_exception_does_not_enter_close_only_mode(self, mock_sleep):
+        """Only the -1003 ban class escalates to close-only; an ordinary
+        placement failure keeps using just the existing UNPROTECTED audit."""
+        state = make_state(_enter_close_only_mode=Mock())
+        state.exchange_interface.place_stop_loss_order.return_value = None
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        manager.place_protection(
+            position=make_position(),
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            quantity=0.5,
+            stop_price=48000.0,
+        )
+
+        state._enter_close_only_mode.assert_not_called()
+
+
+class TestPlaceProtectionRestingStopGuard1112:
+    """#1112: place_protection must consult the resting-stop guard before
+    calling place_stop_loss_order, so a duplicate can never stack."""
+
+    @staticmethod
+    def _resting_order(side, order_id="already_resting"):
+        return SimpleNamespace(order_id=order_id, side=side, stop_price=48000.0)
+
+    def test_adopts_matching_untracked_resting_stop_without_placing(self):
+        state = make_state()
+        state.exchange_interface.get_open_orders_checked.return_value = [
+            self._resting_order(OrderSide.SELL)
+        ]
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+        position = make_position(stop_loss_order_id=None)
+
+        result = manager.place_protection(
+            position=position,
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            quantity=0.5,
+            stop_price=48000.0,
+        )
+
+        assert result.order_id == "already_resting"
+        state.exchange_interface.place_stop_loss_order.assert_not_called()
+        state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
+            "entry-1", "already_resting"
+        )
+        # #1179: adopted price (the resting order's actual stop_price), not
+        # just the intended one, seeds the min-move floor's baseline.
+        state.live_position_tracker.set_last_placed_stop_price.assert_called_once_with(
+            "entry-1", 48000.0
+        )
+        state.order_tracker.track_order.assert_called_once_with("already_resting", "BTCUSDT")
+        state.db_manager.log_audit_event.assert_not_called()
+
+    def test_refuses_when_resting_order_is_wrong_side(self):
+        state = make_state()
+        state.exchange_interface.get_open_orders_checked.return_value = [
+            self._resting_order(OrderSide.BUY)
+        ]
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        result = manager.place_protection(
+            position=make_position(stop_loss_order_id=None),
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            quantity=0.5,
+            stop_price=48000.0,
+        )
+
+        assert result.order_id is None
+        # A confirmed conflict (WRONG_SIDE), not an UNCONFIRMED lookup -- the
+        # caller must still emergency-close on this reason_code (#1218).
+        assert result.refuse_reason_code == StopPlacementRefuseReason.WRONG_SIDE
+        state.exchange_interface.place_stop_loss_order.assert_not_called()
+        state.order_tracker.track_order.assert_not_called()
+        # #1185: a fail-closed refusal is an unprotected entry too.
+        state.db_manager.log_audit_event.assert_called_once()
+        # #1186: the guard's specific reason must reach the audit row, not a
+        # generic message.
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert "wrong side" in audit_call["reason"]
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_refuses_when_open_orders_lookup_is_unconfirmed(self, mock_sleep):
+        """#1186: an unconfirmed lookup (None every time) never clears across
+        the DEFAULT_STOP_LOSS_MAX_RETRIES attempts, so this still ends up
+        refusing -- but only after spending the full retry budget on it, not
+        by bypassing the budget on attempt 0 the way the incomplete first fix
+        did (time.sleep is mocked because this now genuinely exercises the
+        backoff between attempts, not because a fresh test premise requires
+        it)."""
+        state = make_state()
+        state.exchange_interface.get_open_orders_checked.return_value = None
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        result = manager.place_protection(
+            position=make_position(stop_loss_order_id=None),
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            quantity=0.5,
+            stop_price=48000.0,
+        )
+
+        assert result.order_id is None
+        # #1218: the terminal decision on the final attempt is UNCONFIRMED --
+        # this is the reason_code entry_coordinator.py branches on to defer
+        # instead of emergency-closing.
+        assert result.refuse_reason_code == StopPlacementRefuseReason.UNCONFIRMED
+        state.exchange_interface.place_stop_loss_order.assert_not_called()
+        state.db_manager.log_audit_event.assert_called_once()
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert "lookup unconfirmed" in audit_call["reason"]
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_non_terminal_unconfirmed_then_genuine_failure_is_not_deferrable(self, mock_sleep):
+        """#1218 review follow-up (P2): a NON-terminal UNCONFIRMED refusal on
+        attempt 0 (the guard's lookup fails once) followed by the guard
+        clearing and ``place_stop_loss_order`` itself genuinely failing on
+        attempts 1-2 must NOT be classified as the deferrable UNCONFIRMED
+        case. ``on_refuse`` only fires on a TERMINAL refusal (#1186) --
+        attempts 1-2 never refuse at all, they PROCEED and then the exchange
+        call fails -- so ``refuse_reason_code`` stays ``None`` and the caller
+        (entry_coordinator.py) emergency-closes instead of deferring. Pins
+        the invariant a future refactor (e.g. firing ``_invoke_on_refuse`` on
+        a SKIP outcome too) could silently break without any test failing."""
+        state = make_state()
+        state.exchange_interface.get_open_orders_checked.side_effect = [None, [], []]
+        state.exchange_interface.place_stop_loss_order.return_value = None
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        result = manager.place_protection(
+            position=make_position(stop_loss_order_id=None),
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            quantity=0.5,
+            stop_price=48000.0,
+        )
+
+        assert result.order_id is None
+        assert result.refuse_reason_code is None
+        assert result.is_unconfirmed_refusal is False
+        # Attempt 0: SKIP (unconfirmed, budget preserved) -- no placement
+        # attempted. Attempts 1-2: guard PROCEEDs, place_stop_loss_order is
+        # actually called and genuinely fails both times.
+        assert state.exchange_interface.place_stop_loss_order.call_count == 2
+        state.db_manager.log_audit_event.assert_called_once()
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert audit_call["field"] == "stop_loss_order_id"
+
+
+class TestReprotect:
+    """#710/#1185: re-placing a stop-loss after a failed close must delegate
+    to the shared guard+ADOPT+REFUSE+retry helper (``place_or_adopt_stop_loss``)
+    instead of inlining its own copy, and every CRITICAL branch -- invalid
+    inputs, a fail-closed refusal, or exhausted retries -- must persist an
+    UNPROTECTED audit row alongside the existing log + alert escalation."""
+
+    @staticmethod
+    def _held_exchange(**overrides):
+        """Spot exchange stand-in confirmed as holding the position's base asset."""
+        exchange = make_exchange(**overrides)
+        exchange.is_margin_mode = False
+        exchange.get_balance.return_value = SimpleNamespace(free=0.5, locked=0.0)
+        return exchange
+
+    def test_success_registers_stop_and_writes_no_audit(self):
+        exchange = self._held_exchange()
+        exchange.place_stop_loss_order.return_value = "sl-new"
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        manager.reprotect(make_position())
+
+        exchange.place_stop_loss_order.assert_called_once_with(
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.5,
+            stop_price=48000.0,
+            client_order_id=ANY,  # #740: atbsl_-prefixed, generated fresh per placement
+            side_effect_type=SideEffectType.AUTO_REPAY,
+            just_cancelled=True,
+        )
+        state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
+            "entry-1", "sl-new"
+        )
+        state.order_tracker.track_order.assert_called_once_with("sl-new", "BTCUSDT")
+        state.db_manager.log_audit_event.assert_not_called()
+
+    def test_skips_when_position_no_longer_held(self):
+        exchange = make_exchange()
+        exchange.is_margin_mode = False
+        exchange.get_balance.return_value = SimpleNamespace(free=0.0, locked=0.0)
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        manager.reprotect(make_position())
+
+        exchange.place_stop_loss_order.assert_not_called()
+        state.db_manager.log_audit_event.assert_not_called()
+
+    def test_writes_audit_when_stop_price_is_missing(self):
+        exchange = self._held_exchange()
+        send_alert = Mock()
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=send_alert)
+
+        manager.reprotect(make_position(stop_loss=None))
+
+        exchange.place_stop_loss_order.assert_not_called()
+        send_alert.assert_called_once()
+        state.db_manager.log_audit_event.assert_called_once()
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert audit_call["severity"] == "CRITICAL"
+        assert audit_call["field"] == "stop_loss_order_id"
+
+    def test_adopts_matching_untracked_resting_stop_without_placing(self):
+        exchange = self._held_exchange()
+        exchange.get_open_orders_checked.return_value = [
+            SimpleNamespace(order_id="already_resting", side=OrderSide.SELL, stop_price=48000.0)
+        ]
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        manager.reprotect(make_position())
+
+        exchange.place_stop_loss_order.assert_not_called()
+        state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
+            "entry-1", "already_resting"
+        )
+        state.db_manager.log_audit_event.assert_not_called()
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_writes_audit_when_refused(self, mock_sleep):
+        """#1186: the guard consults on every attempt now, so a lookup that
+        stays unconfirmed exhausts the full retry budget (time.sleep mocked
+        for that reason) before refusing, rather than bypassing the budget on
+        attempt 0 the way the incomplete first fix did."""
+        exchange = self._held_exchange()
+        exchange.get_open_orders_checked.return_value = None  # unconfirmed -> REFUSE
+        send_alert = Mock()
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=send_alert)
+
+        manager.reprotect(make_position())
+
+        exchange.place_stop_loss_order.assert_not_called()
+        send_alert.assert_called_once()
+        state.db_manager.log_audit_event.assert_called_once()
+        # #1186: the guard's specific reason must reach both the alert and
+        # the audit row, not a generic message.
+        assert "lookup unconfirmed" in send_alert.call_args.args[0]
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert "lookup unconfirmed" in audit_call["reason"]
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_writes_audit_when_replacement_fails_after_retries(self, mock_sleep):
+        exchange = self._held_exchange()
+        exchange.place_stop_loss_order.return_value = None
+        send_alert = Mock()
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=send_alert)
+
+        manager.reprotect(make_position())
+
+        assert exchange.place_stop_loss_order.call_count == 3
+        send_alert.assert_called_once()
+        state.db_manager.log_audit_event.assert_called_once()
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert audit_call["severity"] == "CRITICAL"
+        assert audit_call["field"] == "stop_loss_order_id"
+
+
+class TestMove:
+    """#1167: a trailing-stop ratchet must move the resting exchange order
+    (cancel + re-place), not just the in-memory/DB stop_loss value."""
+
+    @staticmethod
+    def _held_exchange(**overrides):
+        """Spot exchange stand-in confirmed as holding the position's base asset."""
+        exchange = make_exchange(**overrides)
+        exchange.is_margin_mode = False
+        exchange.get_balance.return_value = SimpleNamespace(free=0.5, locked=0.0)
+        exchange.cancel_order.return_value = True
+        return exchange
+
+    def test_cancels_old_order_and_places_new_one_at_new_price(self):
+        exchange = self._held_exchange()
+        exchange.place_stop_loss_order.return_value = "sl-new"
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        moved = manager.move(make_position(), 49000.0)
+
+        assert moved is True
+        exchange.cancel_order.assert_called_once_with("sl-1", "BTCUSDT")
+        exchange.place_stop_loss_order.assert_called_once_with(
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=0.5,
+            stop_price=49000.0,
+            client_order_id=ANY,  # #740: atbsl_-prefixed, generated fresh per placement
+            side_effect_type=SideEffectType.AUTO_REPAY,
+            just_cancelled=True,
+        )
+        state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
+            "entry-1", "sl-new"
+        )
+        # #1179: a real move must always refresh the min-move floor's
+        # baseline to the achieved price, so the next ratchet's cumulative
+        # drift is measured from here, not from the pre-move tracked value.
+        state.live_position_tracker.set_last_placed_stop_price.assert_called_once_with(
+            "entry-1", 49000.0
+        )
+        state.order_tracker.track_order.assert_called_once_with("sl-new", "BTCUSDT")
+
+    def test_short_position_uses_buy_side(self):
+        exchange = self._held_exchange()
+        exchange.place_stop_loss_order.return_value = "sl-new"
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        manager.move(make_position(side=PositionSide.SHORT), 53000.0)
+
+        call = exchange.place_stop_loss_order.call_args
+        assert call.kwargs["side"] == OrderSide.BUY
+
+    def test_paper_mode_short_circuits_without_exchange_calls(self):
+        state = make_state(enable_live_trading=False)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        moved = manager.move(make_position(), 49000.0)
+
+        assert moved is False
+        state.exchange_interface.cancel_order.assert_not_called()
+
+    def test_no_resting_order_is_a_no_op(self):
+        state = make_state()
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        moved = manager.move(make_position(stop_loss_order_id=None), 49000.0)
+
+        assert moved is False
+        state.exchange_interface.cancel_order.assert_not_called()
+        state.exchange_interface.place_stop_loss_order.assert_not_called()
+
+    def test_skips_when_position_no_longer_held(self):
+        exchange = make_exchange()
+        exchange.is_margin_mode = False
+        exchange.get_balance.return_value = SimpleNamespace(free=0.0, locked=0.0)
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        moved = manager.move(make_position(), 49000.0)
+
+        assert moved is False
+        exchange.cancel_order.assert_not_called()
+
+    def test_does_not_place_when_cancel_fails(self):
+        exchange = self._held_exchange()
+        exchange.cancel_order.return_value = False
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        moved = manager.move(make_position(), 49000.0)
+
+        assert moved is False
+        exchange.place_stop_loss_order.assert_not_called()
+
+    def test_refuses_and_alerts_when_guard_detects_ambiguous_resting_stop(self):
+        exchange = self._held_exchange()
+        # A resting order that survives the exclude_order_id filter (different
+        # id) on the correct side but at an unrelated price -> REFUSE (#1112).
+        exchange.get_open_orders_checked.return_value = [
+            SimpleNamespace(order_id="mystery", side=OrderSide.SELL, stop_price=47000.0)
+        ]
+        send_alert = Mock()
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=send_alert)
+
+        moved = manager.move(make_position(), 49000.0)
+
+        assert moved is False
+        exchange.place_stop_loss_order.assert_not_called()
+        send_alert.assert_called_once()
+        # #1185: the cancel above already succeeded, so a REFUSE here leaves
+        # the position exactly as naked as an exhausted-retries failure would
+        # -- it must get the same persisted audit row, not just the alert.
+        state.db_manager.log_audit_event.assert_called_once()
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert audit_call["severity"] == "CRITICAL"
+        assert audit_call["field"] == "stop_loss_order_id"
+        # #1186: the guard's specific reason (wrong price, not just "REFUSE")
+        # must reach both the alert and the audit row.
+        assert "outside" in send_alert.call_args.args[0]
+        assert "outside" in audit_call["reason"]
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_escalates_when_replacement_fails_after_cancel(self, mock_sleep):
+        exchange = self._held_exchange()
+        exchange.place_stop_loss_order.return_value = None
+        send_alert = Mock()
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=send_alert)
+
+        moved = manager.move(make_position(), 49000.0)
+
+        assert moved is False
+        assert exchange.cancel_order.call_count == 1
+        assert exchange.place_stop_loss_order.call_count == 3
+        send_alert.assert_called_once()
+        # #1167 P1: cancel-succeeded/re-place-failed must escalate with a
+        # persisted CRITICAL audit row, not just a log line + alert — matching
+        # the periodic reconciler's identical scenario (_audit_unprotected).
+        state.db_manager.log_audit_event.assert_called_once()
+        audit_call = state.db_manager.log_audit_event.call_args.kwargs
+        assert audit_call["severity"] == "CRITICAL"
+        assert audit_call["field"] == "stop_loss_order_id"
+
+    def test_rejects_invalid_new_stop_price_before_touching_exchange(self):
+        """#1167 P2: validate new_stop_price BEFORE cancelling, like reprotect()
+        does for its own stop_price — once cancelled it's too late to bail
+        safely."""
+        exchange = self._held_exchange()
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        for bad_price in (0.0, -1.0, float("nan"), float("inf")):
+            moved = manager.move(make_position(), bad_price)
+            assert moved is False
+
+        exchange.cancel_order.assert_not_called()
+        exchange.place_stop_loss_order.assert_not_called()
+
+
+class TestMoveBaseAssetLock:
+    """#1167 P0: move()'s cancel-guard-place sequence must serialise on the
+    position's base-asset lock exactly like execute_entry/execute_exit and the
+    periodic reconciler's own re-placement — otherwise a concurrent
+    reconciliation cycle can observe the naked post-cancel window and place a
+    second resting stop on the same held quantity (#1104/#1108 class)."""
+
+    def test_lock_is_held_for_the_whole_cancel_and_place_round_trip(self):
+        registry = BaseAssetLockRegistry()
+        exchange = TestMove._held_exchange()
+        exchange.place_stop_loss_order.return_value = "sl-new"
+
+        entered_cancel = threading.Event()
+        release_cancel = threading.Event()
+
+        def blocking_cancel(order_id, symbol):
+            entered_cancel.set()
+            release_cancel.wait(timeout=2)
+            return True
+
+        exchange.cancel_order.side_effect = blocking_cancel
+        state = make_state(exchange_interface=exchange, _base_asset_locks=registry)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        mover = threading.Thread(target=manager.move, args=(make_position(), 49000.0))
+        mover.start()
+        try:
+            assert entered_cancel.wait(timeout=2), "move() never reached cancel()"
+
+            # While move() is inside its cancel-guard-place section, a second
+            # thread (standing in for the periodic reconciler's re-placement)
+            # must NOT be able to acquire the same base-asset lock.
+            lock = registry.lock_for("BTC")
+            acquired_by_other_thread = lock.acquire(blocking=False)
+            try:
+                assert not acquired_by_other_thread, (
+                    "base-asset lock was not held during move()'s cancel/place — "
+                    "the reconciler could race it and stack a duplicate stop"
+                )
+            finally:
+                if acquired_by_other_thread:
+                    lock.release()
+        finally:
+            release_cancel.set()
+            mover.join(timeout=2)
+
+        # Released once move() completes.
+        lock = registry.lock_for("BTC")
+        assert lock.acquire(blocking=False)
+        lock.release()
+
+
+class TestMoveAdoptBranch:
+    """#1167/#1112: move()'s ADOPT branch (guard_stop_placement finds an
+    untracked resting stop within tolerance) must track the ACHIEVED price,
+    not the ratchet's intended price — guard_stop_placement only guarantees
+    the adopted order is within tolerance, not equal to what was asked for."""
+
+    @staticmethod
+    def _resting_order(side, stop_price, order_id="already_resting"):
+        return SimpleNamespace(order_id=order_id, side=side, stop_price=stop_price)
+
+    def test_adopts_and_persists_the_actual_resting_price_not_the_intent(self):
+        exchange = TestMove._held_exchange()
+        # Adopted order rests at 49010, not the intended 49000 -- within
+        # guard_stop_placement's tolerance but not identical, and HIGHER
+        # (tighter, safer) for a long -- safe to ratify.
+        exchange.get_open_orders_checked.return_value = [
+            self._resting_order(OrderSide.SELL, 49010.0)
+        ]
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+        position = make_position()
+
+        moved = manager.move(position, 49000.0)
+
+        assert moved is True
+        exchange.place_stop_loss_order.assert_not_called()
+        state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
+            "entry-1", "already_resting"
+        )
+        # The tracked stop_loss price must reflect what's actually resting on
+        # the exchange (49010), not the ratchet's intent (49000) -- otherwise
+        # the engine's own exit check trusts a price the exchange will never
+        # trigger at, the exact #1167 divergence in a different guise.
+        state.live_position_tracker.set_stop_loss_price.assert_called_once_with("entry-1", 49010.0)
+        # #1179: the min-move floor's baseline is the ACHIEVED price too,
+        # unconditionally (unlike set_stop_loss_price, which only fires when
+        # it differs from the intent).
+        state.live_position_tracker.set_last_placed_stop_price.assert_called_once_with(
+            "entry-1", 49010.0
+        )
+
+    def test_does_not_ratify_a_looser_adopted_price(self):
+        """#1213: the adopt tolerance is symmetric, so an adopted resting
+        order can land FURTHER from the ratchet's intent than expected, not
+        just closer. last_placed_stop_price must still reflect exchange
+        reality unconditionally, but the tracked position.stop_loss -- the
+        engine's own software exit trigger -- must NOT be loosened below
+        where the ratchet had already advanced it."""
+        exchange = TestMove._held_exchange()
+        # Adopted order rests at 48990, LOWER than the ratchet's intended
+        # 49000 -- looser/worse for a long.
+        exchange.get_open_orders_checked.return_value = [
+            self._resting_order(OrderSide.SELL, 48990.0)
+        ]
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+        position = make_position()
+
+        moved = manager.move(position, 49000.0)
+
+        assert moved is True
+        exchange.place_stop_loss_order.assert_not_called()
+        state.live_position_tracker.set_stop_loss_order_id.assert_called_once_with(
+            "entry-1", "already_resting"
+        )
+        state.live_position_tracker.set_stop_loss_price.assert_not_called()
+        state.live_position_tracker.set_last_placed_stop_price.assert_called_once_with(
+            "entry-1", 48990.0
+        )
+
+    def test_a_non_finite_resting_price_is_refused_not_adopted(self):
+        """#1219: an order whose stop_price is NaN cannot be verified to protect at
+        the intended level, so it is refused rather than adopted -- and its NaN never
+        reaches the min-move floor's baseline."""
+        exchange = TestMove._held_exchange()
+        exchange.get_open_orders_checked.return_value = [
+            self._resting_order(OrderSide.SELL, float("nan"))
+        ]
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        moved = manager.move(make_position(), 49000.0)
+
+        assert moved is False
+        exchange.place_stop_loss_order.assert_not_called()
+        state.live_position_tracker.set_stop_loss_order_id.assert_not_called()
+        state.live_position_tracker.set_last_placed_stop_price.assert_not_called()
+
+    def test_adopting_at_exactly_the_intended_price_does_not_rewrite_it(self):
+        exchange = TestMove._held_exchange()
+        exchange.get_open_orders_checked.return_value = [
+            self._resting_order(OrderSide.SELL, 49000.0)
+        ]
+        state = make_state(exchange_interface=exchange)
+        manager = LiveStopLossManager(engine_state=state, send_alert=Mock())
+
+        moved = manager.move(make_position(), 49000.0)
+
+        assert moved is True
+        state.live_position_tracker.set_stop_loss_price.assert_not_called()
+        # #1179: still set unconditionally, even though it equals the intent.
+        state.live_position_tracker.set_last_placed_stop_price.assert_called_once_with(
+            "entry-1", 49000.0
+        )
+
+
+class TestMoveExcludesTheOrderItActuallyCancelled:
+    """#1179 P1: ``move()`` must use the order id it actually cancels — read
+    freshly INSIDE the base-asset lock — as ``exclude_order_id``, never the
+    snapshot taken before the lock was acquired.
+
+    The periodic reconciler's own SL re-placement serialises on this same
+    lock (#1167 P0) and can swap the tracked order id between move()'s
+    pre-lock snapshot and its lock acquisition. If move() then excludes the
+    STALE id instead of the one it just cancelled, a lagging Binance
+    open-orders view showing that just-cancelled order as the ONLY resting
+    stop makes ``guard_stop_placement`` classify it as an untracked,
+    same-side, in-tolerance resting stop and ADOPT it — tracking the position
+    as protected by an order that is already dead — instead of correctly
+    recognising (via the exclusion) that the only resting order IS the one
+    just cancelled and REFUSING (fail-closed) pending the reconciler.
+    """
+
+    @staticmethod
+    def _start_reconciler_and_mover(position, registry, exchange, manager):
+        """Runs move() concurrently with a reconciler stand-in that swaps the
+        tracked order id ("sl-old" -> "sl-mid") while move() blocks waiting
+        for the SAME base-asset lock the reconciler holds -- mirroring the
+        fixed reconciliation.py Step 2 (its own null+replace now happens
+        inside this same lock, #1179). Returns move()'s result.
+        """
+        reconciler_holding = threading.Event()
+        release_reconciler = threading.Event()
+
+        def reconciler_replace():
+            with registry.lock_for("BTC"):
+                reconciler_holding.set()
+                release_reconciler.wait(timeout=2)
+                position.stop_loss_order_id = "sl-mid"
+
+        reconciler_thread = threading.Thread(target=reconciler_replace)
+        reconciler_thread.start()
+        assert reconciler_holding.wait(timeout=2), "reconciler stand-in never took the lock"
+
+        mover_result: dict[str, bool] = {}
+
+        def run_move():
+            # move()'s pre-lock snapshot of position.stop_loss_order_id reads
+            # "sl-old" here (the reconciler thread hasn't swapped it yet --
+            # it's still waiting on release_reconciler) and then blocks
+            # trying to acquire the lock the reconciler is holding.
+            mover_result["value"] = manager.move(position, 49000.0)
+
+        mover_thread = threading.Thread(target=run_move)
+        mover_thread.start()
+        # Give move() a moment to take its pre-lock snapshot and start
+        # blocking on the lock before the reconciler swaps the id and
+        # releases it. Best-effort ordering only -- the assertions below are
+        # what actually prove correctness, not this sleep.
+        time.sleep(0.05)
+        release_reconciler.set()
+        reconciler_thread.join(timeout=2)
+        mover_thread.join(timeout=2)
+        return mover_result.get("value")
+
+    @patch("src.engines.live.reconciliation.time.sleep")
+    def test_move_excludes_the_order_it_actually_cancelled(self, mock_sleep):
+        registry = BaseAssetLockRegistry()
+        exchange = TestMove._held_exchange()
+        # Binance's open-orders view lags: it still lists the order move() is
+        # about to cancel (sl-mid) as resting, within ADOPT tolerance of the
+        # new ratchet price -- and it is the ONLY resting order once
+        # correctly excluded.
+        exchange.get_open_orders_checked.return_value = [
+            SimpleNamespace(order_id="sl-mid", side=OrderSide.SELL, stop_price=49000.0)
+        ]
+        send_alert = Mock()
+        position = make_position(stop_loss_order_id="sl-old")
+        state = make_state(exchange_interface=exchange, _base_asset_locks=registry)
+        manager = LiveStopLossManager(engine_state=state, send_alert=send_alert)
+
+        moved = self._start_reconciler_and_mover(position, registry, exchange, manager)
+
+        # move() must cancel the CURRENT order (sl-mid, set by the
+        # reconciler while move() waited), not the stale pre-lock snapshot.
+        exchange.cancel_order.assert_called_once_with("sl-mid", "BTCUSDT")
+        # With the correct fresh exclude_order_id ("sl-mid"), the guard sees
+        # the only resting order IS the one just cancelled and fails closed
+        # (REFUSE) rather than resurrecting it -- move() must NOT succeed...
+        assert moved is False
+        # ...and, above all, must NEVER track the position as protected by
+        # the order it (or the reconciler) just cancelled. This is the
+        # concrete failure mode: silently adopting a dead order.
+        state.live_position_tracker.set_stop_loss_order_id.assert_not_called()
+        exchange.place_stop_loss_order.assert_not_called()
+        send_alert.assert_called_once()
 
 
 class TestCheckFilled:

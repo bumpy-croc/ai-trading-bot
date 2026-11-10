@@ -150,7 +150,7 @@ ai-trading-bot/
     ├── architecture.md           # This file
     ├── changelog.md              # Change history
     ├── project_status.md         # Current milestones
-    └── execplans/                # Feature execution plans
+    └── archive/                  # Completed ExecPlans, phase docs, issue write-ups
 ```
 
 ---
@@ -296,10 +296,11 @@ Real-time execution with safety controls.
 - `execution/stop_loss_manager.py` - All exchange-facing stop-loss lifecycle calls (place/cancel/query/re-protect)
 - `execution/market_data_coordinator.py` - Per-candle market-data + context read path (`LiveMarketDataCoordinator`): latest-frame fetch (WS-cache vs REST + resync), sentiment enrichment, strategy-context readiness gate, correlation-sizing context. Read-only path; reads/writes engine state via a `Protocol` backref
 - `execution/order_fill_coordinator.py` - The `OrderTracker` callbacks (`LiveOrderFillCoordinator`): full/partial fills, cancel/reject (entry-fee refund + stop-loss-cancel escalation #741), tracking-lost (fail-closed). Runs on the OrderTracker poll thread; stop-loss fills are handed to the loop via the thread-safe `_pending_fill_exits` queue (#631). Reads/writes engine state via a `Protocol` backref
-- `loop_timing.py` - Trading-loop cadence + data-freshness helpers (`LiveLoopTimingCoordinator`): interruptible sleep, adaptive poll interval, candle-age/WS-buffer freshness gate. Leaf helpers behind a `Protocol` backref
+- `loop_timing.py` - Trading-loop cadence + data-freshness helpers (`LiveLoopTimingCoordinator`): interruptible sleep, adaptive poll interval, candle-age/WS-buffer freshness gate (+ stale-data streak for the latched-condition monitor). Leaf helpers behind a `Protocol` backref
 - `dynamic_risk_coordinator.py` - Per-entry dynamic-risk position-size adjustment + audit logging (`LiveDynamicRiskCoordinator`): drawdown/peak-aware sizing via the shared `DynamicRiskHandler`. Behind a `Protocol` backref
+- `position_adoption.py` - Exchange verification of OPEN DB rows before a restart adopts them (`ExchangePositionVerifier`)
 - `recovery.py` - Startup recovery: session balance, persisted-position reload, exchange reconciliation (`LiveSessionRecoverer`)
-- `startup.py` - Bootstrap sequence (`LiveStartupSequencer`): session recover/create + wiring, #668 carry-forward, #657 self-heal, account sync, runtime-service startup, loop launch. The engine's public `start()` delegates here. Behind a `Protocol` backref
+- `startup.py` - Bootstrap sequence (`LiveStartupSequencer`): session recover/create + wiring, #668/#683 exchange-verified position adoption, #657 self-heal, account sync, runtime-service startup, loop launch. The engine's public `start()` delegates here. Behind a `Protocol` backref
 - `strategy_runtime.py` - Strategy normalization + per-candle runtime decision pipeline (`StrategyRuntimeCoordinator`): config, component risk-context provider, `RuntimeContext` construction, decision processing, risk-param merge/clone
 - `strategy_hot_swap.py` - Hot-swap / model-update lifecycle (`StrategyHotSwapCoordinator`): public entry points, StrategyManager callbacks, loop-applied pending-update application, post-swap policy/risk refresh
 - `ws_health.py` - WebSocket stream-health subsystem (`WebSocketHealthMonitor`): WS startup, background health-monitor thread + loop, kline/user-stream staleness + reconnect/probe decisions, degraded-user hard-reconnect/restore, order-fill exit-queue drain. Lock-free single-writer model (health thread is the only writer of reconnect counters / `_ws_kline_active`; trading loop reads); state stays on the engine via a `Protocol` backref

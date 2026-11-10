@@ -13,6 +13,11 @@ becomes a diff or gets a written disposition.
 
 ## Items
 
-_(none — cleared by the 2026-08-10 retro. The file was empty on arrival and stayed empty for 14
-days despite that window's findings all being agenda-worthy; see [D-2026-08-10-01] — the agents
-expected to populate it were deregistered (#1050) or died on turn 1 (#1051).)_
+_(Cleared by the 2026-11-09 retro. Empty on arrival for the **fifteenth** consecutive window. The
+open PRs #1285, #1281, #1271 and #1270 were checked for AGENDA additions; none carry any. #1099 (retire or
+restructure this file) is still open and unowned. See [D-2026-11-09-02].)_
+
+- 2026-10-04: #1242 made `latest` an explicit opt-in for local training (`TrainingConfig.set_latest`,
+  `--set-latest`, `live-control train --auto-deploy`) and added the NO CHANGE-vs-`latest` CI check.
+  LESSONS §1.16(a) and `weekly-retro/SKILL.md` still say the pipeline writes `latest` at training
+  time; rewrite them to describe the opt-in and the CI check.

@@ -21,6 +21,7 @@ import math
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
+from src.database.manager import SESSION_RECOVERY_WINDOW_HOURS
 from src.database.models import EventType
 from src.engines.live.execution.position_tracker import LivePosition as Position
 from src.engines.live.execution.position_tracker import LivePositionTracker
@@ -34,6 +35,7 @@ from src.engines.live.trade_close_accounting import (
 from src.engines.shared.models import BaseTrade as Trade
 from src.engines.shared.models import PositionSide
 from src.performance.metrics import Side, pnl_percent
+from src.trading.exit_reason import classify_stop_exit
 
 if TYPE_CHECKING:
     from src.data_providers.data_provider import DataProvider
@@ -46,6 +48,75 @@ if TYPE_CHECKING:
     from src.risk.risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
+
+
+def position_from_db_row(pos_data: dict[str, Any], fallback_entry_balance: float) -> Position:
+    """Hydrate a ``LivePosition`` from a ``DatabaseManager.get_active_positions`` row.
+
+    ``fallback_entry_balance`` stands in when the row carries no usable entry balance.
+    """
+    # Convert database position to Position object
+    # Handle both uppercase and lowercase side values from database
+    side_value = pos_data["side"]
+    if isinstance(side_value, str):
+        side_value = side_value.lower()
+
+    stored_entry_balance = pos_data.get("entry_balance")
+    try:
+        entry_balance = (
+            float(stored_entry_balance)
+            if stored_entry_balance is not None
+            else float(fallback_entry_balance)
+        )
+    except (TypeError, ValueError):
+        logger.warning(
+            "Recovered position %s has invalid entry balance %s; falling back to current balance",
+            pos_data.get("symbol"),
+            stored_entry_balance,
+        )
+        entry_balance = float(fallback_entry_balance)
+
+    # Resolve the tracker key: prefer entry_order_id (exchange),
+    # fall back to database ID string for backward compat
+    entry_order_id = pos_data.get("entry_order_id")
+    tracker_key = entry_order_id or str(pos_data["id"])
+
+    position = Position(
+        symbol=pos_data["symbol"],
+        side=PositionSide(side_value),
+        size=pos_data["size"],
+        entry_price=pos_data["entry_price"],
+        entry_time=pos_data["entry_time"],
+        entry_balance=entry_balance,
+        stop_loss=pos_data.get("stop_loss"),
+        take_profit=pos_data.get("take_profit"),
+        unrealized_pnl=float(pos_data.get("unrealized_pnl", 0.0) or 0.0),
+        unrealized_pnl_percent=float(pos_data.get("unrealized_pnl_percent", 0.0) or 0.0),
+        quantity=pos_data.get("quantity"),
+        # Hydrate partial-operation state so a position partially exited
+        # before a restart closes at its REMAINING size (and logs the
+        # remaining base quantity), not the full original. Without this,
+        # current_size/original_size fall back to size and the close
+        # over-reports size, pnl fraction, and trades.quantity.
+        original_size=pos_data.get("original_size"),
+        current_size=pos_data.get("current_size"),
+        partial_exits_taken=pos_data.get("partial_exits_taken", 0) or 0,
+        scale_ins_taken=pos_data.get("scale_ins_taken", 0) or 0,
+        last_partial_exit_price=pos_data.get("last_partial_exit_price"),
+        last_scale_in_price=pos_data.get("last_scale_in_price"),
+        # Trailing/breakeven state: losing it on restart re-arms the
+        # activation logic and can loosen an already-ratcheted stop.
+        trailing_stop_activated=bool(pos_data.get("trailing_stop_activated", False)),
+        trailing_stop_price=pos_data.get("trailing_stop_price"),
+        breakeven_triggered=bool(pos_data.get("breakeven_triggered", False)),
+        order_id=tracker_key,  # Backward compat: used as _positions dict key
+        tracker_key=tracker_key,
+        exchange_order_id=entry_order_id,
+        client_order_id=pos_data.get("client_order_id"),
+        db_position_id=pos_data["id"],
+        stop_loss_order_id=pos_data.get("stop_loss_order_id"),
+    )
+    return position
 
 
 class RecoveryEngineState(Protocol):
@@ -85,10 +156,12 @@ class RecoveryEngineState(Protocol):
     current_balance: float
     _close_only_mode: bool
     _recovered_inactive_session_id: int | None
+    _history_seed_session_id: int | None
+    _history_seed_lookup_failed: bool
 
     def _strategy_name(self) -> str: ...
 
-    def _enter_close_only_mode(self) -> None: ...
+    def _enter_close_only_mode(self, reason: str | None = None) -> None: ...
 
     def _log_trade(self, trade: Trade) -> None: ...
 
@@ -134,7 +207,7 @@ class LiveSessionRecoverer:
             if session_id is None:
                 strategy = state._strategy_name()
                 session_id = state.db_manager.get_last_session_id(
-                    within_hours=168,  # 7 days — covers long-running paper trading sessions
+                    within_hours=SESSION_RECOVERY_WINDOW_HOURS,
                     strategy_name=strategy,
                     symbol=state._active_symbol,
                 )
@@ -146,14 +219,34 @@ class LiveSessionRecoverer:
 
             logger.info("🔍 Found %s session #%s", source, session_id)
 
+            # Durable seeding lineage (#1036): this session holds the
+            # account_history rows the restart-safe risk seeders must baseline
+            # from. Recorded for BOTH recovery paths (reused active session and
+            # clean restart) and never cleared — unlike
+            # _recovered_inactive_session_id, whose lifetime belongs to the #668
+            # carry-forward guard, which clears it during startup before the
+            # first loop iteration runs.
+            state._history_seed_session_id = session_id
+
             # Clean restart (inactive session): remember it so start() can carry its
             # OPEN positions forward into the new session — INDEPENDENT of whether a
             # positive balance was recovered. A fully-liquidated session (balance 0)
             # can still hold an OPEN position; gating this on balance > 0 would
-            # re-orphan it (#668, P2). The active/crash path reuses the session
-            # directly below and never needs this.
+            # re-orphan it (#668, P2).
             if source != "active":
                 state._recovered_inactive_session_id = session_id
+            else:
+                # Active session (crash recovery): reuse it now, unconditionally —
+                # NOT gated on the balance read below. A crash while a position is
+                # genuinely OPEN leaves its session "active"; if a non-positive/None
+                # balance read used to fall through here, this method returned None,
+                # start() created a BRAND NEW session, and the still-open position
+                # (owned by the old session id) was never reloaded into the tracker
+                # — invisible to both reconcilers, and able to be re-entered as a
+                # second, real position on the same symbol (#743). Mirrors the
+                # unconditional `_recovered_inactive_session_id` handling above for
+                # the identical reason.
+                self._reuse_active_session(session_id)
 
             recovered_balance = state.db_manager.recover_last_balance(session_id)
             # Sanitize BEFORE the positivity filter below. recover_last_balance()
@@ -172,24 +265,9 @@ class LiveSessionRecoverer:
                         "refusing to start on corrupt persisted state."
                     )
             if recovered_balance and recovered_balance > 0:
-                # Crash recovery (active session): reuse the existing session ID so
-                # trades stay attributed to the same session row. Clean restarts create
-                # a new session below; their OPEN positions are carried forward via
-                # _recovered_inactive_session_id (set above).
-                if source == "active":
-                    state.trading_session_id = session_id
-                    # Register the reused session with the DB manager. create_trading_session
-                    # sets _current_session_id for NEW sessions, but this active-recovery path
-                    # reuses an existing one — without this, every session-scoped write that
-                    # falls back to _current_session_id (balance updates, etc.) fails with
-                    # "No active trading session" on the first trade after recovery (#41).
-                    state.db_manager.set_current_session(session_id)
-                    # Wire session context to execution engine so journaling works
-                    state.live_execution_engine.session_id = session_id
-                    state.live_execution_engine.strategy_name = state._strategy_name()
-                    # Crash recovery reuses the session, so day-start snapshots
-                    # already live under it — no recovery fallback needed (#766).
-                    state.event_logger.set_session_id(session_id)
+                # Crash recovery (active session) was already reused above — clean
+                # restarts create a new session below; their OPEN positions are
+                # carried forward via _recovered_inactive_session_id (set above).
                 logger.info(
                     "💾 Recovered balance $%.2f from %s session #%s",
                     recovered_balance,
@@ -197,6 +275,40 @@ class LiveSessionRecoverer:
                     session_id,
                 )
                 return recovered_balance
+
+            if source == "active":
+                # The session (and, via start()'s position-recovery call, any OPEN
+                # position it owns) is already reused — only the *balance* is
+                # unusable. Falling through silently here (as this used to) is
+                # exactly the #743 failure: the caller must not treat this like a
+                # fresh start. Page loudly instead of just logging, via the same
+                # `_record_event(..., alert=True)` mechanism every other CRITICAL
+                # condition in this module uses (see `_emit_reconcile_summary`) —
+                # an operator must verify the true balance/PnL of the reused
+                # session by hand.
+                state._record_event(
+                    EventType.ALERT,
+                    f"Crash recovery: reusing active session #{session_id} but its "
+                    f"balance could not be recovered ({recovered_balance!r}). "
+                    "Starting on the configured default balance — verify the "
+                    "session's true balance and any open position's P&L by hand.",
+                    severity="critical",
+                    component="session_recovery",
+                    error_code="ACTIVE_SESSION_BALANCE_UNRECOVERABLE",
+                    alert=True,
+                )
+                # An unrecoverable balance means current_balance falls back to the
+                # configured default (e.g. INITIAL_BALANCE), not the reused
+                # session's true balance -- sizing new entries off that fabricated
+                # number is exactly the phantom-balance failure mode this repo has
+                # been burned by before. The alert above tells an operator; this
+                # stops the engine from opening new exposure before they look.
+                # Exits/stops keep running, so the recovered position isn't stuck.
+                state._enter_close_only_mode(
+                    f"crash recovery: active session #{session_id}'s balance "
+                    "could not be recovered — refusing to size new entries off "
+                    "the default balance until verified"
+                )
 
             logger.warning("⚠️  Session #%s found but no balance to recover", session_id)
             return None
@@ -206,8 +318,61 @@ class LiveSessionRecoverer:
             # balance). Propagate so startup fails fast.
             raise
         except Exception as e:
+            # The lineage is now UNDETERMINED, not absent: the lookup could not
+            # prove this is a fresh account. Without this flag the seeders would
+            # read an empty _history_seed_session_id, conclude "no history
+            # exists", and latch `self_anchored` — reporting a failed lookup as
+            # a legitimate fresh-account anchor (#1036). Flagging it makes them
+            # expect history, retry, and latch `seed_unavailable` with a WARNING.
+            state._history_seed_lookup_failed = True
             logger.error("❌ Error recovering session: %s", e, exc_info=True)
+            if state.trading_session_id is not None:
+                # _reuse_active_session() already ran before this balance lookup
+                # (see the try block above), so a failure here -- unlike the
+                # falsy-balance case -- would otherwise leave the reused session
+                # wired with no alert and no escalation at all: a silent gap in
+                # the exact contract this method exists to enforce.
+                state._record_event(
+                    EventType.ALERT,
+                    f"Crash recovery: reusing active session #{state.trading_session_id} "
+                    f"but the balance lookup failed ({e}). Starting on the configured "
+                    "default balance — verify the session's balance and open P&L by hand.",
+                    severity="critical",
+                    component="session_recovery",
+                    error_code="ACTIVE_SESSION_BALANCE_UNRECOVERABLE",
+                    exc=e,
+                    alert=True,
+                )
+                state._enter_close_only_mode(
+                    f"crash recovery: active session #{state.trading_session_id}'s "
+                    f"balance lookup raised ({e}) — refusing to size new entries off "
+                    "the default balance until verified"
+                )
             return None
+
+    def _reuse_active_session(self, session_id: int) -> None:
+        """Wire the engine onto a still-active (crash-recovered) session.
+
+        Called unconditionally as soon as an active session is found — never
+        gated on whether its balance could also be recovered (#743). Without
+        this, an unusable balance read left the session's own OPEN position
+        un-reloaded and un-carried-forward, while a brand new session started
+        believing the symbol was flat.
+        """
+        state = self._state
+        state.trading_session_id = session_id
+        # Register the reused session with the DB manager. create_trading_session
+        # sets _current_session_id for NEW sessions, but this active-recovery path
+        # reuses an existing one — without this, every session-scoped write that
+        # falls back to _current_session_id (balance updates, etc.) fails with
+        # "No active trading session" on the first trade after recovery (#41).
+        state.db_manager.set_current_session(session_id)
+        # Wire session context to execution engine so journaling works
+        state.live_execution_engine.session_id = session_id
+        state.live_execution_engine.strategy_name = state._strategy_name()
+        # Crash recovery reuses the session, so day-start snapshots
+        # already live under it — no recovery fallback needed (#766).
+        state.event_logger.set_session_id(session_id)
 
     def ensure_positions_registered_with_risk_manager(self) -> None:
         """Register every tracked position with the risk manager.
@@ -328,64 +493,7 @@ class LiveSessionRecoverer:
             logger.info("🔄 Recovering %s active positions...", len(db_positions))
 
             for pos_data in db_positions:
-                # Convert database position to Position object
-                # Handle both uppercase and lowercase side values from database
-                side_value = pos_data["side"]
-                if isinstance(side_value, str):
-                    side_value = side_value.lower()
-
-                stored_entry_balance = pos_data.get("entry_balance")
-                try:
-                    entry_balance = (
-                        float(stored_entry_balance)
-                        if stored_entry_balance is not None
-                        else float(state.current_balance)
-                    )
-                except (TypeError, ValueError):
-                    logger.warning(
-                        "Recovered position %s has invalid entry balance %s; falling back to current balance",
-                        pos_data.get("symbol"),
-                        stored_entry_balance,
-                    )
-                    entry_balance = float(state.current_balance)
-
-                # Resolve the tracker key: prefer entry_order_id (exchange),
-                # fall back to database ID string for backward compat
-                entry_order_id = pos_data.get("entry_order_id")
-                tracker_key = entry_order_id or str(pos_data["id"])
-
-                position = Position(
-                    symbol=pos_data["symbol"],
-                    side=PositionSide(side_value),
-                    size=pos_data["size"],
-                    entry_price=pos_data["entry_price"],
-                    entry_time=pos_data["entry_time"],
-                    entry_balance=entry_balance,
-                    stop_loss=pos_data.get("stop_loss"),
-                    take_profit=pos_data.get("take_profit"),
-                    unrealized_pnl=float(pos_data.get("unrealized_pnl", 0.0) or 0.0),
-                    unrealized_pnl_percent=float(
-                        pos_data.get("unrealized_pnl_percent", 0.0) or 0.0
-                    ),
-                    quantity=pos_data.get("quantity"),
-                    # Hydrate partial-operation state so a position partially exited
-                    # before a restart closes at its REMAINING size (and logs the
-                    # remaining base quantity), not the full original. Without this,
-                    # current_size/original_size fall back to size and the close
-                    # over-reports size, pnl fraction, and trades.quantity.
-                    original_size=pos_data.get("original_size"),
-                    current_size=pos_data.get("current_size"),
-                    partial_exits_taken=pos_data.get("partial_exits_taken", 0) or 0,
-                    scale_ins_taken=pos_data.get("scale_ins_taken", 0) or 0,
-                    last_partial_exit_price=pos_data.get("last_partial_exit_price"),
-                    last_scale_in_price=pos_data.get("last_scale_in_price"),
-                    order_id=tracker_key,  # Backward compat: used as _positions dict key
-                    tracker_key=tracker_key,
-                    exchange_order_id=entry_order_id,
-                    client_order_id=pos_data.get("client_order_id"),
-                    db_position_id=pos_data["id"],
-                    stop_loss_order_id=pos_data.get("stop_loss_order_id"),
-                )
+                position = position_from_db_row(pos_data, state.current_balance)
 
                 # Validate recovered entry_price before tracking. Positions
                 # with invalid entry_price cannot be closed properly and would
@@ -404,6 +512,9 @@ class LiveSessionRecoverer:
                     state.live_position_tracker.track_recovered_position(
                         position, db_id=pos_data.get("id")
                     )
+                    # Keep the persisted excursion peaks: an empty in-memory
+                    # tracker would otherwise overwrite them on the next persist.
+                    state.live_position_tracker.seed_mfe_mae(position.order_id, pos_data)
 
                 # Register recovered stop-loss order with OrderTracker for monitoring
                 if position.stop_loss_order_id and state.order_tracker:
@@ -414,29 +525,15 @@ class LiveSessionRecoverer:
                         position.symbol,
                     )
 
-                # Update risk manager tracking for recovered positions
-                if state.risk_manager:
-                    try:
-                        state.risk_manager.update_position(
-                            symbol=position.symbol,
-                            # __post_init__ guarantees side is a PositionSide enum.
-                            side=cast(PositionSide, position.side).value,
-                            size=position.size,
-                            entry_price=position.entry_price,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to update risk manager for recovered position %s: %s",
-                            position.symbol,
-                            e,
-                        )
-
                 logger.info(
                     "✅ Recovered position: %s %s @ $%.2f",
                     pos_data["symbol"],
                     pos_data["side"],
                     pos_data["entry_price"],
                 )
+
+            # Single registration path (handles fully-drained current_size == 0).
+            self.ensure_positions_registered_with_risk_manager()
 
             logger.info("🎯 Successfully recovered %s positions", len(db_positions))
 
@@ -504,6 +601,7 @@ class LiveSessionRecoverer:
                     fee_rate=state.live_execution_engine.fee_rate,
                     data_provider=state.data_provider,
                     on_event=state._record_event,
+                    order_tracker=state.order_tracker,
                 )
 
                 if not positions_snapshot:
@@ -541,7 +639,10 @@ class LiveSessionRecoverer:
                         # Route through the guarded helper so the CLOSE_ONLY event
                         # fires — this path previously entered close-only SILENTLY,
                         # unlike the reconcile_startup path below. #853
-                        state._enter_close_only_mode()
+                        state._enter_close_only_mode(
+                            f"{critical_count} CRITICAL reconciliation issues while "
+                            "resolving pending orders"
+                        )
                     # One bounded, deduped, paged-on-critical summary — this
                     # resolve_pending path is where the 714 UNKNOWN-order storm arose.
                     self._emit_reconcile_summary(
@@ -581,7 +682,9 @@ class LiveSessionRecoverer:
                     )
                     # Route through the guarded helper so the CLOSE_ONLY event is
                     # emitted on this startup-critical path too, not just runtime.
-                    state._enter_close_only_mode()
+                    state._enter_close_only_mode(
+                        f"{critical_count} CRITICAL startup reconciliation issues"
+                    )
                 self._emit_reconcile_summary(results, critical_count, high_count, "reconciliation")
 
                 # Log HIGH severity auto-corrections (cancelled entries, SL fills)
@@ -775,6 +878,7 @@ class LiveSessionRecoverer:
                         pnl=gross_pnl,
                         pnl_percent=pnl_pct_sized,
                         exit_reason="stop_loss_offline",
+                        exit_category=classify_stop_exit(position),
                     )
                     state.performance_tracker.record_trade(
                         trade=trade,
@@ -797,6 +901,7 @@ class LiveSessionRecoverer:
                             pnl=gross_pnl,
                             strategy_name=state._strategy_name(),
                             exit_reason="stop_loss_offline",
+                            exit_category=classify_stop_exit(position),
                             entry_time=position.entry_time,
                             exit_time=datetime.now(UTC),
                             session_id=state.trading_session_id,

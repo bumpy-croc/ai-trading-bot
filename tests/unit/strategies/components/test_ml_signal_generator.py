@@ -1102,6 +1102,20 @@ class TestMLBasicSignalGeneratorModelVersionPin:
 
     @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
     @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_resolved_model_identity_pinned_and_latest(self, mock_config_class, mock_engine_class):
+        """Identity is the pinned key, else the registry's current latest bundle key."""
+        _, mock_registry = self._mock_engine(mock_engine_class)
+        pinned = MLBasicSignalGenerator(
+            symbol="BTCUSDT", model_type="basic", timeframe="1h", model_version=self.PINNED_VERSION
+        )
+        assert pinned.resolved_model_identity() == self.PINNED_KEY
+
+        mock_registry.select_bundle.return_value.key = "BTCUSDT:1h:basic:latest_v7"
+        unpinned = MLBasicSignalGenerator(symbol="BTCUSDT", model_type="basic", timeframe="1h")
+        assert unpinned.resolved_model_identity() == "BTCUSDT:1h:basic:latest_v7"
+
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
     def test_missing_pinned_version_raises_at_init(self, mock_config_class, mock_engine_class):
         """A pin the registry cannot find must fail fast, not degrade."""
         self._mock_engine(mock_engine_class, pinned_bundle=False)
@@ -1209,3 +1223,16 @@ class TestMLBasicSignalGeneratorModelVersionPin:
         params = generator.get_parameters()
         assert params["model_version"] == self.PINNED_VERSION
         assert params["pinned_model_key"] == self.PINNED_KEY
+
+
+def test_resolved_model_identity_fails_closed_on_registry_error():
+    generator = MLBasicSignalGenerator.__new__(MLBasicSignalGenerator)
+    generator._pinned_bundle_key = None
+    generator._cross_symbol_bundle_key = None
+    generator.symbol = "ETHUSDT"
+    generator.model_type = "basic"
+    generator.model_timeframe = "1h"
+    generator._registry = MagicMock()
+    generator._registry.select_bundle.side_effect = RuntimeError("boom")
+
+    assert generator.resolved_model_identity() is None

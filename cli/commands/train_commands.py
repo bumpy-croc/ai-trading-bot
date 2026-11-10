@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,10 @@ except ImportError:
     callbacks = None
 
 from src.infrastructure.runtime.paths import get_project_root
+from src.ml.model_metadata import (
+    PRICE_ONLY_FEATURE_STRATEGY,
+    build_price_normalization,
+)
 from src.ml.training_pipeline import DiagnosticsOptions, TrainingConfig, TrainingContext
 from src.ml.training_pipeline.gpu_config import configure_gpu
 from src.ml.training_pipeline.pipeline import TrainingResult, run_training_pipeline
@@ -49,17 +54,38 @@ def _diagnostics_from_args(args) -> DiagnosticsOptions:
     )
 
 
+def _print_promotion_status(version_dir: Path, set_latest: bool) -> None:
+    """Tell the operator whether the trained bundle took the production pointer."""
+    if set_latest:
+        print(f"'latest' now points to {version_dir.name}.")
+        return
+    print(
+        f"'latest' was NOT changed; {version_dir.name} is not served. Promote with: "
+        f"atb live-control deploy-model --model-path {version_dir}"
+    )
+
+
 def train_model_main(args) -> int:
-    """Train a combined model."""
+    """Train a combined model and return the exit code."""
+    return train_model(args)[0]
+
+
+def train_model(args) -> tuple[int, Path | None]:
+    """Train a combined model.
+
+    Returns:
+        ``(exit_code, bundle_dir)``; ``bundle_dir`` is the version directory the
+        run wrote, or None when training failed or produced no artifacts.
+    """
     if not _TENSORFLOW_AVAILABLE:
         print("❌ tensorflow is required for model training but is not installed.")
         print("Install it with: pip install tensorflow")
-        return 1
+        return 1, None
     try:
         start_date, end_date = _parse_dates(args.start_date, args.end_date)
     except ValueError as exc:
         print(f"❌ {exc}")
-        return 1
+        return 1, None
 
     config = TrainingConfig(
         symbol=args.symbol,
@@ -78,6 +104,7 @@ def train_model_main(args) -> int:
         target_type=getattr(args, "target_type", "regression"),
         target_horizon=getattr(args, "target_horizon", 1),
         primary_model_type=getattr(args, "primary_model_type", None),
+        set_latest=getattr(args, "set_latest", False),
     )
 
     ctx = TrainingContext(config=config)
@@ -94,7 +121,7 @@ def train_model_main(args) -> int:
     result: TrainingResult = run_training_pipeline(ctx)
     if not result.success:
         print(f"❌ Training failed: {result.metadata.get('error')}")
-        return 1
+        return 1, None
 
     print(f"✅ Training complete in {result.duration_seconds:.1f}s")
     eval_results = result.metadata.get("evaluation_results", {})
@@ -110,7 +137,8 @@ def train_model_main(args) -> int:
         print(f"Metadata: {artifacts.metadata_path}")
         if artifacts.plot_path:
             print(f"Training plot: {artifacts.plot_path}")
-    return 0
+        _print_promotion_status(artifacts.directory, config.set_latest)
+    return 0, artifacts.directory if artifacts else None
 
 
 # --- Price-only training (legacy path) ---------------------------------------------------------
@@ -203,11 +231,20 @@ def _download_price_frame(symbol: str, timeframe: str, start: str, end: str) -> 
 
 
 def train_price_model_main(args) -> int:
-    """Train a price model."""
+    """Train a price model and return the exit code."""
+    return train_price_model(args)[0]
+
+
+def train_price_model(args) -> tuple[int, Path | None]:
+    """Train a price model.
+
+    Returns:
+        ``(exit_code, bundle_dir)``; ``bundle_dir`` is None when training failed.
+    """
     if not _TENSORFLOW_AVAILABLE:
         print("❌ tensorflow is required for model training but is not installed.")
         print("Install it with: pip install tensorflow")
-        return 1
+        return 1, None
 
     # Configure GPU early
     device_name = configure_gpu()
@@ -221,7 +258,7 @@ def train_price_model_main(args) -> int:
         start_date, end_date = _parse_dates(args.start_date, args.end_date)
     except ValueError as exc:
         print(f"❌ {exc}")
-        return 1
+        return 1, None
 
     start_str = start_date.strftime("%Y-%m-%dT00:00:00Z")
     end_str = end_date.strftime("%Y-%m-%dT23:59:59Z")
@@ -230,13 +267,13 @@ def train_price_model_main(args) -> int:
         price_df = _download_price_frame(args.symbol, args.timeframe, start_str, end_str)
     except Exception as exc:  # noqa: BLE001
         print(f"❌ Failed to download price data: {exc}")
-        return 1
+        return 1, None
 
     try:
         X, y, feature_cols = _prepare_price_only_sequences(price_df.astype(float), sequence_length)
     except Exception as exc:  # noqa: BLE001
         print(f"❌ Failed to prepare sequences: {exc}")
-        return 1
+        return 1, None
 
     split_idx = int(len(X) * 0.8)
     X_train, X_val = X[:split_idx], X[split_idx:]
@@ -277,12 +314,8 @@ def train_price_model_main(args) -> int:
         "created_at": datetime.now(UTC).isoformat(),
         "sequence_length": sequence_length,
         "feature_names": feature_cols,
-        "feature_strategy": "price_only_rolling_minmax",
-        "price_normalization": {
-            "method": "rolling_minmax",
-            "window": sequence_length,
-            "target_feature": "close",
-        },
+        "feature_strategy": PRICE_ONLY_FEATURE_STRATEGY,
+        "price_normalization": build_price_normalization(sequence_length),
         "training_params": {
             "epochs": len(history.history.get("loss", [])),
             "batch_size": args.batch_size,
@@ -309,7 +342,7 @@ def train_price_model_main(args) -> int:
     bundle_dir.mkdir(parents=True, exist_ok=True)
     model.save(bundle_dir / "model.keras")
 
-    from src.ml.training_pipeline.artifacts import convert_to_onnx
+    from src.ml.training_pipeline.artifacts import convert_to_onnx, point_latest_at
 
     convert_to_onnx(model, bundle_dir / "model.onnx")
 
@@ -323,16 +356,13 @@ def train_price_model_main(args) -> int:
     with open(bundle_dir / "feature_schema.json", "w", encoding="utf-8") as f:
         json.dump(schema, f, indent=2)
 
-    latest_link = bundle_dir.parent / "latest"
-    if latest_link.exists() or latest_link.is_symlink():
-        try:
-            latest_link.unlink()
-        except OSError:
-            pass
-    latest_link.symlink_to(version_id)
+    set_latest = getattr(args, "set_latest", False)
+    if set_latest:
+        point_latest_at(bundle_dir)
 
     print(f"✅ Saved bundle to {bundle_dir}")
-    return 0
+    _print_promotion_status(bundle_dir, set_latest)
+    return 0, bundle_dir
 
 
 def train_price_only_model_main(args) -> int:

@@ -22,6 +22,7 @@ from src.config.constants import (
     DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,
     DEFAULT_CHECK_INTERVAL,
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
+    DEFAULT_DB_OUTAGE_ALERT_SECONDS,
     DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS,
     DEFAULT_DYNAMIC_RISK_ENABLED,
     DEFAULT_END_OF_DAY_FLAT,
@@ -35,9 +36,12 @@ from src.config.constants import (
     DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MIN_CHECK_INTERVAL,
     DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_STARTUP_EQUITY_LOOP_MAX_ATTEMPTS,
+    DEFAULT_STATUS_LOG_INTERVAL,
     DEFAULT_TAKE_PROFIT_PCT,
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
+    DRAWDOWN_MARK_MAX_AGE_SECONDS,
 )
 from src.config.feature_flags import get_flag, is_enabled
 from src.data_providers.binance_provider import BinanceProvider
@@ -46,6 +50,11 @@ from src.data_providers.data_provider import DataProvider
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import EventType
+from src.engines.live.closed_candle_gate import (
+    ClosedCandleGate,
+    LoopSignalDecision,
+    stamp_decision_signal,
+)
 from src.engines.live.config import LiveEngineSettings
 
 # Modular handlers (optional injection for testability)
@@ -74,6 +83,7 @@ from src.engines.live.monitoring import (
 )
 from src.engines.live.monitoring.circuit_breaker_enforcer import CircuitBreakerEnforcer
 from src.engines.live.monitoring.drawdown_guard import MaxDrawdownEnforcer, MaxDrawdownGuard
+from src.engines.live.monitoring.latched_condition_monitor import LatchedConditionMonitor
 from src.engines.live.monitoring.system_halt_enforcer import SystemHaltEnforcer
 from src.engines.live.recovery import LiveSessionRecoverer
 from src.engines.live.startup import LiveStartupSequencer
@@ -105,6 +115,7 @@ from src.engines.shared.risk_configuration import (
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
 )
+from src.infrastructure.live_threads import create_live_thread
 from src.infrastructure.logging.events import (
     log_data_event,
     log_engine_event,
@@ -119,6 +130,7 @@ from src.position_management.trailing_stops import TrailingStopPolicy
 from src.prediction.inference_context import (
     InferenceContext,
     inference_scope,
+    register_live_process,
     set_inference_context,
 )
 from src.regime.detector import RegimeDetector
@@ -128,8 +140,9 @@ from src.strategies.components import Position as ComponentPosition
 from src.strategies.components import RuntimeContext, StrategyRuntime
 from src.strategies.components import Strategy as ComponentStrategy
 from src.strategies.components.exposure_governor import ExposureGovernor
+from src.trading.exit_reason import ExitReason
 
-from .account_sync import AccountSynchronizer
+from .account_sync import AccountSynchronizer, SyncResult
 from .order_tracker import OrderTracker
 
 if TYPE_CHECKING:
@@ -149,6 +162,11 @@ logger = logging.getLogger(__name__)
 # looping condition can't flood the single alert channel (the audit's
 # 714-critical-storm class, now that alerts are wired across every subsystem). #853
 ALERT_DEDUP_COOLDOWN_SECONDS = 300.0
+
+# Minimum spacing between AUDIT_WRITE_FAILED events. A broken audit table fails
+# on every reconciler write; one event per window records that it is happening
+# (with a count of the folded-in failures) without a row per attempt.
+AUDIT_FAILURE_EVENT_INTERVAL_SECONDS = 300.0
 
 # Type aliases for backward compatibility - use shared models
 # Position uses LivePosition which has stop_loss_order_id for server-side stop tracking
@@ -220,7 +238,7 @@ class LiveTradingEngine:
         resume_from_last_balance: bool = True,  # Resume balance from last account snapshot
         database_url: str | None = None,  # Database connection URL
         max_consecutive_errors: int = 10,  # Maximum consecutive errors before shutdown
-        account_snapshot_interval: int = DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,  # Account snapshot interval in seconds (30 minutes)
+        account_snapshot_interval: int = DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,  # Account snapshot interval in seconds (1 hour)
         provider: str = "binance",  # 'binance' (default) or 'coinbase'
         testnet: bool = False,  # Use exchange testnet (separate credentials)
         # Dynamic risk management
@@ -259,7 +277,7 @@ class LiveTradingEngine:
             Defaults to True.
         account_snapshot_interval : int, optional
             How often to log account snapshots to database in seconds.
-            Defaults to 1800 (30 minutes). Set to 0 to disable snapshots.
+            Defaults to 3600 (1 hour). Set to 0 to disable snapshots.
         settings : LiveEngineSettings, optional
             Pre-resolved construction-time settings (feature flags / env /
             app config). The runner builds these explicitly; when omitted the
@@ -272,6 +290,7 @@ class LiveTradingEngine:
         # This pins the constructing thread only (contextvar, #926); the
         # trading loop thread scopes itself LIVE in _run_trading_loop.
         set_inference_context(InferenceContext.LIVE)
+        register_live_process()
 
         self._validate_inputs(
             initial_balance=initial_balance,
@@ -356,10 +375,20 @@ class LiveTradingEngine:
         # max_consecutive_errors (incident 2026-05-19: a Railway internal-DNS
         # outage made Postgres unresolvable and shut the live bot down).
         self.db_unreachable_since: float | None = None
+        # Latch so a continuing outage pages once, not on every retry.
+        self._db_outage_announced = False
         self.error_cooldown = DEFAULT_ERROR_COOLDOWN
         # Episode latch for the consecutive-inference-timeout escalation
         # (#927): page once when the threshold is crossed, re-arm on recovery.
         self._inference_escalation_active = False
+        # Drives AccountSynchronizer.pending_startup_equity_retry from the
+        # loop's own cadence instead of only the hourly account-snapshot tick
+        # (#1226 review of #659): _startup_equity_retry_in_progress tracks
+        # whether a retry campaign is active across iterations, and
+        # _startup_equity_retry_attempts bounds it so a permanently-broken
+        # equity endpoint can't spin forever.
+        self._startup_equity_retry_in_progress = False
+        self._startup_equity_retry_attempts = 0
 
         self._init_time_exit_policy(time_exit_policy)
 
@@ -381,6 +410,11 @@ class LiveTradingEngine:
         # daemon, the WS-health thread and the order-tracker-alert thread.
         self._alert_dedup: dict[str, float] = {}
         self._alert_dedup_lock = threading.Lock()
+        # Rate limit for AUDIT_WRITE_FAILED events: monotonic time of the last
+        # emit and how many failures were folded into it since.
+        self._audit_failure_lock = threading.Lock()
+        self._audit_failure_last_emit: float | None = None
+        self._audit_failures_suppressed = 0
 
         # Optional regime detector (feature-gated)
         self.regime_detector = None
@@ -639,6 +673,7 @@ class LiveTradingEngine:
                 f"❌ Could not connect to the PostgreSQL database: {e}\nThe trading engine cannot start without a database connection. Exiting..."
             )
             raise RuntimeError("Database connection required. Service stopped.") from e
+        self.db_manager.set_audit_failure_sink(self._on_audit_write_failed)
         self.trading_session_id: int | None = None
         # On a clean restart the engine recovers balance from the most recent
         # inactive session but creates a NEW session. This holds that old
@@ -646,6 +681,17 @@ class LiveTradingEngine:
         # new session (#668); None when recovery took the active/crash path or
         # found no recent session.
         self._recovered_inactive_session_id: int | None = None
+        # Durable seeding lineage (#1036): the session whose account_history
+        # rows the restart-safe risk seeders (drawdown guard peak, circuit
+        # breaker baseline/peak) must baseline from. Set once by recovery and
+        # never cleared — _recovered_inactive_session_id above is cleared by
+        # the #668 carry-forward guard before the first loop iteration, which
+        # silently disarmed both seeders on carry-forward boots.
+        self._history_seed_session_id: int | None = None
+        # Set when the recovery lookup itself failed: the lineage is undetermined
+        # rather than known-absent, so the seeders must expect history instead of
+        # self-anchoring as if the account were fresh (#1036).
+        self._history_seed_lookup_failed: bool = False
 
     def _init_dynamic_risk_manager(self) -> None:
         """Build the dynamic-risk manager now that the database is available."""
@@ -769,6 +815,8 @@ class LiveTradingEngine:
         # Trading state
         self.is_running = False
         self._close_only_mode = False  # No new entries when True; exits still run
+        # Why the latch was tripped, for the re-announcement message (#1095).
+        self._close_only_reason: str | None = None
         # Startup account-sync may stage a balance correction to persist after the
         # session is wired; owned by LiveStartupSequencer, declared here so the
         # engine carries the attribute for the startup backref Protocol (#486).
@@ -788,11 +836,19 @@ class LiveTradingEngine:
         self.last_data_update: datetime | None = None
         # Track when we last logged account state
         self.last_account_snapshot: datetime | None = None
+        # Track when we last logged the status heartbeat
+        self.last_status_log: datetime | None = None
         self.timeframe: str | None = None  # Will be set when trading starts
         self._active_symbol: str | None = None
 
         # WebSocket stream state (populated during start() if provider supports it)
         self._kline_buffer: KlineBuffer | None = None
+        # Closed-bar frontier captured in the SAME lock acquisition as the
+        # frame it describes (KlineBuffer.snapshot), written by
+        # LiveMarketDataCoordinator.get_latest_data. Reading the buffer's
+        # live frontier here instead would race the WS thread closing the
+        # tail during indicator/ML prep. Trading-loop thread only.
+        self._buffer_frontier: pd.Timestamp | None = None
         self._user_data_processor: UserDataProcessor | None = None
         self._ws_kline_active = False
         # Duck-typed: the unwrapped provider exposing WS kline extensions.
@@ -801,6 +857,7 @@ class LiveTradingEngine:
         # Consecutive unproductive user-stream reconnects; trips a circuit breaker
         # that stops the futile reconnect loop and runs REST-only (#616).
         self._user_reconnect_failures = 0
+        self._user_degraded_paged = False  # USER_WS_DEGRADED already paged this outage
         # Consecutive unproductive kline reconnects; drives the *recovering* REST
         # fallback (#662) — momentary REST while reconnecting, auto-return to
         # WS-primary the instant a real kline event resumes (never REST-until-restart).
@@ -809,6 +866,15 @@ class LiveTradingEngine:
         # bookkeeping exit is deferred to the trading loop so a slow/failing close
         # can't block order polling or force-remove a filled order (#631).
         self._pending_fill_exits: queue.SimpleQueue = queue.SimpleQueue()
+        # Closed-candle gating (parity plan P1.0/D1): signal evaluation runs on
+        # closed bars only when enabled. Flag resolved ONCE here — reading
+        # feature_flags.json is disk I/O that must stay off the per-tick path.
+        self._closed_candle_gate = ClosedCandleGate(
+            enabled=is_enabled("closed_candle_gating", default=False)
+        )
+        # Latest closed-bar decision, replayed to the tick-driven exit path
+        # between bar closes when gating is ON. Trading-loop thread only.
+        self._last_closed_bar_decision: TradingDecision | None = None
 
     def _init_time_exit_policy(self, time_exit_policy: TimeExitPolicy | None) -> None:
         """Construct the time-exit policy from overrides when not injected."""
@@ -854,6 +920,27 @@ class LiveTradingEngine:
                     exc_info=True,
                 )
                 self.time_exit_policy = None
+        self._log_resolved_time_exit_policy()
+
+    def _log_resolved_time_exit_policy(self) -> None:
+        """Log the resolved time-exit policy so its absence is visible at boot.
+
+        DEFAULT_MAX_HOLDING_HOURS only applies inside a strategy-supplied
+        ``time_exits`` config; with none supplied no time-based exit exists.
+        """
+        policy = self.time_exit_policy
+        if policy is None:
+            logger.info(
+                "Time-exit policy: NONE (strategy supplies no time_exits config; "
+                "positions have no maximum holding time)"
+            )
+        else:
+            logger.info(
+                "Time-exit policy: max_holding_hours=%s end_of_day_flat=%s weekend_flat=%s",
+                policy.max_holding_hours,
+                policy.end_of_day_flat,
+                policy.weekend_flat,
+            )
 
     def _install_signal_handlers(self) -> None:
         """Register SIGINT/SIGTERM handlers for graceful shutdown (main thread)."""
@@ -947,6 +1034,13 @@ class LiveTradingEngine:
         self.live_execution_engine.position_snapshot_provider = lambda: list(
             self.live_position_tracker.positions.values()
         )
+        # Exchange order rejections (code + rejected params) land in
+        # system_events instead of dying with the application log (#1094).
+        self.live_execution_engine.attach_exchange_error_sink(self.exchange_interface)
+        # "We cannot exit this position" must page and, if it repeats, latch close-only
+        # rather than paging once per trading-loop iteration forever (#1104).
+        self.live_execution_engine.alert_dispatcher = self._send_alert
+        self.live_execution_engine.on_critical = self._enter_close_only_mode
 
     def _init_entry_handler(self, entry_handler: LiveEntryHandler | None) -> ExposureGovernor:
         """Build the entry handler and its exposure/macro/circuit-breaker gates."""
@@ -1032,11 +1126,18 @@ class LiveTradingEngine:
             close_only_provider=self._refresh_drawdown_gate,
             # Manual kill-switch (#922): scale-ins share the engine's halt state.
             system_halt=self._system_halt,
+            # #1166: a partial exit that fully closes a position must route
+            # through the same cancel-then-close + base-asset-lock sequence
+            # (#710/#703) as every other close.
+            execute_full_exit=self.exit_coordinator.execute_exit,
         )
         # A DI-injected handler was built without the engine's halt state —
         # rebind so its scale-ins cannot bypass the kill-switch. Idempotent
         # for the default handler constructed above.
         self.live_exit_handler.bind_system_halt(self._system_halt)
+        # Same rebind for a DI-injected handler, which is built before the
+        # engine's exit coordinator exists (#1166).
+        self.live_exit_handler.bind_full_exit(self.exit_coordinator.execute_exit)
         # #802 follow-up P3: scale-ins respect the same gross exposure cap as
         # entries (share the governor instance; inert unless the flag is on).
         self.live_exit_handler.configure_exposure_gate(exposure_governor)
@@ -1060,6 +1161,10 @@ class LiveTradingEngine:
         self._drawdown_enforcer = MaxDrawdownEnforcer(
             engine_state=self,
             guard=MaxDrawdownGuard(self.risk_manager.params.max_drawdown),
+            mark_provider=lambda: self.live_position_tracker.mark_reading(
+                DRAWDOWN_MARK_MAX_AGE_SECONDS
+            ),
+            snapshot_writer=self._log_account_snapshot,
         )
         # #807 follow-up: run the account circuit breaker on the loop too —
         # restart-safe daily baseline + drawdown peak (#986 gap B), true-equity
@@ -1081,6 +1186,12 @@ class LiveTradingEngine:
             halt_state=self._system_halt,
         )
         self._system_halt_enforcer.prime()
+        # Re-announce latched conditions until a human clears them (#1096) and
+        # make the in-process close-only latch observable in system_events (#1095).
+        self._latched_condition_monitor = LatchedConditionMonitor(
+            engine_state=self,
+            halt_state=self._system_halt,
+        )
 
         # Startup recovery — session balance, persisted positions, exchange
         # reconciliation. Reads/writes engine state at call time (#486).
@@ -1107,6 +1218,10 @@ class LiveTradingEngine:
         exposure_governor = self._init_entry_handler(entry_handler)
         self._init_exit_handler(exit_handler, exposure_governor)
         self._init_risk_guards()
+        # The stop-loss manager is built by _init_risk_guards, after the exit
+        # handler -- bind it now so a trailing-stop ratchet can move the
+        # resting exchange order (#1167), not just the in-memory/DB value.
+        self.live_exit_handler.bind_stop_loss_manager(self.stop_loss_manager)
 
     def _apply_dynamic_risk_adjustment(
         self,
@@ -1251,6 +1366,105 @@ class LiveTradingEngine:
             df, index, balance, current_price, current_time
         )
 
+    def _evaluate_signal_decision(
+        self,
+        df: pd.DataFrame,
+        current_index: int,
+        current_price: float,
+        current_time: datetime,
+        timeframe: str,
+        safety_mode: bool,
+    ) -> LoopSignalDecision:
+        """Evaluate the strategy signal for this loop tick.
+
+        Flag OFF (default): unchanged behavior — evaluate every tick on the
+        tail (forming) bar; entries may follow every tick.
+
+        Flag ON (``closed_candle_gating``, parity plan P1.0/D1): evaluate
+        exactly once per newly closed bar, at that bar's index, with that
+        bar's final close as the reference price — the inputs backtest uses
+        at the same bar, by construction. Between closes, the cached
+        closed-bar decision keeps flowing to the tick-driven exit path and
+        entries are suppressed. Safety mode defers (never consumes) a bar's
+        evaluation; the gate's monotonic bar-time guard makes evaluation
+        idempotent across ticks, reconnects, and backfills.
+
+        Signal.metadata is stamped with the decision bar's identity in BOTH
+        modes so the staging/prod A/B can attribute every decision.
+
+        Returns:
+            LoopSignalDecision. ``commit_bar`` is set only when a bar was
+            evaluated, and the loop marks it consumed AFTER entry execution.
+        """
+        gate = self._closed_candle_gate
+        view = gate.resolve(df, self._buffer_frontier)
+
+        if not gate.enabled:
+            runtime_decision = self._runtime_process_decision(
+                df,
+                current_index,
+                self.current_balance,
+                float(current_price),
+                current_time,
+            )
+            stamp_decision_signal(
+                runtime_decision,
+                bar_time=view.bar_time,
+                bar_closed=view.bar_closed,
+                timeframe=timeframe,
+            )
+            return LoopSignalDecision(runtime_decision, current_index, True)
+
+        if safety_mode or not view.evaluate:
+            # Between bar closes (or while context readiness holds decisions
+            # back): protective exit checks keep receiving the latest
+            # closed-bar decision, tick-driven — never delayed, never gated.
+            return LoopSignalDecision(self._last_closed_bar_decision, view.index, False)
+
+        # The strategy runtime indexes its OWN prepared dataset positionally
+        # and ignores the frame handed to it, so a frame position is only
+        # valid there while the two align. The loop's dropna can break that
+        # alignment (and the frontier bar is exactly the row it may drop), so
+        # resolve the decision bar by TIMESTAMP against the dataset that will
+        # actually be indexed.
+        runtime_index = self.strategy_coordinator.runtime_index_for(view.bar_time)
+        decision_index = view.index if runtime_index is None else runtime_index
+        runtime_decision = self._runtime_process_decision(
+            df,
+            decision_index,
+            self.current_balance,
+            float(df.iloc[view.index]["close"]),
+            current_time,
+        )
+        stamp_decision_signal(
+            runtime_decision,
+            bar_time=view.bar_time,
+            bar_closed=True,
+            timeframe=timeframe,
+        )
+        logger.info(
+            "Closed-candle gating: decided on closed bar %s (frame index %d of %d rows, "
+            "runtime index %s, %s)",
+            view.bar_time,
+            view.index,
+            len(df),
+            decision_index,
+            timeframe,
+        )
+        self._last_closed_bar_decision = runtime_decision
+        return LoopSignalDecision(runtime_decision, view.index, True, commit_bar=view.bar_time)
+
+    def _reset_closed_candle_gate(self) -> None:
+        """Drop gate state that a retired strategy owns (hot-swap).
+
+        The cached decision drives signal-reversal exits, and the
+        evaluated-bar high-water mark suppresses re-evaluation — both would
+        otherwise let the outgoing strategy speak for the incoming one for up
+        to a full bar.
+        """
+        self._closed_candle_gate.reset()
+        self._last_closed_bar_decision = None
+
     def _finalize_runtime(self) -> None:
         self.strategy_coordinator.finalize_runtime()
 
@@ -1284,16 +1498,26 @@ class LiveTradingEngine:
             exit_on_crash=exit_on_crash,
         )
 
-    def _enter_close_only_mode(self) -> None:
-        """Enter close-only mode: no new entries, exits/stops/trailing still active."""
+    def _enter_close_only_mode(self, reason: str | None = None) -> None:
+        """Enter close-only mode: no new entries, exits/stops/trailing still active.
+
+        ``reason`` is recorded so the re-announcement (#1096) can still say WHY
+        entries are blocked days later, when the log line that explained it has
+        rotated out of the platform's log retention (#1094).
+        """
         if not self._close_only_mode:
             self._close_only_mode = True
-            logger.critical("🚨 CLOSE-ONLY MODE ACTIVATED — no new entries until manual review")
+            self._close_only_reason = reason
+            detail = f" (reason: {reason})" if reason else ""
+            logger.critical(
+                "🚨 CLOSE-ONLY MODE ACTIVATED — no new entries until manual review%s", detail
+            )
             # Emit once on transition (guarded above) so the kill-switch is
-            # visible in system_events and pages an operator.
+            # visible in system_events and pages an operator. The
+            # LatchedConditionMonitor re-announces it for as long as it holds.
             self._record_event(
                 EventType.ALERT,
-                "Close-only mode activated — no new entries until manual review",
+                f"Close-only mode activated — no new entries until manual review{detail}",
                 severity="critical",
                 component="risk",
                 error_code="CLOSE_ONLY",
@@ -1304,7 +1528,10 @@ class LiveTradingEngine:
         """Resume normal trading after close-only mode review."""
         if self._close_only_mode:
             self._close_only_mode = False
+            self._close_only_reason = None
             logger.info("✅ Close-only mode deactivated — normal trading resumed")
+            # The monitor writes the durable CLOSE_ONLY_LATCH_CLEARED row on its
+            # next pass; nothing to page here.
 
     def _start_websocket_streams(self, symbol: str, timeframe: str) -> None:
         """Initialize WebSocket streams for reduced API weight."""
@@ -1421,6 +1648,7 @@ class LiveTradingEngine:
                             None,
                             None,
                             None,
+                            exit_category=ExitReason.ENGINE_SHUTDOWN,
                         )
                     except Exception as e:
                         logger.error(
@@ -1450,8 +1678,11 @@ class LiveTradingEngine:
 
         # End the trading session in database
         if self.trading_session_id:
+            # Paper positions are preserved above; the next start re-adopts them (#668).
             self.db_manager.end_trading_session(
-                session_id=self.trading_session_id, final_balance=self.current_balance
+                session_id=self.trading_session_id,
+                final_balance=self.current_balance,
+                carry_forward_open_positions=True,
             )
 
         logger.info("Trading engine stopped")
@@ -1528,6 +1759,9 @@ class LiveTradingEngine:
         steps = 0
         cfg = get_config()
         self._active_symbol = symbol
+        # Size the gate's stall threshold now that the timeframe is known —
+        # the liveness assertion is meaningless without it.
+        self._closed_candle_gate.configure_timeframe(timeframe)
         try:
             # get() with a non-None default always returns str.
             heartbeat_every = int(cast(str, cfg.get("ENGINE_HEARTBEAT_STEPS", "60")))
@@ -1551,6 +1785,10 @@ class LiveTradingEngine:
                 # `atb live-control halt` blocks new risk in this very
                 # iteration (and on every data-outage `continue` path below).
                 self._system_halt_enforcer.check()
+                # Re-announce anything still blocking entries (#1096). Runs
+                # before the data-freshness `continue` paths so a latch keeps
+                # being reported through a market-data outage too.
+                self._latched_condition_monitor.check()
                 # For mock and real providers, update live data if supported.
                 # Skip when WS kline cache is active (no REST needed).
                 if not self._ws_kline_active and hasattr(self.data_provider, "update_live_data"):
@@ -1562,8 +1800,12 @@ class LiveTradingEngine:
                 df = self._get_latest_data(symbol, timeframe)
                 if df is None or df.empty:
                     log_data_event("no_data", reason="empty_frame")
+                    # Feed the stale-data streak: a REST failure or RESYNCING skips
+                    # entries and exits exactly like a stale frame does.
+                    self._is_data_fresh(df)
                     logger.warning("No market data received")
                     self.check_interval = self._calculate_adaptive_interval()
+                    self._enforce_drawdown_through_data_gap()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
 
@@ -1571,6 +1813,7 @@ class LiveTradingEngine:
                 if not self._is_data_fresh(df):
                     logger.debug("Data is not fresh enough, using longer interval")
                     self.check_interval = self._calculate_adaptive_interval()
+                    self._enforce_drawdown_through_data_gap()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
                 # Add sentiment data if available
@@ -1581,6 +1824,7 @@ class LiveTradingEngine:
                     if self.strategy_manager and self.strategy_manager.has_pending_update():
                         logger.info("🔄 Applying pending strategy/model update...")
                         if self._apply_pending_strategy_update():
+                            self._reset_closed_candle_gate()
                             self._send_alert("Strategy/Model updated in live trading")
                 except Exception as e:
                     logger.error(
@@ -1615,6 +1859,7 @@ class LiveTradingEngine:
                         tail_nan_counts,
                     )
                     self.check_interval = self._calculate_adaptive_interval()
+                    self._enforce_drawdown_through_data_gap()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
 
@@ -1624,6 +1869,7 @@ class LiveTradingEngine:
                     logger.error(
                         "DataFrame became empty after readiness check - skipping iteration"
                     )
+                    self._enforce_drawdown_through_data_gap()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
 
@@ -1637,13 +1883,21 @@ class LiveTradingEngine:
                 elif current_time.tzinfo is None:
                     current_time = current_time.replace(tzinfo=UTC)
 
-                runtime_decision = self._runtime_process_decision(
+                # Signal evaluation: every tick on the forming bar (flag OFF,
+                # today's behavior) or once per closed bar (closed_candle_gating
+                # ON — parity plan P1.0/D1). Protective paths below stay on
+                # current_index/current_price (the forming bar) in both modes.
+                signal_decision = self._evaluate_signal_decision(
                     df,
                     current_index,
-                    self.current_balance,
                     float(current_price),
                     current_time,
+                    timeframe,
+                    safety_mode,
                 )
+                runtime_decision = signal_decision.decision
+                entry_index = signal_decision.entry_index
+                allow_entries = signal_decision.allow_entries
                 if steps % heartbeat_every == 0:
                     log_engine_event(
                         "heartbeat",
@@ -1688,14 +1942,21 @@ class LiveTradingEngine:
                         self.current_balance,
                         candle_time=current_time,
                     )
-                # Check entry conditions if not at maximum positions
-                if (not safety_mode) and (
-                    self.live_position_tracker.position_count
-                    < self.risk_manager.get_max_concurrent_positions()
+                # Check entry conditions if not at maximum positions. With
+                # closed-candle gating ON, entries run only on the tick that
+                # evaluated a newly closed bar, at that bar's index; execution
+                # inputs (current_price/current_time) stay live by design.
+                if (
+                    (not safety_mode)
+                    and allow_entries
+                    and (
+                        self.live_position_tracker.position_count
+                        < self.risk_manager.get_max_concurrent_positions()
+                    )
                 ):
                     self._check_entry_conditions(
                         df,
-                        current_index,
+                        entry_index,
                         symbol,
                         current_price,
                         current_time,
@@ -1703,23 +1964,29 @@ class LiveTradingEngine:
                     )
                     # Check for short entry via legacy hook when available
                     self.entry_coordinator.process_legacy_short_entry(
-                        df, current_index, symbol, current_price, current_time
+                        df, entry_index, symbol, current_price, current_time
                     )
+                # Consume the evaluated bar only now that entry execution has
+                # had its attempt. An exception above skips this, so the next
+                # tick retries the bar instead of losing entries for a whole
+                # timeframe — the ungated path retried on the next tick too.
+                if signal_decision.commit_bar is not None:
+                    self._closed_candle_gate.mark_evaluated(signal_decision.commit_bar)
                 # Update performance metrics
                 self._update_performance_metrics()
                 # Enforce the portfolio max-drawdown hard cap (close-only on breach)
                 self._check_max_drawdown()
                 # Escalate persistent inference timeouts (#927, observability only)
                 self._check_inference_health()
+                # Drive a cold-boot margin-equity retry on the loop's own
+                # cadence (#1226 review of #659) before the periodic snapshot
+                # path below, which only calls sync_account_data() hourly.
+                self._check_pending_startup_equity_retry()
                 self._log_periodic_account_state()
-                # Log status periodically
-                if (
-                    self.performance_tracker.get_metrics().total_trades % 10 == 0
-                    or self.live_position_tracker.position_count > 0
-                ):
-                    self._log_status(symbol, current_price)
+                self._log_status_heartbeat(symbol, current_price)
                 # Reset error counter on successful iteration
                 self.consecutive_errors = 0
+                self._record_db_recovery()
                 self.db_unreachable_since = None
 
                 # Calculate and use adaptive interval for next iteration
@@ -1737,6 +2004,7 @@ class LiveTradingEngine:
                     if self.db_unreachable_since is None:
                         self.db_unreachable_since = time.monotonic()
                     unreachable_for = time.monotonic() - self.db_unreachable_since
+                    self._announce_db_outage(unreachable_for)
                     # Prolonged outage: stop opening new positions (exits and
                     # server-side stop-losses still run) to avoid order churn
                     # while DB writes keep failing. Stays close-only until a
@@ -1751,7 +2019,9 @@ class LiveTradingEngine:
                             unreachable_for,
                             DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS,
                         )
-                        self._enter_close_only_mode()
+                        self._enter_close_only_mode(
+                            f"database unreachable for {unreachable_for:.0f}s"
+                        )
                     logger.warning(
                         "Database temporarily unreachable in trading loop (%s); "
                         "backing off %.0fs and retrying — not counted toward "
@@ -1799,13 +2069,71 @@ class LiveTradingEngine:
         logger.info("Trading loop ended")
         self._finalize_runtime()
 
+    def _announce_db_outage(self, unreachable_for: float) -> None:
+        """Page once when a database outage has lasted ``DEFAULT_DB_OUTAGE_ALERT_SECONDS``.
+
+        The outage's own ``system_events`` row cannot be written while the
+        database is down, so the webhook is the only live channel; the durable
+        record is written on recovery by :meth:`_record_db_recovery`.
+        """
+        if self._db_outage_announced or unreachable_for < DEFAULT_DB_OUTAGE_ALERT_SECONDS:
+            return
+        self._db_outage_announced = True
+        self._record_event(
+            EventType.ALERT,
+            f"Database unreachable for {unreachable_for:.0f}s — the engine keeps retrying; "
+            f"new entries stop after {DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS}s. Exits and "
+            "exchange stop-losses are unaffected.",
+            severity="critical",
+            component="database",
+            error_code="DB_UNREACHABLE",
+            alert=True,
+        )
+
+    def _record_db_recovery(self) -> None:
+        """Write the durable record of a database outage that has just ended.
+
+        No-op unless an outage was in progress. The start of the outage could
+        not be persisted (the database was the thing that was down), so this one
+        row carries its duration.
+        """
+        since = self.db_unreachable_since
+        if since is None:
+            return
+        duration = time.monotonic() - since
+        self._db_outage_announced = False
+        self._record_event(
+            EventType.WARNING,
+            f"Database reachable again after a {duration:.0f}s outage.",
+            severity="warning",
+            component="database",
+            error_code="DB_OUTAGE_RECOVERED",
+        )
+
+    def _log_status_heartbeat(self, symbol: str, current_price: float) -> None:
+        """Log the periodic status line on a wall-clock cadence.
+
+        Previously gated on ``total_trades % 10 == 0 or position_count > 0``,
+        which went silent for a flat session sitting on a trade count not
+        divisible by 10 — making a live loop look hung even though it was
+        still running. This must fire independent of trade volume so it
+        stays valid liveness evidence.
+        """
+        now = datetime.now(UTC)
+        if (
+            self.last_status_log is None
+            or (now - self.last_status_log).total_seconds() >= DEFAULT_STATUS_LOG_INTERVAL
+        ):
+            self._log_status(symbol, current_price)
+            self.last_status_log = now
+
     def _log_periodic_account_state(self) -> None:
         """Log the periodic account snapshot and run periodic exchange account sync."""
         # Log account snapshot to database periodically (configurable interval)
         now = datetime.now(UTC)
         if self.account_snapshot_interval > 0 and (
             self.last_account_snapshot is None
-            or (now - self.last_account_snapshot).seconds >= self.account_snapshot_interval
+            or (now - self.last_account_snapshot).total_seconds() >= self.account_snapshot_interval
         ):
             self._log_account_snapshot()
             self.last_account_snapshot = now
@@ -1818,20 +2146,7 @@ class LiveTradingEngine:
                     )
                     if sync_result.success:
                         logger.debug("Periodic account sync completed")
-                        # Apply any balance correction to the in-memory balance
-                        # that drives sizing (the DB is already updated inside the
-                        # sync). Without this a mid-session margin-equity
-                        # correction would not reach live sizing until restart.
-                        balance_sync = sync_result.data.get("balance_sync", {})
-                        if balance_sync.get("corrected", False):
-                            corrected = balance_sync.get("new_balance")
-                            if corrected is not None:
-                                with self._balance_lock:
-                                    self.current_balance = corrected
-                                logger.info(
-                                    "💰 Balance corrected mid-session from " "exchange: $%.2f",
-                                    corrected,
-                                )
+                        self._apply_corrected_balance(sync_result, "mid-session from exchange")
                     else:
                         logger.warning(
                             "Periodic account sync failed: %s",
@@ -1839,6 +2154,113 @@ class LiveTradingEngine:
                         )
                 except Exception as e:
                     logger.error("Periodic account sync error: %s", e)
+
+    def _apply_corrected_balance(self, sync_result: SyncResult, source: str) -> None:
+        """Apply a sync's balance correction to the in-memory balance that
+        drives sizing (the DB is already updated inside the sync). Without
+        this, a mid-session margin-equity correction would not reach live
+        sizing until restart."""
+        balance_sync = sync_result.data.get("balance_sync", {})
+        if balance_sync.get("corrected", False):
+            corrected = balance_sync.get("new_balance")
+            if corrected is not None:
+                with self._balance_lock:
+                    self.current_balance = corrected
+                logger.info("💰 Balance corrected %s: $%.2f", source, corrected)
+        elif "exchange_cash" in balance_sync:
+            # Spot: the sync only reports; the periodic reconciler writes balance
+            # corrections to the DB only. Re-read so sizing follows the DB.
+            self._refresh_balance_from_db(source)
+
+    def _refresh_balance_from_db(self, source: str) -> None:
+        """Load the session balance from the DB into the in-memory sizing balance."""
+        # Read and assign under one lock hold so a concurrent balance write cannot
+        # be overwritten with a value read before it.
+        try:
+            with self._balance_lock:
+                db_balance = self.db_manager.get_current_balance(self.trading_session_id)
+                if db_balance is None or not math.isfinite(db_balance) or db_balance <= 0:
+                    return
+                if abs(self.current_balance - db_balance) < 1e-9:
+                    return
+                previous = self.current_balance
+                self.current_balance = db_balance
+        except Exception as e:
+            logger.warning("Could not refresh in-memory balance %s: %s", source, e)
+            return
+        logger.info(
+            "💰 In-memory balance refreshed %s: $%.2f -> $%.2f", source, previous, db_balance
+        )
+
+    def _check_pending_startup_equity_retry(self) -> None:
+        """Drive #659's cold-boot margin-equity self-heal from the trading
+        loop's own cadence instead of only the hourly account-snapshot tick.
+
+        ``AccountSynchronizer.pending_startup_equity_retry`` bypasses the
+        internal sync throttle for the next ``sync_account_data()`` call, but
+        in production the only scheduled caller of that method besides
+        startup is ``_log_periodic_account_state``, gated behind
+        ``DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL`` (one hour). Without this check,
+        a cold-boot skip that survives its own inline retry would sit armed
+        but unused until that hourly tick — up to an hour of trading on a
+        stale balance, which is exactly the oversized-sizing window #659
+        describes. Checking every loop iteration instead closes that down to
+        one ``check_interval`` (seconds), and keeps retrying on subsequent
+        iterations — bounded by ``DEFAULT_STARTUP_EQUITY_LOOP_MAX_ATTEMPTS``
+        so a permanently-broken equity endpoint can't spin forever — for as
+        long as the synchronizer keeps reporting the read as unavailable,
+        not just the single bypassed call the flag itself buys.
+        """
+        if not (self.account_synchronizer and self.enable_live_trading):
+            return
+
+        flag_armed = self.account_synchronizer.pending_startup_equity_retry
+        if not flag_armed and not self._startup_equity_retry_in_progress:
+            return
+
+        if self._startup_equity_retry_attempts >= DEFAULT_STARTUP_EQUITY_LOOP_MAX_ATTEMPTS:
+            if self._startup_equity_retry_in_progress:
+                logger.error(
+                    "Cold-boot margin-equity retry exhausted %d loop attempts — "
+                    "tracked balance may stay stale until the next periodic sync",
+                    DEFAULT_STARTUP_EQUITY_LOOP_MAX_ATTEMPTS,
+                )
+                self._startup_equity_retry_in_progress = False
+            return
+
+        self._startup_equity_retry_in_progress = True
+        self._startup_equity_retry_attempts += 1
+        logger.info(
+            "Retrying cold-boot margin-equity sync from the trading loop (attempt %d/%d)",
+            self._startup_equity_retry_attempts,
+            DEFAULT_STARTUP_EQUITY_LOOP_MAX_ATTEMPTS,
+        )
+        try:
+            sync_result = self.account_synchronizer.sync_account_data(
+                force=True, symbol=self._active_symbol
+            )
+        except Exception as e:
+            logger.error("Cold-boot margin-equity retry error: %s", e)
+            return
+
+        if not sync_result.success:
+            # The exchange-level sync itself failed before an equity read was
+            # even attempted (the #1226 P2 scenario) — still unresolved, keep
+            # retrying on the next iteration, bounded by the attempt counter.
+            logger.warning("Cold-boot margin-equity retry sync failed: %s", sync_result.message)
+            return
+
+        balance_sync = sync_result.data.get("balance_sync", {})
+        if balance_sync.get("reason") == "equity unavailable":
+            # Still unresolved — keep retrying on the next iteration, bounded
+            # by the attempt counter above.
+            return
+
+        # Resolved (corrected, already in sync, or a different non-retryable
+        # outcome such as an open position) — stop the campaign.
+        self._startup_equity_retry_in_progress = False
+        self._startup_equity_retry_attempts = 0
+        self._apply_corrected_balance(sync_result, "from cold-boot equity retry")
 
     @staticmethod
     def _is_transient_db_error(exc: BaseException) -> bool:
@@ -2062,6 +2484,7 @@ class LiveTradingEngine:
         candle_low: float | None,
         candle,
         skip_live_close: bool = False,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
     ) -> None:
         """Serialise the close on the position\'s base-asset lock, then execute it (#703).
 
@@ -2078,6 +2501,7 @@ class LiveTradingEngine:
             candle_low,
             candle,
             skip_live_close=skip_live_close,
+            exit_category=exit_category,
         )
 
     def _execute_exit_locked(
@@ -2090,6 +2514,7 @@ class LiveTradingEngine:
         candle_low: float | None,
         candle,
         skip_live_close: bool = False,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
     ) -> None:
         """Close a position using shared execution modules (delegated to LiveExitCoordinator)."""
         return self.exit_coordinator.execute_exit_locked(
@@ -2101,6 +2526,7 @@ class LiveTradingEngine:
             candle_low,
             candle,
             skip_live_close=skip_live_close,
+            exit_category=exit_category,
         )
 
     def _cancel_stop_loss_order(self, position: Position) -> bool:
@@ -2171,6 +2597,16 @@ class LiveTradingEngine:
         self._drawdown_enforcer.check()
         self._circuit_breaker_enforcer.check()
 
+    def _enforce_drawdown_through_data_gap(self) -> None:
+        """Keep the max-drawdown cap running on iterations that skip the loop body.
+
+        A market-data gap `continue`s before ``update_pnl`` and the regular
+        check, so without this the cap would go dark during an outage even for
+        realized losses such as stop fills. Marks are not refreshed on these
+        iterations, so only the balance leg is evaluated.
+        """
+        self._drawdown_enforcer.check_during_data_gap()
+
     def _refresh_drawdown_gate(self) -> bool:
         """Re-assess the max-drawdown hard cap at an exposure-increase chokepoint.
 
@@ -2186,6 +2622,14 @@ class LiveTradingEngine:
         """
         self._drawdown_enforcer.check_before_new_risk()
         return self._close_only_mode
+
+    def _durable_peak_equity(self) -> float:
+        """Peak mark-to-market equity the max-drawdown guard measures from.
+
+        Zero until the guard seeds. Feeds the stored ``account_history.drawdown``
+        so the column shares the hard cap's basis.
+        """
+        return self._drawdown_enforcer.guard.equity_peak
 
     def _durable_peak_balance(self) -> float:
         """Peak balance for drawdown-based risk throttling, durable across restarts.
@@ -2352,6 +2796,7 @@ class LiveTradingEngine:
                 "pnl": trade.pnl,
                 "pnl_percent": trade.pnl_percent,
                 "exit_reason": trade.exit_reason,
+                "exit_category": str(trade.exit_category),
                 "duration_minutes": (trade.exit_time - trade.entry_time).total_seconds() / 60,
             }
 
@@ -2540,9 +2985,50 @@ class LiveTradingEngine:
             )
 
         try:
-            threading.Thread(target=_deliver, name="order-tracker-alert", daemon=True).start()
+            create_live_thread(_deliver, name="order-tracker-alert").start()
         except Exception as e:  # pragma: no cover - defensive; never break order handling
             logger.warning("order-tracker alert dispatch failed: %s", e)
+
+    def _on_audit_write_failed(self, severity: str, description: str, error: BaseException) -> None:
+        """Record that a reconciliation audit row could not be written.
+
+        Called from whichever thread wrote the audit, often while it holds a
+        reconciler lock, so this returns immediately: the rate-limit check is a
+        few instructions and the event (and any webhook, up to 10s) is delivered
+        on a short-lived daemon thread. Only a lost CRITICAL row pages — a lost
+        lower-severity row is queryable but not worth waking an operator for.
+        """
+        now = time.monotonic()
+        with self._audit_failure_lock:
+            last = self._audit_failure_last_emit
+            if last is not None and now - last < AUDIT_FAILURE_EVENT_INTERVAL_SECONDS:
+                self._audit_failures_suppressed += 1
+                return
+            self._audit_failure_last_emit = now
+            folded = self._audit_failures_suppressed
+            self._audit_failures_suppressed = 0
+
+        message = (
+            f"Reconciliation audit write failed [{severity}] {description}: "
+            f"{type(error).__name__}: {error}"
+        )
+        if folded:
+            message += f" (+{folded} more failures since the last report)"
+
+        def _deliver() -> None:
+            self._record_event(
+                EventType.ERROR,
+                message,
+                severity="error",
+                component="reconciler",
+                error_code="AUDIT_WRITE_FAILED",
+                alert=severity == "CRITICAL",
+            )
+
+        try:
+            create_live_thread(_deliver, name="audit-failure-event").start()
+        except Exception as e:  # pragma: no cover - defensive; never break reconciliation
+            logger.warning("audit-failure event dispatch failed: %s", e)
 
     def _sleep_with_interrupt(self, seconds: float) -> None:
         """Sleep in small increments to allow for interrupt (delegated to LiveLoopTimingCoordinator)."""

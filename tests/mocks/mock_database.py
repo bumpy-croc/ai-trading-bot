@@ -13,6 +13,7 @@ from unittest.mock import Mock
 from sqlalchemy.exc import IntegrityError
 
 from src.database.models import EventType
+from src.trading.exit_reason import coerce_exit_category
 
 
 class MockDatabaseManager:
@@ -45,6 +46,10 @@ class MockDatabaseManager:
             "invalid": 0,
             "total": 5,
         }
+
+    def set_audit_failure_sink(self, sink: Any) -> None:
+        """Mirror DatabaseManager.set_audit_failure_sink; the mock never fails an audit write."""
+        self._audit_failure_sink = sink
 
     def set_fallback_balance(self, balance: float) -> None:
         """Set a fallback balance for when no session exists (testing helper)."""
@@ -136,8 +141,15 @@ class MockDatabaseManager:
 
         return session_id
 
+    def get_open_positions_in_ended_sessions(self, session_id: int | None = None) -> list[dict]:
+        """No OPEN position belongs to an ended session in the mock."""
+        return []
+
     def end_trading_session(
-        self, session_id: int | None = None, final_balance: float | None = None
+        self,
+        session_id: int | None = None,
+        final_balance: float | None = None,
+        carry_forward_open_positions: bool = False,
     ):
         """End a trading session"""
         if session_id is None:
@@ -196,6 +208,7 @@ class MockDatabaseManager:
             self._seen_trade_keys.add(key)
 
         trade_id = self._get_next_id()
+        position_id = kwargs.get("position_id")
 
         self._trades[trade_id] = {
             "id": trade_id,
@@ -208,6 +221,8 @@ class MockDatabaseManager:
             "exit_time": exit_time,
             "pnl": pnl,
             "exit_reason": exit_reason,
+            # Typed exit category (#1115); str() so callers see the DB representation.
+            "exit_category": str(coerce_exit_category(kwargs.get("exit_category"))),
             "strategy_name": strategy_name,
             "source": source,
             # Mirror the real log_trade: Trade.order_id is set from exit_order_id (used by
@@ -227,9 +242,39 @@ class MockDatabaseManager:
             "mfe_time": kwargs.get("mfe_time"),
             "mae_time": kwargs.get("mae_time"),
             "margin_interest_cost": kwargs.get("margin_interest_cost"),
+            "position_id": position_id,
         }
 
+        # Mirrors the real DatabaseManager.log_trade's atomic close-with-balance
+        # (#736/#735): position_id flips the mock position CLOSED, and
+        # balance_delta (when given) applies to the tracked balance — same
+        # call, same "transaction" — so tests exercising the real exit paths
+        # against this mock see the same post-close balance/status as Postgres.
+        if position_id is not None and position_id in self._positions:
+            pos = self._positions[position_id]
+            pos["status"] = Any
+            pos["exit_price"] = exit_price
+            pos["unrealized_pnl"] = pnl
+
+        balance_delta = kwargs.get("balance_delta")
+        if balance_delta is not None:
+            sess = session_id or self._current_session_id
+            new_balance = self.get_current_balance(sess) + balance_delta
+            self.update_balance(
+                new_balance=new_balance,
+                update_reason=f"realized_pnl_{symbol}_{exit_reason}",
+                updated_by="live_engine",
+                session_id=sess,
+            )
+
         return trade_id
+
+    def has_terminal_trade_for_position(self, position_id: int) -> bool:
+        """Mirrors DatabaseManager.has_terminal_trade_for_position (#736 idempotency
+        guard): True if a mock trade already references this position_id."""
+        if position_id is None:
+            return False
+        return any(t.get("position_id") == position_id for t in self._trades.values())
 
     def log_position(
         self,
@@ -591,6 +636,46 @@ class MockDatabaseManager:
             )
 
         return _atomic_update()
+
+    def atomic_balance_correction(
+        self,
+        new_absolute_balance: float,
+        reason: str,
+        updated_by: str = "system",
+        session_id: int | None = None,
+        *,
+        caller_snapshot: float | None = None,
+    ):
+        """Context manager for absolute balance corrections.
+
+        Mimics DatabaseManager's atomic_balance_correction (#735b): computes the
+        delta from the CURRENT mock balance (not a caller-supplied stale value),
+        so callers see the same {"old_balance", "new_balance", "change"} shape.
+        ``caller_snapshot`` is accepted for signature parity with the real
+        implementation but unused — this single-threaded mock has no concurrent
+        writer to preserve.
+        """
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _atomic_correction():
+            sess = session_id or self._current_session_id
+            old_balance = self.get_current_balance(sess)
+            change = new_absolute_balance - old_balance
+            result = {
+                "old_balance": old_balance,
+                "new_balance": new_absolute_balance,
+                "change": change,
+            }
+            yield result
+            self.update_balance(
+                new_balance=new_absolute_balance,
+                update_reason=reason,
+                updated_by=updated_by,
+                session_id=sess,
+            )
+
+        return _atomic_correction()
 
     def get_active_session_id(self) -> int | None:
         """Get the active session ID."""

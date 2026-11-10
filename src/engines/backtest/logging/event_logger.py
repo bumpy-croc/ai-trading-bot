@@ -189,6 +189,17 @@ class EventLogger:
             else:
                 logger.debug("Failed to log exit decision: %s", e)
 
+    @staticmethod
+    def _persisted_size(trade: Trade) -> float:
+        """Position size to persist.
+
+        A trade with partial exits carries whole-position P&L, so it is logged
+        at its original size; the final-leg size is zero when partials consumed
+        the whole position, which ``log_trade`` rejects.
+        """
+        original = (getattr(trade, "metadata", None) or {}).get("original_size")
+        return float(original) if original else trade.size
+
     def log_completed_trade(
         self,
         trade: Trade,
@@ -237,11 +248,12 @@ class EventLogger:
                 side=to_side_string(trade.side),
                 entry_price=trade.entry_price,
                 exit_price=trade.exit_price,
-                size=trade.size,
+                size=self._persisted_size(trade),
                 entry_time=trade.entry_time,
                 exit_time=trade.exit_time,
                 pnl=trade.pnl,
                 exit_reason=trade.exit_reason,
+                exit_category=trade.exit_category,
                 strategy_name=strategy_name,
                 source=source,
                 stop_loss=trade.stop_loss,

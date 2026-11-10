@@ -66,7 +66,7 @@ class TestHandleSymbolWiring:
     def test_handle_passes_cli_symbol_to_load_strategy(self, monkeypatch):
         recorded = {}
 
-        def fake_load(name, symbol=None, model_version=None):
+        def fake_load(name, symbol=None, model_version=None, timeframe=None):
             recorded["call"] = (name, symbol, model_version)
             raise RuntimeError("stop after strategy load")
 

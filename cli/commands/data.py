@@ -5,7 +5,7 @@ import os
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import Final, TypedDict
 
 # Ensure project root and src are in sys.path for absolute imports
 from src.infrastructure.runtime.paths import get_project_root
@@ -140,14 +140,16 @@ def _parse_date_string(date_str: str) -> datetime:
     raise ValueError(f"Unrecognized date format: {date_str}. Expected YYYY-MM-DD or ISO datetime.")
 
 
+# Training/backtest corpora must be genuine Binance data. "auto" would silently
+# swap in coarser CoinGecko data on any Binance error and poison the cache.
+_CORPUS_PROVIDER_TYPE: Final = "binance"
+
+
 def _download(ns: argparse.Namespace) -> int:
-    """Download historical price data using automatic Binance → CoinGecko failover."""
-    from src.data_providers.fallback_provider import FallbackProvider
+    """Download historical price data from Binance (fails loudly on Binance errors)."""
     from src.data_providers.provider_factory import create_data_provider
 
-    # Use auto provider (Binance → CoinGecko failover)
-    # cast: provider_type="auto" always constructs a FallbackProvider, which has close()
-    provider = cast(FallbackProvider, create_data_provider(provider_type="auto"))
+    provider = create_data_provider(provider_type=_CORPUS_PROVIDER_TYPE)
 
     try:
         # Parse dates (UTC-aware to match provider expectations)
@@ -194,8 +196,10 @@ def _download(ns: argparse.Namespace) -> int:
         return 1
 
     finally:
-        # Ensure provider resources are always cleaned up
-        provider.close()
+        # BinanceProvider has no close(); release resources only when offered
+        close = getattr(provider, "close", None)
+        if callable(close):
+            close()
 
 
 def _prefill(ns: argparse.Namespace) -> int:
@@ -228,9 +232,8 @@ def _prefill(ns: argparse.Namespace) -> int:
     symbols = _normalize_symbols(ns.symbols)
     timeframes = [tf.strip() for tf in ns.timeframes]
     cache_dir = ns.cache_dir or str(get_cache_dir())
-    # Use auto provider (Binance → CoinGecko failover)
     provider = CachedDataProvider(
-        create_data_provider(provider_type="auto"),
+        create_data_provider(provider_type=_CORPUS_PROVIDER_TYPE),
         cache_dir=cache_dir,
         cache_ttl_hours=ns.cache_ttl_hours,
     )
@@ -282,9 +285,8 @@ def _preload_offline(ns: argparse.Namespace) -> int:
 
     # Create providers with extended TTL for offline preloading
     # Use very long TTL (10 years) to treat preloaded data as permanently valid
-    # Use auto provider (Binance → CoinGecko failover)
     try:
-        data_provider = create_data_provider(provider_type="auto")
+        data_provider = create_data_provider(provider_type=_CORPUS_PROVIDER_TYPE)
         cached_provider = CachedDataProvider(
             data_provider,
             cache_dir=cache_dir,
@@ -428,6 +430,42 @@ class _CacheFileInfo(TypedDict):
     path: str
 
 
+def _audit_cache(cache_dir: str) -> int:
+    """Scan parquet cache files for duplicate/unsorted timestamps (read-only).
+
+    Returns 1 when any file is defective so the audit can gate scripts.
+    """
+    import pandas as pd
+
+    from src.data_providers.cached_data_provider import CACHE_FILE_EXTENSION, count_index_defects
+
+    if not os.path.isdir(cache_dir):
+        print(f"Cache directory {cache_dir} does not exist.")
+        return 1
+    files = sorted(f for f in os.listdir(cache_dir) if f.endswith(CACHE_FILE_EXTENSION))
+    bad = 0
+    for filename in files:
+        try:
+            frame = pd.read_parquet(os.path.join(cache_dir, filename))
+            duplicates, unsorted = count_index_defects(frame)
+        except Exception as e:
+            print(f"UNREADABLE {filename}: {e}")
+            bad += 1
+            continue
+        if not isinstance(frame.index, pd.DatetimeIndex):
+            print(f"DEFECT {filename}: index is {type(frame.index).__name__}, not datetime")
+            bad += 1
+        elif duplicates or unsorted:
+            # Cache filenames are opaque hashes; range/rows identify the file.
+            print(
+                f"DEFECT {filename}: {duplicates} duplicate timestamps, unsorted={unsorted}, "
+                f"{len(frame)} rows, {frame.index.min()} to {frame.index.max()}"
+            )
+            bad += 1
+    print(f"Audited {len(files)} cache files: {bad} defective.")
+    return 1 if bad else 0
+
+
 def _cache_manager(ns: argparse.Namespace) -> int:
     from src.config.paths import get_cache_dir
     from src.data_providers.binance_provider import BinanceProvider
@@ -455,6 +493,8 @@ def _cache_manager(ns: argparse.Namespace) -> int:
         if info["newest_file"]:
             print(f"Newest File: {info['newest_file']}")
         return 0
+    if cmd == "audit":
+        return _audit_cache(cache_dir)
     if cmd == "list":
         if not os.path.exists(cache_dir):
             print(f"Cache directory {cache_dir} does not exist.")
@@ -706,7 +746,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     p_cache = sub.add_parser("cache-manager", help="Cache manager")
     p_cache.add_argument(
-        "subcmd", choices=["info", "list", "clear", "clear-old"], help="Cache action"
+        "subcmd", choices=["info", "list", "clear", "clear-old", "audit"], help="Cache action"
     )
     p_cache.add_argument("--cache-dir", default=None)
     p_cache.add_argument("--detailed", action="store_true")

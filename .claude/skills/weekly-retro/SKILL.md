@@ -20,27 +20,86 @@ checklist line, a new tripwire.
    disposition in the retro PR — never silently dropped. After actioning, **clear the file back
    to its header template in the same PR**. An empty agenda is not a skipped step: still sweep
    inputs 1–7 below; the agenda supplements the sweep, it does not replace it.
+   **Known-weak mechanism — weight it accordingly.** `git log --follow` on this file shows exactly
+   **two** non-retro appends in its whole life (`aee03a26`, and `3f667afe`/#1060 — which was then
+   lost when the retro cleared `develop`'s copy while the item sat on a branch). Every other commit
+   is a retro clearing it. Eight consecutive empty windows is not evidence of a quiet fleet; it is
+   evidence that the intended writers use GH issues instead. Sweep `--label source:automation`
+   issues opened in the window alongside this file.
+   **Before clearing, `gh pr list --state open` and check every open PR's file list for
+   `AGENDA.md`** — an item can be lost to a *branch*: the retro clears the file on `develop` while an
+   unmerged PR still carries an unactioned item, and the merge resolves to the cleared version. Carry
+   any such item into this retro, or leave it and say so explicitly. Earned: the #1036 item rode
+   PR #1060 through the 2026-08-24 retro's clear and reached LESSONS only on 08-31; structural fix
+   tracked as #1090.
 0b. **The previous retro's own PR — verify it MERGED, and that anything it deferred landed.**
    `gh pr list --state merged --search "retro"` / check the branch is on `develop`. If last week's
    retro deferred distillate to another PR, open that PR: **merged → fine; closed or still open →
    its distillate is not on `develop` and recovering it is this retro's first job** (diff its
    files against `develop`, re-land the distillate-only subset). Also re-check the issues the last
-   retro filed — an issue that has sat untouched for a week is itself a finding. Earned: #1026
+   retro filed — an issue that has sat untouched for a week is itself a finding. **Re-measure the state, don't re-read the
+   ticket** — an issue whose fix is a toggle outside the repo (a settings checkbox, an installed
+   hook, an env var) can be done while the issue stays open: #1079's auto-merge setting read `true`
+   on 2026-09-14 with the issue still open and being re-escalated. And **re-run the
+   install-required `--check`s here** (`tools/install_git_hooks.py --check`,
+   `install_merge_drivers.py --check`, `install_worktree_shim.py --check`) instead of trusting last
+   week's issue; installing is an environment action, not a code change, so **run the installer
+   yourself** if one has drifted (LESSONS §3). Invoke the venv interpreter directly — the `make`
+   targets call bare `python`, which does not exist on this machine. **But first diff the installed
+   artifact against `git show origin/develop:<source>`:** the installers read their source from the
+   primary checkout, and on 2026-09-21 a false `DRIFT` would have downgraded the fixed hook (#1260).
+   It recurred 2026-10-19: `DRIFT` on `pre-push` while the installed file was byte-identical to
+   `origin/develop`'s. The diff decides, not the verdict; a false `DRIFT` gets no installer run.
+   Earned: #1026
    closed unmerged 2026-07-21 after the 07-20 retro deliberately did not reproduce it; LESSONS §2.9.
-   **If that PR is still open: `git reset --hard origin/<its-branch>` and build this retro on top of
-   it** — this PR then supersedes it and merges whether or not the old one lands, instead of adding a
-   second stranded PR to the queue. And **if this is the second consecutive stranded retro PR, the
+   **Also look for a retro that never became a PR:** `git branch --list '*retro*'` and
+   `git worktree list | grep -i retro`. If one is ahead of `origin/develop`, `git reset --hard` onto
+   it and re-land it. The 2026-10-05 retro committed a full distillate and died on the push hook;
+   `gh pr list` showed nothing for 7 days (LESSONS §2.9 rule (j)).
+   **If that PR is still open: `git reset --hard origin/<its-branch>`, build this retro on top of it,
+   and push back to THAT branch (`git push origin HEAD:<its-branch>`) so the existing PR updates in
+   place** — retitle it to cover both windows, rewrite its body, and do not open a second PR.
+   Superseding with a new PR closes the one that showed its true age and opens one that shows zero
+   days, every Monday (LESSONS §2.9 rule (k): #1263 → #1266, 10-05 unpushed → #1281 → 10-19).
+   And **if this is the second consecutive stranded retro PR, the
    completion summary must lead with it, addressed to the human** — the retro cannot merge its own
    output, so an unmerged queue is invisible everywhere else (LESSONS §2.9 rule (d); #1047 sat
    `CLEAN` and unmerged for 14 days, taking §2.9/§2.10 off `develop` with it).
-1. **log.md** — the week's entries end to end, not just the tail. **A week with no entries is a
+   **"Merged" is not the finding — "merged how late" is.** Record its time-to-merge and whether it landed
+   *before* this retro started: #1076 merged 2026-08-24 08:53Z, **93 minutes** before the 08-24 run, after
+   7 days green. That is a pass on input 0b and a delivery failure at the same time, and only the latency
+   shows it. Apply the same read to the whole queue — a week in which nothing merged until the human
+   appeared is a finding regardless of how healthy each individual PR looks (LESSONS §2.9 rule (f)).
+0c. **Is the distillate actually LOADED?** Merged is not read. Sessions load LESSONS, skills,
+   `/commands` and agents from the primary checkout, and nothing updates it (LESSONS §3, #1260):
+   `git -C /Users/alex/Sites/ai-trading-bot rev-list --count HEAD..origin/main` and
+   `git -C /Users/alex/Sites/ai-trading-bot diff --stat HEAD origin/main -- .claude/ CLAUDE.md CODE.md`.
+   Non-zero means every retro since that commit shipped into a file nobody reads. **Lead the
+   completion summary with it**, above this week's content. Read this skill itself from
+   `git show origin/develop:.claude/skills/weekly-retro/SKILL.md`, not from the path the task prompt
+   names. Earned: 2026-09-21, primary frozen at `8da478a3` since 2026-08-24, 10 files and 772 lines
+   of three retros' output unloaded.
+   **Even a fresh checkout loads only a preview of LESSONS.** `wc -c .claude/LESSONS.md` on
+   `develop`: 151KB on 2026-10-26, and the SessionStart hook `cat`s it whole, so the harness hands
+   sessions a ~2KB preview plus a file path (the 70KB primary copy already arrived that way). If it is
+   still that large and #1289 is open, say so in the summary; each retro append makes it worse.
+1. **log.md** — the week's entries end to end, not just the tail, **and every open PR branch's `.claude/state/log.md` and `incidents/` (`git show origin/<branch>:<path>`)**: records a standup wrote while its PR is unmerged are invisible on `develop` (LESSONS §2.17). **A week with no entries is a
    finding, not a quiet week** — cross-check against the scheduled-task traces (input 6): if the
    monitors ran and the log is empty, findings were surfaced and dropped (LESSONS §2.10).
+   **Holes matter as much as emptiness, and only the slot list finds them.** Diff the log's *date
+   coverage* against input 6's enumerated slots: a log that simply stops, or skips three days inside
+   a live incident, reads exactly like a quiet stretch. 09-08, 09-12 and 09-13 were comment-only
+   standup runs and `log.md` on `develop` ended 2026-09-11 while the P0 ran to 09-14 — invisible
+   from the log alone (LESSONS §2.17 amendment).
 2. **Incidents + corrections** — anything opened/closed/corrected. Corrections are retro gold:
    the phantom-peak withdrawal (2026-07-04 13:55) became LESSONS §5.6 (the distinct-count check)
    — that's the pipeline working as designed.
 3. **Agent failures** — stalls, wake-losses, kills, review collisions, fabricated/wrong relayed
    claims (`agent-fleet-health` findings; the 2026-07-05 ml-engineer session-integrity note).
+   **Count local-only work, not just PRs:**
+   `git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads | grep ahead`, plus
+   `pgrep -fl 'pytest|pre-push'` for pushes that never returned. On 2026-10-05 `gh pr list` showed
+   3 open PRs while 20 finished branches sat unpushed behind a hung Docker (LESSONS §3, #1273).
 4. **Prediction-vs-outcome record** — every dated prediction made in the log (deploy will be
    healthy, model will beat incumbent, "no midnight heroics" calls) vs what happened. Agents'
    calibration is a charter review item (monthly: "review calibration of each agent"); the
@@ -48,18 +107,91 @@ checklist line, a new tripwire.
 5. **Experiments** — verdicts vs their preregistered thresholds; any p-hacking drift.
 6. **Scheduled tasks** — audit against the **registry**, not the directory. Call
    `mcp__scheduled-tasks__list_scheduled_tasks` and **diff it both ways** against
-   `ls ~/.claude/scheduled-tasks`: a directory with no registry entry is a **DEAD task**, and its
+   `ls ~/.claude/scheduled-tasks`: a directory with no registry entry is **NOT a live task**, and its
    `SKILL.md` survives deregistration so it looks installed forever. (`ls` alone reported "no task
-   missed its schedule" for three consecutive retros while four tasks were dead — LESSONS §3.)
-   Then check each live task's `enabled` / `lastRunAt` **and its expected trace**: date sessions by
-   the first internal `"timestamp"` in `~/.claude/projects/<slug>/*.jsonl`, **not** by file mtime
-   (claude-mem rewrites mtimes). Three distinct failure modes, all silent:
+   missed its schedule" for three consecutive retros while six directories were unregistered —
+   LESSONS §3. As of 2026-08-17: 19 directories, 13 registered, **4 enabled**.)
+   Then audit each live task by **enumerating slots, not by reading `lastRunAt`**. Expand its
+   `cronExpression` across the window, list every slot it should have fired in, and match each to a dated
+   artifact: a session transcript dated by the first internal `"timestamp"` in
+   `~/.claude/projects/<slug>/*.jsonl` (**not** file mtime — claude-mem rewrites mtimes), a PR, or a log
+   entry. A slot with no artifact is a miss.
+   **A transcript proves the run STARTED, not that it produced anything — grade its ending, and
+   prefer the run's own layer-2 output as the artifact** (the issue / comment / incident file /
+   `log.md` append §2.10 requires of it). Any transcript ending in `API Error` / `ENOTFOUND`, a quota
+   message, or mid-tool-call is a **MISS at any length**: on 2026-08-28 the standup fired, ran seven
+   data collections and died on ENOTFOUND, leaving a plausible 46-line transcript that the next day's
+   run scored as a clean HIT — on the day production latched close-only (#1121, LESSONS §2.15).
+   **`lastRunAt` cannot answer this and no task can audit itself** (LESSONS §2.15): it records the last
+   *attempt*, the task's own firing has just refreshed it, and a "within N intervals" tolerance passes any
+   single miss by construction. On 2026-08-19 the standup did not fire at all, and the five standups that
+   followed each reported *"all enabled tasks ran within their expected interval — PASS."* The retro is
+   the only pass positioned to catch this, so enumerate.
+   **For an effectful task, verify the effect as well as the firing.** `prune-worktrees` fired four times
+   in the 2026-08-17→24 window while the worktree count went **7 → 9**. A firing record is not an outcome.
+   Failure modes, all silent:
    - **didn't fire** — app closed (tasks run only while it's open);
-   - **deregistered** — absent from the registry entirely;
-   - **fired and died on turn 1** — grep transcripts for `may not exist or you may not have access`
-     (a stale model-provider selection); `lastRunAt` records the *attempt*, so these look healthy.
+   - **deregistered** — absent from the registry entirely. **This proves deregistration, not
+     failure**: on 2026-08-13 Alex confirmed all six unregistered directories were deliberate
+     retirements, after the 08-10 retro reported them as a 12-day monitoring outage. Ask before
+     calling a missing registry entry an outage (LESSONS §3);
+   - **fired and died on turn 1** — grep transcripts for BOTH `may not exist or you may not have
+     access` (stale model-provider selection, #1051) and `hit your weekly limit` / `hit your usage
+     limit` (quota exhaustion — killed the 2026-08-15 standup, and the 08-13 prod-promote agent
+     mid-deploy). `lastRunAt` records the *attempt*, so these look healthy; **treat any ~20-line
+     transcript as failed until proven otherwise**;
+   - **fired late as a catch-up, masking a missed slot** — on app reopen every overdue task fires at
+     once. Several tasks sharing a `lastRunAt` to the second (2026-08-17: three within 32ms) is a
+     catch-up batch, not punctuality. Check each `lastRunAt` against its `cronExpression` to find the
+     slot actually missed, and note that those runs execute concurrently against one repo.
    A task that ran but produced no artifact is a finding of the same weight as one that never fired.
+   **Three mechanics that silently invert this audit** (2026-09-07):
+   - **A task's transcripts live under the project dir of ITS cwd, not this repo's.**
+     `prune-worktrees` runs from `~/Sites`, so its sessions land in
+     `~/.claude/projects/-Users-alex-Sites-hands-up-education/`. Scoping the search to
+     `-Users-alex-Sites-ai-trading-bot` reports 5/5 phantom misses. Resolve each task's cwd first,
+     then search that dir.
+   - **Grep the signatures to find candidates; grade only the LAST assistant message.** 7 of 8
+     standup transcripts in the 08-31→09-07 window contain `API Error`, `ENOTFOUND` *and*
+     `hit your weekly limit` — the standup's cross-session sweep quotes them out of *other*
+     sessions. Substring-grading would have failed 7 healthy runs.
+   - **Add `hit your session limit`** (the 5-hour rolling cap, rendered
+     `You've hit your session limit · resets <time>`) to the quota strings — it contains neither
+     "weekly" nor "usage" and killed the 2026-09-03 `prune-worktrees` slot. Full list: LESSONS §2.15.
+   - **`list_task_runs` ids are not transcript filenames.** Its `local_<uuid>` session ids match no
+     `*.jsonl` name; read a run through `mcp__ccd_session_mgmt__list_events` with that id, or find
+     the file by first timestamp. And its `status: succeeded` is not evidence: the 2026-09-14
+     `prune-worktrees` run is `succeeded` after 71s with **zero messages**. An empty run is a MISS.
+   - **Add `401 OAuth access token has expired`** to the grep list. It killed the 2026-09-25
+     `prune-worktrees` run, which the registry lists as `succeeded`. **`computer was asleep`
+     (`StreamSuspended`) retries are not a miss** if the run ends with its report (the 09-26 standup
+     took 6h and finished). Record how late the report landed, not just whether it landed.
+     Tasks launching within the same second are a catch-up batch, and a catch-up that fails gets no
+     retry (LESSONS §2.15, 09-28 bullet).
+   - **Cron fires in local time; transcripts are stamped UTC.** The UK clock change on 2026-10-25
+     moved the standup from 08:07Z to 09:07Z. Convert the slot to UTC for the date you are checking
+     before calling a run early or late.
+   - **Grade the ending by its last *event*, not its last text block.** Desktop-app sessions end
+     with an `mcp__ccd_turn__wrap_up` tool call whose `recap` carries the report; the last text
+     block before it is often a preamble ("PR #1285 opened. Now the issue comments."). A grader
+     reading the last text block scored 2 of 8 clean 10-12 → 10-19 standups as died-mid-task. A
+     transcript ending in `wrap_up` or a final text block is clean; one ending in a `tool_use` with
+     no result is not. And probe Docker with the backgrounded probe, never `timeout` — macOS has
+     none, and command-not-found reads as "hung" (LESSONS §3, 2026-10-19).
 7. **Model scoreboard** — new rows this week; stale `latest` claims.
+8. **Outstanding pre-merge asks from previous retros.** For every "requested change / blocking
+   observation" this retro or a previous one left on someone else's PR, check the **merged tree**
+   (`git ls-tree origin/main <path>`), never the review thread — a plain comment is not a gate and
+   merges past one routinely. On 2026-09-13 PR #1130 merged with the `ETHUSDT/price/latest` symlink
+   the 09-07 retro had asked it to drop; it is now in production (LESSONS §1.16 update, §2.11).
+
+## First action
+
+After creating the worktree, run `gh pr list --state open --search "retro in:title"`. If a retro PR
+is open, reset onto its branch and push there (input 0b; one retro PR per stranded chain). Otherwise
+push the branch and open a **draft PR** (header only) before reading any input; update it as you go. Probe Docker with a bound first (`docker info` can hang, LESSONS §3)
+and use `TEST_TYPE=unit git push` if it does. A push not back in 5 minutes is dead: stop and report.
+A retro with no remote artifact is invisible to every reader (LESSONS §2.9 rule (j)).
 
 ## The distillation pass
 
@@ -83,6 +215,11 @@ Rules for editing layer 3:
 
 ## Scoreboard + tracker updates
 
+**Check every model PR's `latest` symlink diff against its stated recommendation** —
+`git diff --stat -- '*/latest'`. The training pipeline writes `latest` at *training* time, so a PR
+whose document says "promotion NOT recommended" can still ship a production pointer to the rejected
+artifact, and `PredictionRegistry._scan` loads every `latest` it finds into `production_index`
+(LESSONS §1.16; PR #1130 added `ETHUSDT/price/latest` while stating "No symlink moved").
 Append a `docs/research/model-promotions.md` row for any `latest` symlink change this week
 (the append-only promotion log — with eval numbers; there is no separate `model-scoreboard.md`,
 the retrain task writes here too). Verify the deployed model matches reality
@@ -97,6 +234,11 @@ A log.md entry (kind `note`, via `decision-record`) listing, as diffs:
 - calibration verdicts per agent (over/under-confident, with the week's examples);
 - scheduled-task audit result (fired/missed);
 - process changes proposed to the Board (anything touching layer 1 → `risk-ratification`).
+
+**Every "Needs a human" line in the PR body and completion summary cites an open issue number.** An
+ask with no issue gets one filed in this run; do not close with "every finding maps to an existing
+issue" without checking each line. Earned: the prod DB credential rotation rode two retro PR bodies
+(#1263, #1266) for 13 days with no issue until #1269 (LESSONS §2.17, 2026-10-05 amendment).
 
 Zero diffs is a legitimate outcome for a quiet week — say so explicitly rather than
 manufacturing lessons.
@@ -115,6 +257,9 @@ manufacturing lessons.
   a note to yourself (LESSONS §2.11) — 5/5 issues from the 07-27 retro had zero activity 14 days on.
   Filing is still the right action for code changes; just don't report it as resolved, and escalate
   the *queue* (N unowned, M days) as a single item once it repeats.
+- **Reporting a drained queue as a healthy week.** Report count *and* composition: how many merged,
+  how long each had been green, and in what ORDER. A batch drain lands rule-carrying PRs after the
+  PRs they constrain unless someone sequences it (LESSONS §2.9 rule (h)).
 - **Reporting a green scheduled-task audit from the wrong instrument** — see input 6. "All tasks
   fired" is only sayable from the registry plus per-task artifact evidence.
 - **Bundling a log-consolidation or human-directed log/incident rewrite into the retro PR.** The

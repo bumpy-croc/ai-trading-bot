@@ -220,8 +220,9 @@ def _make_state(
     metrics.peak_balance = tracker_peak
     state.performance_tracker.get_metrics.return_value = metrics
 
-    def _enter():
+    def _enter(reason=None):
         state._close_only_mode = True
+        state._close_only_reason = reason
 
     state._enter_close_only_mode.side_effect = _enter
     return state
@@ -485,6 +486,7 @@ def test_close_only_mode_blocks_entry_evaluation():
 
     state = create_autospec(LiveEntryEngineState, instance=True)
     state._close_only_mode = True  # what the drawdown trip sets
+    state.db_manager = None  # skip strategy-execution DB logging (#1169)
     strategy = MagicMock()
     state.strategy = strategy
 

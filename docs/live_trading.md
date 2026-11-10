@@ -27,17 +27,17 @@ continuous polling, account synchronisation, and resilience features required fo
 
 | Component | Module | Responsibility | Lock ownership |
 |-----------|--------|----------------|----------------|
-| `LiveStopLossManager` | `engines/live/execution/stop_loss_manager.py` | All exchange-facing stop-loss calls: placement (with retry), cancel, fill/held queries, re-protect, offline-fill detection | None — stateless; reads `enable_live_trading`/`exchange_interface`/`order_tracker` off the engine at call time; position mutations go through `LivePositionTracker`'s internal lock |
+| `LiveStopLossManager` | `engines/live/execution/stop_loss_manager.py` | All exchange-facing stop-loss calls: placement (with retry), cancel, fill/held queries, re-protect, trailing-stop move (cancel + guarded re-place at the ratcheted price, #1167), offline-fill detection | None — stateless; reads `enable_live_trading`/`exchange_interface`/`order_tracker` off the engine at call time; position mutations go through `LivePositionTracker`'s internal lock |
 | `LiveAccountMonitor` | `engines/live/monitoring/account_monitor.py` | Balance/equity snapshots, status lines, performance summaries | None — stateless; reads positions via `LivePositionTracker.positions` (thread-safe snapshot) |
 | `LiveSessionRecoverer` | `engines/live/recovery.py` | Startup recovery: session balance, persisted-position reload, risk-manager re-registration, startup exchange reconciliation | None — runs on the startup path before the trading loop; engine state it mutates (session id, balance, close-only flag) is written through the engine as before |
-| `LiveStartupSequencer` | `engines/live/startup.py` | Bootstrap orchestration (`start()` delegates to `run()`): session recover/create + wiring, #668 carry-forward, #657 self-heal, account sync, runtime-service startup, main-loop launch | None — runs once on the startup path (main thread) before the trading loop; all engine state written through the backref as before |
+| `LiveStartupSequencer` | `engines/live/startup.py` | Bootstrap orchestration (`start()` delegates to `run()`): session recover/create + wiring, #668/#683 exchange-verified position adoption, #657 self-heal, account sync, runtime-service startup, main-loop launch | None — runs once on the startup path (main thread) before the trading loop; all engine state written through the backref as before |
 | `StrategyRuntimeCoordinator` | `engines/live/strategy_runtime.py` | Strategy normalization, component risk-context provider, runtime dataframe prep + `RuntimeContext` construction, per-candle runtime decision processing, risk-param merge/clone | None — reads/writes engine strategy-runtime state (`strategy`, `_runtime`, `_runtime_dataset`, context cache) at call time; all touched only on the single trading-loop thread (per-candle + loop-applied hot-swap) |
 | `StrategyHotSwapCoordinator` | `engines/live/strategy_hot_swap.py` | Public `hot_swap_strategy`/`update_model`, StrategyManager callbacks, loop-applied pending-update application, post-swap refresh of trailing-stop/partial-ops/time-exit policies + component risk re-binding | None — entry points/callbacks only queue a `StrategyManager`-locked pending update (caller thread); all engine-state mutation runs in `apply_pending_strategy_update` on the trading-loop thread |
 | `WebSocketHealthMonitor` | `engines/live/ws_health.py` | WS stream startup, the background health-monitor thread, kline/user-stream staleness + reconnect/probe decisions, degraded-user hard-reconnect, draining the order-fill exit queue on the loop thread | None — the monitor holds no locks. It owns a single daemon thread (handle on the engine, `state._ws_health_thread`) and writes its reconnect-failure counters / `_ws_kline_active` flag only from that one thread (GIL-atomic single-writer); the trading loop reads them. Cross-thread order-fill handoff goes through the thread-safe `_pending_fill_exits` `SimpleQueue`, drained on the loop thread. Provider-owned WS connection state is read-only here |
 | `LiveEntryCoordinator` | `engines/live/execution/entry_coordinator.py` | Entry decision (signal/sizing/SL-TP derivation) + base-asset-locked order execution: duplicate/limit guards, balance+fee accounting, position tracking, risk re-registration, stop-loss placement, emergency-close fallbacks | Serialises each entry on the symbol's base-asset lock (`state._base_asset_locks`) across submit → track → SL placement; the lock lives on the engine and the emergency-close fallback re-acquires it re-entrantly via `state._execute_exit` (#703). Runs on the trading-loop thread; all engine state mutated through the backref as before |
 | `LiveExitCoordinator` | `engines/live/execution/exit_coordinator.py` | Exit decision (`check_exit_conditions`: per-position SL/TP/runtime evaluation + strategy-execution logging) and base-asset-locked close (`execute_exit` → `execute_exit_locked`): resting-stop cancel-before-close (#710), realized-PnL + margin-interest accounting, balance update, trade persistence/CLOSED flip (#657), re-protect on failed close | Serialises each close on the symbol's base-asset lock (`state._base_asset_locks`, #703); the lock lives on the engine and is re-entrant (an entry's failed-SL emergency close routes through the engine's `_execute_exit` wrapper on the same thread). `check_exit_conditions` invokes the close via `state._execute_exit` (the engine wrapper) so engine-level test mocks still intercept. Runs on the trading-loop thread; all engine state mutated through the backref as before |
 | `LiveDynamicRiskCoordinator` | `engines/live/dynamic_risk_coordinator.py` | Per-entry dynamic-risk position-size adjustment (drawdown/peak-aware, via the shared `DynamicRiskHandler`) + its observability/audit logging | None — holds no state of its own. Runs on the trading-loop thread; called by the loop and by `LiveEntryCoordinator` via the engine `_apply_dynamic_risk_adjustment` wrapper |
-| `LiveLoopTimingCoordinator` | `engines/live/loop_timing.py` | Trading-loop cadence + data-freshness helpers: interruptible sleep, activity/time-of-day-aware poll interval, candle-age / WS-buffer freshness gate | None — leaf helpers, no order placement/balance mutation/engine-method calls. Runs on the trading-loop thread; `is_data_fresh` is also reached by `LiveMarketDataCoordinator` via the engine `_is_data_fresh` wrapper. Holds no state of its own |
+| `LiveLoopTimingCoordinator` | `engines/live/loop_timing.py` | Trading-loop cadence + data-freshness helpers: interruptible sleep, activity/time-of-day-aware poll interval, candle-age / WS-buffer freshness gate | None — leaf helpers, no order placement/balance mutation/engine-method calls. Runs on the trading-loop thread; `is_data_fresh` is also reached by `LiveMarketDataCoordinator` via the engine `_is_data_fresh` wrapper. Keeps only the stale-data streak read by `LatchedConditionMonitor` |
 | `LiveMarketDataCoordinator` | `engines/live/execution/market_data_coordinator.py` | Per-candle read path: latest-frame fetch (WS-cache vs REST, resync handling), sentiment enrichment, the strategy-context readiness gate, and correlation-sizing context | None — read path, no order placement/balance mutation (only writes `last_data_update`). Runs on the trading-loop thread; `build_correlation_context` is also called by `StrategyRuntimeCoordinator` via the engine wrapper. Holds no state of its own; defers freshness to the engine's `_is_data_fresh` via `state` |
 | `LiveOrderFillCoordinator` | `engines/live/execution/order_fill_coordinator.py` | The `OrderTracker` callbacks: full fill (queues stop-loss-fill closes), partial fill (critical SL-partial alert), cancel/reject (entry-fee refund for the unfilled fraction + stop-loss-cancel escalation #741), tracking-lost (fail-closed: keep position, escalate) | None — holds no coordinator-local state. Runs on the **OrderTracker poll thread**: a stop-loss fill is handed to the loop via the thread-safe `state._pending_fill_exits` SimpleQueue (never closed inline, #631); position reads/mutations use `LivePositionTracker`'s thread-safe copy + atomic `pop_position`/`set_stop_loss_order_id`; the cancel refund uses `db_manager.atomic_balance_update`. `_record_event`/`_send_alert` invoked via `state` so engine mocks still intercept |
 | `LivePositionTracker` | `engines/live/execution/position_tracker.py` | Position state | Owns `_positions_lock`; `positions` property returns a defensive copy |
@@ -64,13 +64,65 @@ call sites and test mock points are stable while the implementations live in the
     sync.emergency_sync()
     ```
 
+## Restart position adoption (exchange-verified)
+
+On every live start, `LiveStartupSequencer.carry_forward_open_positions` verifies each OPEN DB
+position for the traded symbol, strategy and mode (the current session and ended
+sessions; other still-active sessions and rows with a terminal trade excluded) against the exchange before loading it. The base-asset holding is allocated across
+the rows (margin long: `netAsset`; margin short: borrowed; spot: wallet total).
+
+| Exchange evidence for the row | Action |
+|---|---|
+| Holds at least 99% of the tracked quantity | Adopt unchanged; the startup reconciler ensures its stop |
+| Holds part of it (above dust) | Adopt with `current_size` scaled to what is held; paged as `POSITION_ADOPTED_REDUCED` |
+| Short of inventory, but its stop filled (or part-filled), or an exit/scale-in order is unresolved | Adopt unchanged (`RECONCILE`): the startup reconciler books the real fill price, fee and P&L, so nothing is resized or closed here |
+| Nothing unclaimed, fully exited row, or remainder below min qty / min notional | Phantom: close through the reconciler's external-close path (stop cancelled; audit Trade row only for the reused session's rows, since an old entry marked to today's price would invent P&L); paged as `PHANTOM_POSITION_CLOSED` |
+| Lookup failed (holding or stop order), quantity unknown with inventory present, or spot short | Neither adopt nor close; page `ADOPTION_UNVERIFIED` and enter close-only |
+
+Rows sharing a symbol are ranked by a resting stop first, then newest first (the engine opens one
+position per symbol, so a newer row exists only after the older one left the exchange). Paper mode has no exchange and carries
+forward only the previous session's positions.
+
 ## Max-drawdown hard cap (close-only halt)
 
 The live engine enforces `portfolio.max_drawdown_pct` from `src/config/risk-limits.json`
 (0.20, mirrored by `DEFAULT_MAX_DRAWDOWN` / `RiskParameters.max_drawdown`). On every
 trading-loop iteration `MaxDrawdownEnforcer` (`src/engines/live/monitoring/drawdown_guard.py`)
-measures the drawdown of the current balance from the **session peak balance** — the same
-numbers `account_history.drawdown` is derived from.
+measures two drawdown legs and acts on the worse one:
+
+- **Balance leg** (the original guard, unchanged): realized balance vs the session peak
+  balance. It moves only on realized fills.
+- **Equity leg** (#1267): mark-to-market equity (`balance + unrealized P&L`) vs the session
+  peak equity, so an open position running deep underwater trips the cap before it is
+  stopped out. The equity peak is seeded from `max(account_history.equity)` over the same
+  session lineage and floored at the balance peak. It ratchets up only once two consecutive
+  distinct price marks agree, and an equity-leg breach likewise needs two distinct marks (the
+  drawdown is read off the better of the last two), so one bad tick can neither inflate the
+  peak nor latch a halt that only an operator restart clears. The first mark after boot or
+  after a blind spell stands alone, so a restart mid-drawdown re-trips at once. Giving back
+  open profit counts as drawdown, as in the backtest. When the confirmed equity peak rises
+  more than 0.25% above the last persisted one (and live equity is itself at that peak), the
+  loop writes a best-effort `account_history` snapshot so a restart re-seeds it instead of the
+  lower hourly row. A frozen price counts as a new mark after `DRAWDOWN_MARK_MAX_AGE_SECONDS`,
+  and a flat book (equity is realized balance) needs no confirmation.
+
+Breach is `max(balance leg, equity leg) >= cap`, so the guard is never looser than the
+balance-only version. The equity leg is skipped (never guessed) when there is no fresh
+mark — an invalid price, a position recovered from the DB and not yet re-priced, or a mark
+older than `DRAWDOWN_MARK_MAX_AGE_SECONDS`; the guard logs a WARNING and runs on the balance
+leg alone, and pages once (`DRAWDOWN_EQUITY_MARK_UNAVAILABLE`) if it stays blind for that
+long. The cap also runs (balance leg only; marks are not refreshed) on the market-data-gap
+iterations that skip the loop body, so realized losses such as stop fills are still caught
+through a data outage.
+`account_history.drawdown` uses the same worse-of-both basis.
+
+`FEATURE_MAX_DRAWDOWN_RESET_PEAK` re-baselines both peaks to the current balance. It cannot
+clear a halt caused purely by an open position still at or beyond the cap underwater: the
+equity leg re-trips on the first mark, so close the position (or wait for recovery) first.
+
+Before first deploy compare `max(equity)` with `max(balance)` in `account_history` for the
+production session: the equity leg measures from the former, so a large gap means an
+immediate warning or trip.
 
 - **Peak baseline**: the `account_history` session max is **authoritative** — seeded on boot
   from `max(account_history.balance)` for the active session (plus the recovered inactive
@@ -95,7 +147,7 @@ numbers `account_history.drawdown` is derived from.
   (covers the legacy short path and any direct caller), and scale-ins. Exits, partial exits,
   stop-loss management, and reconciliation keep running. Nothing is liquidated.
   A CRITICAL `system_events` row (`error_code=MAX_DRAWDOWN_BREACH`), a structured
-  `risk_event`, and the alert webhook (if configured) fire once. The trip is **latched**: it
+  `risk_event` (carrying both legs), and the alert webhook (if configured) fire once. The trip is **latched**: it
   survives balance recovery below the cap, does not re-spam, and re-trips on restart via the
   boot-time peak recompute.
 - **Same-iteration enforcement**: because the loop-level check runs after entry evaluation,
@@ -165,6 +217,86 @@ atb live-control resume --env production --reason "root cause fixed"
   removed — `halt` is the real safety command. Cancelling in-flight entry orders from an
   out-of-process CLI would race the running engine's order tracking, so unfilled entries are
   left to the engine's own timeout/cancel logic while the halt guarantees no new ones start.
+
+## Latched conditions are re-announced until cleared (#1095/#1096)
+
+Close-only mode, the manual system halt (including its fail-closed "state never successfully
+read" case) and `FEATURE_ENTRY_PAUSE` all block new entries until a human acts. Each used to
+announce itself exactly once, at minute zero. On 2026-08-20 production latched close-only
+after a stop-loss re-placement failure, paged Slack correctly, and then sat halted for four
+days: nothing re-raised it, and the daily standup's "engine alive" check greps `Decision:` log
+lines, which keep flowing at normal cadence because signal generation runs *before* the
+close-only gate (#1094).
+
+`LatchedConditionMonitor` (`engines/live/monitoring/latched_condition_monitor.py`) runs once
+per trading-loop iteration, before the data-freshness `continue` paths **and before the
+position-count gate that guards entry evaluation**, and writes **one state row per pass** (at
+most hourly), which is a *positive assertion* about the entry path:
+
+| Row | Meaning |
+| --- | --- |
+| `ENTRIES_ENABLED` | The loop ran and found nothing blocking entries. |
+| `CLOSE_ONLY_LATCHED` / `SYSTEM_HALT_LATCHED` / `ENTRY_PAUSE_LATCHED` | The loop ran and found entries blocked; the message carries elapsed time and reason. |
+| `*_LATCH_CLEARED` | The condition resolved (elapsed time in the message). |
+| *no row at all* | The loop thread is not running. This is itself the alarm. |
+
+This is deliberately independent of position count: `check_entry_conditions`'s own
+`strategy_executions` row for a close-only block (#1169) is written only when the trading loop
+actually calls it, which is itself gated on `position_count < max_concurrent_positions` — so a
+close-only halt with the position book already full never reaches that code, and #1169's row
+never appears (#1181). `LatchedConditionMonitor`'s row above is the authoritative "halted but
+alive vs. dead" signal in every case, including that one; #1169's row is a best-effort
+supplement, not a substitute.
+
+One query therefore separates all three cases without any external cross-check:
+
+```sql
+SELECT error_code, message, timestamp
+FROM system_events
+WHERE error_code = 'ENTRIES_ENABLED' OR error_code LIKE '%\_LATCHED'
+ORDER BY timestamp DESC, id DESC LIMIT 5;
+```
+
+Interpretation is per *pass*, not per row: one pass writes `ENTRIES_ENABLED` **or** one
+`*_LATCHED` row for every lever currently blocking, so read the rows sharing the newest
+timestamp. Newest pass is `ENTRIES_ENABLED` and younger than ~2h → healthy; newest pass
+contains any `*_LATCHED` → entries are blocked right now, and every blocking lever is listed;
+nothing inside ~2h → the loop is dead or the engine is down. `ORDER BY ... , id DESC` breaks
+the microsecond tie between rows written in the same pass. `*_LATCH_CLEARED` rows are
+deliberately **not** in this query — they are historical annotations of a resolution, not
+state, and a lever clearing while another still holds must not read as "entries enabled".
+A stale `*_LATCHED` row survives at most one heartbeat after `resume_trading()`, which is a
+spurious FAIL, never a false NOMINAL.
+
+Whether entries are blocked is read from `EntryPauseGate.entry_block()` — the same authority
+the entry and scale-in paths gate on — so the monitor cannot report a state the enforcement
+path disagrees with. That includes the fail-closed case where the `system_halt` flag has never
+been read successfully: entries are refused while the flag still reads `active=False`.
+
+On top of the rows, a **bounded operator page** (`alert=true`, severity `critical`) fires at
+1h, 4h and 12h after the latch, then once every 24h for as long as it holds — at most three
+re-pages in the first day and one a day after that (~31 in a month, not ~720). Pages past the
+first day are prefixed `STILL BLOCKED — DAY N` so day four does not read identically to day
+zero. The webhook is delivered on a short-lived daemon thread so a slow POST can never stall
+the trading loop, each condition is evaluated in its own `try`, and the whole check is
+fault-isolated: observability never propagates into the loop.
+
+`_enter_close_only_mode(reason=...)` records *why* the latch tripped (reconciliation CRITICAL
+findings — deduped and capped at three by `_format_findings` — drawdown breach, circuit
+breaker, DB outage, unconfirmed emergency close, ambiguous order submission) so the message
+four days later still explains itself, long after the log line that carried the detail has
+rotated out of the platform's retention. Elapsed time for the manual halt comes from the flag
+row's durable `updated_at`, so a restart cannot re-announce a four-day halt as "45m".
+
+Elapsed time is durable **only for the manual halt**, which has a `system_control_flags` row.
+Close-only is in-process by nature (a restart genuinely clears it), and `FEATURE_ENTRY_PAUSE`
+is an env var with no row — so a crash-looping entry-paused engine reports `0m` on every boot
+and never escalates past its first page. The durable *record* still accumulates: its own
+`ENTRY_PAUSE_LATCHED` rows are the source for how long that pause has really been in force.
+
+Entry-pause is only reported when the macro-event guard is **enabled** and no window in
+`config/macro_events.json` covers the current time — with the guard disabled no window
+suppresses entries, so none may suppress the finding either.
 
 ## Position management features
 
@@ -303,8 +435,9 @@ Useful flags:
 
 The control surface lives under `atb live-control`:
 
-- `atb live-control train --symbol BTCUSDT --days 365` – runs the standard `atb train` pipeline from the live console and updates the
-  registry’s `latest` symlink automatically so the live engine picks up the new model.
+- `atb live-control train --symbol BTCUSDT --days 365` – runs the standard `atb train` pipeline from the live console. The registry’s
+  `latest` symlink is left alone unless `--auto-deploy` is passed (validation-gated, rolls back on failure); promote a trained
+  bundle later with `deploy-model`.
 - `atb live-control deploy-model --model-path <staging-dir> --close-positions` – promote a staged bundle into the live strategy
   directory.
 - `atb live-control list-models` / `status` – quick operational reads when supervising a running engine.

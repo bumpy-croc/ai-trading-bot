@@ -16,12 +16,28 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 
 from src.config.constants import ENTRY_PAUSE_WARNING_INTERVAL_SECONDS
 from src.config.feature_flags import is_enabled
 from src.engines.live.system_halt import SystemHaltState
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class EntryBlock:
+    """The single authoritative answer to "why are entries blocked right now?".
+
+    ``key`` identifies the lever (``system_halt`` / ``entry_pause``) so monitors
+    can label the condition; ``reason`` is the operator-facing text, reused
+    verbatim in the skip log and in the latched-condition announcements. One
+    source of truth: a monitor that re-derives this can drift out of agreement
+    with the gate the entry path actually consults (#1096 review).
+    """
+
+    key: str
+    reason: str
 
 
 class EntryPauseGate:
@@ -43,9 +59,10 @@ class EntryPauseGate:
         Warns at most once per ENTRY_PAUSE_WARNING_INTERVAL_SECONDS to avoid
         log spam from the trading loop.
         """
-        cause = self._active_cause()
-        if cause is None:
+        block = self.entry_block()
+        if block is None:
             return False
+        cause = block.reason
         now = time.monotonic()
         if (
             self._last_warning is None
@@ -62,22 +79,48 @@ class EntryPauseGate:
             logger.debug("%s — skipping %s", cause, context)
         return True
 
-    def _active_cause(self) -> str | None:
-        """The active pause source's log prefix, or None when not paused."""
+    def entry_blocks(self) -> tuple[EntryBlock, ...]:
+        """EVERY lever currently blocking entries, in precedence order.
+
+        The authority for "are entries blocked": the entry/scale-in paths gate
+        on it and the latched-condition monitor announces it, so the two cannot
+        disagree about a blocked state (#1096 review — a monitor blind to the
+        fail-closed unverified case reproduced #1094's exact shape). All active
+        levers are reported, not just the first: a monitor that saw only the
+        winning cause would record the shadowed one as *cleared* while it is
+        still in force.
+        """
+        blocks: list[EntryBlock] = []
         if self._halt_state is not None:
             if not self._halt_state.established:
                 # Fail closed: the halt flag has never been successfully read
                 # (e.g. DB unreachable at boot) — do not add risk on the
                 # optimistic default.
-                return (
-                    "MANUAL SYSTEM HALT state UNVERIFIED "
-                    "(system_halt flag not successfully read yet — failing closed)"
+                blocks.append(
+                    EntryBlock(
+                        "system_halt",
+                        "MANUAL SYSTEM HALT state UNVERIFIED "
+                        "(system_halt flag not successfully read yet — failing closed)",
+                    )
                 )
-            if self._halt_state.active:
-                return (
-                    "MANUAL SYSTEM HALT active "
-                    f"(reason: {self._halt_state.reason or 'no reason recorded'})"
+            elif self._halt_state.active:
+                blocks.append(
+                    EntryBlock(
+                        "system_halt",
+                        "MANUAL SYSTEM HALT active "
+                        f"(reason: {self._halt_state.reason or 'no reason recorded'})",
+                    )
                 )
         if is_enabled("entry_pause", default=False):
-            return "FEATURE_ENTRY_PAUSE active"
-        return None
+            blocks.append(EntryBlock("entry_pause", "FEATURE_ENTRY_PAUSE active"))
+        return tuple(blocks)
+
+    def entry_block(self) -> EntryBlock | None:
+        """The highest-precedence active pause source, or None when allowed."""
+        blocks = self.entry_blocks()
+        return blocks[0] if blocks else None
+
+    def entry_block_reason(self) -> str | None:
+        """The active pause source's log prefix, or None when not paused."""
+        block = self.entry_block()
+        return None if block is None else block.reason

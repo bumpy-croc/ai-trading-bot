@@ -6,6 +6,41 @@
 
 ## Before You Start Coding
 
+### Verify you are running the code you edited
+
+Worktrees share one venv, and an editable install pins imports to the checkout it was created
+from. Before trusting any backtest, experiment, or test result:
+
+```bash
+python -P -c "import src; print(src.__file__)"   # must be under YOUR worktree
+```
+
+`-P` is load-bearing: without it `sys.path[0]` is the cwd, so the check finds your
+worktree's `src/` and prints a green all-clear even when `atb` is running another
+checkout. `-P` reproduces the console-script shape, which is the one that breaks.
+
+`make install` wires this up automatically (`tools/atb_worktree_shim.py`); re-run `make shim`
+after any venv rebuild. As a backstop, importing `src` at all runs
+`src._source_root.verify_source_root()`, which hard-errors on a mismatch — so `atb`, `pytest`
+and `python experiments/x.py` all fail loudly rather than returning a wrong number, and standalone
+scripts need no opt-in. **Do not** set `ATB_ALLOW_SOURCE_ROOT_MISMATCH=1` to silence it on a run
+whose numbers you intend to act on. Background: GH #1070, `.claude/LESSONS.md` §1.10a / §3.
+
+### Never write to the primary checkout
+
+`/Users/alex/Sites/ai-trading-bot` is the production reference and stays pinned to `main`. Do
+all work in a worktree under `.claude/worktrees/` and **use absolute worktree paths for every
+file read and write** — a shell's cwd can be reset to the primary checkout mid-task, after which
+a relative `grep`/`sed`/`cat` silently reads (or `sed -i` writes) the wrong tree.
+
+A `PreToolUse` hook (`tools/primary_checkout_guard.py`) refuses such writes, and refuses a
+relative read issued from the primary checkout — both only once your session has actually
+worked inside a worktree, so a plain single clone and the PM daemon in the primary are
+unaffected.
+If you hit its banner, the fix is an absolute path under your worktree — not the override. The
+override exists for the human: `ATB_ALLOW_PRIMARY_WRITE=1` at launch, or
+`touch ~/.claude/atb-allow-primary-write`. Background: GH #1082, `.claude/LESSONS.md` §3.
+
 ### Planning Complex Features
 
 For features involving exchange interaction, crash recovery, or position state mutation: enumerate all failure scenarios BEFORE writing code:
@@ -115,6 +150,7 @@ if abs(current_fraction) < 1e-9:  # Position fully closed
 exit_of_current = exit_of_original / current_fraction
 ```
 - Add maximum iteration guards to partial operation loops as defense-in-depth.
+- Every exchange-bound order number (quantity, `price`, `stopPrice`) is snapped with `src.trading.precision.snap_to_step` and serialized with `format_quantity`/`format_price` (margin repay amounts are `Decimal`s formatted fixed-point, never `str()`). Never `round(x / step) * step`, `math.floor(x / step) * step` or `str(float)` — they leave float artifacts (`1648.8200000000001`, Binance 51077/-1111) or scientific notation (`9e-05`, -1100). `tests/unit/trading/test_exchange_numeric_guard.py` fails the build on a new raw snap.
 
 ---
 

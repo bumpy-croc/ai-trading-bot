@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass
@@ -20,8 +21,13 @@ class SystemHaltState:
     an unestablished state as halted (fail closed): a boot that cannot verify
     the flag — e.g. an active halt row behind an unreachable database — must
     not trade on the optimistic default.
+
+    ``since`` mirrors the flag row's ``updated_at`` so a monitor can report how
+    long the halt has really been in force — a durable timestamp that survives
+    the restarts an in-process counter would reset (#1096 review).
     """
 
     active: bool = False
     reason: str | None = None
     established: bool = False
+    since: datetime | None = None

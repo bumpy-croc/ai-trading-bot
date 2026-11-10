@@ -39,6 +39,9 @@ def _result(
     trades: int = 100,
     annualized: float = 0.0,
     drawdown: float = 5.0,
+    early_stopped: bool = False,
+    drawdown_cap_mode: str = "enforce",
+    drawdown_cap_breached: bool = False,
 ) -> ExperimentResult:
     return ExperimentResult(
         config=_cfg(name),
@@ -49,6 +52,9 @@ def _result(
         max_drawdown=drawdown,
         sharpe_ratio=sharpe,
         final_balance=1000.0 * (1 + total_return / 100),
+        early_stopped=early_stopped,
+        drawdown_cap_mode=drawdown_cap_mode,
+        drawdown_cap_breached=drawdown_cap_breached,
     )
 
 
@@ -167,3 +173,63 @@ def test_delta_and_confidence_populated_for_variants() -> None:
     assert pytest.approx(v1.delta_vs_baseline, rel=1e-9) == 1.0
     assert v1.ranking_confidence is not None
     assert 0.0 <= v1.ranking_confidence <= 1.0
+
+
+def test_truncated_variant_gets_explicit_warning() -> None:
+    """#1102: a variant whose backtest was truncated by the drawdown cap
+    must carry a visible warning in the report -- the whole point of the
+    fix is that this can never be silent."""
+    suite = _suite([VariantSpec(name="v1")])
+    baseline = _result("baseline", total_return=2.0, sharpe=1.0, trades=200)
+    variants = [
+        _result(
+            "v1",
+            total_return=3.0,
+            sharpe=1.3,
+            trades=200,
+            early_stopped=True,
+            drawdown_cap_breached=True,
+        )
+    ]
+    suite_res = _suite_result(suite, baseline, variants)
+    report = ExperimentReporter().render(suite_res)
+
+    v1 = next(r for r in report.rows if r.name == "v1")
+    assert any("TRUNCATED" in w for w in v1.warnings)
+    text = ExperimentReporter().render_text(report)
+    assert "TRUNCATED" in text
+
+
+def test_truncation_mismatch_vs_baseline_gets_explicit_warning() -> None:
+    """A variant truncated when the baseline was not (or vice versa) must
+    be flagged -- this is exactly the #1081 Step-2 re-run confusion this
+    fix exists to prevent: comparing a truncated re-run against an
+    untruncated original with no signal either was partial."""
+    suite = _suite([VariantSpec(name="v1")])
+    baseline = _result("baseline", total_return=2.0, sharpe=1.0, trades=200, early_stopped=False)
+    variants = [
+        _result(
+            "v1",
+            total_return=3.0,
+            sharpe=1.3,
+            trades=200,
+            early_stopped=True,
+            drawdown_cap_breached=True,
+        )
+    ]
+    suite_res = _suite_result(suite, baseline, variants)
+    report = ExperimentReporter().render(suite_res)
+
+    v1 = next(r for r in report.rows if r.name == "v1")
+    assert any("MISMATCH" in w for w in v1.warnings)
+
+
+def test_no_truncation_warning_when_neither_side_was_truncated() -> None:
+    suite = _suite([VariantSpec(name="v1")])
+    baseline = _result("baseline", total_return=2.0, sharpe=1.0, trades=200)
+    variants = [_result("v1", total_return=3.0, sharpe=1.3, trades=200)]
+    suite_res = _suite_result(suite, baseline, variants)
+    report = ExperimentReporter().render(suite_res)
+
+    for row in report.rows:
+        assert not any("TRUNCATED" in w or "MISMATCH" in w for w in row.warnings)

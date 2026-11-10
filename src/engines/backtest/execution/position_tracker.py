@@ -19,18 +19,41 @@ from src.config.constants import (
     DEFAULT_SLIPPAGE_RATE,
 )
 from src.engines.backtest.models import ActiveTrade, Trade
+from src.engines.shared.cost_basis import blend_cost_basis
 from src.engines.shared.models import PartialExitOutcome, PositionSide
 from src.engines.shared.partial_exit_executor import PartialExitExecutor
 from src.engines.shared.side_utils import to_side_string
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.mfe_mae_tracker import MFEMAETracker, MFEMetrics
+from src.trading.exit_reason import ExitReason
 
 logger = logging.getLogger(__name__)
+
+# ActiveTrade.metadata keys accumulated across partial exits (also copied onto
+# the completed Trade.metadata):
+# - realized_partial_pnl: cash P&L banked by partials, GROSS of exit fees, net of
+#   slippage (same convention as Trade.pnl for the final leg).
+# - partial_exit_fees / partial_exit_slippage: the costs of those partials, kept
+#   separate so the engine can add them to the reported fee/slippage totals.
+REALIZED_PARTIAL_PNL_KEY = "realized_partial_pnl"
+PARTIAL_FEES_KEY = "partial_exit_fees"
+PARTIAL_SLIPPAGE_KEY = "partial_exit_slippage"
 
 
 @dataclass
 class PositionCloseResult:
-    """Result of closing a position."""
+    """Result of closing a position.
+
+    Attributes:
+        trade: Completed record. ``trade.pnl`` is the WHOLE position's P&L
+            (banked partial slices + final leg), gross of exit fees and
+            interest but net of slippage — so win/loss stats reflect the
+            position outcome.
+        pnl_cash: Final leg only, gross of exit fee. This is what the engine
+            credits to the balance (partial slices were credited when banked),
+            so it intentionally differs from ``trade.pnl`` after partial exits.
+        mfe_mae_metrics: Excursion metrics captured before the tracker cleared.
+    """
 
     trade: Trade
     pnl_cash: float
@@ -181,7 +204,7 @@ class PositionTracker:
 
         # Use shared executor for consistent financial calculations
         result = self._partial_exit_executor.execute_partial_exit(
-            entry_price=float(self.current_trade.entry_price),
+            entry_price=float(self.current_trade.cost_basis_price),
             exit_price=float(current_price),
             position_side=self.current_trade.side,
             exit_fraction=float(exit_fraction),
@@ -208,6 +231,18 @@ class PositionTracker:
         current_size = cast(float, self.current_trade.current_size)
         self.current_trade.current_size = max(0.0, current_size - exit_fraction)
         self.current_trade.partial_exits_taken += 1
+        # Carried on the trade so the closing record reports the whole
+        # position's outcome, not just the last leg (see close_position).
+        # Banked net of slippage but gross of the exit fee, matching how the
+        # final leg's Trade.pnl is computed (slipped price, fee separate).
+        meta = self.current_trade.metadata
+        meta[REALIZED_PARTIAL_PNL_KEY] = (
+            float(meta.get(REALIZED_PARTIAL_PNL_KEY, 0.0)) + result.gross_pnl - result.slippage_cost
+        )
+        meta[PARTIAL_FEES_KEY] = float(meta.get(PARTIAL_FEES_KEY, 0.0)) + result.exit_fee
+        meta[PARTIAL_SLIPPAGE_KEY] = (
+            float(meta.get(PARTIAL_SLIPPAGE_KEY, 0.0)) + result.slippage_cost
+        )
 
         logger.debug(
             "Partial exit: %.4f of position, gross_pnl=%.2f, fee=%.2f, slippage=%.2f, net_pnl=%.2f",
@@ -256,7 +291,8 @@ class PositionTracker:
         trade = self.current_trade
         if trade is None:
             return 0.0
-        if trade.entry_price <= 0 or not math.isfinite(trade.entry_price):
+        cost_price = trade.cost_basis_price
+        if cost_price <= 0 or not math.isfinite(cost_price):
             return 0.0
         if current_price <= 0 or not math.isfinite(current_price):
             return 0.0
@@ -268,7 +304,7 @@ class PositionTracker:
 
         side_str = to_side_string(trade.side)
         side_enum = Side.LONG if side_str == "long" else Side.SHORT
-        pct = pnl_percent(trade.entry_price, current_price, side_enum, fraction)
+        pct = pnl_percent(cost_price, current_price, side_enum, fraction)
 
         entry_balance = getattr(trade, "entry_balance", None)
         basis = (
@@ -280,12 +316,23 @@ class PositionTracker:
             return 0.0
         return cash_pnl(pct, basis)
 
-    def apply_scale_in(self, additional_size: float, max_position_size: float = 1.0) -> None:
+    def apply_scale_in(
+        self,
+        additional_size: float,
+        price: float,
+        max_position_size: float = 1.0,
+    ) -> None:
         """Increase position size via scale-in.
+
+        The added slice is blended into the position's average cost so P&L
+        measures it from the price it was bought at. ``entry_price`` is left
+        alone: partial-exit targets, trailing activation and breakeven keep
+        measuring from the first fill.
 
         Args:
             additional_size: Additional size to add, in balance-fraction
                 units (same units as ``current_size``).
+            price: Fill price of the added slice.
             max_position_size: Maximum allowed position size. Growth is
                 capped at this value without shrinking already-over-cap
                 state (never-shrink semantics, parity with the live tracker).
@@ -301,9 +348,15 @@ class PositionTracker:
         current_size = cast(float, self.current_trade.current_size)
         size = self.current_trade.size
         delta = float(additional_size)
-        self.current_trade.current_size = min(
-            current_size + delta, max(max_position_size, current_size)
+        new_current_size = min(current_size + delta, max(max_position_size, current_size))
+        # Blend only the slice that was actually added after the cap.
+        self.current_trade.avg_cost_price = blend_cost_basis(
+            held_cost_price=self.current_trade.cost_basis_price,
+            held_size=current_size,
+            added_price=float(price),
+            added_size=new_current_size - current_size,
         )
+        self.current_trade.current_size = new_current_size
         self.current_trade.size = min(size + delta, max(max_position_size, size))
         self.current_trade.scale_ins_taken += 1
 
@@ -367,13 +420,15 @@ class PositionTracker:
         exit_time: datetime,
         exit_reason: str,
         basis_balance: float,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
     ) -> PositionCloseResult:
         """Close the current position and compute final trade record.
 
         Args:
             exit_price: Exit price (after slippage).
             exit_time: Exit timestamp.
-            exit_reason: Reason for exit.
+            exit_reason: Free-text exit detail.
+            exit_category: Typed exit category persisted alongside the detail.
             basis_balance: Balance basis for PnL calculation.
 
         Returns:
@@ -394,10 +449,11 @@ class PositionTracker:
         if exit_price <= 0 or not math.isfinite(exit_price):
             raise ValueError(f"Invalid exit_price: {exit_price}")
 
-        # Calculate PnL using shared function for parity with live engine
+        # Calculate PnL using shared function for parity with live engine,
+        # measured from the average cost so scale-in slices earn from their own fill.
         side_str = to_side_string(trade.side)
         side_enum = Side.LONG if side_str == "long" else Side.SHORT
-        trade_pnl_pct = pnl_percent(trade.entry_price, exit_price, side_enum, fraction)
+        trade_pnl_pct = pnl_percent(trade.cost_basis_price, exit_price, side_enum, fraction)
 
         entry_balance = getattr(trade, "entry_balance", None)
         if entry_balance is not None and entry_balance > 0:
@@ -406,6 +462,15 @@ class PositionTracker:
             actual_basis = basis_balance
 
         trade_pnl_cash = cash_pnl(trade_pnl_pct, actual_basis)
+
+        # Balance is credited from pnl_cash (final leg only; partial slices
+        # were credited when banked). The recorded Trade carries the whole
+        # position's P&L so win/loss stats reflect the position outcome: a
+        # position fully consumed by partials would otherwise be recorded as
+        # a zero-P&L trade, and a winner stopped out after partials as a loser.
+        banked_partial_pnl = float(trade.metadata.get(REALIZED_PARTIAL_PNL_KEY, 0.0))
+        position_pnl_cash = trade_pnl_cash + banked_partial_pnl
+        position_pnl_pct = position_pnl_cash / actual_basis if actual_basis > 0 else 0.0
 
         # Get MFE/MAE metrics before clearing
         metrics = self.mfe_mae_tracker.get_position_metrics(self.POSITION_KEY)
@@ -423,9 +488,10 @@ class PositionTracker:
             entry_time=trade.entry_time,
             exit_time=exit_time,
             size=fraction,
-            pnl=trade_pnl_cash,
-            pnl_percent=trade_pnl_pct,
+            pnl=position_pnl_cash,
+            pnl_percent=position_pnl_pct,
             exit_reason=exit_reason,
+            exit_category=exit_category,
             stop_loss=trade.stop_loss,
             take_profit=trade.take_profit,
             mfe=metrics.mfe if metrics else 0.0,
@@ -445,6 +511,21 @@ class PositionTracker:
                 )
         except (TypeError, ValueError) as exc:
             logger.debug("Failed to carry entry-fee metadata onto completed trade: %s", exc)
+
+        # Partial-exit costs are folded into the trade's fee/slippage totals by
+        # the engine; original_size lets persistence log a size for positions
+        # whose partials consumed the whole position (final-leg size is zero).
+        for key in (PARTIAL_FEES_KEY, PARTIAL_SLIPPAGE_KEY, REALIZED_PARTIAL_PNL_KEY):
+            if key in trade.metadata:
+                completed_trade.metadata[key] = float(trade.metadata[key])
+        if trade.avg_cost_price is not None:
+            completed_trade.metadata["avg_cost_price"] = float(trade.avg_cost_price)
+        if banked_partial_pnl or trade.partial_exits_taken:
+            # Scale-ins grow ``size`` but not ``original_size``; the persisted
+            # size must cover all the exposure whose P&L is on the record.
+            completed_trade.metadata["original_size"] = max(
+                float(cast(float, trade.original_size)), float(trade.size)
+            )
 
         # Clear tracker
         self.mfe_mae_tracker.clear(self.POSITION_KEY)

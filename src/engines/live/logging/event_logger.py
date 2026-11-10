@@ -13,6 +13,7 @@ from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 
 from src.config.constants import DEFAULT_CONFIDENCE_SCORE
+from src.trading.exit_reason import ExitReason
 
 if TYPE_CHECKING:
     from src.database.manager import DatabaseManager
@@ -183,6 +184,7 @@ class LiveEventLogger:
         positions: dict[str, LivePosition],
         total_pnl: float,
         peak_balance: float,
+        peak_equity: float | None = None,
     ) -> None:
         """Log current account state to database.
 
@@ -191,6 +193,10 @@ class LiveEventLogger:
             positions: Dictionary of active positions.
             total_pnl: Total realized P&L.
             peak_balance: Peak account balance for drawdown calculation.
+            peak_equity: Peak mark-to-market equity. When given, the stored
+                drawdown is the worse of the balance and equity legs — the
+                same basis as the max-drawdown hard cap — so it moves while a
+                position is open instead of only on realized fills.
         """
         if not self.enabled or self.session_id is None:
             if self.log_to_database and self.session_id is None:
@@ -220,6 +226,9 @@ class LiveEventLogger:
             current_drawdown = 0.0
             if peak_balance > 0:
                 current_drawdown = (peak_balance - balance) / peak_balance * 100
+            if peak_equity is not None and peak_equity > 0:
+                equity_drawdown = (peak_equity - equity) / peak_equity * 100
+                current_drawdown = max(current_drawdown, equity_drawdown)
 
             # Update daily P&L tracking (handles date rollovers)
             self._check_and_update_trading_date(balance)
@@ -289,6 +298,7 @@ class LiveEventLogger:
         pnl: float,
         pnl_percent: float,
         exit_reason: str,
+        exit_category: ExitReason = ExitReason.UNKNOWN,
     ) -> None:
         """Log completed trade to JSON file.
 
@@ -302,7 +312,8 @@ class LiveEventLogger:
             exit_time: Exit timestamp.
             pnl: Profit/loss amount.
             pnl_percent: Profit/loss percentage.
-            exit_reason: Reason for exit.
+            exit_reason: Free-text exit detail.
+            exit_category: Typed exit category.
         """
         if not self.log_trades_to_file:
             return
@@ -324,6 +335,7 @@ class LiveEventLogger:
                 "pnl": pnl,
                 "pnl_percent": pnl_percent,
                 "exit_reason": exit_reason,
+                "exit_category": str(exit_category),
                 "duration_minutes": (exit_time - entry_time).total_seconds() / 60,
             }
 
@@ -592,6 +604,7 @@ class LiveEventLogger:
             self.db_manager.end_trading_session(
                 session_id=self.session_id,
                 final_balance=final_balance,
+                carry_forward_open_positions=True,
             )
         except (AttributeError, ValueError, TypeError) as e:
             logger.debug("Failed to end trading session: %s", e)
