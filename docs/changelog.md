@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the month, volatility premium). All 15 candidates fail their gates on 2015-2026; passive controls
   (60/40, S&P 500) beat every one. Scripts: `experiments/fx_predictability.py`,
   `experiments/markets_bakeoff.py`, `experiments/markets_common.py`. No live or staging change.
+- **Prediction-market favourites test** (research;
+  `docs/research/experiments/2026-11-10_prediction-market-favourites-*.md`). Preregistered test of
+  buying favourites on 14,630 resolved Polymarket markets and holding to resolution. All 3 candidates
+  fail: favourites won less often than their price implied. Script:
+  `experiments/polymarket_favourites.py`. No live or staging change.
 - **Funding-rate watcher** (log.md D-2026-11-10-02). `tools/funding_watch.py`, run daily by
   `.github/workflows/funding-watch.yml`, alerts (one `funding-watch` issue plus the alert webhook)
   when the trailing 7-day BTC or ETH perp funding goes above 10%/yr, the point where the funding

@@ -4792,7 +4792,7 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 
 **Watch.** `tools/funding_watch.py` + `.github/workflows/funding-watch.yml` check BTC/ETH perp funding daily (trailing 7-day mean, sources Binance → OKX → Hyperliquid). When either goes above **10%/yr** it opens one `funding-watch` issue and posts to `ALERT_WEBHOOK_URL`. That issue is the trigger to rerun the S1 bake-off on fresh data (with the risk-free-rate fix to the Sharpe gate) before any build. A job that cannot reach any source fails, so a blind watcher is visible.
 
-## 2026-11-10 ~23:10 UTC · track-record · research (Claude, project thread "Test the bot on forex and other markets")
+## 2026-11-10 ~22:00 UTC · track-record · research (Claude, project thread "Test the bot on forex and other markets")
 
 **Asked by.** Alex, 2026-11-10 21:29 UTC, project chat: test the bot on markets other than crypto, starting with forex ("more stable and can be predicted a bit easier?"), other ideas welcome.
 
@@ -4804,3 +4804,14 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 **Evidence.** `experiments/markets_results/*.json`; each script run twice with byte-identical output.
 
 **Recommendation.** Do not port the prediction model to forex or ETFs. No paper trial, no account, no live or staging change. Entries stay halted per [D-2026-11-10-02].
+
+## 2026-11-10 ~22:50 UTC · track-record · research (Claude, project thread "Test the bot on forex and other markets")
+
+**Hypothesis → verdict.** Prereg `docs/research/experiments/2026-11-10_prediction-market-favourites-prereg.md` (commit `09b285b`, before any price history was downloaded); results `2026-11-10_prediction-market-favourites-results.md`.
+- H1, Polymarket favourites are priced too low, so buying them and holding to resolution beats cash after the spread: **falsified**. 14,630 resolved no-fee markets (final volume >= $250k, 2022-01 to 2026-09). Favourite at 0.90-0.97: 5,727 bets, win rate 90.9% against an average fill of 0.922, excess return -3.4% per bet (t by event -7.4). Bands 0.97-0.99 and 0.70-0.90 also negative, in every year, at every cost level tested.
+- 3 gated candidates, 3 FAIL. Thread total: 18 candidates, 18 FAIL.
+- Post-hoc, not actionable: the underdog side won about 2 points more than its price. The universe is selected on final volume, which favours markets with upsets, and the shortfall grows with final volume (-1.5 pts under $1M, -5.3 pts at $5M+), so this is most likely selection. Only a forward recording can test it.
+
+**Evidence.** `experiments/markets_results/polymarket_favourites.json`; analysis run twice with byte-identical output.
+
+**Recommendation.** Nothing to trade. Board to decide whether a no-money forward recorder of Polymarket order books is worth building.
