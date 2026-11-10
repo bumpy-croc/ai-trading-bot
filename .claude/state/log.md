@@ -4768,7 +4768,7 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 
 **Not in force until this PR merges and develop is promoted (§2.9(i)).**
 
-## [D-2026-11-10-10] 2026-11-10 ~16:50 UTC · decision · board-directed (Claude, project thread)
+## [D-2026-11-10-01] 2026-11-10 ~16:50 UTC · decision · board-directed (Claude, project thread)
 
 **Authority.** Alex, 2026-11-10 16:19 UTC, project thread: "sounds great, I agree with everything. You're in charge now. Action everything. Work autonomously. You can merge and deploy to staging and prod whenever you want." This covers the roadmap in the "Trading bot: assessment and roadmap to profitability" doc, including stopping new live entries.
 
