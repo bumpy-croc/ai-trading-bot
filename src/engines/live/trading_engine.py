@@ -1777,6 +1777,9 @@ class LiveTradingEngine:
                 df = self._get_latest_data(symbol, timeframe)
                 if df is None or df.empty:
                     log_data_event("no_data", reason="empty_frame")
+                    # Feed the stale-data streak: a REST failure or RESYNCING skips
+                    # entries and exits exactly like a stale frame does.
+                    self._is_data_fresh(df)
                     logger.warning("No market data received")
                     self.check_interval = self._calculate_adaptive_interval()
                     self._sleep_with_interrupt(self.check_interval)

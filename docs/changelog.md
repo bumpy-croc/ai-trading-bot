@@ -96,6 +96,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `place_order` sent raw floats for `price`/`stopPrice` and `place_stop_loss_order` used
   `str(float)` (scientific notation below 1e-4). Margin repay amounts and Coinbase order bodies
   are fixed-point too. `test_exchange_numeric_guard.py` fails on any new raw step-snap.
+- **REST-fallback freshness is candle-aware, and a stale-data streak is announced** (#983). With
+  the kline WebSocket down the loop reads REST frames whose tail bar is the forming candle; its
+  open time was compared against a flat 120s, so a 1h strategy passed the freshness gate only
+  for the first ~2 minutes of each hour and the loop `continue`d past entries AND in-engine
+  exits (trailing stops, strategy/time exits) the rest of the time, with only a debug line. The
+  limit is now `interval + 120s` (a tail bar older than that still means the current candle is
+  missing; unknown timeframe keeps the strict 120s), and a gate failing for over 10 minutes
+  latches a `MARKET_DATA_STALE` row/page through the latched-condition monitor until it clears.
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
   a 4h run selects a 4h model bundle; a missing bundle aborts the switch instead of using 1h.
