@@ -41,6 +41,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type error.
 
 ### Fixed
+- **Live max-drawdown hard cap now sees unrealized losses** (#1267). The guard compared only
+  realized balance with its peak, so an open position could run deep underwater while the cap
+  stayed silent. It now trips on `max(balance leg, equity leg)`: the balance leg is the old
+  condition (never looser), the equity leg is mark-to-market equity vs its own session peak
+  (seeded from `account_history.equity`). The equity leg is skipped with a WARNING (and a page
+  after `DRAWDOWN_MARK_MAX_AGE_SECONDS`) when marks are invalid, stale, or not yet re-priced
+  after a restart; its peak and an equity-only breach each need two consecutive distinct marks;
+  new confirmed equity peaks are snapshotted to `account_history`; the balance leg now also
+  runs on market-data-gap iterations; a partial exit rescales the open mark immediately.
+  `account_history.drawdown` now uses the same worse-of-both basis. New
+  `LivePositionTracker.mark_reading()` exposes unrealized P&L with an explicit freshness flag.
 - **A ledger-rejected close no longer undoes an already-filled exchange close** (#1261). When
   `log_trade(balance_delta=...)` is refused by the ledger (the resulting balance would be
   negative), the Trade insert and Position CLOSED flip still commit; the ledger is left

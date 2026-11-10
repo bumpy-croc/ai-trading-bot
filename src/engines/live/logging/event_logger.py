@@ -184,6 +184,7 @@ class LiveEventLogger:
         positions: dict[str, LivePosition],
         total_pnl: float,
         peak_balance: float,
+        peak_equity: float | None = None,
     ) -> None:
         """Log current account state to database.
 
@@ -192,6 +193,10 @@ class LiveEventLogger:
             positions: Dictionary of active positions.
             total_pnl: Total realized P&L.
             peak_balance: Peak account balance for drawdown calculation.
+            peak_equity: Peak mark-to-market equity. When given, the stored
+                drawdown is the worse of the balance and equity legs — the
+                same basis as the max-drawdown hard cap — so it moves while a
+                position is open instead of only on realized fills.
         """
         if not self.enabled or self.session_id is None:
             if self.log_to_database and self.session_id is None:
@@ -221,6 +226,9 @@ class LiveEventLogger:
             current_drawdown = 0.0
             if peak_balance > 0:
                 current_drawdown = (peak_balance - balance) / peak_balance * 100
+            if peak_equity is not None and peak_equity > 0:
+                equity_drawdown = (peak_equity - equity) / peak_equity * 100
+                current_drawdown = max(current_drawdown, equity_drawdown)
 
             # Update daily P&L tracking (handles date rollovers)
             self._check_and_update_trading_date(balance)

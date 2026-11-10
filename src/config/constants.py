@@ -159,6 +159,10 @@ DEFAULT_MAX_DRAWDOWN = 0.20  # 20% maximum drawdown (fraction)
 DRAWDOWN_WARNING_AT_PCT_OF_LIMIT = 0.50  # WARNING at 50% of the cap (10% drawdown at 0.20)
 DRAWDOWN_CRITICAL_AT_PCT_OF_LIMIT = 0.80  # CRITICAL at 80% of the cap (16% drawdown at 0.20)
 DRAWDOWN_GUARD_LOG_INTERVAL_SECONDS = 900  # Min seconds between repeated drawdown-tier logs
+# A position mark older than this is stale for the drawdown guard's equity leg: twice the
+# slowest trading-loop interval (DEFAULT_MAX_CHECK_INTERVAL = 300s), so one slow cycle never
+# reads as stale but a stuck price feed does.
+DRAWDOWN_MARK_MAX_AGE_SECONDS = 600
 
 # Account-level circuit breakers (#807). Hard halts enforced independent of
 # strategy logic. Graduated drawdown throttling stays with dynamic-risk; these
