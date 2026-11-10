@@ -41,6 +41,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type error.
 
 ### Fixed
+- **Correlated-exposure cap now binds in `compute_size_reduction_factor`; admin login rejects
+  backslash open redirects** (#750). The old `max / projected` scaling only enforced the cap
+  when the group was empty (group at the 0.10 cap + candidate 0.10 left 0.15). The candidate
+  now shrinks to the remaining headroom `(max - current) / candidate`, so existing + new never
+  exceeds the cap, including for callers that skip the later clamp
+  (`calculate_position_fraction(correlation_ctx=...)`, live only). Backtest sizing is
+  unchanged: the handler clamp already bound the cap there. The admin `is_safe_redirect_url` is a module-level allow-list check (single
+  leading `/`, no backslash or control characters, no `//`, also after percent-decoding), so
+  `/\evil.com` and encoded variants fall back to the admin index.
 - **Local training no longer promotes a model as a side effect** (#1242). `save_artifacts`, the
   meta-label export and the legacy price trainer used to point `{symbol}/{type}/latest` at every
   trained bundle, so any local run (and `atb train cloud --provider local`) published a candidate to
