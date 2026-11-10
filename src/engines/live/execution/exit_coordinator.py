@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 import pandas as pd
 
 from src.config.constants import BORROW_DUST_EPSILON
+from src.database.manager import DuplicateCloseError
 from src.engines.live.margin_interest_tracker import MarginInterestTracker
 from src.engines.live.trade_close_accounting import (
     _close_entry_fee_usd,
@@ -103,6 +104,8 @@ class LiveExitEngineState(Protocol):
     def _cancel_stop_loss_order(self, position: Position) -> bool: ...
 
     def _reprotect_position(self, position: Position) -> None: ...
+
+    def _enter_close_only_mode(self, reason: str | None = None) -> None: ...
 
     def _log_trade(self, trade: Trade) -> None: ...
 
@@ -661,51 +664,74 @@ class LiveExitCoordinator:
                         position.symbol,
                         position.order_id,
                     )
-                state.db_manager.log_trade(
-                    symbol=position.symbol,
-                    side=position_side.value,
-                    entry_price=position.entry_price,
-                    exit_price=exit_price,
-                    size=float(
-                        position.current_size
-                        if position.current_size is not None
-                        else position.size
-                    ),
-                    pnl=gross_pnl,
-                    strategy_name=state._strategy_name(),
-                    exit_reason=reason,
-                    exit_category=exit_category,
-                    entry_time=position.entry_time,
-                    exit_time=datetime.now(UTC),
-                    session_id=state.trading_session_id,
-                    position_id=close_position_id,
-                    mfe=(metrics.mfe if metrics else None),
-                    mae=(metrics.mae if metrics else None),
-                    mfe_price=(metrics.mfe_price if metrics else None),
-                    mae_price=(metrics.mae_price if metrics else None),
-                    mfe_time=(metrics.mfe_time if metrics else None),
-                    mae_time=(metrics.mae_time if metrics else None),
-                    # trades.commission is the round-trip fee in USD (entry + exit),
-                    # the same values booked to account_balances: entry_fee as the
-                    # entry_fee_<symbol> ledger event, exit_fee folded into the
-                    # realized_pnl_<symbol> event. Deliberately NOT orders.actual_commission
-                    # (raw exchange commission in the received asset — ETH on buys, USDT on
-                    # sells — with no commission_asset column, populated asynchronously by
-                    # reconciliation, so unit-ambiguous and unreliable at close time).
-                    # The entry leg is scaled to the closed portion so a partial final
-                    # close's commission matches its portion-level size/quantity/pnl
-                    # (ratio is 1.0 for a full close). Reuses the same scaled total fed
-                    # to performance_tracker.record_trade above so the metrics and the
-                    # DB ledger never diverge.
-                    commission=total_fee,
-                    quantity=_closed_base_quantity(position),
-                    margin_interest_cost=interest_cost,
-                    # Deferred from the block above (#736): balance, trade insert, and
-                    # position-close all commit in this ONE transaction when a
-                    # db_position_id is available. When it isn't, the balance was
-                    # already applied standalone above and balance_delta stays None.
-                    balance_delta=(realized_pnl if atomic_close_with_balance else None),
-                )
+                ledger_result: dict[str, Any] = {}
+                try:
+                    state.db_manager.log_trade(
+                        symbol=position.symbol,
+                        side=position_side.value,
+                        entry_price=position.entry_price,
+                        exit_price=exit_price,
+                        size=float(
+                            position.current_size
+                            if position.current_size is not None
+                            else position.size
+                        ),
+                        pnl=gross_pnl,
+                        strategy_name=state._strategy_name(),
+                        exit_reason=reason,
+                        exit_category=exit_category,
+                        entry_time=position.entry_time,
+                        exit_time=datetime.now(UTC),
+                        session_id=state.trading_session_id,
+                        position_id=close_position_id,
+                        mfe=(metrics.mfe if metrics else None),
+                        mae=(metrics.mae if metrics else None),
+                        mfe_price=(metrics.mfe_price if metrics else None),
+                        mae_price=(metrics.mae_price if metrics else None),
+                        mfe_time=(metrics.mfe_time if metrics else None),
+                        mae_time=(metrics.mae_time if metrics else None),
+                        # trades.commission is the round-trip fee in USD (entry + exit),
+                        # the same values booked to account_balances: entry_fee as the
+                        # entry_fee_<symbol> ledger event, exit_fee folded into the
+                        # realized_pnl_<symbol> event. Deliberately NOT orders.actual_commission
+                        # (raw exchange commission in the received asset — ETH on buys, USDT on
+                        # sells — with no commission_asset column, populated asynchronously by
+                        # reconciliation, so unit-ambiguous and unreliable at close time).
+                        # The entry leg is scaled to the closed portion so a partial final
+                        # close's commission matches its portion-level size/quantity/pnl
+                        # (ratio is 1.0 for a full close). Reuses the same scaled total fed
+                        # to performance_tracker.record_trade above so the metrics and the
+                        # DB ledger never diverge.
+                        commission=total_fee,
+                        quantity=_closed_base_quantity(position),
+                        margin_interest_cost=interest_cost,
+                        # Deferred from the block above (#736): balance, trade insert, and
+                        # position-close all commit in this ONE transaction when a
+                        # db_position_id is available. When it isn't, the balance was
+                        # already applied standalone above and balance_delta stays None.
+                        balance_delta=(realized_pnl if atomic_close_with_balance else None),
+                        ledger_result=ledger_result,
+                    )
+                except DuplicateCloseError:
+                    # Another closer (the reconciler) already booked this position's PnL
+                    # and closed its row, so nothing is written here; the balance re-read
+                    # below picks up the ledger it moved.
+                    logger.warning(
+                        "Close of %s (%s) was already booked by another closer — skipping the "
+                        "duplicate trade/PnL write.",
+                        position.symbol,
+                        position.order_id,
+                    )
+                ledger_rejected = "rejected_reason" in ledger_result
+                if ledger_rejected:
+                    # The close and trade are persisted but the ledger refused the delta, so
+                    # its balance no longer matches the exchange: stop sizing new entries off
+                    # it until an operator reconciles (exits and stops keep running).
+                    state._enter_close_only_mode(
+                        f"ledger rejected the realized PnL {realized_pnl:+.2f} of the "
+                        f"{position.symbol} close ({ledger_result['rejected_reason']}) — "
+                        "refusing new entries until the balance ledger is reconciled"
+                    )
                 if atomic_close_with_balance:
                     # Authoritative post-commit read: the atomic write above is
                     # what actually moved the ledger, so re-read rather than
@@ -720,10 +746,14 @@ class LiveExitCoordinator:
                             state.trading_session_id
                         )
                     except Exception as read_err:
-                        state.current_balance += realized_pnl
+                        # A refused delta never reached the ledger, so applying it in
+                        # memory would diverge from it.
+                        if not ledger_rejected:
+                            state.current_balance += realized_pnl
                         logger.warning(
-                            "Post-close balance re-read failed for %s: %s — applied the "
-                            "known realized PnL delta in-memory instead of re-reading.",
+                            "Post-close balance re-read failed for %s: %s — kept the "
+                            "in-memory balance consistent with the ledger instead of "
+                            "re-reading.",
                             position.symbol,
                             read_err,
                         )

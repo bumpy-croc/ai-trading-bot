@@ -2,7 +2,9 @@
 
 A latched condition — close-only mode, the manual system halt (including its
 fail-closed "unverified" state), an entry pause outside a macro-event window —
-blocks new entries until somebody acts. Before this monitor, each announced
+blocks new entries until somebody acts. Two conditions clear on their own but
+are just as silent while they hold: a stalled closed-candle gate and a market-data
+freshness gate that keeps rejecting frames. Before this monitor, each announced
 itself exactly once, at minute zero. On 2026-08-20 production latched
 close-only, paged correctly, and then sat halted for four days because nothing
 re-raised the condition and nothing recorded that it was still true (#1094).
@@ -67,6 +69,11 @@ logger = logging.getLogger(__name__)
 HEARTBEAT_INTERVAL_SECONDS = 3600.0
 # Row written when nothing is blocking entries — the positive assertion.
 ENTRIES_ENABLED_CODE = "ENTRIES_ENABLED"
+_HUMAN_CLEARED_CONSEQUENCE = (
+    "New entries remain blocked until a human clears it; exits, stop-losses "
+    "and reconciliation continue."
+)
+_HUMAN_CLEARED_RESOLUTION = "new entries are enabled again."
 
 
 class LatchedConditionEngineState(Protocol):
@@ -75,6 +82,7 @@ class LatchedConditionEngineState(Protocol):
     _close_only_mode: bool
     _close_only_reason: str | None
     _closed_candle_gate: Any
+    loop_timing_coordinator: Any
 
     def _record_event(
         self,
@@ -110,6 +118,13 @@ class _Condition:
     cleared_code: str
     label: str
     predicate: Callable[[LatchedConditionMonitor], Observation]
+    # What the latch costs and how it ends differs per condition: a human clears
+    # close-only, but stale market data clears itself and also freezes exits.
+    consequence: str = _HUMAN_CLEARED_CONSEQUENCE
+    # Page at the moment of latching instead of waiting PAGE_SCHEDULE_SECONDS[0]:
+    # for a condition that freezes exits, an hour of silence is too long.
+    page_on_latch: bool = False
+    resolution: str = _HUMAN_CLEARED_RESOLUTION
 
 
 @dataclass
@@ -147,6 +162,21 @@ CONDITIONS: tuple[_Condition, ...] = (
         cleared_code="CLOSED_CANDLE_GATE_STALL_CLEARED",
         label="Closed-candle gating stalled",
         predicate=lambda monitor: monitor.observe_closed_candle_gate(),
+    ),
+    _Condition(
+        key="stale_market_data",
+        component="data",
+        latched_code="MARKET_DATA_STALE",
+        cleared_code="MARKET_DATA_STALE_CLEARED",
+        label="Stale market data",
+        predicate=lambda monitor: monitor.observe_stale_market_data(),
+        consequence=(
+            "The trading loop is skipping new entries AND in-engine exits (trailing "
+            "stops, strategy/time exits) until fresh data returns on its own; "
+            "reconciliation, and exchange-side stop-losses in live mode, continue."
+        ),
+        resolution="the trading loop is processing market data again.",
+        page_on_latch=True,
     ),
     _Condition(
         key="entry_pause",
@@ -259,6 +289,21 @@ class LatchedConditionMonitor:
             return Observation(False)
         return Observation(True, observation.reason)
 
+    def observe_stale_market_data(self) -> Observation:
+        """Has the freshness gate been rejecting market data for minutes on end?
+
+        The gate's skip is a bare ``continue`` in the trading loop: no entry, no
+        exit, no error. Before this condition a sustained stale-data streak was
+        a debug line, indistinguishable from a quiet market (#983).
+        """
+        coordinator = getattr(self._state, "loop_timing_coordinator", None)
+        if coordinator is None:
+            return Observation(False)
+        observation = coordinator.stale_data_observation()
+        if not observation.stale:
+            return Observation(False)
+        return Observation(True, observation.reason)
+
     def observe_entry_gate(self, key: str) -> Observation:
         """Read one lever from the gate the entry path itself consults.
 
@@ -323,7 +368,7 @@ class LatchedConditionMonitor:
             record = _LatchRecord(
                 since=now,
                 reason=observation.reason,
-                next_page_at=now + PAGE_SCHEDULE_SECONDS[0],
+                next_page_at=now if condition.page_on_latch else now + PAGE_SCHEDULE_SECONDS[0],
                 started_at=observation.started_at,
             )
             self._bookkeeping.latched[condition.key] = record
@@ -347,8 +392,7 @@ class LatchedConditionMonitor:
         message = (
             f"{prefix}{condition.label} still active after {elapsed} "
             f"(reason: {record.reason or 'not recorded — see the latch event at minute zero'}). "
-            "New entries remain blocked until a human clears it; exits, stop-losses "
-            "and reconciliation continue."
+            f"{condition.consequence}"
         )
         if page_due:
             record.pages_sent += 1
@@ -379,7 +423,7 @@ class LatchedConditionMonitor:
         if record is None:
             return
         elapsed = format_elapsed(self._elapsed(record, now))
-        message = f"{condition.label} cleared after {elapsed} — new entries are enabled again."
+        message = f"{condition.label} cleared after {elapsed} — {condition.resolution}"
         logger.info("✅ %s", message)
         # Durable row only: a resolution is what monitors query for, and the
         # clearing operator does not need to be paged about their own action.

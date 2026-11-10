@@ -14,6 +14,7 @@ import requests  # type: ignore[import-untyped]  # requests ships no inline type
 
 from src.config import get_config
 from src.infrastructure.network_retry import with_network_retry
+from src.trading.precision import format_price, format_quantity
 from src.trading.symbols.factory import SymbolFactory
 
 from .data_provider import DataProvider
@@ -511,17 +512,17 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                 "type": cb_type,
             }
             if cb_type == "market":
-                body["size"] = str(quantity)
+                body["size"] = format_quantity(quantity)
             else:
                 body.update(
                     {
-                        "size": str(quantity),
-                        "price": str(price) if price else None,
+                        "size": format_quantity(quantity),
+                        "price": format_price(price) if price else None,
                         "time_in_force": time_in_force,
                     }
                 )
             if cb_type == "stop":
-                body["stop_price"] = str(stop_price) if stop_price else None
+                body["stop_price"] = format_price(stop_price) if stop_price else None
                 body["stop"] = "loss"  # default stop loss
 
             # Add client_order_id for idempotency if provided

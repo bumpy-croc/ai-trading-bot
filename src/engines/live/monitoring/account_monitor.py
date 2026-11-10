@@ -13,6 +13,7 @@ snapshot property.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -46,6 +47,10 @@ class MonitoringEngineState(Protocol):
         """(total, consecutive) live inference timeouts (#927)."""
         ...
 
+    def _durable_peak_equity(self) -> float:
+        """Peak mark-to-market equity the drawdown guard measures from."""
+        ...
+
 
 class LiveAccountMonitor:
     """Snapshots, status lines, and performance summaries for a live session."""
@@ -61,6 +66,18 @@ class LiveAccountMonitor:
         # This trade-off reduces overhead while maintaining statistical validity for risk metrics
         state = self._state
         state.performance_tracker.update_balance(state.current_balance, timestamp=datetime.now(UTC))
+
+    def _peak_equity(self) -> float | None:
+        """Guard's peak equity for the stored drawdown, or None when unavailable."""
+        # getattr keeps bare/legacy engine states working.
+        peak_fn = getattr(self._state, "_durable_peak_equity", None)
+        if not callable(peak_fn):
+            return None
+        try:
+            peak = float(peak_fn())
+        except (TypeError, ValueError):
+            return None
+        return peak if math.isfinite(peak) and peak > 0 else None
 
     def log_account_snapshot(self) -> None:
         """Log current account state to database via the event logger.
@@ -80,6 +97,7 @@ class LiveAccountMonitor:
                 positions=state.live_position_tracker.positions,
                 total_pnl=perf_metrics.total_pnl,
                 peak_balance=perf_metrics.peak_balance,
+                peak_equity=self._peak_equity(),
             )
         except Exception as e:
             # Snapshot logging must never crash the trading loop.

@@ -41,6 +41,7 @@ from src.config.constants import (
     DEFAULT_TAKE_PROFIT_PCT,
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
+    DRAWDOWN_MARK_MAX_AGE_SECONDS,
 )
 from src.config.feature_flags import get_flag, is_enabled
 from src.data_providers.binance_provider import BinanceProvider
@@ -856,6 +857,7 @@ class LiveTradingEngine:
         # Consecutive unproductive user-stream reconnects; trips a circuit breaker
         # that stops the futile reconnect loop and runs REST-only (#616).
         self._user_reconnect_failures = 0
+        self._user_degraded_paged = False  # USER_WS_DEGRADED already paged this outage
         # Consecutive unproductive kline reconnects; drives the *recovering* REST
         # fallback (#662) — momentary REST while reconnecting, auto-return to
         # WS-primary the instant a real kline event resumes (never REST-until-restart).
@@ -1159,6 +1161,10 @@ class LiveTradingEngine:
         self._drawdown_enforcer = MaxDrawdownEnforcer(
             engine_state=self,
             guard=MaxDrawdownGuard(self.risk_manager.params.max_drawdown),
+            mark_provider=lambda: self.live_position_tracker.mark_reading(
+                DRAWDOWN_MARK_MAX_AGE_SECONDS
+            ),
+            snapshot_writer=self._log_account_snapshot,
         )
         # #807 follow-up: run the account circuit breaker on the loop too —
         # restart-safe daily baseline + drawdown peak (#986 gap B), true-equity
@@ -1672,8 +1678,11 @@ class LiveTradingEngine:
 
         # End the trading session in database
         if self.trading_session_id:
+            # Paper positions are preserved above; the next start re-adopts them (#668).
             self.db_manager.end_trading_session(
-                session_id=self.trading_session_id, final_balance=self.current_balance
+                session_id=self.trading_session_id,
+                final_balance=self.current_balance,
+                carry_forward_open_positions=True,
             )
 
         logger.info("Trading engine stopped")
@@ -1791,8 +1800,12 @@ class LiveTradingEngine:
                 df = self._get_latest_data(symbol, timeframe)
                 if df is None or df.empty:
                     log_data_event("no_data", reason="empty_frame")
+                    # Feed the stale-data streak: a REST failure or RESYNCING skips
+                    # entries and exits exactly like a stale frame does.
+                    self._is_data_fresh(df)
                     logger.warning("No market data received")
                     self.check_interval = self._calculate_adaptive_interval()
+                    self._enforce_drawdown_through_data_gap()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
 
@@ -1800,6 +1813,7 @@ class LiveTradingEngine:
                 if not self._is_data_fresh(df):
                     logger.debug("Data is not fresh enough, using longer interval")
                     self.check_interval = self._calculate_adaptive_interval()
+                    self._enforce_drawdown_through_data_gap()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
                 # Add sentiment data if available
@@ -1845,6 +1859,7 @@ class LiveTradingEngine:
                         tail_nan_counts,
                     )
                     self.check_interval = self._calculate_adaptive_interval()
+                    self._enforce_drawdown_through_data_gap()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
 
@@ -1854,6 +1869,7 @@ class LiveTradingEngine:
                     logger.error(
                         "DataFrame became empty after readiness check - skipping iteration"
                     )
+                    self._enforce_drawdown_through_data_gap()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
 
@@ -2581,6 +2597,16 @@ class LiveTradingEngine:
         self._drawdown_enforcer.check()
         self._circuit_breaker_enforcer.check()
 
+    def _enforce_drawdown_through_data_gap(self) -> None:
+        """Keep the max-drawdown cap running on iterations that skip the loop body.
+
+        A market-data gap `continue`s before ``update_pnl`` and the regular
+        check, so without this the cap would go dark during an outage even for
+        realized losses such as stop fills. Marks are not refreshed on these
+        iterations, so only the balance leg is evaluated.
+        """
+        self._drawdown_enforcer.check_during_data_gap()
+
     def _refresh_drawdown_gate(self) -> bool:
         """Re-assess the max-drawdown hard cap at an exposure-increase chokepoint.
 
@@ -2596,6 +2622,14 @@ class LiveTradingEngine:
         """
         self._drawdown_enforcer.check_before_new_risk()
         return self._close_only_mode
+
+    def _durable_peak_equity(self) -> float:
+        """Peak mark-to-market equity the max-drawdown guard measures from.
+
+        Zero until the guard seeds. Feeds the stored ``account_history.drawdown``
+        so the column shares the hard cap's basis.
+        """
+        return self._drawdown_enforcer.guard.equity_peak
 
     def _durable_peak_balance(self) -> float:
         """Peak balance for drawdown-based risk throttling, durable across restarts.
