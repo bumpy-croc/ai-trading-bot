@@ -4299,3 +4299,67 @@ denial reproduced today on the combined query, breaking the 5-day clean streak; 
 commented), #1277 (worktree count unchanged at 30 for a 5th day, commented), #1141 (Railway CLI
 auth, reconfirmed broken for prod+staging), #1292 (staging flat 28 days, updated); incident
 `.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md` (updated).
+
+---
+
+## 2026-11-10 09:1x · track-record · daily-trading-standup
+
+**PROD**: equity $85.02028779, balance $85.17325606. Session-21 peak equity $88.89367342 (since
+2026-08-24) → DD **4.36%** via the equity method, 4.036% via the engine's own stored
+`account_history.drawdown` column (#1267 methodology divergence persists, not re-derived). One
+open position (id 39, ETHUSDT LONG, entry $2140.63, current $2104.90, unrealized -$0.20,
+stop-loss $1925.45 intact). Last 6 trades: loss/win/loss/win/win/loss — no 4+ consecutive losing
+streak. Zero unresolved CRITICAL `system_events` in 7 days.
+
+**Tripwire ladder** (ratified from `origin/main:src/config/risk-limits.json`, CAP=20%,
+WARN_FRAC=0.50, CRIT_FRAC=0.80): SOFT (≥5%, floor $84.449) **PASS** (4.36%, $0.57 clear);
+WARNING (≥10%, floor $80.004) **PASS**; CRITICAL (≥16%, floor $74.671) **PASS**; BREACH (≥20%,
+floor $71.115) **PASS**. Weekly DD via equity (7d-ago $86.55536142 → today $85.02028779,
+-1.77%) well under the 6% regime-shift threshold.
+
+**Positive-state assertions**: `ENTRIES_ENABLED` latch fresh (08:20:04 UTC, ~50min old at check
+time) — **PASS**, entries genuinely possible, not inferred from a flat book. `FEATURE_ENTRY_PAUSE`
+confirmed false via the same latch row's message text (narrower `railway variables -k` read
+denied again, "Credential Materialization" — #1290, no coverage gap). No unresolved CRITICAL
+events — **PASS**. Decision-cadence / `Decision:` log lines could **not** be directly verified
+this run — `railway logs` `Unauthorized` (#1141, reconfirmed) — substituted the hourly
+`account_history`/`system_events` write cadence as the loop-liveness proxy (if the loop were
+frozen, these rows would also stop).
+
+**#1290 (prod-DB-read classifier)**: did **NOT** reproduce today — the literal combined
+multi-statement `psql` call (three `-c` flags, one invocation, matching the task's own spec)
+succeeded cleanly on the first try, reversing 11-09's denial. Commented on #1290 with this data
+point; left open since this is run-to-run variance, not a confirmed fix.
+
+**CROSS-SESSION**: branch=main (correct). Open PR count 5 (#1291, #1285, #1281, #1271, #1270),
+all MERGEABLE, CI green on every check, none CONFLICTING. #1281 (29 days old), #1271 (37 days),
+#1270 (33 days) stale with no activity — symptoms of #1127 (no scheduled agent has merge
+authority), not re-filed. **Worktree count grew to 31**, breaking the 30-day plateau (11-05
+through 11-09) — traced to the new `retro-2026-11-09` worktree created by the 11-09 weekly-retro
+run (PR #1291); commented on #1277. Background `claude` process pid 33319 now ~27 days old —
+same long-lived process flagged on prior days, not filed.
+
+**Scheduled-task audit**: `daily-trading-standup` HIT today (this run) and confirmed HIT for
+11-07 through 11-09 via each day's own layer-2 artifact (the escalation comment landed on
+#1269). `weekly-model-retrain` — no new slot in this window (last fired 11-08 Sunday, still
+blocked on the stale ECR image, 5th consecutive week, unchanged, not re-commented).
+`prune-worktrees` — fired 11-09 23:10 UTC per `lastRunAt`; effect check shows worktree count
+grew 30→31 same window — reconfirms #1277 (fires but doesn't reduce count; the one new worktree
+is legitimate retro output, not a leak, but nothing pruned the backlog either). `weekly-retro` —
+last slot 11-09, already HIT (PR #1291).
+
+**STAGING**: flat **29 days** (last trade exit 10-12 19:08 UTC, #51, +$0.12 stop-loss).
+Equity/balance unchanged at $1020.16. Governor/circuit/gate_reason log check BLOCKED —
+`railway logs -e staging` `Unauthorized` (#1141, unchanged). Updated #1292 with today's day
+count (29, up from 28).
+
+**Market**: BTC $74,218 (-0.22% 24h), ETH $2,096.94 (-0.94% 24h), via CoinGecko public API
+(WebSearch again returned only stale 2025/mid-2026 articles, #1288 unchanged). The open ETHUSDT
+LONG's unrealized P&L is still only -$0.20 against this move; stop-loss ($1925.45) remains well
+clear of current price ($2104.90 per DB / $2096.94 per CoinGecko).
+
+Ref: GH #1269 (credential P1, 38th escalation, queue stays at 1, PR title restamped), #1285
+(updated record PR), #1286 (dead push-notification channel, not retried), #1290 (classifier did
+NOT reproduce today, commented), #1277 (worktree count grew 30→31, commented), #1141 (Railway
+CLI auth, reconfirmed broken for prod+staging), #1292 (staging flat 29 days, updated); incident
+`.claude/state/incidents/2026-10-04T0915-P1-prod-db-credential-unrotated.md` (updated).
