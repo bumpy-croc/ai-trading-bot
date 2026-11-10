@@ -79,6 +79,23 @@ SESSION_RECOVERY_WINDOW_HOURS = 168  # 7 days
 SIMULATED_SESSION_MODES = (TradeSource.PAPER, TradeSource.BACKTEST)
 
 
+class NegativeBalanceError(ValueError):
+    """A balance delta would take the session ledger below zero.
+
+    Subclasses ``ValueError`` so every existing ``except ValueError`` handler
+    keeps working; ``log_trade`` catches this type specifically so a ledger
+    rejection never undoes an already-filled exchange close.
+    """
+
+
+class DuplicateCloseError(ValueError):
+    """A Trade already references the position a ``balance_delta`` close targets.
+
+    Raised by ``log_trade`` under the balance-ledger lock so two racing closers of the
+    same position (engine exit vs reconciler) cannot both book its PnL.
+    """
+
+
 @dataclass(frozen=True)
 class SystemHaltStatus:
     """Detached snapshot of the ``system_halt`` control flag (#922).
@@ -1105,6 +1122,7 @@ class DatabaseManager:
         margin_interest_cost: float | None = None,
         position_id: int | None = None,
         balance_delta: float | None = None,
+        ledger_result: dict[str, Any] | None = None,
     ) -> int:
         """Logs a completed trade to the database.
 
@@ -1155,16 +1173,26 @@ class DatabaseManager:
                 trade/position commit used to leave the ledger able to
                 double-apply or drop the same PnL on recovery). Serialized against
                 every other balance writer the same way ``atomic_balance_update``
-                is (see ``_lock_balance_ledger``). When None (the default),
+                is (see ``_lock_balance_ledger``). The close is already a fact on
+                the exchange, so a delta the ledger refuses (resulting balance
+                negative) never aborts the Trade/Position write: the ledger is left
+                unchanged, a CRITICAL ``reconciliation_audit_events`` row is written
+                in the same transaction, and a CRITICAL log is emitted. When None (the default),
                 behaviour is unchanged: no balance write happens here, matching
                 every existing caller that owns its own balance update.
+
+            ledger_result: Optional out-parameter, filled only when ``balance_delta``
+                is given: with the ``old_balance``/``new_balance``/``change`` of the
+                applied delta, or with ``rejected_reason`` when the ledger refused it
+                (the Trade/Position close still committed). Lets callers tell a
+                moved ledger from an untouched one without a second read.
 
         Returns:
             Trade ID
 
         Raises:
             ValueError: Invalid financial inputs, or (with ``balance_delta``) no
-                resolvable session id or the resulting balance would be negative.
+                resolvable session id.
         """
         # Validate financial inputs at API boundary
         if not math.isfinite(entry_price) or entry_price <= 0:
@@ -1183,21 +1211,46 @@ class DatabaseManager:
         # Use WRITE timeout - trade logging requires durability guarantees
         with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
             balance_result: dict[str, float] | None = None
+            ledger_rejection: str | None = None
+            ledger_balance_before: float | None = None
             if balance_delta is not None:
                 # Serialize against every other ledger writer and apply the
                 # balance change BEFORE the trade/position writes below, all in
                 # this same session/transaction — see _lock_balance_ledger and
-                # _apply_balance_delta. A negative-balance ValueError here aborts
-                # before any Trade/Position write is even added to the session.
+                # _apply_balance_delta.
                 locked_session_id = cast(int, effective_session_id)  # validated above
                 self._lock_balance_ledger(session, locked_session_id)
-                balance_result = self._apply_balance_delta(
-                    session,
-                    locked_session_id,
-                    balance_delta,
-                    f"realized_pnl_{symbol}_{exit_reason}",
-                    "live_engine",
-                )
+                # Checked under the ledger lock (position_id is set, validated above): a
+                # Trade already linked to this position means another closer booked its
+                # PnL, and a second booking would double-apply it.
+                if (
+                    session.query(Trade.id).filter(Trade.position_id == position_id).first()
+                    is not None
+                ):
+                    raise DuplicateCloseError(
+                        f"position {position_id} already has a terminal trade; "
+                        "refusing to book its PnL again"
+                    )
+                try:
+                    balance_result = self._apply_balance_delta(
+                        session,
+                        locked_session_id,
+                        balance_delta,
+                        f"realized_pnl_{symbol}_{exit_reason}",
+                        "live_engine",
+                    )
+                except NegativeBalanceError as ledger_err:
+                    # Every caller passing balance_delta records a close that has
+                    # ALREADY happened on the exchange, so the ledger's negative-
+                    # balance check must not veto the Trade insert and Position
+                    # CLOSED flip: aborting here would leave a gone exchange
+                    # position OPEN in the DB (phantom position). _apply_balance_delta
+                    # raises before adding any row, so nothing needs undoing; the
+                    # ledger is left untouched and the anomaly is recorded below.
+                    ledger_rejection = str(ledger_err)
+                    ledger_balance_before = AccountBalance.get_current_balance(
+                        locked_session_id, session, for_update=False
+                    )
 
             # Normalize sides/sources to the DATABASE enums (fresh locals, no
             # argument reassignment). Engines pass their own PositionSide
@@ -1280,6 +1333,30 @@ class DatabaseManager:
                             symbol,
                         )
 
+                if ledger_rejection is not None:
+                    # Persisted in the same transaction as the Trade so the
+                    # anomaly record and the close can never diverge.
+                    session.add(
+                        ReconciliationAuditEvent(
+                            session_id=effective_session_id,
+                            entity_type="balance",
+                            entity_id=position_id,
+                            field="realized_pnl",
+                            old_value=f"{ledger_balance_before:.2f}",
+                            new_value=None,
+                            reason=(
+                                f"Ledger rejected realized PnL of {balance_delta:+.2f} for "
+                                f"{symbol} ({exit_reason}); Trade and Position close were "
+                                f"persisted, ledger NOT adjusted: {ledger_rejection}"
+                            ),
+                            severity="CRITICAL",
+                        )
+                    )
+
+                # Flushed before the commit so the id is read while the transaction is
+                # still open: a refresh after commit could fail on a close that did commit.
+                session.flush()
+                trade_id = trade.id
                 session.commit()
             except IntegrityError as ie:
                 # Rollback on integrity errors (duplicate keys, constraint violations)
@@ -1301,22 +1378,47 @@ class DatabaseManager:
                 raise
 
             logger.info(
-                f"Logged trade #{trade.id}: {symbol} {db_side.value} P&L: ${pnl:.2f} ({pnl_percent:.2f}%)"
+                f"Logged trade #{trade_id}: {symbol} {db_side.value} P&L: ${pnl:.2f} ({pnl_percent:.2f}%)"
             )
+            if ledger_result is not None:
+                if ledger_rejection is not None:
+                    ledger_result["rejected_reason"] = ledger_rejection
+                elif balance_result is not None:
+                    ledger_result.update(balance_result)
+            if ledger_rejection is not None:
+                logger.critical(
+                    "LEDGER ANOMALY: realized PnL %+.2f for %s (Trade #%s, Position %s) was "
+                    "persisted but the ledger rejected the balance change (%s). The balance "
+                    "ledger is NOT adjusted and must be reconciled against the exchange.",
+                    cast(float, balance_delta),
+                    symbol,
+                    trade_id,
+                    position_id,
+                    ledger_rejection,
+                )
             if balance_result is not None:
                 logger.info(
                     "Atomic exit: balance $%.2f -> $%.2f | Trade #%s | Position %s closed",
                     balance_result["old_balance"],
                     balance_result["new_balance"],
-                    trade.id,
+                    trade_id,
                     position_id,
                 )
 
-            # Update performance metrics - handle None session_id
+            # Update performance metrics - handle None session_id. The trade is already
+            # committed, so a metrics failure must not make the write look failed.
             if effective_session_id:
-                self._update_performance_metrics(effective_session_id)
+                try:
+                    self._update_performance_metrics(effective_session_id)
+                except Exception as metrics_err:
+                    logger.warning(
+                        "Trade #%s committed but the performance metrics update failed: %s",
+                        trade_id,
+                        metrics_err,
+                        exc_info=True,
+                    )
 
-            return trade.id
+            return trade_id
 
     def log_position(
         self,
@@ -3191,7 +3293,7 @@ class DatabaseManager:
         new_balance = current_balance + delta
 
         if new_balance < 0:
-            raise ValueError(
+            raise NegativeBalanceError(
                 f"Balance update would result in negative balance: "
                 f"${current_balance:.2f} + ${delta:.2f} = ${new_balance:.2f}"
             )

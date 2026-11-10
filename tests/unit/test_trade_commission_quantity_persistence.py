@@ -516,25 +516,64 @@ def test_reconciler_filled_sl_converts_short_commission_to_usd_and_dedups(monkey
     assert t["order_id"] == "reconcile_sl_77"
 
 
-def test_reconciler_filled_sl_skips_trade_when_db_close_fails(monkeypatch):
-    """If the DB position close fails, NO trade is logged — the row stays OPEN and is
-    re-reconciled later; logging now would duplicate when it is re-recovered."""
+def test_reconciler_filled_sl_leaves_position_tracked_when_atomic_write_fails(monkeypatch):
+    """#1223: the position close, Trade insert and balance delta are ONE atomic write. When it
+    fails nothing is committed, so the position stays tracked (flagged exchange_close_pending)
+    for a retry instead of being left CLOSED with its PnL dropped."""
     from types import SimpleNamespace as NS
 
     db = MockDatabaseManager()
-    reconciler = _make_reconciler(db, fee_rate=0.001)
+    tracker = _tracker_with(_make_position(quantity=2.5, entry_fee=None, entry_price=100.0))
+    reconciler = _make_reconciler(db, fee_rate=0.001, tracker=tracker)
     monkeypatch.setattr(reconciler, "_persist_audit", lambda *a, **k: None)
-    monkeypatch.setattr(db, "close_position", Mock(side_effect=RuntimeError("db down")))
+    monkeypatch.setattr(db, "log_trade", Mock(side_effect=RuntimeError("db down")))
+    close_spy = Mock(wraps=db.close_position)
+    monkeypatch.setattr(db, "close_position", close_spy)
+    no_balance_write = Mock()
+    monkeypatch.setattr(db, "update_balance", no_balance_write)
     position = _make_position(
         quantity=2.5, entry_fee=None, side=PositionSide.SHORT, entry_price=100.0
     )
     position.db_position_id = 88
     position.order_id = "pos-88"
+    _register_open_position(db, position)
     sl_order = NS(average_price=90.0, order_id="sl-88", commission=2.0, commission_asset="USDT")
 
     reconciler._close_position_from_filled_sl(position, sl_order)
 
-    assert len(db._trades) == 0  # DB close failed -> trade not logged (no duplicate risk)
+    assert len(db._trades) == 0
+    close_spy.assert_not_called()  # no separate upfront close transaction
+    no_balance_write.assert_not_called()
+    tracker.remove_position.assert_not_called()
+    assert position.exchange_close_pending is True
+
+
+def test_reconciler_filled_sl_closes_position_only_through_the_atomic_write(monkeypatch):
+    """#1223: on success the position is closed by log_trade(position_id, balance_delta) — the
+    reconciler never issues a separate close_position, which is the crash window."""
+    from types import SimpleNamespace as NS
+
+    db = MockDatabaseManager()
+    position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0)
+    position.db_position_id = 89
+    position.order_id = "pos-89"
+    _register_open_position(db, position)
+    tracker = _tracker_with(position)
+    reconciler = _make_reconciler(db, fee_rate=0.001, tracker=tracker)
+    monkeypatch.setattr(reconciler, "_persist_audit", lambda *a, **k: None)
+    log_spy = Mock(wraps=db.log_trade)
+    monkeypatch.setattr(db, "log_trade", log_spy)
+    close_spy = Mock(wraps=db.close_position)
+    monkeypatch.setattr(db, "close_position", close_spy)
+    sl_order = NS(average_price=90.0, order_id="sl-89", commission=0.2, commission_asset="USDT")
+
+    reconciler._close_position_from_filled_sl(position, sl_order)
+
+    log_spy.assert_called_once()
+    assert log_spy.call_args.kwargs["position_id"] == 89
+    assert log_spy.call_args.kwargs["balance_delta"] == pytest.approx(-25.0 - 0.2)
+    close_spy.assert_not_called()
+    tracker.remove_position.assert_called_once_with("pos-89")
 
 
 def test_reconciler_filled_exit_logs_trade_with_exchange_order_id(monkeypatch):
@@ -587,28 +626,36 @@ def test_reconciler_filled_exit_synthesizes_dedup_key_when_no_exchange_id(monkey
     assert t["order_id"] == "reconcile_exit_56"
 
 
-def test_reconciler_filled_exit_skips_trade_when_db_close_fails(monkeypatch):
-    """If the DB position close fails, NO trade is logged and the balance is NOT corrected — the
-    row stays OPEN and is re-reconciled later (avoids the double balance correction)."""
+def test_reconciler_filled_exit_raises_and_stays_tracked_when_atomic_write_fails(monkeypatch):
+    """#1223: when the atomic close+trade+balance write fails nothing is committed, so the
+    position stays tracked and the failure is raised — the order journal then stays SUBMITTED and
+    the next restart retries, instead of the PnL being silently dropped."""
     db = MockDatabaseManager()
-    monkeypatch.setattr(db, "close_position", Mock(side_effect=RuntimeError("db down")))
+    monkeypatch.setattr(db, "log_trade", Mock(side_effect=RuntimeError("db down")))
+    close_spy = Mock(wraps=db.close_position)
+    monkeypatch.setattr(db, "close_position", close_spy)
     no_balance_write = Mock()
     monkeypatch.setattr(db, "update_balance", no_balance_write)
     position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0)
     position.db_position_id = 57
     position.order_id = "pos-57"
-    reconciler = _make_reconciler(db, fee_rate=0.001, tracker=_tracker_with(position))
+    tracker = _tracker_with(position)
+    reconciler = _make_reconciler(db, fee_rate=0.001, tracker=tracker)
     monkeypatch.setattr(reconciler, "_persist_audit", lambda *a, **k: None)
 
-    reconciler._reconcile_filled_exit(
-        {"position_id": 57, "client_order_id": "atbx_exit_3"},
-        fill_price=90.0,
-        exit_fee=0.2,
-        exit_order_id="EXCH-1",
-    )
+    with pytest.raises(RuntimeError, match="could not be persisted"):
+        reconciler._reconcile_filled_exit(
+            {"position_id": 57, "client_order_id": "atbx_exit_3"},
+            fill_price=90.0,
+            exit_fee=0.2,
+            exit_order_id="EXCH-1",
+        )
 
-    assert len(db._trades) == 0  # DB close failed -> trade not logged (no duplicate risk)
-    no_balance_write.assert_not_called()  # and P&L not realized -> no double balance correction
+    assert len(db._trades) == 0
+    close_spy.assert_not_called()  # no separate upfront close transaction
+    no_balance_write.assert_not_called()
+    tracker.remove_position.assert_not_called()
+    assert position.exchange_close_pending is True
 
 
 def test_reconciler_external_close_spot_logs_balance_neutral_trade(monkeypatch):
@@ -729,9 +776,10 @@ def test_external_close_exit_price_falls_back_to_entry_when_no_provider():
     assert reconciler._external_close_exit_price(position) == pytest.approx(100.0)
 
 
-def test_reconciler_filled_exit_skips_trade_when_db_close_returns_false(monkeypatch):
-    """close_position returns False (row not found / commit rolled back) WITHOUT raising — the gate
-    must treat that as 'not closed' and log no trade (else trades/account_balances diverge)."""
+def test_reconciler_filled_exit_without_usable_price_closes_row_and_raises_on_false(monkeypatch):
+    """With no usable fill price there is no PnL to realize, so the row is closed on its own;
+    close_position returning False (row not found / commit rolled back) WITHOUT raising must be
+    treated as 'not closed' — the position stays tracked and the failure is raised."""
     db = MockDatabaseManager()
     monkeypatch.setattr(db, "close_position", Mock(return_value=False))
     no_balance_write = Mock()
@@ -739,18 +787,21 @@ def test_reconciler_filled_exit_skips_trade_when_db_close_returns_false(monkeypa
     position = _make_position(quantity=2.5, entry_fee=None, entry_price=100.0)
     position.db_position_id = 71
     position.order_id = "pos-71"
-    reconciler = _make_reconciler(db, fee_rate=0.001, tracker=_tracker_with(position))
+    tracker = _tracker_with(position)
+    reconciler = _make_reconciler(db, fee_rate=0.001, tracker=tracker)
     monkeypatch.setattr(reconciler, "_persist_audit", lambda *a, **k: None)
 
-    reconciler._reconcile_filled_exit(
-        {"position_id": 71, "client_order_id": "atbx_exit_f"},
-        fill_price=90.0,
-        exit_fee=0.2,
-        exit_order_id="EXCH-F",
-    )
+    with pytest.raises(RuntimeError, match="could not be persisted"):
+        reconciler._reconcile_filled_exit(
+            {"position_id": 71, "client_order_id": "atbx_exit_f"},
+            fill_price=0.0,
+            exit_fee=0.2,
+            exit_order_id="EXCH-F",
+        )
 
-    assert len(db._trades) == 0  # False return -> not persisted -> no trade
+    assert len(db._trades) == 0
     no_balance_write.assert_not_called()
+    tracker.remove_position.assert_not_called()
 
 
 def test_reconciler_external_close_skips_trade_when_db_close_returns_false(monkeypatch):

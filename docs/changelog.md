@@ -41,6 +41,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type error.
 
 ### Fixed
+- **A ledger-rejected close no longer undoes an already-filled exchange close** (#1261). When
+  `log_trade(balance_delta=...)` is refused by the ledger (the resulting balance would be
+  negative), the Trade insert and Position CLOSED flip still commit; the ledger is left
+  unchanged and a CRITICAL `reconciliation_audit_events` row is written in the same
+  transaction, and the live exit path enters close-only mode (the ledger no longer matches the
+  exchange). Previously the abort left the DB position OPEN after the exchange position was
+  gone (phantom position). `log_trade(balance_delta=...)` also refuses, under the ledger lock,
+  to book a position that already has a terminal Trade (`DuplicateCloseError`).
+- **Offline-SL and reconcile-exit closes commit the position close, Trade and balance in one
+  transaction** (#1223). `_close_position_from_filled_sl` and `_reconcile_filled_exit` no longer
+  close the row in a separate upfront transaction, so a crash can no longer leave a CLOSED
+  position with its PnL dropped. A failed write now leaves the position OPEN and tracked for
+  retry (`_reconcile_filled_exit` raises so the order journal stays SUBMITTED).
 - **Margin user-data WebSocket now actually re-establishes without a restart** (#723, #616, #729).
   Root cause, reproduced against the real python-binance stack with a fake ws-api server: an
   in-place re-subscribe reuses one cached `KeepAliveWebsocket`, so the previous listener's exit

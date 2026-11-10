@@ -1,0 +1,412 @@
+"""Crash-window regression tests for the reconciler's offline-exit closes (#1223).
+
+``_close_position_from_filled_sl`` and ``_reconcile_filled_exit`` commit the position
+close inside the same transaction as the Trade insert and the balance delta. A separate
+earlier close would leave the position CLOSED with no Trade and no balance change if the
+process died in between — a PnL that is never recovered, because a CLOSED position is
+never re-picked-up. These tests run against a real in-memory database and fail the write
+to prove the all-or-nothing behavior.
+"""
+
+from __future__ import annotations
+
+import threading
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
+
+from src.database.manager import DatabaseManager
+from src.database.models import Position, PositionStatus, Trade, TradeSource
+from src.engines.live.execution.position_tracker import LivePosition
+from src.engines.live.reconciliation import PositionReconciler
+from src.engines.shared.models import PositionSide
+
+pytestmark = pytest.mark.fast
+
+SEED_BALANCE = 1000.0
+ENTRY_PRICE = 100.0
+QUANTITY = 2.0
+SIZE = 0.2
+SL_PRICE = 90.0
+
+
+class _Env(SimpleNamespace):
+    """Bundle of the real DB, the reconciler, the tracker and the tracked position."""
+
+
+@pytest.fixture
+def env() -> _Env:
+    db = DatabaseManager("sqlite:///:memory:")
+    session_id = db.create_trading_session(
+        strategy_name="TestStrategy",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        mode=TradeSource.LIVE,
+        initial_balance=SEED_BALANCE,
+    )
+    db.update_balance(SEED_BALANCE, "seed", "test", session_id)
+    db_position_id = db.log_position(
+        symbol="BTCUSDT",
+        side="long",
+        entry_price=ENTRY_PRICE,
+        size=SIZE,
+        strategy_name="TestStrategy",
+        entry_order_id="entry-1",
+        quantity=QUANTITY,
+        entry_balance=SEED_BALANCE,
+        session_id=session_id,
+    )
+    position = LivePosition(
+        symbol="BTCUSDT",
+        side=PositionSide.LONG,
+        size=SIZE,
+        entry_price=ENTRY_PRICE,
+        entry_time=datetime(2025, 1, 1, tzinfo=UTC),
+        order_id="entry-1",
+        original_size=SIZE,
+        current_size=SIZE,
+        quantity=QUANTITY,
+    )
+    position.db_position_id = db_position_id
+    positions = {position.order_id: position}
+    tracker = SimpleNamespace(
+        _positions=positions,
+        _positions_lock=threading.Lock(),
+        remove_position=Mock(side_effect=lambda oid: positions.pop(oid, None)),
+        get_position=lambda oid: positions.get(oid),
+    )
+    reconciler = PositionReconciler(
+        exchange_interface=Mock(),
+        position_tracker=tracker,
+        db_manager=db,
+        session_id=session_id,
+        fee_rate=0.0,
+    )
+    return _Env(
+        db=db,
+        session_id=session_id,
+        position=position,
+        position_id=db_position_id,
+        tracker=tracker,
+        reconciler=reconciler,
+    )
+
+
+def _sl_order(order_id: str = "sl-1") -> SimpleNamespace:
+    return SimpleNamespace(
+        average_price=SL_PRICE, order_id=order_id, commission=0.0, commission_asset="USDT"
+    )
+
+
+def _position_status(db: DatabaseManager, position_id: int) -> PositionStatus:
+    with db.get_session() as session:
+        row = session.query(Position).filter(Position.id == position_id).one()
+        return row.status
+
+
+def _trade_count(db: DatabaseManager, session_id: int) -> int:
+    with db.get_session() as session:
+        return session.query(Trade).filter(Trade.session_id == session_id).count()
+
+
+@pytest.fixture(params=["commit_fails", "trade_write_fails"])
+def fail_next_commit(request, monkeypatch, env):
+    """Arm a one-shot failure of the close's DB write.
+
+    ``commit_fails``: the next ``Session.commit`` raises (connection lost mid-transaction).
+    ``trade_write_fails``: the next ``log_trade`` call raises, i.e. the process dies between
+    deciding to close and recording the PnL.
+    """
+    armed = {"on": False}
+
+    if request.param == "commit_fails":
+        real_commit = Session.commit
+
+        def _commit(self):
+            if armed["on"]:
+                armed["on"] = False
+                self.rollback()
+                raise OperationalError("COMMIT", {}, Exception("connection lost"))
+            return real_commit(self)
+
+        monkeypatch.setattr(Session, "commit", _commit)
+    else:
+        real_log_trade = env.db.log_trade
+
+        def _log_trade(*args, **kwargs):
+            if armed["on"]:
+                armed["on"] = False
+                raise RuntimeError("process died before the trade write")
+            return real_log_trade(*args, **kwargs)
+
+        monkeypatch.setattr(env.db, "log_trade", _log_trade)
+
+    def arm() -> None:
+        armed["on"] = True
+
+    return arm
+
+
+def test_offline_sl_close_commits_position_trade_and_balance_together(env):
+    env.reconciler._close_position_from_filled_sl(env.position, _sl_order())
+
+    assert _position_status(env.db, env.position_id) == PositionStatus.CLOSED
+    assert _trade_count(env.db, env.session_id) == 1
+    assert env.db.get_current_balance(env.session_id) == pytest.approx(
+        SEED_BALANCE + (SL_PRICE - ENTRY_PRICE) * QUANTITY
+    )
+    assert env.position.order_id not in env.tracker._positions
+
+
+def test_offline_sl_crash_mid_close_leaves_position_open_and_retry_realizes_pnl_once(
+    env, fail_next_commit
+):
+    """A crash before the PnL is recorded commits nothing: the position stays OPEN and
+    tracked, and the retry books the PnL exactly once."""
+    fail_next_commit()
+    env.reconciler._close_position_from_filled_sl(env.position, _sl_order())
+
+    assert _position_status(env.db, env.position_id) == PositionStatus.OPEN
+    assert _trade_count(env.db, env.session_id) == 0
+    assert env.db.get_current_balance(env.session_id) == pytest.approx(SEED_BALANCE)
+    assert env.position.order_id in env.tracker._positions
+    assert env.position.exchange_close_pending is True
+
+    env.reconciler._close_position_from_filled_sl(env.position, _sl_order())
+
+    expected_pnl = (SL_PRICE - ENTRY_PRICE) * QUANTITY
+    assert _position_status(env.db, env.position_id) == PositionStatus.CLOSED
+    assert _trade_count(env.db, env.session_id) == 1
+    assert env.db.get_current_balance(env.session_id) == pytest.approx(SEED_BALANCE + expected_pnl)
+
+
+def test_filled_exit_crash_mid_close_raises_leaves_position_open_and_retry_realizes_once(
+    env, fail_next_commit
+):
+    order_data = {"position_id": env.position_id, "client_order_id": "exit-1"}
+
+    fail_next_commit()
+    with pytest.raises(RuntimeError, match="could not be persisted"):
+        env.reconciler._reconcile_filled_exit(
+            order_data, fill_price=SL_PRICE, exit_fee=0.0, exit_order_id="exch-exit-1"
+        )
+
+    assert _position_status(env.db, env.position_id) == PositionStatus.OPEN
+    assert _trade_count(env.db, env.session_id) == 0
+    assert env.db.get_current_balance(env.session_id) == pytest.approx(SEED_BALANCE)
+    assert env.position.order_id in env.tracker._positions
+
+    env.reconciler._reconcile_filled_exit(
+        order_data, fill_price=SL_PRICE, exit_fee=0.0, exit_order_id="exch-exit-1"
+    )
+
+    assert _position_status(env.db, env.position_id) == PositionStatus.CLOSED
+    assert _trade_count(env.db, env.session_id) == 1
+    assert env.db.get_current_balance(env.session_id) == pytest.approx(
+        SEED_BALANCE + (SL_PRICE - ENTRY_PRICE) * QUANTITY
+    )
+    assert env.position.order_id not in env.tracker._positions
+
+
+def test_position_with_a_linked_trade_is_closed_by_the_upfront_guard_without_reapplying_pnl(
+    env,
+):
+    """A trade linked to this position already exists (an earlier pass booked it) but the
+    row is still OPEN: the upfront terminal-trade guard closes the row and does not re-book
+    the PnL."""
+    env.db.log_trade(
+        symbol="BTCUSDT",
+        side="long",
+        entry_price=ENTRY_PRICE,
+        exit_price=SL_PRICE,
+        size=SIZE,
+        entry_time=datetime(2025, 1, 1, tzinfo=UTC),
+        exit_time=datetime.now(UTC),
+        pnl=-20.0,
+        exit_reason="stop_loss",
+        strategy_name="TestStrategy",
+        source=TradeSource.LIVE,
+        session_id=env.session_id,
+        exit_order_id="sl-dup",
+        position_id=env.position_id,
+    )
+
+    env.reconciler._close_position_from_filled_sl(env.position, _sl_order("sl-dup"))
+
+    assert _position_status(env.db, env.position_id) == PositionStatus.CLOSED
+    assert _trade_count(env.db, env.session_id) == 1
+    assert env.db.get_current_balance(env.session_id) == pytest.approx(SEED_BALANCE)
+    assert env.position.order_id not in env.tracker._positions
+
+
+def test_racing_second_close_with_a_new_order_id_is_recognised_as_already_booked(env):
+    """A second closer arriving with a different exit order id (so no unique-key collision)
+    is stopped by the in-transaction duplicate-close check: the row is closed idempotently and
+    the PnL is booked exactly once."""
+    env.reconciler._close_position_from_filled_sl(env.position, _sl_order("sl-first"))
+
+    outcome = env.reconciler._log_reconciliation_trade(
+        position=env.position,
+        entry_price=ENTRY_PRICE,
+        exit_price=SL_PRICE,
+        qty=QUANTITY,
+        gross_pnl=-20.0,
+        exit_fee=0.0,
+        interest_cost=0.0,
+        reason="stop_loss_filled_offline",
+        exit_order_id="sl-second",
+        balance_delta=-20.0,
+    )
+
+    assert outcome.position_closed is True
+    assert outcome.balance is None
+    assert _trade_count(env.db, env.session_id) == 1
+    assert env.db.get_current_balance(env.session_id) == pytest.approx(
+        SEED_BALANCE + (SL_PRICE - ENTRY_PRICE) * QUANTITY
+    )
+
+
+def test_unrelated_order_id_collision_does_not_close_the_row_or_drop_the_pnl(env):
+    """A unique-key collision with a trade that is NOT linked to this position is not proof
+    the PnL was booked: the row must stay OPEN and tracked, not be closed with the PnL lost."""
+    env.db.log_trade(
+        symbol="BTCUSDT",
+        side="long",
+        entry_price=ENTRY_PRICE,
+        exit_price=SL_PRICE,
+        size=SIZE,
+        entry_time=datetime(2025, 1, 1, tzinfo=UTC),
+        exit_time=datetime.now(UTC),
+        pnl=-20.0,
+        exit_reason="stop_loss",
+        strategy_name="TestStrategy",
+        source=TradeSource.LIVE,
+        session_id=env.session_id,
+        exit_order_id="sl-unrelated",
+    )
+
+    env.reconciler._close_position_from_filled_sl(env.position, _sl_order("sl-unrelated"))
+
+    assert _position_status(env.db, env.position_id) == PositionStatus.OPEN
+    assert env.position.order_id in env.tracker._positions
+    assert env.position.exchange_close_pending is True
+
+
+def test_unpriced_exit_still_closes_the_row(env):
+    """No usable exit price means no PnL can be realized, but the exchange position is gone,
+    so the DB row must still be closed."""
+    closed = env.reconciler._realize_pnl_on_close(
+        env.position, None, "stop_loss_filled_offline", log_trade=True, exit_order_id="x"
+    )
+
+    assert closed is True
+    assert _position_status(env.db, env.position_id) == PositionStatus.CLOSED
+    assert _trade_count(env.db, env.session_id) == 0
+    assert env.db.get_current_balance(env.session_id) == pytest.approx(SEED_BALANCE)
+
+
+def test_realize_pnl_on_close_reports_failure_when_write_does_not_commit(env, fail_next_commit):
+    fail_next_commit()
+
+    closed = env.reconciler._realize_pnl_on_close(
+        env.position,
+        SL_PRICE,
+        "stop_loss_filled_offline",
+        log_trade=True,
+        exit_order_id="sl-fail",
+    )
+
+    assert closed is False
+    assert _position_status(env.db, env.position_id) == PositionStatus.OPEN
+
+
+def test_ledger_rejection_does_not_block_the_offline_close(env):
+    """A realized loss larger than the ledger balance is refused by the ledger, but the stop
+    already filled on the exchange: the position must close and the anomaly is audited."""
+    env.db.update_balance(5.0, "shrunk", "test", env.session_id)
+
+    env.reconciler._close_position_from_filled_sl(env.position, _sl_order())
+
+    assert _position_status(env.db, env.position_id) == PositionStatus.CLOSED
+    assert _trade_count(env.db, env.session_id) == 1
+    assert env.db.get_current_balance(env.session_id) == pytest.approx(5.0)
+    assert len(env.db.get_audit_events(env.session_id, severity="CRITICAL")) == 1
+    assert env.position.order_id not in env.tracker._positions
+    # The refused delta moved nothing, so no balance-change audit row may claim it did.
+    assert env.db.get_audit_events(env.session_id, severity="MEDIUM") == []
+    # ...and the refusal is queued for escalation to close-only mode.
+    assert len(env.reconciler.take_ledger_rejections()) == 1
+    assert env.reconciler.take_ledger_rejections() == []
+
+
+def test_periodic_cycle_escalates_a_ledger_refused_stop_loss_close(env):
+    """The periodic wrapper carries the refusal to the cycle so close-only is latched."""
+    from src.engines.live.reconciliation import PeriodicReconciler
+
+    env.db.update_balance(5.0, "shrunk", "test", env.session_id)
+    periodic = PeriodicReconciler(
+        exchange_interface=Mock(),
+        position_tracker=env.tracker,
+        db_manager=env.db,
+        session_id=env.session_id,
+    )
+
+    closed = periodic._close_position_from_filled_sl(
+        env.position.order_id, env.position, _sl_order()
+    )
+
+    assert closed is True
+    assert len(periodic._ledger_rejection_findings) == 1
+    assert "ledger refused" in periodic._ledger_rejection_findings[0]
+
+
+def test_startup_reconcile_reports_a_ledger_refusal_as_critical(env, monkeypatch):
+    from src.engines.live.reconciliation import Severity
+
+    monkeypatch.setattr(env.reconciler, "resolve_pending_orders", lambda: [])
+    monkeypatch.setattr(env.reconciler, "_reconcile_balance", Mock())
+    env.reconciler._ledger_rejections.append("BTCUSDT stop_loss_filled_offline: refused")
+
+    results = env.reconciler.reconcile_startup({})
+
+    assert results[-1].severity == Severity.CRITICAL
+    assert results[-1].entity_type == "balance"
+
+
+def test_session_less_reconciler_still_closes_the_row(env):
+    """With no session to book against, the closing caller still gets its row closed."""
+    env.reconciler.session_id = None
+
+    outcome = env.reconciler._log_reconciliation_trade(
+        position=env.position,
+        entry_price=ENTRY_PRICE,
+        exit_price=SL_PRICE,
+        qty=QUANTITY,
+        gross_pnl=-20.0,
+        exit_fee=0.0,
+        interest_cost=0.0,
+        reason="stop_loss_filled_offline",
+        exit_order_id="sl-nosession",
+        balance_delta=-20.0,
+    )
+
+    assert outcome.position_closed is True
+    assert _position_status(env.db, env.position_id) == PositionStatus.CLOSED
+
+
+def test_filled_exit_for_untracked_missing_row_does_not_wedge_the_journal(env):
+    """An exit whose position is neither tracked nor in the DB has nothing to retry against, so
+    it must not raise (which would leave the order journal SUBMITTED forever)."""
+    env.reconciler._reconcile_filled_exit(
+        {"position_id": 99999, "client_order_id": "exit-orphan"},
+        fill_price=SL_PRICE,
+        exit_fee=0.0,
+        exit_order_id="exch-exit-orphan",
+    )
+
+    assert _trade_count(env.db, env.session_id) == 0
+    assert env.position.order_id in env.tracker._positions

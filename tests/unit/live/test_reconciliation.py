@@ -520,8 +520,13 @@ class TestPositionReconciler:
         assert any("Stop-loss filled" in c.reason for c in result.corrections)
         # Position must be removed from in-memory tracker
         mock_position_tracker.remove_position.assert_called_once_with(pos.order_id)
-        # DB position must be closed with SL fill price
-        mock_db.close_position.assert_called_once_with(7, exit_price=49000.0)
+        # DB position is closed by the atomic trade write (#1223), not a separate
+        # upfront close_position: -1 gross (0.001 qty reconciled from the entry fill) minus 0.05 fee.
+        mock_db.close_position.assert_not_called()
+        mock_db.log_trade.assert_called_once()
+        assert mock_db.log_trade.call_args.kwargs["position_id"] == 7
+        assert mock_db.log_trade.call_args.kwargs["exit_price"] == pytest.approx(49000.0)
+        assert mock_db.log_trade.call_args.kwargs["balance_delta"] == pytest.approx(-1.05)
 
     def test_reconcile_position_sl_filled_no_average_price(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
@@ -1285,13 +1290,14 @@ class TestBalanceAccountsForPositionNotional:
     def test_filled_sl_close_fail_flags_exchange_close_pending(
         self, reconciler, mock_db, mock_position_tracker
     ):
-        """_close_position_from_filled_sl retains the position when the DB close RETURNS False,
-        and flags it exchange_close_pending: the stop-loss already sold the asset, so balance
-        reconciliation must exclude its notional rather than add the realized value back."""
+        """_close_position_from_filled_sl retains the position when the atomic close write
+        fails, and flags it exchange_close_pending: the stop-loss already sold the asset, so
+        balance reconciliation must exclude its notional rather than add the realized value
+        back."""
         from types import SimpleNamespace as NS
 
         pos = MockPosition(db_position_id=90, order_id="pos-90")
-        mock_db.close_position.return_value = False
+        mock_db.log_trade.side_effect = RuntimeError("db down")
         sl_order = NS(
             average_price=48000.0, order_id="sl-90", commission=0.0, commission_asset="USDT"
         )
@@ -1596,8 +1602,13 @@ class TestFilledOrderPositionReconciliation:
 
         # Position should be removed from tracker
         mock_position_tracker.remove_position.assert_called_once_with("order_123")
-        # DB position should be closed with exit price
-        mock_db.close_position.assert_called_once_with(7, exit_price=51000.0)
+        # DB position is closed by the atomic trade write (#1223): +100 gross (0.1 qty,
+        # 50000 -> 51000) minus 0.05 commission.
+        mock_db.close_position.assert_not_called()
+        mock_db.log_trade.assert_called_once()
+        assert mock_db.log_trade.call_args.kwargs["position_id"] == 7
+        assert mock_db.log_trade.call_args.kwargs["exit_price"] == pytest.approx(51000.0)
+        assert mock_db.log_trade.call_args.kwargs["balance_delta"] == pytest.approx(99.95)
 
     def test_filled_exit_no_position_id_is_safe(
         self, reconciler, mock_exchange, mock_db, mock_position_tracker
@@ -2492,8 +2503,9 @@ class TestPeriodicReconcilerSLVerification:
         )
         reconciler._reconcile_cycle()
 
-        # DB closed first, then removed from the tracker (delegated handler)
-        mock_db.close_position.assert_called_once_with(50, exit_price=48000.0)
+        # DB closed by the atomic trade write, then removed from the tracker (delegated
+        # handler) — no separate upfront close_position (#1223).
+        mock_db.close_position.assert_not_called()
         mock_position_tracker.remove_position.assert_called_once_with("entry_1")
         mock_db.log_audit_event.assert_any_call(
             session_id=1,
@@ -6101,8 +6113,8 @@ class TestPeriodicSLFillBooksPnl:
 
         reconciler._reconcile_cycle()
 
-        # Booked as SL close with the fill price...
-        mock_db.close_position.assert_called_once_with(71, exit_price=48000.0)
+        # Booked as SL close with the fill price (closed by the atomic trade write)...
+        mock_db.close_position.assert_not_called()
         # ...with realized P&L booked atomically with the trade insert and
         # position-close (#736/#735, via log_trade's balance_delta): short
         # entry 50000 -> cover 48000 on 0.1 qty = +200 gross, minus 0.05 SL
@@ -6240,8 +6252,8 @@ class TestSpotSLFillNotExternalClose:
         )
         reconciler._reconcile_cycle()
 
-        # Closed as an SL fill with the real price, P&L booked...
-        mock_db.close_position.assert_called_once_with(90, exit_price=48000.0)
+        # Closed as an SL fill with the real price (by the atomic trade write), P&L booked...
+        mock_db.close_position.assert_not_called()
         pnl_calls = [
             c for c in mock_db.log_trade.call_args_list if c.kwargs.get("balance_delta") is not None
         ]
