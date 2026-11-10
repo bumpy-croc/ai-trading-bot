@@ -9,20 +9,33 @@ engine keeps thin delegating wrappers, so the trading loop and the
 ``LiveMarketDataCoordinator`` (which calls ``state._is_data_fresh``) are
 unchanged.
 
-Leaf helpers — no order placement, balance mutation, or engine-method calls;
-the coordinator holds no state of its own. Runs on the trading-loop thread.
+Leaf helpers — no order placement, balance mutation, or engine-method calls.
+The only state the coordinator keeps is the stale-data streak the latched-condition
+monitor reads (``stale_data_observation``). Runs on the trading-loop thread.
 """
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
 import pandas as pd
 
 from src.config.constants import DEFAULT_SLEEP_POLL_INTERVAL
+from src.engines.live.kline_buffer import timeframe_to_ms
+
+logger = logging.getLogger(__name__)
+
+# A freshness gate that has been failing this long is no longer a blip: the loop
+# is skipping entries AND in-engine exits for the whole streak, so it is
+# announced as a latched condition instead of a debug line. Long enough to ride
+# out a WebSocket reconnect, longer than the largest poll interval so one slow sample cannot latch.
+STALE_DATA_LATCH_SECONDS = 600.0
 
 if TYPE_CHECKING:
     from src.engines.live.execution.position_tracker import LivePositionTracker
@@ -37,18 +50,43 @@ class LiveLoopTimingEngineState(Protocol):
     min_check_interval: int
     max_check_interval: int
     data_freshness_threshold: int
+    timeframe: str | None
     live_position_tracker: LivePositionTracker
     _ws_kline_active: bool
     _kline_buffer: KlineBuffer | None
     _ws_kline_provider: Any
 
 
+@dataclass(frozen=True)
+class StaleDataObservation:
+    """Whether the freshness gate has been failing long enough to announce.
+
+    Attributes:
+        stale: True once the gate has failed continuously for longer than
+            ``STALE_DATA_LATCH_SECONDS``.
+        elapsed_seconds: Length of the current failing streak (0 when fresh).
+        reason: Operator-facing description, or None when not stale.
+    """
+
+    stale: bool
+    elapsed_seconds: float
+    reason: str | None = None
+
+
 class LiveLoopTimingCoordinator:
     """Owns the trading loop's cadence + data-freshness helpers."""
 
-    def __init__(self, engine_state: LiveLoopTimingEngineState) -> None:
+    def __init__(
+        self,
+        engine_state: LiveLoopTimingEngineState,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         """Bind to the engine's live state (see protocol for the surface)."""
         self._state = engine_state
+        self._clock = clock
+        self._stale_since: float | None = None
+        self._stale_reason: str | None = None
 
     def sleep_with_interrupt(self, seconds: float) -> None:
         """Sleep in small increments to allow for interrupt and float seconds"""
@@ -94,12 +132,55 @@ class LiveLoopTimingCoordinator:
     def is_data_fresh(self, df: pd.DataFrame) -> bool:
         """Check if the data is fresh enough to warrant processing.
 
-        When WS kline cache is active, uses buffer freshness instead of
-        candle timestamps (which stay static for higher timeframes like 1h).
+        When the WS kline cache is active and healthy, uses buffer freshness
+        (candle timestamps stay static for higher timeframes like 1h). On the
+        REST fallback the tail bar is the *forming* candle, whose open time is
+        up to one interval old by construction, so its age is judged against
+        ``interval + data_freshness_threshold``: a tail bar older than that is
+        genuinely missing the current candle. Every verdict feeds the stale-data
+        streak behind ``stale_data_observation``.
         """
+        fresh, reason = self._evaluate_freshness(df)
+        self._record_freshness(fresh, reason)
+        return fresh
+
+    def stale_data_observation(self) -> StaleDataObservation:
+        """Has the freshness gate been blocking the loop long enough to announce?"""
+        if self._stale_since is None:
+            return StaleDataObservation(stale=False, elapsed_seconds=0.0)
+        elapsed = max(0.0, self._clock() - self._stale_since)
+        if elapsed <= STALE_DATA_LATCH_SECONDS:
+            return StaleDataObservation(stale=False, elapsed_seconds=elapsed)
+        return StaleDataObservation(
+            stale=True,
+            elapsed_seconds=elapsed,
+            reason=(
+                f"market data has failed the freshness gate for {int(elapsed)}s "
+                f"({self._stale_reason}); the trading loop is skipping entries and "
+                "in-engine exits"
+            ),
+        )
+
+    def _record_freshness(self, fresh: bool, reason: str | None) -> None:
+        """Track the failing streak; log its edges once instead of every tick."""
+        if fresh:
+            if self._stale_since is not None:
+                logger.info(
+                    "Market data fresh again after %ds", int(self._clock() - self._stale_since)
+                )
+                self._stale_since = None
+                self._stale_reason = None
+            return
+        if self._stale_since is None:
+            self._stale_since = self._clock()
+            logger.warning("Market data failed the freshness gate: %s", reason)
+        self._stale_reason = reason
+
+    def _evaluate_freshness(self, df: pd.DataFrame) -> tuple[bool, str | None]:
+        """Return ``(fresh, reason_if_stale)`` for the frame the loop just fetched."""
         state = self._state
         if df is None or df.empty:
-            return False
+            return False, "empty market-data frame"
 
         # Bypass candle-timestamp check only when WS stream is confirmed healthy
         if (
@@ -108,14 +189,16 @@ class LiveLoopTimingCoordinator:
             and state._ws_kline_provider
             and getattr(state._ws_kline_provider, "ws_healthy", False)
         ):
-            return state._kline_buffer.is_fresh
+            if state._kline_buffer.is_fresh:
+                return True, None
+            return False, "WebSocket kline buffer has stopped updating"
 
         latest_timestamp = df.index[-1] if hasattr(df.index[-1], "timestamp") else datetime.now(UTC)
         if isinstance(latest_timestamp, str):
             try:
                 latest_timestamp = pd.to_datetime(latest_timestamp)
             except (ValueError, TypeError):
-                return True  # Assume fresh if we can't parse timestamp
+                return True, None  # Assume fresh if we can't parse timestamp
 
         # Normalizes to UTC to avoid naive/aware datetime comparisons.
         if isinstance(latest_timestamp, pd.Timestamp):
@@ -130,4 +213,20 @@ class LiveLoopTimingCoordinator:
                 latest_timestamp = latest_timestamp.astimezone(UTC)
 
         age_seconds = (datetime.now(UTC) - latest_timestamp).total_seconds()
-        return age_seconds <= state.data_freshness_threshold
+        max_age_seconds = state.data_freshness_threshold + self._candle_interval_seconds()
+        if age_seconds <= max_age_seconds:
+            return True, None
+        return False, (
+            f"latest candle opened {int(age_seconds)}s ago, limit {int(max_age_seconds)}s "
+            f"(timeframe {getattr(state, 'timeframe', None) or 'unknown'})"
+        )
+
+    def _candle_interval_seconds(self) -> float:
+        """Seconds per candle for the engine's timeframe, or 0 when unknown.
+
+        Unknown means the strict threshold-only rule: never relax the gate on a
+        timeframe this code cannot size.
+        """
+        timeframe = getattr(self._state, "timeframe", None)
+        interval_ms = timeframe_to_ms(timeframe) if isinstance(timeframe, str) else None
+        return interval_ms / 1000.0 if interval_ms else 0.0

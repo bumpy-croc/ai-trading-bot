@@ -842,6 +842,7 @@ class LiveTradingEngine:
         # Consecutive unproductive user-stream reconnects; trips a circuit breaker
         # that stops the futile reconnect loop and runs REST-only (#616).
         self._user_reconnect_failures = 0
+        self._user_degraded_paged = False  # USER_WS_DEGRADED already paged this outage
         # Consecutive unproductive kline reconnects; drives the *recovering* REST
         # fallback (#662) — momentary REST while reconnecting, auto-return to
         # WS-primary the instant a real kline event resumes (never REST-until-restart).
@@ -1658,8 +1659,11 @@ class LiveTradingEngine:
 
         # End the trading session in database
         if self.trading_session_id:
+            # Paper positions are preserved above; the next start re-adopts them (#668).
             self.db_manager.end_trading_session(
-                session_id=self.trading_session_id, final_balance=self.current_balance
+                session_id=self.trading_session_id,
+                final_balance=self.current_balance,
+                carry_forward_open_positions=True,
             )
 
         logger.info("Trading engine stopped")
@@ -1777,6 +1781,9 @@ class LiveTradingEngine:
                 df = self._get_latest_data(symbol, timeframe)
                 if df is None or df.empty:
                     log_data_event("no_data", reason="empty_frame")
+                    # Feed the stale-data streak: a REST failure or RESYNCING skips
+                    # entries and exits exactly like a stale frame does.
+                    self._is_data_fresh(df)
                     logger.warning("No market data received")
                     self.check_interval = self._calculate_adaptive_interval()
                     self._sleep_with_interrupt(self.check_interval)

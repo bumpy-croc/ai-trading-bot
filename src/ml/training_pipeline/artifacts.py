@@ -305,6 +305,39 @@ def convert_to_onnx(model: Any, output_path: Path) -> Path | None:
                 logger.warning("Failed to clean up temporary ONNX directory: %s", exc)
 
 
+def point_latest_at(version_dir: Path) -> None:
+    """Atomically point ``{version_dir.parent}/latest`` at ``version_dir``.
+
+    Raises:
+        RuntimeError: If the symlink cannot be created or swapped in.
+    """
+    type_dir = version_dir.parent
+    latest_link = type_dir / "latest"
+    # Temporary symlink + atomic rename avoids a window where `latest` is missing
+    temp_link = type_dir / f".latest.{version_dir.name}.tmp"
+
+    try:
+        # Clean up any stale temp symlink
+        if temp_link.exists() or temp_link.is_symlink():
+            temp_link.unlink()
+
+        temp_link.symlink_to(version_dir.name)
+
+        # Atomically replace existing symlink (rename is atomic on POSIX systems)
+        temp_link.replace(latest_link)
+
+    except OSError as e:
+        # Clean up temp symlink on failure
+        if temp_link.exists() or temp_link.is_symlink():
+            try:
+                temp_link.unlink()
+            except OSError:
+                # Ignores cleanup errors - primary error takes precedence
+                pass
+        logger.error("Failed to update 'latest' symlink: %s", e)
+        raise RuntimeError(f"Failed to update 'latest' symlink at {latest_link}") from e
+
+
 def save_artifacts(
     model: Any,
     symbol: str,
@@ -313,8 +346,15 @@ def save_artifacts(
     metadata: dict,
     version_id: str,
     enable_onnx: bool,
+    *,
+    set_latest: bool = False,
 ) -> ArtifactPaths:
-    """Save training artifacts."""
+    """Save training artifacts.
+
+    ``latest`` is the production pointer the registry serves, so it only moves
+    when ``set_latest`` is passed; otherwise the bundle is written but not
+    promoted.
+    """
     if not _TENSORFLOW_AVAILABLE:
         raise ImportError(
             "tensorflow is required for saving artifacts but is not installed. "
@@ -348,32 +388,8 @@ def save_artifacts(
     with open(feature_schema_path, "w", encoding="utf-8") as f:
         json.dump(feature_schema, f, indent=2)
 
-    # Atomic symlink update to avoid race conditions (TOCTOU vulnerability)
-    # Create temporary symlink, then atomically replace the existing symlink
-    latest_link = type_dir / "latest"
-    temp_link = type_dir / f".latest.{version_dir.name}.tmp"
-
-    try:
-        # Clean up any stale temp symlink
-        if temp_link.exists() or temp_link.is_symlink():
-            temp_link.unlink()
-
-        # Create symlink with temporary name
-        temp_link.symlink_to(version_dir.name)
-
-        # Atomically replace existing symlink (rename is atomic on POSIX systems)
-        temp_link.replace(latest_link)
-
-    except OSError as e:
-        # Clean up temp symlink on failure
-        if temp_link.exists() or temp_link.is_symlink():
-            try:
-                temp_link.unlink()
-            except OSError:
-                # Ignores cleanup errors - primary error takes precedence
-                pass
-        logger.error("Failed to update 'latest' symlink: %s", e)
-        raise RuntimeError(f"Failed to update 'latest' symlink at {latest_link}") from e
+    if set_latest:
+        point_latest_at(version_dir)
 
     return ArtifactPaths(
         directory=version_dir,

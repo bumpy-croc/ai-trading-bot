@@ -1,0 +1,25 @@
+name: Model promotion log check
+
+on:
+  pull_request:
+    paths:
+      - "docs/research/model-promotions.md"
+      - "src/ml/models/**"
+
+permissions:
+  contents: read
+
+jobs:
+  no-change-means-no-latest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fail a NO CHANGE promotion entry that moves a latest pointer
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: python tools/check_promotion_log.py --base "origin/$BASE_REF"

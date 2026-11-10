@@ -3,7 +3,7 @@
 Helper scripts for development and quality assurance.
 
 ## Scripts
-- `run_mypy.py`: Type checking script with project-specific configuration
+- `run_mypy.py`: Type checks `src/` and `cli/` with the project's `mypy.ini` (also the CI `type-check` job); `--targets` limits it to named files
 
 Usage:
 ```bash

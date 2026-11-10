@@ -24,6 +24,7 @@ from src.ml.training_pipeline.artifacts import (
     convert_to_onnx,
     create_training_plots,
     evaluate_model_performance,
+    point_latest_at,
     save_artifacts,
     validate_model_robustness,
 )
@@ -585,7 +586,47 @@ class TestSaveArtifacts:
         assert result.onnx_path is None
         mock_convert.assert_not_called()
 
-    def test_creates_latest_symlink(self, tmp_path):
+    def test_does_not_touch_latest_by_default(self, tmp_path):
+        # Arrange
+        model = MagicMock()
+        type_dir = tmp_path / "BTCUSDT" / "basic"
+
+        # Act
+        save_artifacts(
+            model,
+            symbol="BTCUSDT",
+            model_type="basic",
+            registry_root=tmp_path,
+            metadata={"test": "data"},
+            version_id="2024-01-01_10h_v1",
+            enable_onnx=False,
+        )
+
+        # Assert
+        assert (type_dir / "2024-01-01_10h_v1" / "metadata.json").exists()
+        assert not (type_dir / "latest").is_symlink()
+        assert not (type_dir / "latest").exists()
+
+    def test_default_save_leaves_existing_latest_on_incumbent(self, tmp_path):
+        # Arrange
+        model = MagicMock()
+        for version_id, set_latest in (("2024-01-01_10h_v1", True), ("2024-01-01_11h_v1", False)):
+            save_artifacts(
+                model,
+                symbol="BTCUSDT",
+                model_type="basic",
+                registry_root=tmp_path,
+                metadata={"version": version_id},
+                version_id=version_id,
+                enable_onnx=False,
+                set_latest=set_latest,
+            )
+
+        # Assert
+        latest_link = tmp_path / "BTCUSDT" / "basic" / "latest"
+        assert latest_link.resolve().name == "2024-01-01_10h_v1"
+
+    def test_creates_latest_symlink_when_requested(self, tmp_path):
         # Arrange
         model = MagicMock()
         model.save = MagicMock()
@@ -602,6 +643,7 @@ class TestSaveArtifacts:
             metadata=metadata,
             version_id=version_id,
             enable_onnx=False,
+            set_latest=True,
         )
 
         # Assert
@@ -609,7 +651,7 @@ class TestSaveArtifacts:
         assert latest_link.is_symlink()
         assert latest_link.resolve().name == version_id
 
-    def test_updates_existing_symlink(self, tmp_path):
+    def test_updates_existing_symlink_when_requested(self, tmp_path):
         # Arrange
         model = MagicMock()
         model.save = MagicMock()
@@ -624,6 +666,7 @@ class TestSaveArtifacts:
             metadata={"version": 1},
             version_id=version_id_1,
             enable_onnx=False,
+            set_latest=True,
         )
 
         # Second version
@@ -638,8 +681,41 @@ class TestSaveArtifacts:
             metadata={"version": 2},
             version_id=version_id_2,
             enable_onnx=False,
+            set_latest=True,
         )
 
         # Assert
         latest_link = tmp_path / "BTCUSDT" / "basic" / "latest"
         assert latest_link.resolve().name == version_id_2
+
+
+@pytest.mark.fast
+class TestPointLatestAt:
+    """Test the atomic ``latest`` pointer swap."""
+
+    def test_repoints_and_leaves_no_temp_link(self, tmp_path):
+        # Arrange
+        (tmp_path / "v1").mkdir()
+        (tmp_path / "v2").mkdir()
+        point_latest_at(tmp_path / "v1")
+
+        # Act
+        point_latest_at(tmp_path / "v2")
+
+        # Assert
+        assert (tmp_path / "latest").resolve().name == "v2"
+        assert not list(tmp_path.glob(".latest.*.tmp"))
+
+    def test_failure_raises_runtime_error_and_keeps_incumbent(self, tmp_path):
+        # Arrange
+        (tmp_path / "v1").mkdir()
+        (tmp_path / "v2").mkdir()
+        point_latest_at(tmp_path / "v1")
+
+        # Act / Assert
+        with patch("pathlib.Path.replace", side_effect=PermissionError("denied")):
+            with pytest.raises(RuntimeError, match="Failed to update 'latest' symlink"):
+                point_latest_at(tmp_path / "v2")
+
+        assert (tmp_path / "latest").resolve().name == "v1"
+        assert not list(tmp_path.glob(".latest.*.tmp"))

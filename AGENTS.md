@@ -389,7 +389,7 @@ When addressing review comments from a PR link:
 
 1. **Training**: `atb train model` or `atb live-control train`
    - Writes to `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/`
-   - Updates `latest` symlink automatically
+   - Does not move `latest`; promote explicitly (`--set-latest`, or `atb live-control deploy-model` / `train --auto-deploy`, which validate first)
    - Includes metadata.json with training params and performance
 
 2. **Deployment**: Strategies load via `latest` symlink

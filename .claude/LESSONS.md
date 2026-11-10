@@ -31,6 +31,12 @@ much precision", on **stopPrice**/limit price / PRICE_FILTER `tickSize`).
   best-effort lookup against its absence, harden *every* consumer of that lookup in the same
   function — and prefer a fail-loud refusal to send over an un-normalized send.
 
+- **Enforced, not just advised (#789):** snap with `precision.snap_to_step` (exact decimal) and
+  serialize with `format_quantity`/`format_price`; `BinanceProvider._conform_order_numerics` is
+  the last-line guard on every order, and `tests/unit/trading/test_exchange_numeric_guard.py`
+  fails on any new raw `round(x / step) * step` in the exchange-facing packages. An off-step
+  value is logged and sent unchanged, never silently moved (see 1.13).
+
 ### 1.2 Decimal × float `TypeError` from DB-loaded fields
 SQLAlchemy `Numeric` columns load as `Decimal`. Mixing a DB-loaded value with a `float` raises
 `unsupported operand type(s) for *: 'decimal.Decimal' and 'float'`. Fired in prod every cycle (#673)
