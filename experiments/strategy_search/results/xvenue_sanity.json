@@ -1,0 +1,162 @@
+{
+ "gap": {
+  "btc_mean_gap": 0.10605920293545454,
+  "eligible_coins_per_day": 27.754545454545454,
+  "hl_funding_missing_share": 0.0,
+  "mean_binance_funding": 0.1040622878643957,
+  "mean_gap": 0.09819206230406156,
+  "mean_hl_funding": 0.20225435016845722,
+  "median_abs_gap": 0.129628728
+ },
+ "sanity_pass": true,
+ "variants": {
+  "primary (7d, enter 20%, exit 5%, 1x legs)": {
+   "active_share": 0.9945454545454545,
+   "avg_gross": 0.9170909090909091,
+   "avg_net": 0.0,
+   "avg_slots": 4.585454545454546,
+   "basis_pnl_per_year": 0.0005911339748721873,
+   "cagr": 0.10696464586957255,
+   "cost_per_year": 0.043899545454545455,
+   "days": 550,
+   "forced_closes": 0,
+   "funding_per_year": -0.1450018047558182,
+   "funding_pnl_per_year": 0.1450018047558182,
+   "max_dd": 0.006659233306557266,
+   "round_trips": 90,
+   "sharpe": 5.817651886644401,
+   "sharpe_rf0": 9.470327137956744,
+   "turnover_per_year": 23.89090909090909,
+   "vol": 0.01073810775433103,
+   "worst_day": -0.0022130121216857464,
+   "years": {
+    "2023": 0.11356745724453421,
+    "2024": 0.06816357731731215
+   }
+  },
+  "secondary: 2x legs, forced close at 40%": {
+   "active_share": 0.9945454545454545,
+   "avg_gross": 1.8312727272727274,
+   "avg_net": 0.0,
+   "avg_slots": 4.578181818181818,
+   "basis_pnl_per_year": 0.0019491945327850984,
+   "cagr": 0.20858138694134598,
+   "cost_per_year": 0.10457581818181817,
+   "days": 550,
+   "forced_closes": 5,
+   "funding_per_year": -0.2923644877390909,
+   "funding_pnl_per_year": 0.2923644877390909,
+   "max_dd": 0.013283300419282051,
+   "round_trips": 91,
+   "sharpe": 6.841918707971191,
+   "sharpe_rf0": 8.624859086829426,
+   "turnover_per_year": 50.967272727272736,
+   "vol": 0.021998952351557445,
+   "worst_day": -0.005235452480759956,
+   "years": {
+    "2023": 0.23583725236084052,
+    "2024": 0.12126558965983203
+   }
+  },
+  "secondary: enter 10%": {
+   "active_share": 1.0,
+   "avg_gross": 0.9989090909090909,
+   "avg_net": 0.0,
+   "avg_slots": 4.994545454545454,
+   "basis_pnl_per_year": 0.0006356469168423462,
+   "cagr": 0.10261125804149618,
+   "cost_per_year": 0.04878390909090909,
+   "days": 550,
+   "forced_closes": 0,
+   "funding_per_year": -0.14590952728409093,
+   "funding_pnl_per_year": 0.14590952728409093,
+   "max_dd": 0.011038687630646526,
+   "round_trips": 104,
+   "sharpe": 5.053547613881874,
+   "sharpe_rf0": 8.4396025691003,
+   "turnover_per_year": 27.607272727272733,
+   "vol": 0.011583633744550362,
+   "worst_day": -0.0022130121216857464,
+   "years": {
+    "2023": 0.11356745724453421,
+    "2024": 0.06183992676776651
+   }
+  },
+  "secondary: enter 30%": {
+   "active_share": 0.9636363636363636,
+   "avg_gross": 0.8232727272727272,
+   "avg_net": 0.0,
+   "avg_slots": 4.116363636363636,
+   "basis_pnl_per_year": 0.0005904171659776125,
+   "cagr": 0.11041788108435058,
+   "cost_per_year": 0.03486081818181819,
+   "days": 550,
+   "forced_closes": 0,
+   "funding_per_year": -0.13907426328854544,
+   "funding_pnl_per_year": 0.13907426328854544,
+   "max_dd": 0.0028421096909878596,
+   "round_trips": 73,
+   "sharpe": 6.397764146537109,
+   "sharpe_rf0": 10.22414975015362,
+   "turnover_per_year": 19.112727272727277,
+   "vol": 0.01025061886159582,
+   "worst_day": -0.0022130121216857464,
+   "years": {
+    "2023": 0.11153761455304201,
+    "2024": 0.07368979807474751
+   }
+  },
+  "secondary: lookback 14d": {
+   "active_share": 1.0,
+   "avg_gross": 0.9170909090909092,
+   "avg_net": 0.0,
+   "avg_slots": 4.585454545454546,
+   "basis_pnl_per_year": 0.0005681786659506267,
+   "cagr": 0.10616920134177699,
+   "cost_per_year": 0.030547181818181817,
+   "days": 550,
+   "forced_closes": 1,
+   "funding_per_year": -0.13094344910063638,
+   "funding_pnl_per_year": 0.13094344910063638,
+   "max_dd": 0.005473463107892762,
+   "round_trips": 56,
+   "sharpe": 6.320147262858618,
+   "sharpe_rf0": 10.335169530347708,
+   "turnover_per_year": 15.130909090909093,
+   "vol": 0.009769016913746592,
+   "worst_day": -0.0023244197953109363,
+   "years": {
+    "2023": 0.09942242234127652,
+    "2024": 0.08313215873175239
+   }
+  },
+  "secondary: lookback 3d": {
+   "active_share": 1.0,
+   "avg_gross": 0.9407272727272726,
+   "avg_net": 0.0,
+   "avg_slots": 4.703636363636364,
+   "basis_pnl_per_year": 0.003487894197059374,
+   "cagr": 0.08040671832656332,
+   "cost_per_year": 0.07624518181818181,
+   "days": 550,
+   "forced_closes": 0,
+   "funding_per_year": -0.15017292753636366,
+   "funding_pnl_per_year": 0.15017292753636366,
+   "max_dd": 0.018010835101451184,
+   "round_trips": 171,
+   "sharpe": 3.22733133031847,
+   "sharpe_rf0": 6.541698769272283,
+   "turnover_per_year": 45.39272727272728,
+   "vol": 0.011834179873716977,
+   "worst_day": -0.002185651816025951,
+   "years": {
+    "2023": 0.1071967658755455,
+    "2024": 0.03682389082553139
+   }
+  }
+ },
+ "window": [
+  "2023-07-01",
+  "2024-12-31"
+ ]
+}
