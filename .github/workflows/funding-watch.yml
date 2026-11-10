@@ -1,0 +1,85 @@
+name: Funding Watch
+
+# Daily check of BTC/ETH perp funding (log.md D-2026-11-10-02). The bot is paused
+# and active development stopped because funding carry, the only strategy that
+# passed the #1315 bake-off, earns less than idle USDT at current funding. This
+# job raises the flag when the trailing 7-day funding climbs back above
+# 10%/yr — the point where building carry is worth revisiting.
+#
+# On an alert it opens one GitHub issue labelled `funding-watch` (only if none is
+# open, so it never spams) and posts to ALERT_WEBHOOK_URL when that secret is set.
+# If no exchange API is reachable the job fails, so a blind watcher is visible.
+# See tools/funding_watch.py.
+
+on:
+  schedule:
+    - cron: "17 9 * * *" # daily, 09:17 UTC
+  workflow_dispatch:
+    inputs:
+      threshold:
+        description: "Annualised funding threshold (0.10 = 10%/yr)"
+        required: false
+        default: "0.10"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: funding-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install client
+        run: pip install --no-input requests==2.31.0
+      - name: Read funding
+        id: watch
+        run: |
+          set +e
+          python tools/funding_watch.py \
+            --threshold "${{ github.event.inputs.threshold || '0.10' }}" \
+            --json-out funding.json
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+      - name: Alert
+        if: steps.watch.outputs.code == '10'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: |
+          report="$(python -c 'import json; print(json.load(open("funding.json"))["report"])')"
+          if [ -n "$ALERT_WEBHOOK_URL" ]; then
+            python - <<'PY' || echo "::warning::webhook POST failed"
+          import json, os, requests
+          report = json.load(open("funding.json"))["report"]
+          requests.post(
+              os.environ["ALERT_WEBHOOK_URL"],
+              json={"text": "🤖 Trading Bot: funding carry may be worth building again\n" + report},
+              timeout=10,
+          ).raise_for_status()
+          PY
+          fi
+          gh label create funding-watch --color FBCA04 \
+            --description "Funding-rate watcher alerts" --force
+          open="$(gh issue list --label funding-watch --state open --json number --jq 'length')"
+          if [ "$open" = "0" ]; then
+            gh issue create --label funding-watch \
+              --title "Funding back above threshold: revisit funding carry" \
+              --body "$(printf '%s\n\n%s\n\n%s' "$report" \
+                'The bot is paused and development stopped because carry earned less than idle USDT (bake-off #1315, log.md D-2026-11-10-02). Funding has now climbed back above the threshold, so building the carry strategy is worth reconsidering. Rerun the S1 bake-off on fresh data before committing.' \
+                "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}")"
+          else
+            echo "An open funding-watch issue already exists; not opening another."
+          fi
+      - name: Fail if blind
+        if: steps.watch.outputs.code == '2'
+        run: |
+          echo "::error::No funding source reachable for at least one symbol — the watcher is blind."
+          exit 1

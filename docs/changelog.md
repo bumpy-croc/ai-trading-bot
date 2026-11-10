@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Funding-rate watcher** (log.md D-2026-11-10-02). `tools/funding_watch.py`, run daily by
+  `.github/workflows/funding-watch.yml`, alerts (one `funding-watch` issue plus the alert webhook)
+  when the trailing 7-day BTC or ETH perp funding goes above 10%/yr, the point where the funding
+  carry strategy from the #1315 bake-off becomes worth building. Falls back Binance → OKX →
+  Hyperliquid and fails loudly when no source is reachable.
 - **External write-gap watchdog** (#689, #669). `atb live-control watchdog` (run every 30 minutes
   by `.github/workflows/heartbeat-monitor.yml`, superseding the account_history-only
   `scripts/check_heartbeat.py`) pages when

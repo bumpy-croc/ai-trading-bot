@@ -4780,3 +4780,14 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 5. **Issues closed:** 24 fixed by the batch (comments link the fixing PR). HyperGrowth-only #1083, #1274 and #1272, plus staging-flat #1292, closed as not planned.
 
 **Reversal.** To resume entries, revert #1314's start-command change and promote.
+
+## [D-2026-11-10-02] 2026-11-10 ~18:30 UTC · decision · board-directed (Claude, project thread)
+
+**Authority.** Alex, 2026-11-10, project thread: explicit permission to pause live trading (18:00 UTC), then chose "Stop, watch funding" on the carry build-or-stop question raised in [D-2026-11-10-01] item 4.
+
+**Correction to [D-2026-11-10-01] item 1 and its Reversal line.** The `feature_flags.json` pause (#1319) worked on staging but **not on production**: the production Railway service has `FEATURE_ENTRY_PAUSE=false` set as a service variable, which outranks the file. Production was paused instead with the DB kill switch, `atb live-control halt --env production` (engine logged "MANUAL SYSTEM HALT ENFORCED" at 18:01:25 UTC); staging was halted the same way. Exits and stops still run. Prod at halt: balance ~$85.17, one ETHUSDT long 0.0056 @ $2140.63 with an exchange stop at $1925.45. **Resuming now needs** `atb live-control resume --env <env>` *and* reverting `entry_pause` in `feature_flags.json` (#1319). Remove prod's stale `FEATURE_ENTRY_PAUSE=false` Railway variable at the next redeploy. The "Entries enabled" boot event that misled the staging check is #1322.
+
+**Decision.** Stop active strategy development. The bot stays halted (close-only) in both environments. Do not build the funding-carry strategy (S1) at current funding: 0.9%/yr holdout CAGR is below idle-USDT yield.
+- ΔP: building carry now adds ~0 expected return over idle stablecoins. ΔR: none taken. C: avoids engineering and monitoring spend. E: bake-off #1315.
+
+**Watch.** `tools/funding_watch.py` + `.github/workflows/funding-watch.yml` check BTC/ETH perp funding daily (trailing 7-day mean, sources Binance → OKX → Hyperliquid). When either goes above **10%/yr** it opens one `funding-watch` issue and posts to `ALERT_WEBHOOK_URL`. That issue is the trigger to rerun the S1 bake-off on fresh data (with the risk-free-rate fix to the Sharpe gate) before any build. A job that cannot reach any source fails, so a blind watcher is visible.
