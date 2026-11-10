@@ -15,7 +15,8 @@ import math
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
@@ -32,6 +33,8 @@ from src.config.constants import (
     DEFAULT_STARTUP_BAN_MAX_WAIT,
     DEFAULT_WS_KLINE_STALENESS_THRESHOLD,
     DEFAULT_WS_RECONNECT_MAX_RETRIES,
+    DEFAULT_WS_TWM_JOIN_TIMEOUT,
+    DEFAULT_WS_TWM_TRANSPORT_CLOSE_TIMEOUT,
     DEFAULT_WS_USER_LIVENESS_PROBE_TIMEOUT,
     DEFAULT_WS_USER_STALENESS_THRESHOLD,
     EXCHANGE_IP_RATE_LIMIT_BAN_CODE,
@@ -66,6 +69,7 @@ try:
     from binance.client import Client
     from binance.enums import SIDE_BUY, SIDE_SELL
     from binance.exceptions import BinanceAPIException, BinanceOrderException
+    from binance.ws.constants import WSListenerState
 
     BINANCE_AVAILABLE = True
 except ImportError:
@@ -75,6 +79,7 @@ except ImportError:
     BinanceAPIException = Exception
     BinanceOrderException = Exception
     ThreadedWebsocketManager = None
+    WSListenerState = None
     SIDE_BUY = "BUY"
     SIDE_SELL = "SELL"
     BINANCE_AVAILABLE = False
@@ -123,6 +128,39 @@ STOP_LOSS_LIMIT_SLIPPAGE_FACTOR = 0.005  # 0.5% slippage
 # the subscription being unsubscribed (it died with its connection). Expected
 # during socket teardown after a transport drop/full rebuild (#907).
 _BINANCE_SUBSCRIPTION_NOT_ACTIVE = -2036
+
+
+class _ExpectedTransportCloseFilter(logging.Filter):
+    """Drops python-binance's ERROR lines for a ws-api close we initiated (#729).
+
+    Scoped to the thread that runs the closing loop, so a genuine close report from
+    another provider's TWM is never swallowed.
+    """
+
+    _MARKERS = ("ConnectionClosedOK", "BinanceWebsocketClosed")
+
+    def __init__(self, thread_ident: int | None = None) -> None:
+        """Match records from ``thread_ident`` only; None matches every thread."""
+        super().__init__()
+        self._thread_ident = thread_ident
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return False for the library's report of our own deliberate close."""
+        if self._thread_ident is not None and record.thread != self._thread_ident:
+            return True
+        return not record.getMessage().startswith(self._MARKERS)
+
+
+@contextmanager
+def _muted_expected_transport_close(thread_ident: int | None = None) -> Iterator[None]:
+    """Silence python-binance's per-close ERROR lines while we close a ws-api on purpose."""
+    ws_logger = logging.getLogger("binance.ws.reconnecting_websocket")
+    close_filter = _ExpectedTransportCloseFilter(thread_ident)
+    ws_logger.addFilter(close_filter)
+    try:
+        yield
+    finally:
+        ws_logger.removeFilter(close_filter)
 
 
 _BAN_EXPIRY_PATTERN = re.compile(r"banned until (\d{13})")
@@ -319,6 +357,25 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         # stop_streams so its selector/self-pipe FDs aren't leaked (CODE.md §241).
         self._twm_loop: asyncio.AbstractEventLoop | None = None
         self._twm_lock = threading.Lock()  # Guards _ensure_twm() check-then-set
+        # Serialises stream teardown/rebuild (stop_streams, hard_reconnect_user) so an
+        # engine shutdown and the WS health thread's rebuild can never interleave and
+        # leave a freshly built TWM (a non-daemon thread) running after shutdown.
+        self._stream_lifecycle_lock = threading.RLock()
+        # Guards the kline generation + socket-key hand-off between the TWM loop thread
+        # (error callback) and the health thread (start/reconnect). Held only for
+        # dict/attribute operations, never across a socket start.
+        self._kline_stream_lock = threading.Lock()
+        self._kline_stream_generation = 0
+        # Set by the public stop_streams() BEFORE it takes the lifecycle lock and cleared
+        # by an explicit start_*_stream(); reconnect/rebuild paths refuse to build a new
+        # TWM while it is set, and wake from their backoff waits the moment it is.
+        self._streams_shut_down = threading.Event()
+        # Thread running a reconnect/rebuild under the lifecycle lock: the start_* call it
+        # makes must not re-arm a provider that stop_streams() shut down meanwhile.
+        self._rebuilding_thread: int | None = None
+        # True while a user socket has been started and not yet stopped. The key alone
+        # cannot say: python-binance returns None for a ws-api margin socket's key.
+        self._user_socket_active = False
         self._kline_ws_state = WebSocketState.DISCONNECTED
         self._user_ws_state = WebSocketState.DISCONNECTED
         self._kline_socket_key: str | None = None
@@ -353,7 +410,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         # dead socket (a TOCTOU blackout). The lock makes that compound update
         # atomic (#717). Held only around the flag mutations, never around the
         # downstream on_user_event forwarding or the socket start/stop loop calls.
-        self._user_stream_lock = threading.Lock()
+        self._user_stream_lock = threading.RLock()
 
         # Last-known-good get_symbol_info() result per symbol (#1155). Filters
         # (tick/step size, precision, min notional) change only on rare
@@ -2662,6 +2719,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self._twm_loop.set_exception_handler(self._twm_loop_exception_handler)
             twm_kwargs["loop"] = self._twm_loop
             self._twm = ThreadedWebsocketManager(**twm_kwargs)
+            # Daemon: a manager thread that cannot be joined must never keep the
+            # process alive after shutdown.
+            self._twm.daemon = True
             self._twm.start()
 
     def _twm_loop_exception_handler(
@@ -2719,7 +2779,61 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                     exc,
                 )
             return
+        if self._is_user_subscribe_failure(exc):
+            self._handle_user_subscribe_failure(loop, exc)
+            return
         loop.default_exception_handler(context)
+
+    def _handle_user_subscribe_failure(
+        self, loop: asyncio.AbstractEventLoop, exc: BaseException | None
+    ) -> None:
+        """React to the user-data listener dying while subscribing (#616/#723).
+
+        python-binance subscribes inside the listener task, AFTER ``start_*_socket``
+        has already returned a key. A failed subscribe (``Request timed out`` racing
+        a ws-api reconnect, a refused connect) kills that task, and the only signal
+        is the unretrieved task exception that lands here. Without acting on it the
+        provider keeps reporting PRIMARY while nothing will ever be delivered, and a
+        ws-api ping still succeeds, so the liveness check would hold the dead
+        subscription indefinitely. Flag it RESYNCING so the health monitor rebuilds
+        the stream on its next cycle. A failure from a retired loop belongs to a
+        socket that is already being discarded and must not touch the live stream.
+        """
+        if loop is not self._twm_loop:
+            logger.debug("Suppressed user-stream subscribe failure on a retired loop: %s", exc)
+            return
+        logger.warning("User data stream subscription failed — rebuilding the stream: %s", exc)
+        with self._user_stream_lock:
+            if self._user_ws_state == WebSocketState.PRIMARY:
+                self._on_user_disconnect()
+
+    @staticmethod
+    def _traceback_has_frame(exc: BaseException | None, filename_suffix: str, *names: str) -> bool:
+        """True iff ``exc``'s traceback passes a ``names`` frame in a python-binance file."""
+        tb = exc.__traceback__ if exc is not None else None
+        while tb is not None:
+            code = tb.tb_frame.f_code
+            if (
+                code.co_name in names
+                and code.co_filename.endswith(filename_suffix)
+                and "binance" in code.co_filename
+            ):
+                return True
+            tb = tb.tb_next
+        return False
+
+    @classmethod
+    def _is_user_subscribe_failure(cls, exc: BaseException | None) -> bool:
+        """True iff ``exc`` escaped ``start_listener`` while the user socket subscribed.
+
+        The subscribe runs in ``KeepAliveWebsocket.connect`` -> ``_before_connect`` as
+        ``async with socket`` is entered, so the traceback passes both ``start_listener``
+        and one of those frames. A failure inside our own callback has frames below
+        ``start_listener`` but not these, so it is never matched.
+        """
+        return cls._traceback_has_frame(
+            exc, "threaded_stream.py", "start_listener"
+        ) and cls._traceback_has_frame(exc, "keepalive_websocket.py", "connect", "_before_connect")
 
     @staticmethod
     def _is_socket_teardown_keyerror(exc: BaseException | None) -> bool:
@@ -2829,35 +2943,80 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             True if stream started successfully, False on failure.
         """
         try:
+            if self._rebuilding_thread != threading.get_ident():
+                self._streams_shut_down.clear()
             self._ensure_twm()
             self._active_symbol = symbol
             self._active_timeframe = timeframe
             self._on_kline_cb = on_kline
 
+            # Each start supersedes the previous socket: its late error callbacks are
+            # dropped so they cannot tear down or flag the new socket (same path key).
+            with self._kline_stream_lock:
+                self._kline_stream_generation += 1
+                generation = self._kline_stream_generation
+
             def _kline_callback(msg: dict) -> None:
                 """Route kline events, handling errors before user callback."""
                 if msg.get("e") == "error":
-                    logger.error("Kline WS error: %s", msg.get("m", "unknown"))
-                    self._on_kline_disconnect()
+                    self._handle_kline_socket_error(generation, msg)
                     return
                 self._last_kline_event_time = datetime.now(UTC)
                 self._kline_event_received = True
                 on_kline(msg)
 
             self._kline_event_received = False  # Reset until first event confirms
-            # cast: _ensure_twm() above guarantees _twm is set; mypy cannot narrow
-            # an attribute inside the closure.
-            self._kline_socket_key = self._socket_on_twm_loop(
-                lambda: cast(Any, self._twm).start_kline_socket(
-                    callback=_kline_callback, symbol=symbol, interval=timeframe
-                )
-            )
+            # PRIMARY before the socket starts, so a fast error callback's RESYNCING
+            # is never overwritten by a later assignment.
             self._kline_ws_state = WebSocketState.PRIMARY
             self._last_kline_event_time = datetime.now(UTC)
+            try:
+                # cast: _ensure_twm() above guarantees _twm is set; mypy cannot narrow
+                # an attribute inside the closure.
+                self._kline_socket_key = self._socket_on_twm_loop(
+                    lambda: cast(Any, self._twm).start_kline_socket(
+                        callback=_kline_callback, symbol=symbol, interval=timeframe
+                    )
+                )
+            except Exception:
+                self._kline_ws_state = WebSocketState.DISCONNECTED
+                raise
             return True
         except Exception as e:
             logger.error("Failed to start kline stream: %s", e)
             return False
+
+    def _handle_kline_socket_error(self, generation: int, msg: dict) -> None:
+        """Flag the kline stream RESYNCING and stop its dead socket at once (#665).
+
+        After python-binance exhausts its reconnects the listener's read loop is gone
+        and ``recv`` raises ``ReadLoopClosed`` on every iteration, so the listener
+        emits an error callback as fast as it can spin until something stops the
+        socket. Stopping it here ends the storm immediately instead of at the health
+        monitor's next cycle. This runs on the TWM loop thread, inside the listener,
+        and ``stop_socket`` only clears the socket's run flag (the listener exits at
+        its next iteration), so it is non-blocking and safe to call re-entrantly. The
+        generation check and the key hand-off share one lock, so a callback from a
+        superseded socket is dropped and a repeat error from the same socket does
+        nothing. Recovery stays with the health monitor, which resyncs from REST and
+        starts a fresh socket (``reconnect_kline``).
+        """
+        with self._kline_stream_lock:
+            if generation != self._kline_stream_generation:
+                return
+            socket_key, self._kline_socket_key = self._kline_socket_key, None
+            already_handled = socket_key is None and (
+                self._kline_ws_state == WebSocketState.RESYNCING
+            )
+            if socket_key is not None and self._twm is not None:
+                try:
+                    self._twm.stop_socket(socket_key)
+                except Exception as e:
+                    logger.error("Failed to stop errored kline socket: %s", e)
+        if already_handled:
+            return
+        logger.error("Kline WS error: %s", msg.get("m", "unknown"))
+        self._on_kline_disconnect()
 
     def start_user_stream(self, on_user_event: Callable[[dict], None]) -> bool:
         """Start user data stream. Requires credentials. Live mode only.
@@ -2869,6 +3028,8 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             True if stream started successfully, False on failure.
         """
         try:
+            if self._rebuilding_thread != threading.get_ident():
+                self._streams_shut_down.clear()
             self._ensure_twm()
             self._on_user_event_cb = on_user_event
 
@@ -2921,21 +3082,35 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                         "(eventStreamTerminated) — entering RESYNCING (#907)"
                     )
                     return
-                on_user_event(msg)
+                # python-binance runs this inside start_listener: an exception escaping
+                # here would kill the listener task and silence the stream for good.
+                try:
+                    on_user_event(msg)
+                except Exception as e:
+                    logger.error("User data event forwarding failed: %s", e, exc_info=True)
 
-            # cast: _ensure_twm() above guarantees _twm is set; mypy cannot narrow
-            # an attribute inside the closures.
-            if self._use_margin:
-                self._user_socket_key = self._socket_on_twm_loop(
-                    lambda: cast(Any, self._twm).start_margin_socket(callback=_user_callback)
-                )
-            else:
-                self._user_socket_key = self._socket_on_twm_loop(
-                    lambda: cast(Any, self._twm).start_user_socket(callback=_user_callback)
-                )
+            # PRIMARY before the socket starts: python-binance subscribes asynchronously
+            # and a fast subscribe failure flags RESYNCING from the TWM loop; assigning
+            # PRIMARY afterwards could overwrite that and hide a dead stream.
             self._last_user_event_time = datetime.now(UTC)
             self._user_stream_subscribed_at = datetime.now(UTC)
             self._user_ws_state = WebSocketState.PRIMARY
+            try:
+                # cast: _ensure_twm() above guarantees _twm is set; mypy cannot narrow
+                # an attribute inside the closures.
+                if self._use_margin:
+                    self._user_socket_key = self._socket_on_twm_loop(
+                        lambda: cast(Any, self._twm).start_margin_socket(callback=_user_callback)
+                    )
+                else:
+                    self._user_socket_key = self._socket_on_twm_loop(
+                        lambda: cast(Any, self._twm).start_user_socket(callback=_user_callback)
+                    )
+            except Exception:
+                self._user_ws_state = WebSocketState.DISCONNECTED
+                self._user_stream_subscribed_at = None
+                raise
+            self._user_socket_active = True
             return True
         except Exception as e:
             logger.error("Failed to start user data stream: %s", e)
@@ -2950,45 +3125,179 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self._user_stream_generation += 1
             self._user_event_received = False
         self._user_stream_subscribed_at = None
-        if self._user_socket_key and self._twm:
+        # python-binance reports a ws-api margin socket's key as None, so the key alone
+        # cannot tell whether a socket is running; stop_socket(None) is valid.
+        if (self._user_socket_active or self._user_socket_key) and self._twm:
             try:
                 self._twm.stop_socket(self._user_socket_key)
             except Exception as e:
                 logger.error("Failed to stop user socket: %s", e)
             self._user_socket_key = None
+            self._user_socket_active = False
             self._user_ws_state = WebSocketState.DISCONNECTED
 
+    @contextmanager
+    def _rebuild_scope(self) -> Iterator[None]:
+        """Hold the lifecycle lock for a reconnect/rebuild without re-arming a shutdown."""
+        with self._stream_lifecycle_lock:
+            self._rebuilding_thread = threading.get_ident()
+            try:
+                yield
+            finally:
+                self._rebuilding_thread = None
+
     def stop_streams(self) -> None:
-        """Stop all WebSocket streams. Recreates TWM on reconnect."""
-        # Invalidate the current user generation FIRST (before teardown), atomically
-        # with clearing the event flag under the lock, so a callback still draining
-        # on the TWM loop is dropped and can't fake a recovery during shutdown (#717).
+        """Stop all WebSocket streams and refuse further rebuilds until restarted.
+
+        Engine shutdown path. Marks the provider shut down, then tears down under the
+        lifecycle lock, so a health-thread reconnect racing this call cannot build a
+        new TWM after it and abandons its remaining work instead of making shutdown
+        wait; an explicit ``start_*_stream`` re-arms the provider.
+        """
+        self._streams_shut_down.set()
+        with self._stream_lifecycle_lock:
+            self._teardown_twm()
+
+    def _teardown_twm(self) -> None:
+        """Tear the whole TWM down cleanly. Callers hold ``_stream_lifecycle_lock``.
+
+        The user generation is invalidated FIRST (atomically with clearing the event
+        flag under the lock) so a callback still draining on the TWM loop is dropped
+        and can't fake a recovery during teardown (#717). The ws-api transport is then
+        closed from the loop side before ``twm.stop()``: python-binance's own
+        ``stop()`` gives ``close_connection`` 5 s, but the ws-api read loop only
+        notices it is closing after its 10 s ``recv`` timeout, so without this the
+        stop times out ("Error stopping client"), the loop closes with the client
+        coroutine and websockets tasks still pending, and each rebuild logs ERROR
+        artifacts (#729). Recreates the TWM on the next ``_ensure_twm``.
+        """
         with self._user_stream_lock:
             self._user_stream_generation += 1
             self._user_event_received = False
+        with self._kline_stream_lock:
+            self._kline_stream_generation += 1
         self._user_stream_subscribed_at = None
-        if self._twm:
-            twm, loop = self._twm, self._twm_loop
-            twm.stop()
-            # The TWM runs its loop on its own thread; wait for that thread to leave
-            # run_until_complete before closing the loop, so we neither close a running
-            # loop nor leak its selector/self-pipe FDs (CODE.md §241).
-            twm.join(timeout=5)
-            if loop is not None and not loop.is_closed() and not loop.is_running():
-                try:
-                    loop.close()
-                except Exception as e:
-                    logger.debug("Could not close TWM event loop on stop: %s", e)
-            self._twm = None
-            self._twm_loop = None
-            self._kline_socket_key = None
-            self._user_socket_key = None
-            self._kline_ws_state = WebSocketState.DISCONNECTED
-            self._user_ws_state = WebSocketState.DISCONNECTED
-            self._kline_event_received = False
-            # _user_event_received is cleared above under _user_stream_lock (atomic
-            # with the generation bump); not repeated here to keep a single locked
-            # writer of that flag (#717).
+        if not self._twm:
+            return
+        twm, loop = self._twm, self._twm_loop
+        ws_api = getattr(getattr(twm, "_client", None), "ws_api", None)
+        self._close_ws_api_transport(ws_api, loop, twm.ident)
+        twm.stop()
+        # The TWM runs its loop on its own thread; wait for that thread to leave
+        # run_until_complete before closing the loop, so we neither close a running
+        # loop nor leak its selector/self-pipe FDs (CODE.md §241).
+        twm.join(timeout=DEFAULT_WS_TWM_JOIN_TIMEOUT)
+        if twm.is_alive():
+            self._release_dead_listener_keys(twm)
+            twm.join(timeout=DEFAULT_WS_TWM_JOIN_TIMEOUT)
+        # Retire the loop BEFORE draining it: a listener aborted by this very teardown
+        # then reports its failure against a loop that is no longer the live one.
+        self._twm = None
+        self._twm_loop = None
+        self._kline_socket_key = None
+        self._user_socket_key = None
+        self._user_socket_active = False
+        self._kline_ws_state = WebSocketState.DISCONNECTED
+        self._user_ws_state = WebSocketState.DISCONNECTED
+        self._kline_event_received = False
+        if loop is not None and not loop.is_closed():
+            if twm.is_alive() or loop.is_running():
+                logger.warning(
+                    "TWM thread still alive %ds after stop — leaving its loop open (#729)",
+                    2 * DEFAULT_WS_TWM_JOIN_TIMEOUT,
+                )
+            else:
+                self._close_stopped_loop(loop, ws_api)
+
+    @staticmethod
+    def _release_dead_listener_keys(twm: Any) -> None:
+        """Drop socket keys whose listener task died, so the TWM thread can exit (#723).
+
+        python-binance removes a key from ``_socket_running`` only when its listener
+        exits normally, and ``socket_listener`` keeps the manager thread alive until
+        that dict is empty. A listener killed by an exception (a failed subscribe)
+        therefore pins the thread forever, and so does one still inside its
+        exit-unsubscribe against an unresponsive ws-api (a request timeout longer than
+        the join). Called only after ``stop()`` flagged every socket and the join timed
+        out, so any key left belongs to a listener that is dead or already abandoned.
+        """
+        running = getattr(twm, "_socket_running", None)
+        if not isinstance(running, dict) or not running:
+            return
+        logger.warning(
+            "TWM thread did not exit: releasing %d socket key(s) of dead or stuck listeners",
+            len(running),
+        )
+        running.clear()
+
+    @staticmethod
+    def _close_ws_api_transport(
+        ws_api: Any, loop: asyncio.AbstractEventLoop | None, thread_ident: int | None = None
+    ) -> None:
+        """Best-effort quiesce of the TWM client's ws-api socket on its own loop (#729).
+
+        Marks the ws-api EXITING and closes its websocket until its read loop has
+        stopped. python-binance's ``close_connection`` otherwise waits for that loop
+        to notice it is closing, which takes up to its 10 s ``recv`` timeout, longer
+        than ``twm.stop()``'s 5 s patience ("Error stopping client"). EXITING is
+        re-asserted because a reconnect already in flight overwrites it, and a closed
+        socket makes the pending ``recv`` raise at once. Failure is harmless:
+        ``twm.stop()`` still runs and tears the client down the slow way.
+        """
+        if loop is None or ws_api is None or not loop.is_running():
+            return
+
+        async def quiesce() -> None:
+            while True:
+                ws_api.ws_state = WSListenerState.EXITING
+                if getattr(ws_api, "ws", None) is not None:
+                    await ws_api.ws.close()
+                if getattr(ws_api, "_handle_read_loop", None) is None:
+                    return
+                await asyncio.sleep(0.05)
+
+        try:
+            with _muted_expected_transport_close(thread_ident):
+                asyncio.run_coroutine_threadsafe(
+                    asyncio.wait_for(quiesce(), DEFAULT_WS_TWM_TRANSPORT_CLOSE_TIMEOUT), loop
+                ).result(timeout=DEFAULT_WS_TWM_TRANSPORT_CLOSE_TIMEOUT + 1)
+        except Exception as e:
+            logger.warning("ws-api transport close before TWM stop failed: %s", e)
+
+    @staticmethod
+    def _close_stopped_loop(loop: asyncio.AbstractEventLoop, ws_api: Any = None) -> None:
+        """Release what a stopped TWM loop still holds, then close it (#729).
+
+        The listener's exit-unsubscribe can re-open the ws-api after the earlier close,
+        so its socket is closed once more here, or the connection lingers until GC.
+        Then pending tasks are cancelled and finished: closing a loop with live tasks
+        makes asyncio report each as ``Task was destroyed but it is pending!`` and
+        Python print ``Exception ignored ... Event loop is closed`` when their
+        coroutines are finalized, long after teardown. This is the clean shutdown
+        ``asyncio.run`` does. Bounded so a task that ignores cancellation cannot stall
+        the caller; a failure is logged because an unclosed loop leaks descriptors.
+        """
+        ws = getattr(ws_api, "ws", None)
+        if ws is not None:
+            try:
+                with _muted_expected_transport_close(threading.get_ident()):
+                    loop.run_until_complete(
+                        asyncio.wait_for(ws.close(), DEFAULT_WS_TWM_TRANSPORT_CLOSE_TIMEOUT)
+                    )
+            except Exception as e:
+                logger.warning("Could not close the re-opened ws-api socket on stop: %s", e)
+        try:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(
+                    asyncio.wait(pending, timeout=DEFAULT_WS_TWM_TRANSPORT_CLOSE_TIMEOUT)
+                )
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+        except Exception as e:
+            logger.warning("Could not close TWM event loop on stop: %s", e)
 
     @property
     def ws_state(self) -> WebSocketState:
@@ -3148,31 +3457,34 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         Returns:
             True if reconnect succeeded, False otherwise.
         """
-        for attempt in range(1, DEFAULT_WS_RECONNECT_MAX_RETRIES + 1):
-            try:
-                if self._kline_socket_key and self._twm:
-                    self._twm.stop_socket(self._kline_socket_key)
-                    self._kline_socket_key = None
-                # cast: reconnect only runs after start_kline_stream() stored these;
-                # mypy cannot prove that cross-method invariant.
-                if self.start_kline_stream(
-                    cast(str, self._active_symbol),
-                    cast(str, self._active_timeframe),
-                    cast(Callable[[dict], None], self._on_kline_cb),
-                ):
-                    return True
-            except Exception as e:
-                logger.error(
-                    "Kline reconnect attempt %d/%d failed: %s",
-                    attempt,
-                    DEFAULT_WS_RECONNECT_MAX_RETRIES,
-                    e,
-                )
-            if attempt < DEFAULT_WS_RECONNECT_MAX_RETRIES:
-                backoff = 2 ** (attempt - 1)
-                logger.info("Retrying kline reconnect in %ds...", backoff)
-                time.sleep(backoff)
-        return False
+        with self._rebuild_scope():
+            for attempt in range(1, DEFAULT_WS_RECONNECT_MAX_RETRIES + 1):
+                if self._streams_shut_down.is_set():
+                    return False
+                try:
+                    if self._kline_socket_key and self._twm:
+                        self._twm.stop_socket(self._kline_socket_key)
+                        self._kline_socket_key = None
+                    # cast: reconnect only runs after start_kline_stream() stored these;
+                    # mypy cannot prove that cross-method invariant.
+                    if self.start_kline_stream(
+                        cast(str, self._active_symbol),
+                        cast(str, self._active_timeframe),
+                        cast(Callable[[dict], None], self._on_kline_cb),
+                    ):
+                        return True
+                except Exception as e:
+                    logger.error(
+                        "Kline reconnect attempt %d/%d failed: %s",
+                        attempt,
+                        DEFAULT_WS_RECONNECT_MAX_RETRIES,
+                        e,
+                    )
+                if attempt < DEFAULT_WS_RECONNECT_MAX_RETRIES:
+                    backoff = 2 ** (attempt - 1)
+                    logger.info("Retrying kline reconnect in %ds...", backoff)
+                    self._streams_shut_down.wait(backoff)
+            return False
 
     def reconnect_user(self, on_user_event: Callable[[dict], None] | None = None) -> bool:
         """Reconnect user data stream with exponential backoff.
@@ -3187,53 +3499,57 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             True if reconnect succeeded, False otherwise.
         """
         callback = on_user_event or self._on_user_event_cb
-        if not callback:
+        with self._rebuild_scope():
+            if not callback:
+                return False
+            for attempt in range(1, DEFAULT_WS_RECONNECT_MAX_RETRIES + 1):
+                if self._streams_shut_down.is_set():
+                    return False
+                try:
+                    if (self._user_socket_active or self._user_socket_key) and self._twm:
+                        self._twm.stop_socket(self._user_socket_key)
+                    if self.start_user_stream(callback):
+                        return True
+                except Exception as e:
+                    logger.error(
+                        "User stream reconnect attempt %d/%d failed: %s",
+                        attempt,
+                        DEFAULT_WS_RECONNECT_MAX_RETRIES,
+                        e,
+                    )
+                if attempt < DEFAULT_WS_RECONNECT_MAX_RETRIES:
+                    backoff = 2 ** (attempt - 1)
+                    logger.info("Retrying user stream reconnect in %ds...", backoff)
+                    self._streams_shut_down.wait(backoff)
             return False
-        for attempt in range(1, DEFAULT_WS_RECONNECT_MAX_RETRIES + 1):
-            try:
-                if self._user_socket_key and self._twm:
-                    self._twm.stop_socket(self._user_socket_key)
-                if self.start_user_stream(callback):
-                    return True
-            except Exception as e:
-                logger.error(
-                    "User stream reconnect attempt %d/%d failed: %s",
-                    attempt,
-                    DEFAULT_WS_RECONNECT_MAX_RETRIES,
-                    e,
-                )
-            if attempt < DEFAULT_WS_RECONNECT_MAX_RETRIES:
-                backoff = 2 ** (attempt - 1)
-                logger.info("Retrying user stream reconnect in %ds...", backoff)
-                time.sleep(backoff)
-        return False
 
     def hard_reconnect_user(self, on_user_event: Callable[[dict], None] | None = None) -> bool:
-        """Fully rebuild the user stream on a fresh AsyncClient/ws_api socket (#723).
+        """Rebuild the user stream on a fresh TWM, AsyncClient and ws-api socket (#723).
 
-        Unlike ``reconnect_user`` (which only ``stop_socket`` + re-subscribes over the
-        SAME shared ``client.ws_api`` object), this tears the whole TWM down via
-        ``stop_streams`` — which calls ``AsyncClient.close_connection`` and drops
-        ``ws_api`` — then ``_ensure_twm`` builds a NEW ``ThreadedWebsocketManager`` →
-        new ``AsyncClient`` → brand-new ``WebsocketAPI`` (empty subscription/route map,
-        fresh read loop, fresh TCP socket), and ``start_user_stream`` subscribes over
-        it. This is the margin analogue of what makes the kline stream recover (a
-        genuinely fresh socket), and the only supported-library way to escape an
-        object-level-degraded ws_api the in-place re-subscribe can't restore (#616 M1).
+        The in-place ``reconnect_user`` re-subscribes through the SAME python-binance
+        objects, which cannot work for a ws-api margin stream:
 
-        Gated OFF by default behind ``FEATURE_WS_USER_HARD_RECONNECT`` at the call site
-        (the engine), so this method only runs when deliberately enabled. It does NOT
-        touch the kline stream (kline lives on a separate provider/TWM) and CANNOT
-        sever order placement or stop-loss submission (those use the separate
-        synchronous ``self._client``, never the TWM's ``AsyncClient``).
+        * the manager caches its ``KeepAliveWebsocket`` and, for ws-api subscriptions,
+          never evicts it, so every re-subscribe reuses one object whose later
+          listener exit unsubscribes the NEWER subscription;
+        * the first socket's key is ``None``, so ``stop_socket`` never reaches its
+          listener and a zombie keeps consuming (and, via the generation guard,
+          dropping) events from the shared queue;
+        * a subscribe racing the ws-api's own reconnect times out, which kills the
+          listener task silently.
 
-        The generation token is bumped under ``_user_stream_lock`` inside both
-        ``stop_streams`` and ``start_user_stream`` (reused as-is), so a stale callback
-        from the torn-down AsyncClient is dropped and cannot fake recovery. Like
-        ``reconnect_user``, returning True means only that a socket was *opened* — real
-        WS-primary recovery is still gated on a confirmed event via the engine's single
-        ``_restore_user_ws_primary`` disable site, so a fire-and-forget start on a still-
-        broken (M2 server-side) socket cannot blackout order tracking.
+        A new TWM owns a new event loop, ``AsyncClient``, ``WebsocketAPI``, socket
+        manager and queue, so none of that state can leak into the new subscription.
+        It does NOT touch order placement or stop-loss submission (those use the
+        separate synchronous ``self._client``). Refuses when this provider also hosts
+        the kline stream (the teardown would kill it) and after ``stop_streams``.
+
+        The generation token is bumped under ``_user_stream_lock`` in the teardown and
+        in ``start_user_stream``, so a stale callback from the old client is dropped
+        and cannot fake recovery. Returning True means only that a subscription was
+        *requested*; WS-primary recovery stays gated on a real event via the engine's
+        single ``restore_user_ws_primary`` site, and a failed subscribe flags RESYNCING
+        (see ``_handle_user_subscribe_failure``) so the next health cycle retries.
 
         Args:
             on_user_event: Fresh callback for the rebuilt stream. If None, reuses the
@@ -3245,25 +3561,32 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         callback = on_user_event or self._on_user_event_cb
         if not callback:
             return False
-        try:
-            # Full teardown: closes the AsyncClient (ws_api=None) and the TWM loop. The
-            # user generation is bumped under the lock here, invalidating any in-flight
-            # callback from the old socket before the new one is built.
-            self.stop_streams()
-        except Exception as e:
-            # A failed teardown must not be reported as a recovered stream. Leave the
-            # caller to keep REST polling on / re-mark degraded (no false PRIMARY).
-            logger.error("Hard user-stream reconnect: teardown (stop_streams) failed: %s", e)
-            return False
-        try:
-            # Rebuild the TWM → new AsyncClient → fresh ws_api, then subscribe over it.
-            # start_user_stream calls _ensure_twm internally, but call it explicitly so a
-            # rebuild failure surfaces here distinctly from a subscribe failure.
-            self._ensure_twm()
-            return self.start_user_stream(callback)
-        except Exception as e:
-            logger.error("Hard user-stream reconnect: rebuild/start failed: %s", e)
-            return False
+        with self._rebuild_scope():
+            if self._streams_shut_down.is_set():
+                logger.info("Hard user-stream reconnect skipped: streams were shut down")
+                return False
+            if self._kline_socket_key is not None:
+                logger.error(
+                    "Hard user-stream reconnect refused: this provider also hosts the "
+                    "kline stream and a full teardown would kill it"
+                )
+                return False
+            try:
+                self._teardown_twm()
+            except Exception as e:
+                # A failed teardown must not be reported as a recovered stream. Leave the
+                # caller to keep REST polling on / re-mark degraded (no false PRIMARY).
+                logger.error("Hard user-stream reconnect: teardown failed: %s", e)
+                return False
+            if self._streams_shut_down.is_set():
+                logger.info("Hard user-stream rebuild abandoned: streams were shut down")
+                return False
+            try:
+                self._ensure_twm()
+                return self.start_user_stream(callback)
+            except Exception as e:
+                logger.error("Hard user-stream reconnect: rebuild/start failed: %s", e)
+                return False
 
 
 # Aliases for backward compatibility
