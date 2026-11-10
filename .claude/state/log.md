@@ -4767,3 +4767,16 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 **Unowned queue (§2.11).** At least 40 open issues have zero assignees (`gh issue list --limit 40` returned 40 with asg=0). Oldest: #1111 (08-24, 77 days). Escalated as one item here, not per issue. Issue filed: none (no new code change needed this week).
 
 **Not in force until this PR merges and develop is promoted (§2.9(i)).**
+
+## [D-2026-11-10-10] 2026-11-10 ~16:50 UTC · decision · board-directed (Claude, project thread)
+
+**Authority.** Alex, 2026-11-10 16:19 UTC, project thread: "sounds great, I agree with everything. You're in charge now. Action everything. Work autonomously. You can merge and deploy to staging and prod whenever you want." This covers the roadmap in the "Trading bot: assessment and roadmap to profitability" doc, including stopping new live entries.
+
+**Decisions and actions.**
+1. **HyperGrowth entries paused in every environment** (#1314). `FEATURE_ENTRY_PAUSE=true` is set on the start command in `railway.json` and the Dockerfile CMD. Exits, stops, partial exits and reconciliation keep running. Why: no measured directional edge (returns-levers synthesis 2026-07-12; model-free scan #1105, 0 of 20 cells beat costs); the honest 365d backtest returns -20.15%. **An `ENTRY_PAUSE` latched condition is intended. It is not an incident: standups should report it as a state, not escalate it.**
+2. **Staging synced** to develop `e581230` (#1317). Railway staging deploy `baf7501` SUCCESS.
+3. **Production parity promote** (#1316). main tree is identical to develop `e581230`. Railway production deploy `57a90d9` SUCCESS at ~16:47 UTC. It ships the entry pause plus the 2026-11-10 safety batch (#1270, #1299–#1312, #1295, #1297). No new migrations. The restart cleared any in-process latch, which was intended. The money-path PRs did not each get the two-reviewer gauntlet. That was accepted because entries are paused and the account is ~$88. Boot-log verification is pending: the cloud session has no Railway CLI.
+4. **Phase 1 strategy bake-off** preregistered and run (#1315). S1 funding carry passes every gate but earned 0.9%/yr in the 2025-01 → 2026-10 holdout, below idle-USDT yield. S2 trend+vol and S3 cross-sectional momentum fail the holdout. Gate flaw recorded: Sharpe was measured against a zero risk-free rate. The Board was asked whether to build S1 or stop and watch funding.
+5. **Issues closed:** 24 fixed by the batch (comments link the fixing PR). HyperGrowth-only #1083, #1274 and #1272, plus staging-flat #1292, closed as not planned.
+
+**Reversal.** To resume entries, revert #1314's start-command change and promote.
