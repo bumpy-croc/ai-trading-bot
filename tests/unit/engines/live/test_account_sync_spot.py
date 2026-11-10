@@ -4,6 +4,7 @@ Covers position side/unit matching, the balance-sync/reconciler split, the
 invalid-balance guard, and the trade-recovery ID space and timezone handling.
 """
 
+import logging
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, create_autospec, patch
 
@@ -11,7 +12,10 @@ import pytest
 
 from src.data_providers.exchange_interface import (
     AccountBalance,
+    Order,
     OrderSide,
+    OrderStatus,
+    OrderType,
     Position,
     Trade,
 )
@@ -209,6 +213,56 @@ class TestSyncBalances:
 
         assert result["synced"] is False
         assert result["error"].startswith("Invalid balance data from exchange")
+
+
+def _exchange_order(order_id="49981411828", symbol="ETHUSDT") -> Order:
+    now = datetime.now(UTC)
+    return Order(
+        order_id=order_id,
+        symbol=symbol,
+        side=OrderSide.SELL,
+        order_type=OrderType.STOP_LOSS,
+        quantity=0.1,
+        price=None,
+        status=OrderStatus.PENDING,
+        filled_quantity=0.0,
+        average_price=None,
+        commission=0.0,
+        commission_asset="USDT",
+        create_time=now,
+        update_time=now,
+        stop_price=1_800.0,
+    )
+
+
+class TestSyncOrders:
+    def test_open_positions_own_stop_is_not_reported_as_new(self, sync, db, caplog):
+        db.get_pending_orders_new.return_value = []
+        db.get_active_positions.return_value = [_db_position(stop_loss_order_id="49981411828")]
+
+        with caplog.at_level(logging.WARNING, logger="src.engines.live.account_sync"):
+            result = sync._sync_orders([_exchange_order("49981411828")])
+
+        assert result["new_orders"] == 0
+        assert "New order found on exchange" not in caplog.text
+
+    def test_foreign_order_still_warns(self, sync, db, caplog):
+        db.get_pending_orders_new.return_value = []
+        db.get_active_positions.return_value = [_db_position(stop_loss_order_id="49981411828")]
+
+        with caplog.at_level(logging.WARNING, logger="src.engines.live.account_sync"):
+            result = sync._sync_orders([_exchange_order("777")])
+
+        assert result["new_orders"] == 1
+        assert "New order found on exchange: 777" in caplog.text
+
+    def test_position_without_stop_does_not_shield_unknown_orders(self, sync, db):
+        db.get_pending_orders_new.return_value = []
+        db.get_active_positions.return_value = [_db_position(stop_loss_order_id=None)]
+
+        result = sync._sync_orders([_exchange_order("777")])
+
+        assert result["new_orders"] == 1
 
 
 class TestRecoverMissingTrades:

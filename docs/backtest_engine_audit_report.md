@@ -38,7 +38,7 @@ The system has a **shared decision manager** (`PartialOperationsManager`) that b
 ❌ PositionTracker.apply_partial_exit() - DUPLICATED (execution)
 ```
 
-This violates the single source of truth principle. There's an existing consolidation plan (`docs/execplans/shared_models_consolidation.md`) that identified this issue but was never executed.
+This violates the single source of truth principle. There's an existing consolidation plan (`docs/archive/execplans/shared_models_consolidation.md`) that identified this issue but was never executed.
 
 **Issue**:
 The backtest engine **does NOT deduct fees and slippage** from partial exit P&L, while the live engine **DOES**. This creates a systematic overestimation of backtest returns when partial exits are used.

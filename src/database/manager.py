@@ -3939,7 +3939,10 @@ class DatabaseManager:
             )
             session.add(pt)
             # Update position current size and counters
-            cur = float(position.current_size or position.size or 0.0)
+            # 0.0 is valid (fully drained); only a NULL column falls back to size.
+            cur = float(
+                position.current_size if position.current_size is not None else position.size or 0.0
+            )
             new_cur = max(0.0, cur - float(executed_size_delta))
             position.current_size = Decimal(str(new_cur))
             position.partial_exits_taken = int((position.partial_exits_taken or 0) + 1)
@@ -3994,7 +3997,10 @@ class DatabaseManager:
             )
             session.add(pt)
             # Update position current size and counters
-            cur = float(position.current_size or position.size or 0.0)
+            # 0.0 is valid (fully drained); only a NULL column falls back to size.
+            cur = float(
+                position.current_size if position.current_size is not None else position.size or 0.0
+            )
             new_cur = min(1.0, cur + float(added_size_delta))
             position.current_size = Decimal(str(new_cur))
             position.scale_ins_taken = int((position.scale_ins_taken or 0) + 1)

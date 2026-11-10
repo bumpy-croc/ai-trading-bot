@@ -506,17 +506,24 @@ class ExitHandler:
                         scale_basis = _resolve_basis_balance(trade, balance)
                         scale_notional = scale_basis * add_effective
                         side_str = to_side_string(trade.side)
-                        scale_fee, scale_slippage = self.execution_engine.calculate_scale_in_costs(
+                        (
+                            scale_fee,
+                            scale_slippage,
+                            scale_fill_price,
+                        ) = self.execution_engine.calculate_scale_in_costs(
                             price=current_price,
                             notional=scale_notional,
                             side=side_str,
                         )
-                        total_scale_in_fees += scale_fee
 
+                        # Blend before accruing the fee so a rejected blend
+                        # cannot charge a fee for a slice that was never added.
                         self.position_tracker.apply_scale_in(
                             add_effective,
+                            price=scale_fill_price,
                             max_position_size=self.max_position_size,
                         )
+                        total_scale_in_fees += scale_fee
 
                         scale_ins.append(
                             {
@@ -846,8 +853,10 @@ class ExitHandler:
         )
         fraction = float(getattr(trade, "current_size", trade.size))
         entry_notional = basis_balance * fraction
-        # Scale by price change to get exit notional (this is intentional and correct)
-        position_notional = entry_notional * (base_exit_price / trade.entry_price)
+        # Scale by price change to get exit notional (this is intentional and correct).
+        # Units held = entry_notional / cost basis, which differs from the first
+        # fill's price once a scale-in has been blended in.
+        position_notional = entry_notional * (base_exit_price / trade.cost_basis_price)
 
         # Convert PositionSide enum to string for cost calculation
         side_str = to_side_string(trade.side)
@@ -928,9 +937,9 @@ class ExitHandler:
             return 0.0
 
         # Validate prices before calling pnl_percent to prevent ValueError
-        if trade.entry_price <= 0 or current_price <= 0:
+        if trade.cost_basis_price <= 0 or current_price <= 0:
             return 0.0
 
         side_str = to_side_string(trade.side)
         side_enum = Side.LONG if side_str == "long" else Side.SHORT
-        return pnl_percent(trade.entry_price, current_price, side_enum, 1.0)
+        return pnl_percent(trade.cost_basis_price, current_price, side_enum, 1.0)

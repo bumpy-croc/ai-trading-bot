@@ -185,6 +185,12 @@ class Backtester:
       whole-position outcomes (partial slices banked into the trade's P&L);
       live records only the final leg, so they are not comparable to live for
       partial-exit strategies until #1234 lands.
+    - **Scale-in cost basis.** P&L, fees and the equity sample use the
+      quantity-weighted average cost of the position, so a scale-in slice
+      earns from its own (slipped) fill. Partial-exit targets, trailing
+      activation and breakeven stay measured from the first fill. The live
+      tracker does not blend cost yet; it is dormant while live scale-ins are
+      disabled.
     - ExitHandler: Processes exit signals and execution
     - CorrelationHandler: Applies correlation-based sizing
     - RegimeHandler: Manages regime-based strategy switching
