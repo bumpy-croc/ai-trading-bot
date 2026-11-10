@@ -330,9 +330,10 @@ def summarise(name: str, run: pd.DataFrame, bench: pd.Series | None, gated: bool
     g = mc.gate(run["excess"], periods, bench_excess=bench)
     weekly = None
     if bench is not None:
-        wk = (
-            lambda s: (1.0 + s.loc[mc.HOLDOUT[0] : mc.HOLDOUT[1]]).resample("W-FRI").prod() - 1.0
-        )  # noqa: E731
+
+        def wk(s: pd.Series) -> pd.Series:
+            return (1.0 + s.loc[mc.HOLDOUT[0] : mc.HOLDOUT[1]]).resample("W-FRI").prod() - 1.0
+
         weekly = mc.alpha_vs(wk(run["excess"]), wk(bench), 52.0)
     return {
         "name": name,
