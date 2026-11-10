@@ -302,3 +302,26 @@ class TestCoinbaseGetOpenOrdersChecked:
         provider = self._provider()
         with patch.object(provider, "_request", side_effect=Exception("network error")):
             assert provider.get_open_orders_checked("BTC-USD") is None
+
+
+class TestCoinbaseOrderNumerics:
+    """#789: str(float) renders small values in scientific notation, which exchanges reject."""
+
+    def test_order_body_numbers_are_fixed_point(self):
+        from src.data_providers.exchange_interface import OrderSide, OrderType
+
+        with patch.dict(os.environ, {"ENV": "test"}, clear=False):
+            for key in ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_API_PASSPHRASE"]:
+                os.environ.pop(key, None)
+            provider = CoinbaseProvider()
+        with patch.object(provider, "_request", return_value={"id": "o1"}) as mock_request:
+            provider.place_order(
+                "SHIB-USD",
+                OrderSide.BUY,
+                OrderType.LIMIT,
+                quantity=0.00009,
+                price=0.00001234,
+            )
+        body = mock_request.call_args.kwargs["body"]
+        assert body["size"] == "0.00009"
+        assert body["price"] == "0.00001234"

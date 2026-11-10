@@ -4,7 +4,8 @@ import argparse
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import mock_open, patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
@@ -240,12 +241,12 @@ class TestControlTrain:
 
         # Act
         with (
-            patch("cli.commands.live.train_price_model_main") as mock_train,
+            patch("cli.commands.live.train_price_model") as mock_train,
             patch("cli.commands.live._latest_metadata") as mock_metadata_path,
             patch("builtins.open", mock_open(read_data=json.dumps(metadata))),
         ):
 
-            mock_train.return_value = 0
+            mock_train.return_value = (0, None)
             mock_metadata_path.return_value = Path("/tmp/metadata.json")
 
             result = _control(args)
@@ -274,12 +275,12 @@ class TestControlTrain:
 
         # Act
         with (
-            patch("cli.commands.live.train_model_main") as mock_train,
+            patch("cli.commands.live.train_model") as mock_train,
             patch("cli.commands.live._latest_metadata") as mock_metadata_path,
             patch("builtins.open", mock_open(read_data=json.dumps(metadata))),
         ):
 
-            mock_train.return_value = 0
+            mock_train.return_value = (0, None)
             mock_metadata_path.return_value = Path("/tmp/metadata.json")
 
             result = _control(args)
@@ -301,13 +302,120 @@ class TestControlTrain:
         )
 
         # Act
-        with patch("cli.commands.live.train_price_model_main") as mock_train:
-            mock_train.return_value = 1
+        with patch("cli.commands.live.train_price_model") as mock_train:
+            mock_train.return_value = (1, None)
 
             result = _control(args)
 
             # Assert
             assert result == 1
+
+
+class TestControlTrainPromotion:
+    """GH #1242: `live-control train` never moves ``latest`` except through the gate."""
+
+    @staticmethod
+    def _args(sentiment: bool, auto_deploy: bool):
+        return argparse.Namespace(
+            control_cmd="train",
+            symbol="BTCUSDT",
+            sentiment=sentiment,
+            days=365,
+            epochs=50,
+            auto_deploy=auto_deploy,
+        )
+
+    @pytest.mark.parametrize(
+        ("sentiment", "trainer"),
+        [(False, "train_price_model"), (True, "train_model")],
+    )
+    @pytest.mark.parametrize("auto_deploy", [False, True])
+    def test_training_is_never_asked_to_set_latest(self, sentiment, trainer, auto_deploy):
+        decision = SimpleNamespace(promoted=True, reason="ok", audit_path=None)
+        with (
+            patch(f"cli.commands.live.{trainer}", return_value=(0, Path("/m/B/p/v1"))) as train,
+            patch("cli.commands.live._gate_and_promote", return_value=decision),
+        ):
+            assert _control(self._args(sentiment, auto_deploy)) == 0
+
+        assert getattr(train.call_args.args[0], "set_latest", False) is False
+
+    def test_without_auto_deploy_the_gate_does_not_run(self):
+        with (
+            patch("cli.commands.live.train_price_model", return_value=(0, Path("/m/B/p/v1"))),
+            patch("cli.commands.live._gate_and_promote") as gate,
+        ):
+            assert _control(self._args(False, False)) == 0
+
+        gate.assert_not_called()
+
+    def test_auto_deploy_gates_the_bundle_in_the_namespace_it_was_written_to(self):
+        """A sentiment run without sentiment data lands in ``price/``, not ``sentiment/``."""
+        bundle = Path("/m/ETHUSDT/price/v2")
+        decision = SimpleNamespace(promoted=True, reason="ok", audit_path=None)
+        with (
+            patch("cli.commands.live.train_model", return_value=(0, bundle)),
+            patch("cli.commands.live._gate_and_promote", return_value=decision) as gate,
+        ):
+            assert _control(self._args(True, True)) == 0
+
+        assert gate.call_args.args[0] == bundle
+        assert gate.call_args.kwargs["symbol"] == "ETHUSDT"
+        assert gate.call_args.kwargs["model_type"] == "price"
+        assert "known_prev_target" not in gate.call_args.kwargs
+
+    def test_auto_deploy_blocked_by_gate_returns_error(self):
+        decision = SimpleNamespace(promoted=False, reason="failed", audit_path=None)
+        with (
+            patch("cli.commands.live.train_price_model", return_value=(0, Path("/m/B/p/v1"))),
+            patch("cli.commands.live._gate_and_promote", return_value=decision),
+        ):
+            assert _control(self._args(False, True)) == 1
+
+    def test_auto_deploy_without_a_bundle_is_an_error(self):
+        with (
+            patch("cli.commands.live.train_price_model", return_value=(0, None)),
+            patch("cli.commands.live._gate_and_promote") as gate,
+        ):
+            assert _control(self._args(False, True)) == 1
+
+        gate.assert_not_called()
+
+    def test_failed_first_model_is_not_left_served(self, tmp_path):
+        """No prior ``latest``: a gate failure must leave the namespace without one."""
+        type_dir = tmp_path / "BTCUSDT" / "basic"
+        bundle = type_dir / "v1"
+        bundle.mkdir(parents=True)
+        report = MagicMock(passed=False, inconclusive=False)
+        report.summary.return_value = "failed"
+        report.to_dict.return_value = {}
+        with (
+            patch("cli.commands.live.MODEL_REGISTRY", tmp_path),
+            patch("cli.commands.live.train_price_model", return_value=(0, bundle)),
+            patch("src.ml.validation.gate.BearValidationHarness") as harness,
+        ):
+            harness.return_value.run.return_value = report
+            assert _control(self._args(False, True)) == 1
+
+        assert not (type_dir / "latest").exists()
+        assert not (type_dir / "latest").is_symlink()
+
+    def test_passing_first_model_becomes_latest(self, tmp_path):
+        type_dir = tmp_path / "BTCUSDT" / "basic"
+        bundle = type_dir / "v1"
+        bundle.mkdir(parents=True)
+        report = MagicMock(passed=True, inconclusive=False)
+        report.summary.return_value = "passed"
+        report.to_dict.return_value = {}
+        with (
+            patch("cli.commands.live.MODEL_REGISTRY", tmp_path),
+            patch("cli.commands.live.train_price_model", return_value=(0, bundle)),
+            patch("src.ml.validation.gate.BearValidationHarness") as harness,
+        ):
+            harness.return_value.run.return_value = report
+            assert _control(self._args(False, True)) == 0
+
+        assert (type_dir / "latest").resolve() == bundle.resolve()
 
 
 class TestControlDeployModel:

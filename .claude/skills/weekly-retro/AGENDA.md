@@ -13,12 +13,11 @@ becomes a diff or gets a written disposition.
 
 ## Items
 
-_(Cleared by the 2026-09-14 retro. Empty on arrival for the **seventh** consecutive window. This
-retro stopped treating that as a fleet signal and checked the mechanism instead: `git log --follow`
-on this file records exactly **two** non-retro appends since it was created (`aee03a26`;
-`3f667afe`/#1060, which was then lost to a branch) against ~9 retro clears. The intended writers
-file GH issues instead — six `source:automation` issues were opened in this window (#1135, #1136,
-#1138, #1140, #1141, #1142) and none of them came through here. Dispositioned in [D-2026-09-14-01]
-and GH #1144: either wire the standup's sink to append one line here whenever it reports a process
-gap, or retire this file and make the retro sweep `source:automation` issues. Skill input 0 now
-says to sweep both.)_
+_(Cleared by the 2026-11-09 retro. Empty on arrival for the **fifteenth** consecutive window. The
+open PRs #1285, #1281, #1271 and #1270 were checked for AGENDA additions; none carry any. #1099 (retire or
+restructure this file) is still open and unowned. See [D-2026-11-09-02].)_
+
+- 2026-10-04: #1242 made `latest` an explicit opt-in for local training (`TrainingConfig.set_latest`,
+  `--set-latest`, `live-control train --auto-deploy`) and added the NO CHANGE-vs-`latest` CI check.
+  LESSONS §1.16(a) and `weekly-retro/SKILL.md` still say the pipeline writes `latest` at training
+  time; rewrite them to describe the opt-in and the CI check.

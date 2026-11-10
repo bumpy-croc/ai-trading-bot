@@ -185,6 +185,12 @@ class Backtester:
       whole-position outcomes (partial slices banked into the trade's P&L);
       live records only the final leg, so they are not comparable to live for
       partial-exit strategies until #1234 lands.
+    - **Scale-in cost basis.** P&L, fees and the equity sample use the
+      quantity-weighted average cost of the position, so a scale-in slice
+      earns from its own (slipped) fill. Partial-exit targets, trailing
+      activation and breakeven stay measured from the first fill. The live
+      tracker does not blend cost yet; it is dormant while live scale-ins are
+      disabled.
     - ExitHandler: Processes exit signals and execution
     - CorrelationHandler: Applies correlation-based sizing
     - RegimeHandler: Manages regime-based strategy switching
@@ -221,6 +227,7 @@ class Backtester:
         max_position_size: float | None = None,
         annual_margin_interest_rate: float = 0.0,
         drawdown_cap_mode: DrawdownCapMode = "enforce",
+        model_version: str | None = None,
         _regime_switcher_class: type | None = None,
         _strategy_manager: Any | None = None,
     ) -> None:
@@ -276,6 +283,11 @@ class Backtester:
                 results with ``drawdown_cap_mode`` and an explicit
                 ``early_stopped`` boolean so a truncated run can never be
                 mistaken for a complete one.
+            model_version: The run's point-in-time model pin (GH #988). Threaded
+                to regime switching so a switched-in ML strategy scores with the
+                same pinned version as the initial strategy; a strategy that
+                cannot honor the pin is never switched to (it would silently
+                resolve ``latest``).
             _regime_switcher_class: Optional regime switcher class for testing (internal).
             _strategy_manager: Optional strategy manager class or instance for testing (internal).
         """
@@ -465,6 +477,7 @@ class Backtester:
 
         # Regime switching
         self.enable_regime_switching = enable_regime_switching
+        self.model_version = model_version
         self.regime_handler: RegimeHandler | None = None
 
         # Validate test injection parameters (both or neither must be provided)
@@ -654,6 +667,7 @@ class Backtester:
                 regime_switcher=regime_switcher,
                 strategy_manager=strategy_manager,
                 initial_strategy_name=self.initial_strategy_name,
+                model_version=self.model_version,
             )
 
             logger.info("Regime-aware strategy switching enabled for backtesting")

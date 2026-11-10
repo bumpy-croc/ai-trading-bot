@@ -47,6 +47,10 @@ class MockDatabaseManager:
             "total": 5,
         }
 
+    def set_audit_failure_sink(self, sink: Any) -> None:
+        """Mirror DatabaseManager.set_audit_failure_sink; the mock never fails an audit write."""
+        self._audit_failure_sink = sink
+
     def set_fallback_balance(self, balance: float) -> None:
         """Set a fallback balance for when no session exists (testing helper)."""
         self._fallback_balance = balance
@@ -137,8 +141,15 @@ class MockDatabaseManager:
 
         return session_id
 
+    def get_open_positions_in_ended_sessions(self, session_id: int | None = None) -> list[dict]:
+        """No OPEN position belongs to an ended session in the mock."""
+        return []
+
     def end_trading_session(
-        self, session_id: int | None = None, final_balance: float | None = None
+        self,
+        session_id: int | None = None,
+        final_balance: float | None = None,
+        carry_forward_open_positions: bool = False,
     ):
         """End a trading session"""
         if session_id is None:
