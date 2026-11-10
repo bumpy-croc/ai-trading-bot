@@ -88,6 +88,21 @@ class PositionSizer(ABC):
             ValueError: If input parameters are invalid
         """
 
+    def explain_zero_size(
+        self,
+        signal: "Signal",
+        balance: float,
+        risk_amount: float,
+        regime: Optional["RegimeContext"] = None,
+    ) -> str | None:
+        """Name why ``calculate_size`` returned 0 for a directional signal.
+
+        Called only after a zero, purely from the same inputs, so it never
+        changes a decision. Sizers with a deliberate veto override it so a
+        zero-size decision is never silent.
+        """
+        return None
+
     def validate_inputs(self, balance: float, risk_amount: float) -> None:
         """Validate common input parameters.
 
@@ -378,6 +393,18 @@ class ConfidenceWeightedSizer(PositionSizer):
             }
         )
         return params
+
+    def explain_zero_size(
+        self,
+        signal: "Signal",
+        balance: float,
+        risk_amount: float,
+        regime: Optional["RegimeContext"] = None,
+    ) -> str | None:
+        """Name the confidence floor when it is what zeroed the size."""
+        if signal.confidence < self.min_confidence:
+            return f"confidence_{signal.confidence:.3f}_below_min_{self.min_confidence:.3f}"
+        return None
 
 
 class KellySizer(PositionSizer):
@@ -1125,6 +1152,7 @@ class LeveragedPositionSizer(PositionSizer):
         self.base_sizer = base_sizer
         self.leverage_manager = leverage_manager
         self.max_leveraged_fraction = max_leveraged_fraction
+        self._zeroed_by_leverage = False
 
     def calculate_size(
         self,
@@ -1148,11 +1176,13 @@ class LeveragedPositionSizer(PositionSizer):
             Leveraged position size in base currency.
         """
         self.validate_inputs(balance, risk_amount)
+        self._zeroed_by_leverage = False
         base_size = self.base_sizer.calculate_size(signal, balance, risk_amount, regime)
         if base_size <= 0 or regime is None:
             return base_size
 
         leverage = self.leverage_manager.get_leverage_multiplier(regime)
+        self._zeroed_by_leverage = leverage <= 0
         if leverage <= 0:
             return 0.0
         leveraged_size = base_size * leverage
@@ -1164,6 +1194,21 @@ class LeveragedPositionSizer(PositionSizer):
         # Cap at max_leveraged_fraction of balance
         max_size = balance * self.max_leveraged_fraction
         return min(leveraged_size, max_size)
+
+    def explain_zero_size(
+        self,
+        signal: "Signal",
+        balance: float,
+        risk_amount: float,
+        regime: Optional["RegimeContext"] = None,
+    ) -> str | None:
+        """Name the base sizer's veto, else a zero-leverage regime."""
+        reason = self.base_sizer.explain_zero_size(signal, balance, risk_amount, regime)
+        if reason is not None:
+            return reason
+        # Read from the last calculate_size: the leverage manager smooths state on
+        # every query, so asking it again here would perturb the next decision.
+        return "leverage_multiplier_zero_for_regime" if self._zeroed_by_leverage else None
 
     def get_parameters(self) -> dict[str, Any]:
         """Get leveraged position sizer parameters."""
@@ -1407,6 +1452,16 @@ class VolatilityTargetSizer(PositionSizer):
             }
         )
         return adjusted
+
+    def explain_zero_size(
+        self,
+        signal: "Signal",
+        balance: float,
+        risk_amount: float,
+        regime: Optional["RegimeContext"] = None,
+    ) -> str | None:
+        """Delegate to the wrapped sizer, which owns the zero decision."""
+        return self.base_sizer.explain_zero_size(signal, balance, risk_amount, regime)
 
     def _set_sizing_metrics(self, metrics: dict[str, float]) -> None:
         with self._metrics_lock:
