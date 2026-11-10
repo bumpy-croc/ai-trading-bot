@@ -11,8 +11,13 @@ Two properties matter more than elegance here, both because getting them wrong r
   worktree, but ``make install`` runs inside ephemeral agent worktrees. A symlink into one of
   those dangles the moment the worktree is pruned or its branch stops shipping ``.githooks/``,
   and git skips a dangling hook *silently*, exiting 0. A copy cannot dangle.
-* **The source is read from the primary checkout** (the parent of the git common dir) when it
-  has one, so a feature branch in a worktree cannot seed the repo-wide hook.
+* **The source is the integration branch, not a working tree.** ``origin/develop`` is read
+  first. The primary checkout is held on ``main``, which trails ``develop`` between promotes,
+  so installing from it (the old rule) *downgraded* a hook that ``develop`` had already fixed,
+  and ``--check`` reported DRIFT against an install byte-identical to ``develop``'s. A feature
+  branch in a worktree still cannot seed the repo-wide hook. Only when there is no such ref (a
+  fresh clone, a test repo) does the primary's, then the invoking checkout's, ``.githooks/``
+  stand in.
 
 Drift is the price of copying, so ``--check`` compares content **and the executable bit** —
 git skips a non-executable hook silently — and is wired to ``make hooks-check``; ``make
@@ -33,6 +38,7 @@ from pathlib import Path
 
 SOURCE_DIR_NAME = ".githooks"
 HOOK_MODE = 0o755
+SOURCE_REF = "origin/develop"
 
 
 def _git(*args: str, cwd: Path | None = None) -> str:
@@ -74,42 +80,66 @@ def hooks_dir(root: Path) -> Path:
     return _common_dir(root) / "hooks"
 
 
-def source_dir(root: Path) -> tuple[Path | None, Path]:
-    """Return the ``.githooks`` to install from, and the primary root it was judged against.
+def _hooks_from_ref(root: Path) -> dict[str, bytes] | None:
+    """The tracked hooks as committed on ``SOURCE_REF``, or None when that ref has none."""
+    listing = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", SOURCE_REF, "--", SOURCE_DIR_NAME],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+    )
+    if listing.returncode != 0 or not listing.stdout.strip():
+        return None
+    hooks: dict[str, bytes] = {}
+    for path in listing.stdout.splitlines():
+        blob = subprocess.run(
+            ["git", "show", f"{SOURCE_REF}:{path}"], cwd=str(root), capture_output=True
+        )
+        if blob.returncode != 0:
+            return None
+        hooks[Path(path).name] = blob.stdout
+    return hooks
 
-    Prefers the primary checkout's copy: the hooks directory is shared, so seeding it from
-    whatever branch a worktree happens to be on would leak a feature branch's hook to every
-    other worktree. Falls back to the invoking checkout — safe only because we copy.
+
+def source_hooks(root: Path) -> tuple[dict[str, bytes] | None, str]:
+    """Return ``({hook name: content}, where it came from)``; the dict is None if none found.
+
+    Order: ``SOURCE_REF``, the primary checkout's ``.githooks/``, the invoking checkout's.
+    The fallbacks are safe only because hooks are copied, so pruning a worktree cannot
+    disable an installed hook.
     """
-    primary = primary_root(root)
-    for candidate in (primary / SOURCE_DIR_NAME, root / SOURCE_DIR_NAME):
+    from_ref = _hooks_from_ref(root)
+    if from_ref is not None:
+        return from_ref, SOURCE_REF
+    for candidate in (primary_root(root) / SOURCE_DIR_NAME, root / SOURCE_DIR_NAME):
         if candidate.is_dir():
-            return candidate, primary
-    return None, primary
+            hooks = {p.name: p.read_bytes() for p in sorted(candidate.iterdir()) if p.is_file()}
+            return hooks, str(candidate)
+    return None, SOURCE_REF
 
 
 def install(root: Path, *, check_only: bool = False) -> int:
-    source, primary = source_dir(root)
-    if source is None:
+    hooks, origin = source_hooks(root)
+    if hooks is None:
         print(
-            f"error: no {SOURCE_DIR_NAME}/ found in {primary} or {root}",
+            f"error: no {SOURCE_DIR_NAME}/ found on {SOURCE_REF}, in {primary_root(root)} or "
+            f"{root}",
             file=sys.stderr,
         )
         return 1
-    if source.parent != primary:
+    if origin != SOURCE_REF:
         print(
-            f"note: {primary} has no {SOURCE_DIR_NAME}/ (branch predates tracked hooks); "
-            f"installing from {source} instead. Hooks are copied, so pruning this worktree "
-            f"cannot disable them.",
+            f"note: {SOURCE_REF} has no {SOURCE_DIR_NAME}/; using {origin} instead. Hooks are "
+            f"copied, so pruning a worktree cannot disable them.",
         )
 
     target_dir = hooks_dir(root)
     target_dir.mkdir(parents=True, exist_ok=True)
     problems = 0
 
-    for hook in sorted(p for p in source.iterdir() if p.is_file()):
-        target = target_dir / hook.name
-        wanted = hook.read_bytes()
+    for name, wanted in sorted(hooks.items()):
+        target = target_dir / name
+        hook = f"{SOURCE_DIR_NAME}/{name}"
         current = target.read_bytes() if target.is_file() else None
         # The mode bit is as load-bearing as the content: git skips a non-executable hook
         # SILENTLY and the push succeeds. Content-only drift detection would print "ok" over
