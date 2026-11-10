@@ -41,6 +41,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type error.
 
 ### Fixed
+- **Restart adopts OPEN positions only after exchange verification** (#683). In live mode
+  `carry_forward_open_positions` now checks every OPEN DB row for the traded symbol, strategy
+  and mode, in the current session or any ended session, against the exchange before loading it
+  (`ExchangePositionVerifier`, `src/engines/live/position_adoption.py`). The base-asset
+  holding (margin long `netAsset`, margin short borrowed, spot wallet total) is allocated
+  across the rows newest first, so two same-symbol rows can no longer both be backed by one
+  balance. Real inventory is adopted (resized through `current_size` when only part remains,
+  with its stop ensured by the startup reconciler), a phantom is closed through the
+  reconciler's balance-neutral external-close path and paged (`PHANTOM_POSITION_CLOSED`),
+  dust below the exchange minimum is treated as a phantom, and an unconfirmed lookup adopts
+  and closes nothing, pages (`ADOPTION_UNVERIFIED`) and latches close-only. This replaces the
+  previous-session-only carry-forward (#677) for live mode, so a real position stranded under
+  an older session is adopted too; crash restarts verify the reused session's own rows the
+  same way. Paper mode keeps the previous-session carry-forward.
 - **Live max-drawdown hard cap now sees unrealized losses** (#1267). The guard compared only
   realized balance with its peak, so an open position could run deep underwater while the cap
   stayed silent. It now trips on `max(balance leg, equity leg)`: the balance leg is the old

@@ -30,7 +30,7 @@ continuous polling, account synchronisation, and resilience features required fo
 | `LiveStopLossManager` | `engines/live/execution/stop_loss_manager.py` | All exchange-facing stop-loss calls: placement (with retry), cancel, fill/held queries, re-protect, trailing-stop move (cancel + guarded re-place at the ratcheted price, #1167), offline-fill detection | None — stateless; reads `enable_live_trading`/`exchange_interface`/`order_tracker` off the engine at call time; position mutations go through `LivePositionTracker`'s internal lock |
 | `LiveAccountMonitor` | `engines/live/monitoring/account_monitor.py` | Balance/equity snapshots, status lines, performance summaries | None — stateless; reads positions via `LivePositionTracker.positions` (thread-safe snapshot) |
 | `LiveSessionRecoverer` | `engines/live/recovery.py` | Startup recovery: session balance, persisted-position reload, risk-manager re-registration, startup exchange reconciliation | None — runs on the startup path before the trading loop; engine state it mutates (session id, balance, close-only flag) is written through the engine as before |
-| `LiveStartupSequencer` | `engines/live/startup.py` | Bootstrap orchestration (`start()` delegates to `run()`): session recover/create + wiring, #668 carry-forward, #657 self-heal, account sync, runtime-service startup, main-loop launch | None — runs once on the startup path (main thread) before the trading loop; all engine state written through the backref as before |
+| `LiveStartupSequencer` | `engines/live/startup.py` | Bootstrap orchestration (`start()` delegates to `run()`): session recover/create + wiring, #668/#683 exchange-verified position adoption, #657 self-heal, account sync, runtime-service startup, main-loop launch | None — runs once on the startup path (main thread) before the trading loop; all engine state written through the backref as before |
 | `StrategyRuntimeCoordinator` | `engines/live/strategy_runtime.py` | Strategy normalization, component risk-context provider, runtime dataframe prep + `RuntimeContext` construction, per-candle runtime decision processing, risk-param merge/clone | None — reads/writes engine strategy-runtime state (`strategy`, `_runtime`, `_runtime_dataset`, context cache) at call time; all touched only on the single trading-loop thread (per-candle + loop-applied hot-swap) |
 | `StrategyHotSwapCoordinator` | `engines/live/strategy_hot_swap.py` | Public `hot_swap_strategy`/`update_model`, StrategyManager callbacks, loop-applied pending-update application, post-swap refresh of trailing-stop/partial-ops/time-exit policies + component risk re-binding | None — entry points/callbacks only queue a `StrategyManager`-locked pending update (caller thread); all engine-state mutation runs in `apply_pending_strategy_update` on the trading-loop thread |
 | `WebSocketHealthMonitor` | `engines/live/ws_health.py` | WS stream startup, the background health-monitor thread, kline/user-stream staleness + reconnect/probe decisions, degraded-user hard-reconnect, draining the order-fill exit queue on the loop thread | None — the monitor holds no locks. It owns a single daemon thread (handle on the engine, `state._ws_health_thread`) and writes its reconnect-failure counters / `_ws_kline_active` flag only from that one thread (GIL-atomic single-writer); the trading loop reads them. Cross-thread order-fill handoff goes through the thread-safe `_pending_fill_exits` `SimpleQueue`, drained on the loop thread. Provider-owned WS connection state is read-only here |
@@ -63,6 +63,25 @@ call sites and test mock points are stable while the implementations live in the
     sync = AccountSynchronizer(BinanceProvider(), DatabaseManager(), session_id=<current_session_id>)
     sync.emergency_sync()
     ```
+
+## Restart position adoption (exchange-verified)
+
+On every live start, `LiveStartupSequencer.carry_forward_open_positions` verifies each OPEN DB
+position for the traded symbol, strategy and mode (the current session and ended
+sessions; other still-active sessions and rows with a terminal trade excluded) against the exchange before loading it. The base-asset holding is allocated across
+the rows (margin long: `netAsset`; margin short: borrowed; spot: wallet total).
+
+| Exchange evidence for the row | Action |
+|---|---|
+| Holds at least 99% of the tracked quantity | Adopt unchanged; the startup reconciler ensures its stop |
+| Holds part of it (above dust) | Adopt with `current_size` scaled to what is held; paged as `POSITION_ADOPTED_REDUCED` |
+| Short of inventory, but its stop filled (or part-filled), or an exit/scale-in order is unresolved | Adopt unchanged (`RECONCILE`): the startup reconciler books the real fill price, fee and P&L, so nothing is resized or closed here |
+| Nothing unclaimed, fully exited row, or remainder below min qty / min notional | Phantom: close through the reconciler's external-close path (stop cancelled; audit Trade row only for the reused session's rows, since an old entry marked to today's price would invent P&L); paged as `PHANTOM_POSITION_CLOSED` |
+| Lookup failed (holding or stop order), quantity unknown with inventory present, or spot short | Neither adopt nor close; page `ADOPTION_UNVERIFIED` and enter close-only |
+
+Rows sharing a symbol are ranked by a resting stop first, then newest first (the engine opens one
+position per symbol, so a newer row exists only after the older one left the exchange). Paper mode has no exchange and carries
+forward only the previous session's positions.
 
 ## Max-drawdown hard cap (close-only halt)
 

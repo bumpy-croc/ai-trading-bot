@@ -50,6 +50,75 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def position_from_db_row(pos_data: dict[str, Any], fallback_entry_balance: float) -> Position:
+    """Hydrate a ``LivePosition`` from a ``DatabaseManager.get_active_positions`` row.
+
+    ``fallback_entry_balance`` stands in when the row carries no usable entry balance.
+    """
+    # Convert database position to Position object
+    # Handle both uppercase and lowercase side values from database
+    side_value = pos_data["side"]
+    if isinstance(side_value, str):
+        side_value = side_value.lower()
+
+    stored_entry_balance = pos_data.get("entry_balance")
+    try:
+        entry_balance = (
+            float(stored_entry_balance)
+            if stored_entry_balance is not None
+            else float(fallback_entry_balance)
+        )
+    except (TypeError, ValueError):
+        logger.warning(
+            "Recovered position %s has invalid entry balance %s; falling back to current balance",
+            pos_data.get("symbol"),
+            stored_entry_balance,
+        )
+        entry_balance = float(fallback_entry_balance)
+
+    # Resolve the tracker key: prefer entry_order_id (exchange),
+    # fall back to database ID string for backward compat
+    entry_order_id = pos_data.get("entry_order_id")
+    tracker_key = entry_order_id or str(pos_data["id"])
+
+    position = Position(
+        symbol=pos_data["symbol"],
+        side=PositionSide(side_value),
+        size=pos_data["size"],
+        entry_price=pos_data["entry_price"],
+        entry_time=pos_data["entry_time"],
+        entry_balance=entry_balance,
+        stop_loss=pos_data.get("stop_loss"),
+        take_profit=pos_data.get("take_profit"),
+        unrealized_pnl=float(pos_data.get("unrealized_pnl", 0.0) or 0.0),
+        unrealized_pnl_percent=float(pos_data.get("unrealized_pnl_percent", 0.0) or 0.0),
+        quantity=pos_data.get("quantity"),
+        # Hydrate partial-operation state so a position partially exited
+        # before a restart closes at its REMAINING size (and logs the
+        # remaining base quantity), not the full original. Without this,
+        # current_size/original_size fall back to size and the close
+        # over-reports size, pnl fraction, and trades.quantity.
+        original_size=pos_data.get("original_size"),
+        current_size=pos_data.get("current_size"),
+        partial_exits_taken=pos_data.get("partial_exits_taken", 0) or 0,
+        scale_ins_taken=pos_data.get("scale_ins_taken", 0) or 0,
+        last_partial_exit_price=pos_data.get("last_partial_exit_price"),
+        last_scale_in_price=pos_data.get("last_scale_in_price"),
+        # Trailing/breakeven state: losing it on restart re-arms the
+        # activation logic and can loosen an already-ratcheted stop.
+        trailing_stop_activated=bool(pos_data.get("trailing_stop_activated", False)),
+        trailing_stop_price=pos_data.get("trailing_stop_price"),
+        breakeven_triggered=bool(pos_data.get("breakeven_triggered", False)),
+        order_id=tracker_key,  # Backward compat: used as _positions dict key
+        tracker_key=tracker_key,
+        exchange_order_id=entry_order_id,
+        client_order_id=pos_data.get("client_order_id"),
+        db_position_id=pos_data["id"],
+        stop_loss_order_id=pos_data.get("stop_loss_order_id"),
+    )
+    return position
+
+
 class RecoveryEngineState(Protocol):
     """Live engine state the recoverer reads and mutates at call time.
 
@@ -424,69 +493,7 @@ class LiveSessionRecoverer:
             logger.info("🔄 Recovering %s active positions...", len(db_positions))
 
             for pos_data in db_positions:
-                # Convert database position to Position object
-                # Handle both uppercase and lowercase side values from database
-                side_value = pos_data["side"]
-                if isinstance(side_value, str):
-                    side_value = side_value.lower()
-
-                stored_entry_balance = pos_data.get("entry_balance")
-                try:
-                    entry_balance = (
-                        float(stored_entry_balance)
-                        if stored_entry_balance is not None
-                        else float(state.current_balance)
-                    )
-                except (TypeError, ValueError):
-                    logger.warning(
-                        "Recovered position %s has invalid entry balance %s; falling back to current balance",
-                        pos_data.get("symbol"),
-                        stored_entry_balance,
-                    )
-                    entry_balance = float(state.current_balance)
-
-                # Resolve the tracker key: prefer entry_order_id (exchange),
-                # fall back to database ID string for backward compat
-                entry_order_id = pos_data.get("entry_order_id")
-                tracker_key = entry_order_id or str(pos_data["id"])
-
-                position = Position(
-                    symbol=pos_data["symbol"],
-                    side=PositionSide(side_value),
-                    size=pos_data["size"],
-                    entry_price=pos_data["entry_price"],
-                    entry_time=pos_data["entry_time"],
-                    entry_balance=entry_balance,
-                    stop_loss=pos_data.get("stop_loss"),
-                    take_profit=pos_data.get("take_profit"),
-                    unrealized_pnl=float(pos_data.get("unrealized_pnl", 0.0) or 0.0),
-                    unrealized_pnl_percent=float(
-                        pos_data.get("unrealized_pnl_percent", 0.0) or 0.0
-                    ),
-                    quantity=pos_data.get("quantity"),
-                    # Hydrate partial-operation state so a position partially exited
-                    # before a restart closes at its REMAINING size (and logs the
-                    # remaining base quantity), not the full original. Without this,
-                    # current_size/original_size fall back to size and the close
-                    # over-reports size, pnl fraction, and trades.quantity.
-                    original_size=pos_data.get("original_size"),
-                    current_size=pos_data.get("current_size"),
-                    partial_exits_taken=pos_data.get("partial_exits_taken", 0) or 0,
-                    scale_ins_taken=pos_data.get("scale_ins_taken", 0) or 0,
-                    last_partial_exit_price=pos_data.get("last_partial_exit_price"),
-                    last_scale_in_price=pos_data.get("last_scale_in_price"),
-                    # Trailing/breakeven state: losing it on restart re-arms the
-                    # activation logic and can loosen an already-ratcheted stop.
-                    trailing_stop_activated=bool(pos_data.get("trailing_stop_activated", False)),
-                    trailing_stop_price=pos_data.get("trailing_stop_price"),
-                    breakeven_triggered=bool(pos_data.get("breakeven_triggered", False)),
-                    order_id=tracker_key,  # Backward compat: used as _positions dict key
-                    tracker_key=tracker_key,
-                    exchange_order_id=entry_order_id,
-                    client_order_id=pos_data.get("client_order_id"),
-                    db_position_id=pos_data["id"],
-                    stop_loss_order_id=pos_data.get("stop_loss_order_id"),
-                )
+                position = position_from_db_row(pos_data, state.current_balance)
 
                 # Validate recovered entry_price before tracking. Positions
                 # with invalid entry_price cannot be closed properly and would
