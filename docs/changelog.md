@@ -50,6 +50,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `apply_scale_in_update` used `position.current_size or position.size`, so a `current_size` of
   0.0 (fully consumed by partial exits) was treated as the full `size` on the next update. They now
   fall back to `size` only when the column is NULL.
+- **Backtest scale-in slices are booked from their own fill price** (#734). The backtest engine
+  measured every slice from the first entry, so a scale-in at +3% that then reached +4% was booked
+  at +4% instead of ~+0.97%. `ActiveTrade` now carries a quantity-weighted `avg_cost_price`
+  (`cost_basis_price`); the final close, per-leg partial-exit P&L and fees, the exit fee notional,
+  margin interest and the unrealized-P&L equity sample use it. `entry_price` and every trigger
+  (partial-exit targets, trailing activation, breakeven) are unchanged. Backtests of strategies
+  that scale in (hyper_growth) will report different returns; runs without a scale-in are
+  unchanged. The live tracker has the same booking error, but live scale-ins are disabled.
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
   a 4h run selects a 4h model bundle; a missing bundle aborts the switch instead of using 1h.
