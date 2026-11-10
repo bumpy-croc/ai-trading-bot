@@ -3,7 +3,7 @@
   "enable_regime_detection": false,
   "optimizer_canary_fraction": "0.1",
   "optimizer_auto_apply": false,
-  "entry_pause": true,
+  "entry_pause": false,
   "closed_candle_gating": false,
   "allow_cross_symbol_model": false,
   "max_drawdown_reset_peak": false,
