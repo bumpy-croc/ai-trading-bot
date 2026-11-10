@@ -71,6 +71,13 @@ class QueryTimeout:
 # This cap indicates "extremely profitable" while remaining storable in Numeric(18, 8).
 MAX_PROFIT_FACTOR = 999999.99
 
+# A clean restart re-adopts the previous session only if it started within this window
+# (covers long-running paper sessions); older sessions' open rows are never carried forward.
+SESSION_RECOVERY_WINDOW_HOURS = 168  # 7 days
+
+# Session modes whose position rows are simulated and may be closed without an exchange check.
+SIMULATED_SESSION_MODES = (TradeSource.PAPER, TradeSource.BACKTEST)
+
 
 class NegativeBalanceError(ValueError):
     """A balance delta would take the session ledger below zero.
@@ -101,6 +108,17 @@ class SystemHaltStatus:
     reason: str | None
     source: str | None
     updated_at: datetime | None
+
+
+def _position_summary(position: Position) -> dict[str, Any]:
+    """Identify a position row in event details and listings."""
+    return {
+        "position_id": position.id,
+        "symbol": position.symbol,
+        "side": position.side.value,
+        "strategy_name": position.strategy_name,
+        "entry_time": position.entry_time.isoformat() if position.entry_time else None,
+    }
 
 
 def _trade_net_pnl(trade: Any) -> float:
@@ -732,9 +750,33 @@ class DatabaseManager:
         self._current_session_id = session_id
 
     def end_trading_session(
-        self, session_id: int | None = None, final_balance: float | None = None
+        self,
+        session_id: int | None = None,
+        final_balance: float | None = None,
+        carry_forward_open_positions: bool = False,
     ) -> None:
-        """End a trading session and calculate final metrics."""
+        """End a trading session and calculate final metrics.
+
+        An ended session must not leave OPEN position rows behind unnoticed
+        (#1044): they are invisible to the session-scoped engine reads yet still
+        count in unscoped queries. What happens to them depends on the session mode:
+
+        - ``LIVE``: rows are never touched (the exchange is the source of truth and
+          closing the row would hide a live position). A critical ``ALERT`` event
+          lists them so an operator reconciles by hand.
+        - ``PAPER`` with ``carry_forward_open_positions=True``: rows stay OPEN for
+          the next start to re-adopt via ``reassign_open_positions_to_session``
+          (#668); the ``ENGINE_STOP`` event records which rows were preserved.
+        - ``PAPER``/``BACKTEST`` otherwise: the positions are simulated and have no
+          successor, so they are closed balance-neutrally with an audit row and a
+          warning event.
+
+        Args:
+            session_id: Session to end (defaults to the manager's current session).
+            final_balance: Final session balance.
+            carry_forward_open_positions: True when the caller is an engine whose
+                next start re-adopts this session's OPEN paper positions.
+        """
         session_id = session_id or self._current_session_id
         if not session_id:
             logger.warning("No active session to end")
@@ -784,24 +826,257 @@ class DatabaseManager:
 
                     trading_session.max_drawdown = max_drawdown * 100
 
+            # Handled in the same transaction as the session end, so a session
+            # never ends with its rows half-processed.
+            open_positions = (
+                db.query(Position)
+                .filter(
+                    Position.session_id == session_id,
+                    Position.status == PositionStatus.OPEN,
+                )
+                .with_for_update()
+                .all()
+            )
+            # Allowlist: only a mode known to be simulated may have rows closed.
+            is_simulated = trading_session.mode in SIMULATED_SESSION_MODES
+            is_live_session = not is_simulated
+            close_positions = (
+                bool(open_positions) and is_simulated and not carry_forward_open_positions
+            )
+            open_position_summaries = [_position_summary(p) for p in open_positions]
+            if close_positions:
+                self._close_orphaned_positions(
+                    db,
+                    open_positions,
+                    reason=(
+                        f"Trading session #{session_id} ended without carry-forward; "
+                        "simulated position closed balance-neutrally (#1044)"
+                    ),
+                )
+
             db.commit()
 
             # Log session end event
+            end_details: dict[str, Any] = {
+                "duration_hours": (
+                    trading_session.end_time - trading_session.start_time
+                ).total_seconds()
+                / 3600,
+                "total_trades": trading_session.total_trades,
+                "final_pnl": trading_session.total_pnl,
+                "win_rate": trading_session.win_rate,
+            }
+            if open_position_summaries:
+                end_details["open_positions"] = {
+                    "disposition": (
+                        "closed"
+                        if close_positions
+                        else "preserved" if is_simulated else "left_open_for_manual_review"
+                    ),
+                    "positions": open_position_summaries,
+                }
             self.log_event(
                 event_type=EventType.ENGINE_STOP,
                 message=f"Trading session ended: {trading_session.session_name}",
-                details={
-                    "duration_hours": (
-                        trading_session.end_time - trading_session.start_time
-                    ).total_seconds()
-                    / 3600,
-                    "total_trades": trading_session.total_trades,
-                    "final_pnl": trading_session.total_pnl,
-                    "win_rate": trading_session.win_rate,
-                },
+                details=end_details,
+                session_id=session_id,
+            )
+            self._log_session_end_open_positions(
+                session_id,
+                is_live_session=is_live_session,
+                closed=close_positions,
+                summaries=open_position_summaries,
             )
 
             logger.info(f"Ended trading session #{session_id}")
+
+    def _log_session_end_open_positions(
+        self,
+        session_id: int,
+        *,
+        is_live_session: bool,
+        closed: bool,
+        summaries: list[dict[str, Any]],
+    ) -> None:
+        """Emit the durable alert/warning for OPEN rows found when a session ended (#1044).
+
+        Preserved paper rows get no extra event: the ``ENGINE_STOP`` event already
+        lists them, and they are expected to be re-adopted on the next start.
+        """
+        if not summaries:
+            return
+        if is_live_session:
+            logger.critical(
+                "LIVE session #%s ended with %d OPEN position row(s) still recorded: %s",
+                session_id,
+                len(summaries),
+                summaries,
+            )
+            self.log_event(
+                event_type=EventType.ALERT,
+                message=(
+                    f"LIVE session #{session_id} ended with {len(summaries)} OPEN position "
+                    "row(s) still recorded — verify against the exchange"
+                ),
+                severity="critical",
+                component="session_end",
+                error_code="LIVE_SESSION_ENDED_WITH_OPEN_POSITIONS",
+                details={"positions": summaries},
+                session_id=session_id,
+            )
+        elif closed:
+            self.log_event(
+                event_type=EventType.WARNING,
+                message=(
+                    f"Session #{session_id} ended with {len(summaries)} OPEN simulated "
+                    "position(s); closed balance-neutrally"
+                ),
+                severity="warning",
+                component="session_end",
+                error_code="SESSION_ENDED_OPEN_POSITIONS_CLOSED",
+                details={"positions": summaries},
+                session_id=session_id,
+            )
+
+    @staticmethod
+    def _close_orphaned_positions(db: Session, positions: list[Position], reason: str) -> None:
+        """Close OPEN position rows without touching any balance or trade ledger.
+
+        Mirrors the reconciler's external-close semantics: the row flips to CLOSED
+        and an immutable audit row records why. No P&L is invented — there is no
+        fill price for a position nobody is managing — and no balance row is written.
+        The caller owns the transaction.
+        """
+        now = datetime.now(UTC)
+        for position in positions:
+            position.status = PositionStatus.CLOSED
+            position.last_update = now
+            db.add(
+                ReconciliationAuditEvent(
+                    session_id=position.session_id,
+                    entity_type="position",
+                    entity_id=position.id,
+                    field="status",
+                    old_value="OPEN",
+                    new_value="CLOSED",
+                    reason=reason,
+                    severity="HIGH",
+                )
+            )
+
+    @staticmethod
+    def _session_is_over() -> Any:
+        """SQL predicate: no engine start will ever re-adopt the in-scope session's rows.
+
+        True when a newer session exists for the same symbol and strategy (this covers a
+        crashed session that is still flagged active but was replaced), or when the
+        session is ended and older than the recovery window. An ended session inside the
+        window with no successor is excluded: its paper positions wait for the next
+        start's carry-forward.
+        """
+        newer = sa.orm.aliased(TradingSession)
+        superseded = sa.exists().where(
+            newer.symbol == TradingSession.symbol,
+            newer.strategy_name == TradingSession.strategy_name,
+            newer.start_time > TradingSession.start_time,
+        )
+        window_cutoff = datetime.now(UTC) - timedelta(hours=SESSION_RECOVERY_WINDOW_HOURS)
+        return sa.or_(
+            superseded,
+            sa.and_(~TradingSession.is_active, TradingSession.start_time < window_cutoff),
+        )
+
+    def get_open_positions_in_ended_sessions(self, session_id: int | None = None) -> list[dict]:
+        """List OPEN positions whose trading session has ended or been superseded (#1044).
+
+        The positive-state check for monitoring: the result must be empty once
+        every restart has carried its positions forward. A non-empty result is a
+        phantom row — invisible to the engine's session-scoped reads, visible to
+        anything unscoped.
+
+        Args:
+            session_id: Restrict the check to one ended session.
+
+        Returns:
+            One dict per row (position id, session id/mode/end time, symbol, side,
+            strategy, entry time, entry price, quantity), oldest session first.
+        """
+        with self.get_session_with_timeout(QueryTimeout.DEFAULT) as db:
+            query = (
+                db.query(Position, TradingSession)
+                .join(TradingSession, Position.session_id == TradingSession.id)
+                .filter(
+                    Position.status == PositionStatus.OPEN,
+                    self._session_is_over(),
+                )
+                .order_by(Position.session_id, Position.id)
+            )
+            if session_id is not None:
+                query = query.filter(Position.session_id == session_id)
+            return [
+                {
+                    **_position_summary(position),
+                    "session_id": ended_session.id,
+                    "session_mode": ended_session.mode.value,
+                    "session_end_time": (
+                        ended_session.end_time.isoformat() if ended_session.end_time else None
+                    ),
+                    "entry_price": float(position.entry_price),
+                    "quantity": float(position.quantity) if position.quantity is not None else None,
+                }
+                for position, ended_session in query.all()
+            ]
+
+    def close_open_positions_in_ended_sessions(
+        self, position_ids: list[int], reason: str
+    ) -> list[int]:
+        """Balance-neutrally close the given OPEN rows of ended, non-LIVE sessions (#1044).
+
+        Each id is re-validated inside the write transaction: it must still be OPEN,
+        belong to an ended session, and that session must not be ``LIVE`` (a LIVE row
+        may mirror a real exchange position and needs manual reconciliation). Ids
+        failing the check are skipped, so a stale listing cannot close a row that was
+        carried forward since.
+
+        Args:
+            position_ids: Candidate ids (from ``get_open_positions_in_ended_sessions``).
+            reason: Audit note stored on each ``reconciliation_audit_events`` row.
+
+        Returns:
+            Ids actually closed.
+        """
+        if not position_ids:
+            return []
+        with self.get_session_with_timeout(QueryTimeout.WRITE) as db:
+            positions = (
+                db.query(Position)
+                .join(TradingSession, Position.session_id == TradingSession.id)
+                .filter(
+                    Position.id.in_(position_ids),
+                    Position.status == PositionStatus.OPEN,
+                    self._session_is_over(),
+                    TradingSession.mode.in_(SIMULATED_SESSION_MODES),
+                )
+                .with_for_update(of=Position)
+                .all()
+            )
+            if not positions:
+                return []
+            closed_ids = [p.id for p in positions]
+            self._close_orphaned_positions(db, positions, reason)
+            try:
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                logger.error(
+                    "Failed to close OPEN positions of ended sessions %s: %s. "
+                    "Transaction rolled back.",
+                    position_ids,
+                    e,
+                    exc_info=True,
+                )
+                raise
+            return closed_ids
 
     @staticmethod
     def _normalize_db_enum(value: str | Enum, enum_cls: type[_DbEnumT]) -> _DbEnumT:

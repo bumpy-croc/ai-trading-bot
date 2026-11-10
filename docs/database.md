@@ -45,6 +45,9 @@ The manager falls back to creating tables automatically when connecting to an em
 - `atb db migrate` – runs Alembic migrations using the repository’s migration scripts.
 - `atb db backup` – dumps data using `pg_dump` with safe defaults (see Backups & recovery for scheduling tips).
 - `atb db reset-railway` / `setup-railway` – remote administration helpers for Railway deployments.
+- `atb db close-stale-positions` – lists OPEN positions whose trading session has ended (dry run by default). `--apply`
+  closes the non-LIVE rows balance-neutrally with an audit row each; LIVE rows are only listed, because they may mirror a
+  real exchange position. `--session-id` narrows it to one session.
 - `atb db nuke` – drops all objects (including enums) and recreates the schema; intended for local resets only.
 
 ## Migrations
@@ -64,6 +67,24 @@ Workflow for a schema change:
 5. Name the revision `NNNN_short_name`, keep the id at 32 characters or fewer (the `alembic_version` column is `VARCHAR(32)`),
    and set `down_revision` to the current head.
 6. Verify on a fresh database: `alembic upgrade head`, then `atb db verify`.
+
+## Ended sessions and OPEN positions
+
+`DatabaseManager.end_trading_session` decides what happens to the session's OPEN `positions` rows, by session mode:
+
+| Session | Caller | Rows |
+|---------|--------|------|
+| PAPER | engine `stop()` (`carry_forward_open_positions=True`) | stay OPEN; the next start re-adopts them via `reassign_open_positions_to_session` |
+| PAPER / BACKTEST | anything else | closed balance-neutrally (audit row, no trade, no balance write) |
+| LIVE | any | never touched; critical `LIVE_SESSION_ENDED_WITH_OPEN_POSITIONS` event |
+
+Positive-state check for monitoring: `DatabaseManager.get_open_positions_in_ended_sessions()` must return nothing once
+restarts have carried positions forward. A session counts as over when a newer session exists for the same symbol and
+strategy (this includes a crashed session that is still flagged active but was replaced), or when it is ended and started
+more than 7 days ago (`SESSION_RECOVERY_WINDOW_HOURS`, the clean-restart recovery window). An ended session inside the
+window with no successor is not reported: its paper positions wait for the next start's carry-forward.
+
+The engine runs the check at startup and records an `OPEN_POSITIONS_IN_ENDED_SESSIONS` event when it finds rows.
 
 ## Backups & recovery
 

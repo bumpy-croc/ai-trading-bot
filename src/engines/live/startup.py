@@ -150,6 +150,7 @@ class LiveStartupSequencer:
         # on every startup instead of being silent (P0 observability hardening).
         state._warn_if_no_alert_channel()
         self.carry_forward_open_positions()
+        self.report_open_positions_in_ended_sessions()
         self.self_heal_terminal_positions()
         self.synchronize_account_on_start()
 
@@ -502,6 +503,52 @@ class LiveStartupSequencer:
         )
         hidden = len(decisions) - len(shown)
         return f"{text}; and {hidden} more" if hidden > 0 else text
+
+    def report_open_positions_in_ended_sessions(self) -> None:
+        """Record a durable event if any OPEN position belongs to an ended session (#1044).
+
+        Runs after carry-forward, so anything still found was not re-adopted:
+        another strategy/symbol, or older than the recovery window. The engine
+        never sees such rows, so this is the only place they surface at runtime.
+        Clear them with ``atb db close-stale-positions``.
+        """
+        state = self._state
+        try:
+            stale = state.db_manager.get_open_positions_in_ended_sessions()
+        except Exception as check_err:
+            logger.warning("Ended-session OPEN position check failed: %s", check_err)
+            return
+        if not isinstance(stale, list) or not stale:
+            return
+        session_ids = sorted({row["session_id"] for row in stale})
+        logger.warning(
+            "%d OPEN position row(s) belong to ended session(s) %s and are invisible to "
+            "the engine — review with `atb db close-stale-positions`",
+            len(stale),
+            session_ids,
+        )
+        live_rows = [row for row in stale if row["session_mode"] == "LIVE"]
+        if live_rows:
+            # A LIVE row may mirror a real exchange position no reconciler sees, and
+            # the cleanup command refuses it: page for a manual exchange check.
+            state._record_event(
+                EventType.ALERT,
+                f"{len(live_rows)} OPEN LIVE position row(s) belong to ended session(s) "
+                f"{sorted({row['session_id'] for row in live_rows})} and were not carried "
+                "forward — verify against the exchange",
+                severity="critical",
+                component="session_recovery",
+                error_code="LIVE_OPEN_POSITIONS_IN_ENDED_SESSIONS",
+                alert=True,
+            )
+        state._record_event(
+            EventType.WARNING,
+            f"{len(stale)} OPEN position row(s) belong to ended session(s) {session_ids}; "
+            "run `atb db close-stale-positions` to review",
+            severity="warning",
+            component="session_recovery",
+            error_code="OPEN_POSITIONS_IN_ENDED_SESSIONS",
+        )
 
     def self_heal_terminal_positions(self) -> None:
         """Close any OPEN position in this session that already has a terminal Trade (#657)."""

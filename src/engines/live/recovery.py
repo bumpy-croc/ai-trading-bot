@@ -21,6 +21,7 @@ import math
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
+from src.database.manager import SESSION_RECOVERY_WINDOW_HOURS
 from src.database.models import EventType
 from src.engines.live.execution.position_tracker import LivePosition as Position
 from src.engines.live.execution.position_tracker import LivePositionTracker
@@ -206,7 +207,7 @@ class LiveSessionRecoverer:
             if session_id is None:
                 strategy = state._strategy_name()
                 session_id = state.db_manager.get_last_session_id(
-                    within_hours=168,  # 7 days — covers long-running paper trading sessions
+                    within_hours=SESSION_RECOVERY_WINDOW_HOURS,
                     strategy_name=strategy,
                     symbol=state._active_symbol,
                 )
