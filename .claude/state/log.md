@@ -2134,3 +2134,8 @@ comment. Every other finding is an existing open issue (#1260, #1261, #1262, #12
 6. #1261 (p1): three money-path findings in production, unowned for 7 days.
 Ref: PR #1263, #1264 (`904e038e`), #1265, #1260, #1261, #1262, #1233, #1127, #1230, #1099;
 [D-2026-09-21-01], [D-2026-09-15-01]; LESSONS §2.9(i)/§2.15.
+
+## 2026-10-04 19:10 · track-record · quant-researcher
+Experiment #1081 Step 2 batch 2 (items 3, 7 re-run; item 2 not re-run) → item 7 supported (exact), item 3 conclusion held with moved numbers, item 2 unresolved
+Evidence: docs/research/notes/2026-10-04_1081-step2-revalidation-batch2.md (develop@812b5701, provenance banner on every run, load avg 35-48)
+Item 7 (#1048 incumbent OOS leg): PF 0.4814, 6 trades, 83.33%, MaxDD 3.26%, final $83.86 all reproduce. Item 3 (live-trade-review/parity-gap comparators): 5 trades/-1.26% (orig 6/-0.78%) and 4 trades/-2.27% (orig 3/+0.91%); long-only now vs shorts-enabled originals, cause not isolated; conclusion "backtest far from live" holds. Item 2: exact-original-command run at e1d24239 aborted on cost (about 55 min per 365d run under load); found the original scored ETHUSDT with the BTCUSDT model (native ETH model added 07-05, #886), a non-#1070 candidate cause for the CF-A non-reproduction. No shipped decision contradicted. Pending: items 2, 4, 5, 6, 8.
