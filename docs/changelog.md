@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **mypy now runs in CI** (#1111). New `type-check` job in `.github/workflows/tests.yml` runs
+  `python bin/run_mypy.py` over `src/` and `cli/`. Measured backlog on `develop` is zero errors
+  across 358 files, so the whole tree is gated. `bin/run_mypy.py` now makes a single mypy
+  invocation instead of one process per file, and `tests/unit/test_run_mypy.py` proves it fails on a
+  type error.
+
 ### Fixed
 - **Developer-tooling guards no longer fail silently** (#1138, #1147, #1136, #1151).
   The Makefile resolves its interpreter (`$VIRTUAL_ENV`, `.venv`, the primary's `.venv`, then
