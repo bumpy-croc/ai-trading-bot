@@ -4791,3 +4791,16 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 - ΔP: building carry now adds ~0 expected return over idle stablecoins. ΔR: none taken. C: avoids engineering and monitoring spend. E: bake-off #1315.
 
 **Watch.** `tools/funding_watch.py` + `.github/workflows/funding-watch.yml` check BTC/ETH perp funding daily (trailing 7-day mean, sources Binance → OKX → Hyperliquid). When either goes above **10%/yr** it opens one `funding-watch` issue and posts to `ALERT_WEBHOOK_URL`. That issue is the trigger to rerun the S1 bake-off on fresh data (with the risk-free-rate fix to the Sharpe gate) before any build. A job that cannot reach any source fails, so a blind watcher is visible.
+
+## 2026-11-10 ~23:10 UTC · track-record · research (Claude, project thread "Test the bot on forex and other markets")
+
+**Asked by.** Alex, 2026-11-10 21:29 UTC, project chat: test the bot on markets other than crypto, starting with forex ("more stable and can be predicted a bit easier?"), other ideas welcome.
+
+**Hypotheses → verdicts.** Prereg `docs/research/experiments/2026-11-10_other-markets-bakeoff-prereg.md` (commit `8adb4dc`, before any script existed); results `2026-11-10_other-markets-bakeoff-results.md`.
+- H1, forex direction is predictable enough to beat retail costs with the bot's kind of model: **falsified** at 1h and 1d. Daily out-of-sample accuracy 49.9% (25,158 bars). Hourly 51.6-52.5% (596,415 bars), worth under 1 bp per trade against a 1.8 bp round trip, and 68% of the gross edge sits in the bid-only quotes around the 17:00 New York rollover. Net -3.5% to -9.5%/yr. The same pipeline on BTC/ETH scores 53-54% and loses 60-70%/yr.
+- H2, a published rule-based strategy still adds something over passive holding after retail costs: **not supported**. Nine rules, 2015-01 to 2026-10 holdout: Sharpe -0.19 to 0.42 (gate 0.5), best alpha t vs 60/40 = 0.62 (gate 1.65). Controls: SPY 13.5%/yr (34% DD), 60/40 8.7%/yr (22% DD), T-bills 2.1%/yr.
+- 15 gated candidates, 15 FAIL. Candidate count on the 2015-2026 holdout: 15.
+
+**Evidence.** `experiments/markets_results/*.json`; each script run twice with byte-identical output.
+
+**Recommendation.** Do not port the prediction model to forex or ETFs. No paper trial, no account, no live or staging change. Entries stay halted per [D-2026-11-10-02].

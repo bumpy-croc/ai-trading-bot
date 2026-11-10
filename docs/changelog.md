@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Other-markets bake-off** (research; `docs/research/experiments/2026-11-10_other-markets-bakeoff-*.md`).
+  Preregistered test of the bot's prediction method on forex and ETFs, plus nine published rule-based
+  strategies (FX carry and trend, multi-asset trend, dual momentum, sector rotation, RSI-2, turn of
+  the month, volatility premium). All 15 candidates fail their gates on 2015-2026; passive controls
+  (60/40, S&P 500) beat every one. Scripts: `experiments/fx_predictability.py`,
+  `experiments/markets_bakeoff.py`, `experiments/markets_common.py`. No live or staging change.
 - **Funding-rate watcher** (log.md D-2026-11-10-02). `tools/funding_watch.py`, run daily by
   `.github/workflows/funding-watch.yml`, alerts (one `funding-watch` issue plus the alert webhook)
   when the trailing 7-day BTC or ETH perp funding goes above 10%/yr, the point where the funding
