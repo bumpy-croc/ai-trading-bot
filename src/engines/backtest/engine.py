@@ -227,6 +227,7 @@ class Backtester:
         max_position_size: float | None = None,
         annual_margin_interest_rate: float = 0.0,
         drawdown_cap_mode: DrawdownCapMode = "enforce",
+        model_version: str | None = None,
         _regime_switcher_class: type | None = None,
         _strategy_manager: Any | None = None,
     ) -> None:
@@ -282,6 +283,11 @@ class Backtester:
                 results with ``drawdown_cap_mode`` and an explicit
                 ``early_stopped`` boolean so a truncated run can never be
                 mistaken for a complete one.
+            model_version: The run's point-in-time model pin (GH #988). Threaded
+                to regime switching so a switched-in ML strategy scores with the
+                same pinned version as the initial strategy; a strategy that
+                cannot honor the pin is never switched to (it would silently
+                resolve ``latest``).
             _regime_switcher_class: Optional regime switcher class for testing (internal).
             _strategy_manager: Optional strategy manager class or instance for testing (internal).
         """
@@ -471,6 +477,7 @@ class Backtester:
 
         # Regime switching
         self.enable_regime_switching = enable_regime_switching
+        self.model_version = model_version
         self.regime_handler: RegimeHandler | None = None
 
         # Validate test injection parameters (both or neither must be provided)
@@ -660,6 +667,7 @@ class Backtester:
                 regime_switcher=regime_switcher,
                 strategy_manager=strategy_manager,
                 initial_strategy_name=self.initial_strategy_name,
+                model_version=self.model_version,
             )
 
             logger.info("Regime-aware strategy switching enabled for backtesting")
