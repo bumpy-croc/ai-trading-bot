@@ -23,7 +23,7 @@ from typing import Any
 
 from src.config.constants import HOLDINGS_CAP_MIN_RATIO
 from src.trading.balance_retry import read_free_balance_with_retry
-from src.trading.precision import quantize_to_step
+from src.trading.precision import snap_to_step
 from src.trading.symbols.factory import base_asset_from_symbol
 
 logger = logging.getLogger(__name__)
@@ -125,10 +125,7 @@ def _floor_to_lot_step(exchange_interface: Any, symbol: str, quantity: float) ->
     if not isinstance(step_size, int | float) or step_size <= 0 or not math.isfinite(step_size):
         return quantity
 
-    # +epsilon so a quantity that is mathematically an exact lot multiple but
-    # stored a hair low (float noise) isn't truncated a whole step down
-    # (mirrors _normalize_quantity's floor branch).
-    floored = math.floor(quantity / step_size + 1e-9) * step_size
+    floored = snap_to_step(quantity, step_size, "floor")
     if not math.isfinite(floored):
         return quantity
-    return quantize_to_step(floored, step_size)
+    return floored

@@ -109,6 +109,49 @@ If `/api/dashboard/state` is unreachable the JS falls back to per-resource fetch
 checks configuration providers, database connectivity, and Binance API reachability so you can wire it into uptime monitors or
 Kubernetes liveness probes.
 
+## Write-gap watchdog (dead-man's-switch)
+
+A dead engine cannot report its own death (the 2026-05-19 outage ran 12.8 days silently), so
+liveness is judged from outside the process. `.github/workflows/heartbeat-monitor.yml` runs
+`python -m cli.commands.live_watchdog --env all` every 30 minutes (also `atb live-control
+watchdog --env <production|staging|development|all>`). It reads each environment's database and
+treats either stream going quiet for more than `--threshold-minutes` (default
+`$HEARTBEAT_THRESHOLD_MINUTES`, then 120) as a gap:
+
+| Stream | Written by | Cadence |
+| --- | --- | --- |
+| `account_history` | `LiveAccountMonitor` snapshot | hourly |
+| `system_events` loop-state row (`ENTRIES_ENABLED` or any `*_LATCHED` / `CLOSED_CANDLE_GATE_STALLED`) | `LatchedConditionMonitor` | hourly |
+
+`reconciliation_audit_events` is deliberately **not** a liveness stream: it is event-driven, so a
+quiet audit table is the healthy state.
+
+A gap follows the same latched-condition pattern as the in-process monitor: a critical
+`HEARTBEAT_GAP` row plus a webhook page (`$ALERT_WEBHOOK_URL`) immediately, re-paged at 1h, 4h
+and 12h and then daily (`src/infrastructure/paging_schedule.py`, shared with
+`LatchedConditionMonitor`), pages past the first day prefixed `STILL DOWN — DAY N`, and a
+`HEARTBEAT_GAP_CLEARED` row once writes resume. The job is stateless, so the latch is rebuilt from
+its own rows; an undelivered page is retried on the next run. The command exits non-zero while a
+gap is open or a check cannot complete, so the CI failure notification is a second channel.
+Judgement uses the newest rows globally rather than session state: a crash leaves the session
+`is_active` and a clean stop clears it, but in both cases the writes stop. A deliberate stop
+therefore also raises the gap until the engine restarts.
+
+The only writes are the `HEARTBEAT_GAP` / `HEARTBEAT_GAP_CLEARED` rows in `system_events`.
+
+## Failure observability
+
+- `DatabaseManager.log_audit_event` never raises: the correction an audit row documents (a
+  balance heal, a position close) must still complete. A failed write is logged at ERROR and
+  reported to the engine, which records an `AUDIT_WRITE_FAILED` `system_events` row
+  (component `reconciler`; one per 5 minutes with the folded-in count; a lost `CRITICAL` audit row
+  also pages). The event is delivered on a daemon thread because the write usually fails while a
+  reconciler lock is held.
+- A database outage the live loop rides out pages `DB_UNREACHABLE` once after 5 minutes
+  (webhook only: the row cannot be written while the database is down), enters close-only after
+  30, and writes `DB_OUTAGE_RECOVERED` with the duration when the database returns, so every
+  outage leaves a durable row.
+
 ## Operational tips
 
 - Ship JSON logs to your preferred aggregator (Loki, ELK, Datadog) and index on `event_type`, `strategy`, `symbol`, and

@@ -101,6 +101,38 @@ class TestTrainModelCommand:
             assert parsed_args.target_type == "regression"
             assert parsed_args.target_horizon == 1
 
+    @pytest.mark.parametrize(
+        ("flags", "expected"), [([], False), (["--set-latest"], True)], ids=["default", "opt-in"]
+    )
+    def test_set_latest_flag_reaches_train_model_main(self, flags, expected):
+        args = argparse.Namespace(args=["BTCUSDT", *flags])
+
+        with (
+            patch("cli.commands.train._TRAINING_AVAILABLE", True),
+            patch("cli.commands.train.train_model_main") as mock_train,
+        ):
+            mock_train.return_value = 0
+            _handle_model(args)
+
+            assert mock_train.call_args.args[0].set_latest is expected
+
+    @pytest.mark.parametrize(
+        ("flags", "expected"), [([], False), (["--set-latest"], True)], ids=["default", "opt-in"]
+    )
+    def test_set_latest_flag_reaches_train_price_model_main(self, flags, expected):
+        from cli.commands.train import _handle_price
+
+        args = argparse.Namespace(args=["BTCUSDT", *flags])
+
+        with (
+            patch("cli.commands.train._TRAINING_AVAILABLE", True),
+            patch("cli.commands.train.train_price_model_main") as mock_train,
+        ):
+            mock_train.return_value = 0
+            _handle_price(args)
+
+            assert mock_train.call_args.args[0].set_latest is expected
+
     def test_unknown_target_type_rejected_by_argparse(self):
         args = argparse.Namespace(args=["BTCUSDT", "--target-type", "not_a_real_target"])
 

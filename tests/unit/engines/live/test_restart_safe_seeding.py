@@ -79,11 +79,15 @@ class _SeedState:
         self.events: list[str | None] = []
         self._peaks = list(peaks if peaks is not None else [None])
         self._snapshots = list(snapshots if snapshots is not None else [None])
+        # Equity reads drain their own copy so a balance-peak call count stays
+        # a pure count of balance reads (the breaker only ever reads equity).
+        self._equity_peaks = list(self._peaks)
         self.peak_calls: list[int | None] = []
+        self.equity_peak_calls: list[int | None] = []
         self.snapshot_calls: list[int | None] = []
         self.db_manager = SimpleNamespace(
             get_session_peak_balance=self._get_peak,
-            get_session_peak_equity=lambda **kw: self._get_peak(**kw),
+            get_session_peak_equity=self._get_equity_peak,
             get_first_snapshot_of_day=self._get_snapshot,
         )
 
@@ -96,6 +100,13 @@ class _SeedState:
     def _get_peak(self, session_id=None, fallback_session_id=None, **_kw):
         self.peak_calls.append(fallback_session_id)
         value = self._next(self._peaks)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    def _get_equity_peak(self, session_id=None, fallback_session_id=None, **_kw):
+        self.equity_peak_calls.append(fallback_session_id)
+        value = self._next(self._equity_peaks)
         if isinstance(value, BaseException):
             raise value
         return value
@@ -155,7 +166,7 @@ def test_breaker_seeds_peak_and_baseline_from_prior_session_on_carry_forward_boo
 
     enforcer.check()
 
-    assert state.peak_calls == [PRIOR_SESSION]
+    assert state.equity_peak_calls == [PRIOR_SESSION]
     assert state.snapshot_calls == [PRIOR_SESSION]
     assert enforcer.breaker.peak == pytest.approx(1016.44)
     assert enforcer.breaker.daily_baseline == pytest.approx(1010.0)
@@ -268,7 +279,7 @@ def test_breaker_fresh_session_self_anchors_once_without_warning(caplog):
         enforcer.check()
 
     assert enforcer.peak_seed_provenance == PEAK_SEED_SELF_ANCHORED
-    assert state.peak_calls == [None]
+    assert state.equity_peak_calls == [None]
     assert state.snapshot_calls == [None]
     assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 

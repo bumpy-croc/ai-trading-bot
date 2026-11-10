@@ -9,6 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from cli.commands.live_halt import ENV_DB_URL_VARS, halt_main, resume_main
+from cli.commands.live_watchdog import add_arguments as add_watchdog_arguments
+from cli.commands.live_watchdog import watchdog_main
 from cli.core.forward import forward_to_module_main
 from src.infrastructure.runtime.paths import get_project_root
 
@@ -30,17 +32,17 @@ except ImportError:
 
 if not _IS_RAILWAY:
     try:
-        from cli.commands.train_commands import train_model_main, train_price_model_main
+        from cli.commands.train_commands import train_model, train_price_model
 
         _TRAINING_AVAILABLE = True
     except ImportError:
         _TRAINING_AVAILABLE = False
-        train_model_main = None  # type: ignore
-        train_price_model_main = None  # type: ignore
+        train_model = None  # type: ignore
+        train_price_model = None  # type: ignore
 else:
     _TRAINING_AVAILABLE = False
-    train_model_main = None  # type: ignore
-    train_price_model_main = None  # type: ignore
+    train_model = None  # type: ignore
+    train_price_model = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -175,15 +177,12 @@ def _gate_and_promote(
     model_type: str,
     provider: str = "binance",
     force: bool = False,
-    known_prev_target: Path | None = None,
 ):
     """Run the bear-market validation gate, keeping ``latest`` on the candidate
     only if it passes (else rolling back).
 
     The gate flips ``latest`` to ``version_dir`` to score the *candidate* (the
-    registry resolves models by symlink), then rolls back on failure. When the
-    caller already promoted the candidate (training path), pass the pre-training
-    target as ``known_prev_target`` so a rollback restores the right model.
+    registry resolves models by symlink), then rolls back on failure.
     """
     from src.ml.validation.gate import promote_version_if_valid
 
@@ -194,7 +193,6 @@ def _gate_and_promote(
         repoint_fn=_repoint_latest,
         provider=provider,
         force=force,
-        known_prev_target=known_prev_target,
     )
 
 
@@ -253,14 +251,7 @@ def _control(ns: argparse.Namespace) -> int:
             )
             print("Use a local development environment for model training.")
             return 1
-        from src.ml.validation.gate import default_resolve_latest
-
         start_date, end_date = _date_range(ns.days)
-        model_type = "sentiment" if ns.sentiment else "basic"
-        # Capture the currently-live version BEFORE training. Training promotes
-        # the freshly trained version to ``latest``; if it later fails the #801
-        # gate we roll ``latest`` back to this pre-training target.
-        prev_target = default_resolve_latest(_type_dir(ns.symbol, model_type))
 
         if ns.sentiment:
             args = SimpleNamespace(
@@ -278,7 +269,7 @@ def _control(ns: argparse.Namespace) -> int:
                 skip_onnx=False,
                 disable_mixed_precision=False,
             )
-            code = train_model_main(args)
+            code, bundle_dir = train_model(args)
         else:
             args = SimpleNamespace(
                 symbol=ns.symbol,
@@ -289,43 +280,37 @@ def _control(ns: argparse.Namespace) -> int:
                 batch_size=256,
                 sequence_length=120,
             )
-            code = train_price_model_main(args)
+            code, bundle_dir = train_price_model(args)
 
         if code != 0:
             print("❌ Model training failed")
             return code
 
         print("✅ Model training complete")
-        # Training just flipped ``latest`` to the new version; resolve it.
-        candidate = default_resolve_latest(_type_dir(ns.symbol, model_type))
+        if not ns.auto_deploy:
+            # Training never moves ``latest``; the trainer already printed how to promote.
+            return 0
 
-        if ns.auto_deploy:
-            # #801: gate the just-promoted model. If it fails, roll ``latest``
-            # back to the pre-training target so a bad model does not stay live.
-            if candidate is None:
-                print("⚠️ Auto-deploy requested but no 'latest' model resolved after training.")
-                return 1
-            decision = _gate_and_promote(
-                candidate,
-                symbol=ns.symbol.upper(),
-                model_type=model_type,
-                provider=getattr(ns, "provider", "binance"),
-                known_prev_target=prev_target,
-            )
-            if not decision.promoted:
-                print(f"❌ Auto-deploy blocked by validation gate: {decision.reason}")
-                if decision.audit_path is not None:
-                    print(f"   Audit: {decision.audit_path}")
-                return 1
-            print(f"✅ Auto-deploy: kept as latest after validation ({decision.reason})")
-        else:
-            # No auto-deploy: training already set ``latest``. Warn the operator
-            # it is UNVALIDATED and show how to validate it.
-            if candidate is not None:
-                print(f"   ⚠️ '{candidate.name}' is now 'latest' but UNVALIDATED.")
-                print(
-                    "   Validate with: atb live-control validate-model " f"--model-path {candidate}"
-                )
+        if bundle_dir is None:
+            print("⚠️ Auto-deploy requested but training reported no bundle to deploy.")
+            return 1
+        # #801: the gate flips ``latest`` to the candidate to score it and rolls
+        # back (or removes it when there was none) on failure, so an unvalidated
+        # model is never left served. The bundle's own path names its registry
+        # namespace, which the trainer chooses (a sentiment run without sentiment
+        # data lands in ``price``).
+        decision = _gate_and_promote(
+            bundle_dir,
+            symbol=bundle_dir.parent.parent.name,
+            model_type=bundle_dir.parent.name,
+            provider=getattr(ns, "provider", "binance"),
+        )
+        if not decision.promoted:
+            print(f"❌ Auto-deploy blocked by validation gate: {decision.reason}")
+            if decision.audit_path is not None:
+                print(f"   Audit: {decision.audit_path}")
+            return 1
+        print(f"✅ Auto-deploy: kept as latest after validation ({decision.reason})")
         return 0
 
     if ns.control_cmd == "deploy-model":
@@ -376,6 +361,9 @@ def _control(ns: argparse.Namespace) -> int:
 
     if ns.control_cmd == "resume":
         return resume_main(ns)
+
+    if ns.control_cmd == "watchdog":
+        return watchdog_main(ns)
 
     if ns.control_cmd == "swap-strategy":
         print(
@@ -459,6 +447,16 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     )
     p_resume.add_argument("--reason", default=None, help="Why trading is resuming (logged)")
     p_resume.set_defaults(func=_control)
+
+    p_watchdog = sub.add_parser(
+        "watchdog",
+        help=(
+            "External dead-man's-switch: page when the engine stops writing "
+            "account_history / loop-state rows (exit 1 while a gap is open)"
+        ),
+    )
+    add_watchdog_arguments(p_watchdog)
+    p_watchdog.set_defaults(func=_control)
 
     p_swap = sub.add_parser("swap-strategy", help="Hot-swap strategy (simulated)")
     p_swap.add_argument("--strategy", required=True)

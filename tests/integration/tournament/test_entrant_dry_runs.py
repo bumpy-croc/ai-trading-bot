@@ -98,6 +98,9 @@ _COMMON_TRAIN_ARGS = [
     "--force-price-only",
     "--input-data-s3",
     "s3://acceptance-test-dummy/dummy.csv",
+    # Training no longer promotes on its own; these sandboxed registries need
+    # `latest` so the exam strategies resolve the freshly trained bundle.
+    "--set-latest",
 ]
 
 
@@ -408,6 +411,7 @@ class TestEntrantMetaLabelDryRun:
                 "--force-price-only",
                 "--input-data-s3",
                 "s3://acceptance-test-dummy/dummy.csv",
+                "--set-latest",
                 "--epochs",
                 "1",
                 "--target-type",

@@ -105,6 +105,9 @@ DEFAULT_MAX_CONSECUTIVE_ERRORS = 10  # Maximum errors before shutdown
 # loop stops opening new positions (close-only) while it keeps retrying, to
 # avoid order churn during a prolonged outage. Exits and server-side stops still run.
 DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS = 1800  # 30 minutes
+# A continuous outage this long pages an operator (well before close-only) so a
+# multi-minute outage is never silent; shorter blips are recorded on recovery.
+DEFAULT_DB_OUTAGE_ALERT_SECONDS = 300  # 5 minutes
 
 # Health Monitor Constants (distinct from CPU optimization intervals)
 DEFAULT_HEALTH_BASE_CHECK_INTERVAL = 60  # Base health check interval in seconds
@@ -159,6 +162,10 @@ DEFAULT_MAX_DRAWDOWN = 0.20  # 20% maximum drawdown (fraction)
 DRAWDOWN_WARNING_AT_PCT_OF_LIMIT = 0.50  # WARNING at 50% of the cap (10% drawdown at 0.20)
 DRAWDOWN_CRITICAL_AT_PCT_OF_LIMIT = 0.80  # CRITICAL at 80% of the cap (16% drawdown at 0.20)
 DRAWDOWN_GUARD_LOG_INTERVAL_SECONDS = 900  # Min seconds between repeated drawdown-tier logs
+# A position mark older than this is stale for the drawdown guard's equity leg: twice the
+# slowest trading-loop interval (DEFAULT_MAX_CHECK_INTERVAL = 300s), so one slow cycle never
+# reads as stale but a stuck price feed does.
+DRAWDOWN_MARK_MAX_AGE_SECONDS = 600
 
 # Account-level circuit breakers (#807). Hard halts enforced independent of
 # strategy logic. Graduated drawdown throttling stays with dynamic-risk; these
@@ -507,6 +514,12 @@ DEFAULT_WS_HEALTH_CHECK_INTERVAL = 30  # Seconds between health monitor checks
 # keepalive traffic on the ws-api TCP path (~1 ping per staleness window).
 DEFAULT_WS_USER_LIVENESS_PROBE_TIMEOUT = 10
 DEFAULT_WS_RECONNECT_MAX_RETRIES = 3  # Maximum reconnect attempts before REST_DEGRADED
+# TWM teardown bounds (#729). The transport-close timeout caps closing the ws-api
+# socket from the loop side; the join timeout covers the listeners' 3 s recv poll
+# plus the loop's exit after ``stop()``, and is applied twice when a dead listener
+# pins the manager thread.
+DEFAULT_WS_TWM_TRANSPORT_CLOSE_TIMEOUT = 2
+DEFAULT_WS_TWM_JOIN_TIMEOUT = 4
 # Consecutive unproductive user-stream reconnects (stale again with no real event)
 # before the watchdog opens a circuit breaker: stop the futile ~2-min reconnect loop
 # and run REST-polling-only. python-binance's start_margin_socket is fire-and-forget
