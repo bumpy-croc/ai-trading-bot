@@ -99,13 +99,18 @@ Everything else is a candidate. Behaviour of the command:
 
 ## Training and deployment
 
-`atb train model` writes models directly into the registry at `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}` and refreshes the `latest`
-symlink used by the prediction engine. Operations teams can also trigger training from the live-control CLI, which simply wraps the
-same pipeline:
+`atb train model` writes models directly into the registry at `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}` but does **not** move the
+`latest` symlink: the registry serves every `latest` as a production model and does not serve a `{SYMBOL}/{TYPE}` directory without
+one, so a freshly trained bundle is inert until it is deliberately promoted. Pass `--set-latest` (`atb train model|price`) to
+point `latest` at the new bundle without validation, or promote afterwards with the validation-gated `atb live-control deploy-model`.
+Operations teams can also trigger training from the live-control CLI, which wraps the same pipeline:
 
 ```bash
-# Train a price-only model on the last 365 days and update the latest bundle
+# Train a price-only model on the last 365 days; latest is left untouched
 atb live-control train --symbol BTCUSDT --days 365 --epochs 50
+
+# Train and promote only if the validation gate passes (latest rolls back otherwise)
+atb live-control train --symbol BTCUSDT --days 365 --epochs 50 --auto-deploy
 ```
 
 To roll back, repoint the `latest` symlink with either `atb models promote …` or `atb live-control deploy-model --model-path BTCUSDT/basic/2025-09-17_1h_v1`.
