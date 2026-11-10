@@ -184,11 +184,12 @@ class S3ArtifactManager:
         symbol: str,
         model_type: str,
         version_id: str,
-        update_latest: bool = True,
+        update_latest: bool = False,
     ) -> Path:
         """Sync trained model from S3 to local model registry.
 
-        Downloads model artifacts and updates the 'latest' symlink atomically.
+        Downloads model artifacts; the 'latest' symlink (which the registry serves
+        as production) moves only when ``update_latest`` is set.
 
         Args:
             s3_uri: S3 URI to model artifacts
@@ -196,7 +197,7 @@ class S3ArtifactManager:
             symbol: Trading symbol (e.g., BTCUSDT)
             model_type: Model type (e.g., basic, sentiment)
             version_id: Version identifier (e.g., 2025-12-23_14h_v1)
-            update_latest: Update 'latest' symlink to point to new version
+            update_latest: Update 'latest' symlink to point to new version (explicit opt-in)
 
         Returns:
             Path to synced model directory

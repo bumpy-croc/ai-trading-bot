@@ -41,6 +41,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type error.
 
 ### Fixed
+- **Local training no longer promotes a model as a side effect** (#1242). `save_artifacts`, the
+  meta-label export and the legacy price trainer used to point `{symbol}/{type}/latest` at every
+  trained bundle, so any local run (and `atb train cloud --provider local`) published a candidate to
+  the registry, which serves every `latest` as production. `TrainingConfig.set_latest` (default
+  off) now gates the symlink; opt in with `atb train model|price --set-latest`, or
+  `atb live-control train --auto-deploy`, which trains without touching `latest` and then gates the
+  new bundle (in the registry namespace it was written to) through the #801 gate; a failed first
+  model is left with no `latest` instead of being served. `atb train cloud --set-latest` now also covers the local provider. A bare
+  `live-control train` no longer leaves an unvalidated `latest` behind; promote with `deploy-model`.
+  A new `model-promotion-check` workflow (`tools/check_promotion_log.py`) fails a PR whose
+  `docs/research/model-promotions.md` adds a `NO CHANGE` entry while a `src/ml/models/**/latest`
+  pointer also changes.
 - **Regime switches in a pinned backtest honor the model pin** (#1258). `Backtester` takes a
   `model_version` (`atb backtest` passes the resolved pin) and hands it to `RegimeHandler`, which
   threads it through `call_strategy_factory`. A switched-in `ml_basic` scores with the pinned

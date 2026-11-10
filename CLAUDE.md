@@ -119,7 +119,7 @@ atb live-control list-models
 atb live-control deploy-model --model-path BTCUSDT/basic/2025-10-27_14h_v1
 ```
 
-Models write to `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/` (model.onnx, metadata.json, feature_schema.json). The `latest` symlink auto-updates. See `docs/prediction.md` for pipeline details.
+Models write to `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/` (model.onnx, metadata.json, feature_schema.json). Training never moves the `latest` symlink on its own; it moves only with `--set-latest` (`atb train model|price|cloud`), `--auto-deploy` (`atb live-control train`, validation-gated) or a gated `deploy-model`. See `docs/prediction.md` for pipeline details.
 
 ### Monitoring & Utilities
 ```bash
