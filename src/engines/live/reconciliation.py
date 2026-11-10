@@ -4147,8 +4147,38 @@ class PositionReconciler:
         except Exception as e:
             logger.warning("Margin position check failed for %s: %s — position retained", symbol, e)
 
-    def _remove_phantom_position(self, position: Any, result: ReconciliationResult) -> None:
-        """Remove a phantom position from tracker and DB, cancel its exchange SL."""
+    def close_untracked_phantom(self, position: Any, *, log_trade: bool = True) -> bool:
+        """Close a phantom OPEN row that was never loaded into the tracker (#683).
+
+        Runs the same external-close path as a tracked phantom (stop-loss cancel, DB close,
+        balance-neutral audit Trade row, audit event), for a row the startup adoption check
+        found has no exchange inventory behind it. ``log_trade=False`` skips the audit Trade
+        row: its P&L is marked to the current price, which means nothing for a row opened
+        sessions ago and would feed performance metrics. Returns True only when the DB row
+        closed.
+        """
+        result = ReconciliationResult(
+            entity_type="position",
+            entity_id=getattr(position, "db_position_id", None),
+            status="verified",
+        )
+        return self._remove_phantom_position(position, result, tracked=False, log_trade=log_trade)
+
+    def _remove_phantom_position(
+        self,
+        position: Any,
+        result: ReconciliationResult,
+        *,
+        tracked: bool = True,
+        log_trade: bool = True,
+    ) -> bool:
+        """Remove a phantom position from tracker and DB, cancel its exchange SL.
+
+        Returns whether the DB row closed.
+
+        ``tracked=False`` is for a row that was never in the tracker: there is nothing to pop,
+        and the close still counts as ours.
+        """
         # Cancel the server-side stop-loss before removing from tracker.
         # Leaving an orphaned SL on the exchange is a fund-loss path —
         # if it triggers with AUTO_REPAY, it opens a new naked position.
@@ -4181,7 +4211,7 @@ class PositionReconciler:
                     alert=True,
                 )
 
-        removed = self.position_tracker.pop_position(position.order_id)
+        removed = self.position_tracker.pop_position(position.order_id) if tracked else position
         db_pos_id = getattr(position, "db_position_id", None)
         db_closed = False
         if db_pos_id:
@@ -4195,7 +4225,8 @@ class PositionReconciler:
         # closed a still-tracked position (pop returned it) and the DB row actually closed —
         # avoids a duplicate when an earlier pass already handled it.
         if db_closed and removed is not None:
-            self._log_external_close_trade(position)
+            if log_trade:
+                self._log_external_close_trade(position)
         elif db_pos_id and removed is not None and not db_closed:
             # Popped from the in-memory tracker but the DB row did NOT close — memory/DB divergence
             # (CODE.md: no silent divergence). The phantom is gone on the exchange, so do not
@@ -4219,6 +4250,7 @@ class PositionReconciler:
         result.corrections.append(audit)
         result.status = "corrected"
         result.severity = Severity.HIGH
+        return db_closed
 
     def _estimate_position_notional(self) -> float:
         """Estimate total notional value of open positions using entry prices.
