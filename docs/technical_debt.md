@@ -21,7 +21,7 @@
 | Functions over 50 lines | 544 of 3,563 (15%) | AST scan of `src/` and `cli/` |
 | Functions without a return annotation (excluding `__init__`) | 270 | AST scan of `src/` and `cli/` |
 | `except Exception` | 810 occurrences in 125 files | `grep -rn "except Exception" src cli` |
-| Mypy | no type errors in the code; the local runner reports 17 files only because `types-PyYAML` is not installed in the venv (CI installs it) | `python bin/run_mypy.py` |
+| Mypy | no type errors over `src/` and `cli/`; the `type-check` CI job (`.github/workflows/tests.yml`) fails any PR that introduces one | `python bin/run_mypy.py` |
 
 ## Open items
 
