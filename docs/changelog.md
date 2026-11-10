@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nothing referenced the directory; `alembic heads` still returns the single head
   `0015_balance_session_id_idx`.
   `docs/database.md` now documents the migration workflow.
+- **Model artifact retention policy and `atb models cleanup`** (#792). Lists old version
+  directories under `src/ml/models/` that no `latest` symlink, config, `docs/research` note, or
+  newest-N rule protects, with the bytes each frees. Dry run by default; deletes only with
+  `--apply`; aborts on a dangling or out-of-tree symlink; never touches a symlink. Policy documented
+  in `docs/prediction.md`.
 
 ### Fixed
 - **Developer-tooling guards no longer fail silently** (#1138, #1147, #1136, #1151).
