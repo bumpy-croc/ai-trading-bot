@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Model artifact retention policy and `atb models cleanup`** (#792). Lists old version
+  directories under `src/ml/models/` that no `latest` symlink, config, `docs/research` note, or
+  newest-N rule protects, with the bytes each frees. Dry run by default; deletes only with
+  `--apply`; aborts on a dangling or out-of-tree symlink; never touches a symlink. Policy documented
+  in `docs/prediction.md`.
+### Changed
+- **Docs archived and refreshed** (#793). The three `PHASE1_*` docs, all nine ExecPlans and the four
+  `docs/issues/` write-ups moved to `docs/archive/`, each with a header naming the archive date and
+  the doc that supersedes it. `docs/technical_debt.md` is rewritten from measured state (the stale
+  2025-11-21 snapshot is kept in `docs/archive/`). `docs/README.md` indexes every doc and defines the
+  ExecPlan lifecycle (active in `.agents/plans/`, closed in `docs/archive/execplans/`).
+
+### Removed
+- **`Optimizer MVP` workflow** (#793). It ran `scripts/run_optimizer.py`, which was deleted in #335,
+  so every daily scheduled run was failing.
+### Removed
+- **Stale migration backup directory under `migrations/`** (#791). 15 pre-baseline migrations,
+  including a duplicate `0001_initial_schema`, are gone from the tree (still in git history).
+  Nothing referenced the directory; `alembic heads` still returns the single head
+  `0015_balance_session_id_idx`.
+  `docs/database.md` now documents the migration workflow.
+### Added
+- **mypy now runs in CI** (#1111). New `type-check` job in `.github/workflows/tests.yml` runs
+  `python bin/run_mypy.py` over `src/` and `cli/`. Measured backlog on `develop` is zero errors
+  across 358 files, so the whole tree is gated. `bin/run_mypy.py` now makes a single mypy
+  invocation instead of one process per file, and `tests/unit/test_run_mypy.py` proves it fails on a
+  type error.
+
 ### Fixed
 - **Local training no longer promotes a model as a side effect** (#1242). `save_artifacts`, the
   meta-label export and the legacy price trainer used to point `{symbol}/{type}/latest` at every
@@ -24,6 +53,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A new `model-promotion-check` workflow (`tools/check_promotion_log.py`) fails a PR whose
   `docs/research/model-promotions.md` adds a `NO CHANGE` entry while a `src/ml/models/**/latest`
   pointer also changes.
+- **Regime switches in a pinned backtest honor the model pin** (#1258). `Backtester` takes a
+  `model_version` (`atb backtest` passes the resolved pin) and hands it to `RegimeHandler`, which
+  threads it through `call_strategy_factory`. A switched-in `ml_basic` scores with the pinned
+  version; an ML target whose factory cannot honor the pin (`ml_adaptive`, `ml_sentiment`,
+  `ensemble_weighted`) is refused with an error log instead of silently resolving `latest`, and
+  the refusal is listed under `failed_switches` in the regime results. `momentum_leverage` and
+  `leveraged_regime` (momentum mode) load no model and switch normally. The CLI does not enable
+  regime switching today, so this applies to programmatic `Backtester(enable_regime_switching=True)`.
+- **Backtest scale-in slices are booked from their own fill price** (#734). The backtest engine
+  measured every slice from the first entry, so a scale-in at +3% that then reached +4% was booked
+  at +4% instead of ~+0.97%. `ActiveTrade` now carries a quantity-weighted `avg_cost_price`
+  (`cost_basis_price`); the final close, per-leg partial-exit P&L and fees, the exit fee notional,
+  margin interest and the unrealized-P&L equity sample use it. `entry_price` and every trigger
+  (partial-exit targets, trailing activation, breakeven) are unchanged. Backtests of strategies
+  that scale in (hyper_growth) will report different returns; runs without a scale-in are
+  unchanged. The live tracker has the same booking error, but live scale-ins are disabled.
+- **Drained positions no longer read back as full size in the DB** (#734). `apply_partial_exit_update`
+  and `apply_scale_in_update` used `position.current_size or position.size`, so a `current_size` of
+  0.0 (fully consumed by partial exits) was treated as the full `size` on the next update. They now
+  fall back to `size` only when the column is NULL.
+- **Developer-tooling guards no longer fail silently** (#1138, #1147, #1136, #1151).
+  The Makefile resolves its interpreter (`$VIRTUAL_ENV`, `.venv`, the primary's `.venv`, then
+  `python3`) instead of invoking bare `python`, so `make hooks` runs in a fresh shell, and fails
+  loudly when none exists. `tools/install_git_hooks.py` installs and checks against
+  `origin/develop` rather than the primary checkout (held on `main`), which used to downgrade a
+  fixed hook and report false drift. New `tools/check_install_state.py` / `make install-check`
+  runs the shim, hook and merge-driver `--check`s together, and `.githooks/pre-push` runs it on
+  every push as a non-blocking warning. The hook also serialises runs behind a per-user lock
+  (stale and dead-owner takeover) and kills its pytest process group when the `git push` that
+  started it is gone, so overlapping pushes no longer pile up orphaned suites.
+  `tools/primary_checkout_guard.py` no longer treats a
+  redirect (`2>/dev/null`) as a relative operand, and now also pins a session by the worktree its
+  calls touch (`cd <worktree>`, a mutating `git -C`, an `Edit` inside one), so a session whose shell cwd
+  resets to the primary on every call is guarded. That inferred pin refuses writes to the primary
+  but leaves `.claude/state/`, standup briefs and the retro agenda writable and skips the
+  relative-read check, because the PM daemon has the same shape.
+- **Account sync no longer warns about the bot's own stop-loss order** (#1259). Protective stops
+  are stored on `positions.stop_loss_order_id`, never in `orders`, so the hourly sync logged
+  "New order found on exchange" for every resting stop. `_sync_orders` now skips ids that equal an
+  open position's `stop_loss_order_id`; a genuinely foreign order still warns.
+- **Zero-size BUY/SELL decisions name the component that zeroed them** (#1045). `Strategy` adds
+  `size_zero_reason` (`risk_manager(<name>):<detail>` or `position_sizer(<name>):<detail>`) to the
+  decision metadata and a `ZeroSizeReason:` suffix to the `Decision:` log line.
+  `RiskManager`/`PositionSizer` gained a side-effect-free `explain_zero_size` hook, implemented for
+  `FlatRiskManager` (confidence floor), `ConfidenceWeightedSizer` and `LeveragedPositionSizer`
+  (zero-leverage regime). The live entry coordinator persists the reason and the entry handler's
+  block reasons in `strategy_executions.reasons`, and logs when a downstream gate (correlation,
+  dynamic risk, exposure cap) takes a sized entry to zero.
+- **Regression test for the Decimal load boundary** (#675). A real-database round trip asserts
+  `get_active_positions` and `LivePositionTracker.recover_positions` never yield a `Decimal`.
+- **Pre-push fast suite no longer fails under machine load.** The session DB fixture decided
+  whether to start a Postgres container from the list *before* `-m`/`-k` deselection, so
+  `-m fast` over `tests/unit` started one container per xdist worker and the 30s per-test
+  timeout failed the first test on each worker. It now looks at the tests that will actually run.
+  Wall-clock tests (rate limit, circuit breaker, WS filter, feature/model caches, live-timeout
+  escalation) use injected clocks or hung-until-teardown calls instead of real sleeps; the
+  backtest scale tests use a model-free strategy and smaller datasets; `tests/benchmark` is
+  skipped unless requested (`pytest tests/benchmark`, `-m benchmark`, or `ATB_RUN_BENCHMARKS=1`).
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
   a 4h run selects a 4h model bundle; a missing bundle aborts the switch instead of using 1h.

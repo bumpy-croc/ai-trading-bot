@@ -10,8 +10,8 @@ Tests cover:
 """
 
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -21,6 +21,27 @@ from src.infrastructure.circuit_breaker import (
     CircuitBreakerError,
     CircuitState,
 )
+
+
+class _FakeClock:
+    """Manually advanced wall clock for the breaker's recovery timeout."""
+
+    def __init__(self) -> None:
+        self.now = 1_000_000.0
+
+    def time(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """Replace the breaker module's ``time`` so recovery timeouts are driven by the test."""
+    fake = _FakeClock()
+    monkeypatch.setattr("src.infrastructure.circuit_breaker.time", SimpleNamespace(time=fake.time))
+    return fake
 
 
 class TestCircuitBreakerInit:
@@ -119,11 +140,11 @@ class TestCircuitBreakerStateTransitions:
         # Function should not have been called
         mock_func.assert_not_called()
 
-    def test_transitions_to_half_open_after_timeout(self):
+    def test_transitions_to_half_open_after_timeout(self, clock):
         """Test circuit transitions to HALF_OPEN after recovery timeout."""
         breaker = CircuitBreaker(
             failure_threshold=1,
-            recovery_timeout=0.1,  # 100ms for fast testing
+            recovery_timeout=0.1,
             expected_exception=ValueError,
         )
 
@@ -133,15 +154,14 @@ class TestCircuitBreakerStateTransitions:
 
         assert breaker.state == CircuitState.OPEN
 
-        # Wait for recovery timeout
-        time.sleep(0.15)
+        clock.advance(0.15)  # past the recovery timeout
 
         # Next call should transition to HALF_OPEN and execute
         result = breaker.call(lambda: "recovered")
         assert result == "recovered"
         assert breaker.state == CircuitState.CLOSED
 
-    def test_half_open_success_closes_circuit(self):
+    def test_half_open_success_closes_circuit(self, clock):
         """Test successful call in HALF_OPEN state closes circuit."""
         breaker = CircuitBreaker(
             failure_threshold=1,
@@ -153,8 +173,7 @@ class TestCircuitBreakerStateTransitions:
         with pytest.raises(ValueError):
             breaker.call(lambda: (_ for _ in ()).throw(ValueError("fail")))
 
-        # Wait for recovery
-        time.sleep(0.15)
+        clock.advance(0.15)  # past the recovery timeout
 
         # Successful call should close circuit
         breaker.call(lambda: "success")
@@ -162,7 +181,7 @@ class TestCircuitBreakerStateTransitions:
         assert breaker.state == CircuitState.CLOSED
         assert breaker.failure_count == 0
 
-    def test_half_open_failure_reopens_circuit(self):
+    def test_half_open_failure_reopens_circuit(self, clock):
         """Test failure in HALF_OPEN state reopens circuit."""
         breaker = CircuitBreaker(
             failure_threshold=1,
@@ -174,8 +193,7 @@ class TestCircuitBreakerStateTransitions:
         with pytest.raises(ValueError):
             breaker.call(lambda: (_ for _ in ()).throw(ValueError("fail")))
 
-        # Wait for recovery
-        time.sleep(0.15)
+        clock.advance(0.15)  # past the recovery timeout
 
         # Fail again in HALF_OPEN
         with pytest.raises(ValueError):

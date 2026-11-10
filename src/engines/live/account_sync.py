@@ -906,12 +906,28 @@ class AccountSynchronizer:
             # Get current open orders from database (using new Order table)
             db_orders = self.db_manager.get_pending_orders_new(self.session_id)
 
+            # Protective stops live on the position row (stop_loss_order_id), never in
+            # the orders table, so they are expected to have no db_orders match.
+            protective_stop_ids = {
+                row["stop_loss_order_id"]
+                for row in self.db_manager.get_active_positions(self.session_id)
+                if row.get("stop_loss_order_id")
+            }
+
             synced_orders = []
             new_orders = []
             cancelled_orders = []
 
             # Check for orders that exist in exchange but not in database
             for exchange_order in exchange_orders:
+                if str(exchange_order.order_id) in protective_stop_ids:
+                    logger.debug(
+                        "Order %s %s is the protective stop of an open position",
+                        exchange_order.order_id,
+                        exchange_order.symbol,
+                    )
+                    continue
+
                 # Find matching order in database
                 db_order = None
                 for order_row in db_orders:
