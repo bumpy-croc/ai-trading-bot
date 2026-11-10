@@ -41,6 +41,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type error.
 
 ### Fixed
+- **REST-fallback freshness is candle-aware, and a stale-data streak is announced** (#983). With
+  the kline WebSocket down the loop reads REST frames whose tail bar is the forming candle; its
+  open time was compared against a flat 120s, so a 1h strategy passed the freshness gate only
+  for the first ~2 minutes of each hour and the loop `continue`d past entries AND in-engine
+  exits (trailing stops, strategy/time exits) the rest of the time, with only a debug line. The
+  limit is now `interval + 120s` (a tail bar older than that still means the current candle is
+  missing; unknown timeframe keeps the strict 120s), and a gate failing for over 10 minutes
+  latches a `MARKET_DATA_STALE` row/page through the latched-condition monitor until it clears.
 - **All exchange-bound numerics go through one precision module** (#789).
   `snap_to_step` (exact decimal) replaces every `round(x / step) * step` / `math.floor(x / step)
   * step` site (stop/limit price, SL quantity, entry/close lot normalization, close sizing).
