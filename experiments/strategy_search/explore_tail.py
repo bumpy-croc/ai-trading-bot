@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import data as data_mod  # noqa: E402
 import engine as eng  # noqa: E402
+
 import strategies as strat  # noqa: E402
 
 FIT = ("2020-07-01", "2022-12-31")

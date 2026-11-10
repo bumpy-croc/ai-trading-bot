@@ -14,8 +14,9 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import engine as eng  # noqa: E402
-import strategies as strat  # noqa: E402
 from data import Market  # noqa: E402
+
+import strategies as strat  # noqa: E402
 
 
 def _frames(close: pd.DataFrame, funding: float = 0.0) -> tuple[pd.DataFrame, pd.DataFrame]:

@@ -28,7 +28,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree
 
-import numpy as np
 import pandas as pd
 import requests
 
@@ -149,7 +148,7 @@ class Market:
     funding: pd.DataFrame  # sum of funding prints settled during the UTC day (long pays if > 0)
     spot_close: pd.DataFrame  # matching spot pair close, NaN where no spot market
 
-    def truncate(self, end: str) -> "Market":
+    def truncate(self, end: str) -> Market:
         """Hard cutoff: drop every row after `end`. Used to keep the holdout physically out of reach."""
         cut = pd.Timestamp(end, tz="UTC")
         return Market(**{k: v.loc[:cut] for k, v in self.__dict__.items()})

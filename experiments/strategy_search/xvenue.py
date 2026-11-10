@@ -130,7 +130,7 @@ class Pair:
     bn_rank: pd.DataFrame
     eligible: pd.DataFrame
 
-    def truncate(self, end: str) -> "Pair":
+    def truncate(self, end: str) -> Pair:
         cut = pd.Timestamp(end, tz="UTC")
         return Pair(**{k: v.loc[:cut] for k, v in self.__dict__.items()})
 

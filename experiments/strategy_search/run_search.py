@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import data as data_mod  # noqa: E402
 import engine as eng  # noqa: E402
+
 import strategies as strat  # noqa: E402
 
 RESULTS = Path(__file__).resolve().parent / "results"

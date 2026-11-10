@@ -9,13 +9,12 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-
 from data import Market
 from engine import (
     ANN,
+    EXCLUDE,
     PERP_FEE,
     SPOT_FEE,
-    EXCLUDE,
     Result,
     liquidity_rank,
     on_days,
