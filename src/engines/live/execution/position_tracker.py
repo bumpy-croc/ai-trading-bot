@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -20,6 +21,7 @@ from src.config.constants import (
     DEFAULT_MFE_MAE_PRECISION_DECIMALS,
     DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS,
     DEFAULT_SLIPPAGE_RATE,
+    DRAWDOWN_MARK_MAX_AGE_SECONDS,
 )
 from src.engines.shared.models import (
     BasePosition,
@@ -81,6 +83,26 @@ class PositionCloseResult:
     mfe_mae_metrics: MFEMetrics | None = None
 
 
+@dataclass(frozen=True)
+class MarkReading:
+    """Aggregate unrealized P&L plus whether it can be trusted as a live mark.
+
+    ``fresh`` is False when any open position was not priced by the latest
+    ``update_pnl`` (invalid price, recovered from persistence and never
+    re-marked) or when the last pricing pass is older than the caller's limit.
+    ``unrealized_pnl`` is then not a live number and must not be trusted.
+    ``sequence`` advances when the marking price changes (or has been held for
+    ``DRAWDOWN_MARK_MAX_AGE_SECONDS``), so callers can tell distinct marks apart
+    from repeated reads of the same one. ``flat`` means no position is open:
+    the reading then carries no unrealized component to second-guess.
+    """
+
+    unrealized_pnl: float
+    fresh: bool
+    sequence: int
+    flat: bool = False
+
+
 class LivePositionTracker:
     """Tracks active position state, partial operations, and MFE/MAE metrics.
 
@@ -120,6 +142,13 @@ class LivePositionTracker:
         self._position_db_ids: dict[str, int | None] = {}
         # Protects concurrent access from OrderTracker callbacks and main trading loop
         self._positions_lock = threading.Lock()
+        # Mark bookkeeping for ``mark_reading``: written only under the lock.
+        self._mark_sequence = 0
+        self._last_mark_price: float | None = None
+        self._price_held_since: float | None = None
+        self._last_mark_monotonic: float | None = None
+        self._last_pass_complete = False
+        self._recovered_unmarked = False
         self.db_manager = db_manager
         self.mfe_mae_tracker = MFEMAETracker(precision_decimals=mfe_mae_precision)
         self._mfe_mae_update_frequency = mfe_mae_update_frequency
@@ -286,6 +315,8 @@ class LivePositionTracker:
         with self._positions_lock:
             self._positions[order_id] = position
             self._position_db_ids[order_id] = db_id
+            # Its unrealized_pnl is the persisted value, not a live mark.
+            self._recovered_unmarked = True
 
     @staticmethod
     def _optional_float(value: Any) -> float | None:
@@ -551,6 +582,7 @@ class LivePositionTracker:
         """
         with self._positions_lock:
             # Perform all mutations inside the lock to prevent race conditions
+            complete = True
             for position in self._positions.values():
                 fraction = float(
                     position.current_size if position.current_size is not None else position.size
@@ -573,6 +605,7 @@ class LivePositionTracker:
                         position.entry_price,
                         position.symbol,
                     )
+                    complete = False
                     position.unrealized_pnl = 0.0
                     position.unrealized_pnl_percent = 0.0
                     continue
@@ -580,6 +613,7 @@ class LivePositionTracker:
                     logger.error(
                         "Invalid current_price %.8f for position %s", current_price, position.symbol
                     )
+                    complete = False
                     position.unrealized_pnl = 0.0
                     position.unrealized_pnl_percent = 0.0
                     continue
@@ -591,6 +625,44 @@ class LivePositionTracker:
 
                 position.unrealized_pnl = cash_pnl(pnl_pct, basis_balance)
                 position.unrealized_pnl_percent = pnl_pct * 100.0
+
+            # A repeated price is the same mark, not a confirmation of itself —
+            # unless it has been held long enough that a frozen price must not
+            # postpone a breach indefinitely.
+            now = time.monotonic()
+            if (
+                current_price != self._last_mark_price
+                or self._price_held_since is None
+                or now - self._price_held_since >= DRAWDOWN_MARK_MAX_AGE_SECONDS
+            ):
+                self._mark_sequence += 1
+                self._price_held_since = now
+            self._last_mark_price = current_price
+            self._last_mark_monotonic = now
+            self._last_pass_complete = complete
+            if complete:
+                self._recovered_unmarked = False
+
+    def mark_reading(self, max_age_seconds: float) -> MarkReading:
+        """Unrealized P&L with an explicit freshness verdict (see ``MarkReading``).
+
+        ``update_pnl`` silently writes 0.0 for a position it cannot price, which
+        is indistinguishable from a flat position; a guard that must not mistake
+        "could not price" for "flat" reads this instead of ``total_unrealized_pnl``
+        so a missing mark degrades loudly.
+        """
+        with self._positions_lock:
+            total = sum(float(p.unrealized_pnl) for p in self._positions.values())
+            if not self._positions:
+                return MarkReading(total, True, self._mark_sequence, flat=True)
+            last = self._last_mark_monotonic
+            fresh = (
+                last is not None
+                and self._last_pass_complete
+                and not self._recovered_unmarked
+                and time.monotonic() - last <= max_age_seconds
+            )
+            return MarkReading(total, fresh, self._mark_sequence)
 
     def total_unrealized_pnl(self) -> float:
         """Sum of unrealized P&L across all open positions, in cash terms.
@@ -731,9 +803,16 @@ class LivePositionTracker:
             )
 
             # Update position state - clamp to exactly zero if very close (accumulated rounding)
+            size_before = float(position.current_size)
             position.current_size = max(0.0, float(position.current_size) - float(delta_fraction))
             if abs(position.current_size) < EPSILON:
                 position.current_size = 0.0
+            # The exited slice is realized: rescale the open mark now so risk
+            # guards reading it before the next pricing pass don't double count it.
+            if size_before > 0:
+                remaining = position.current_size / size_before
+                position.unrealized_pnl *= remaining
+                position.unrealized_pnl_percent *= remaining
             position.partial_exits_taken += 1
             position.last_partial_exit_price = price
 

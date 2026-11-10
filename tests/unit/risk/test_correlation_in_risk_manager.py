@@ -45,6 +45,6 @@ def test_risk_manager_applies_correlation_reduction():
             "corr_matrix": corr,
         },
     )
-    # Projected exposure would be 0.06 + 0.08 = 0.14 > 0.1, expect reduction below 0.1
-    assert fraction <= 0.1
-    assert fraction > 0.05
+    # Projected exposure would be 0.06 + 0.08 = 0.14 > 0.1; the candidate shrinks to the
+    # remaining headroom, so existing + new lands exactly on the cap.
+    assert fraction == pytest.approx(0.04)

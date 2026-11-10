@@ -150,6 +150,7 @@ if abs(current_fraction) < 1e-9:  # Position fully closed
 exit_of_current = exit_of_original / current_fraction
 ```
 - Add maximum iteration guards to partial operation loops as defense-in-depth.
+- Every exchange-bound order number (quantity, `price`, `stopPrice`) is snapped with `src.trading.precision.snap_to_step` and serialized with `format_quantity`/`format_price` (margin repay amounts are `Decimal`s formatted fixed-point, never `str()`). Never `round(x / step) * step`, `math.floor(x / step) * step` or `str(float)` — they leave float artifacts (`1648.8200000000001`, Binance 51077/-1111) or scientific notation (`9e-05`, -1100). `tests/unit/trading/test_exchange_numeric_guard.py` fails the build on a new raw snap.
 
 ---
 

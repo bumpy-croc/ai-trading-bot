@@ -51,7 +51,7 @@ def _seed_inactive_session_with_open_position(
         strategy_name=strategy,
         symbol=symbol,
         timeframe="1h",
-        mode=TradeSource.PAPER,
+        mode=TradeSource.LIVE,
         initial_balance=1000.0,
     )
     position_id = db.log_position(
@@ -67,7 +67,9 @@ def _seed_inactive_session_with_open_position(
         stop_loss_order_id=stop_loss_order_id,
     )
     # Gracefully end the session (mirrors a clean shutdown): is_active -> False.
-    db.end_trading_session(session_id=session_id, final_balance=1000.0)
+    db.end_trading_session(
+        session_id=session_id, final_balance=1000.0, carry_forward_open_positions=True
+    )
     return session_id, position_id
 
 
@@ -80,13 +82,19 @@ def _make_live_engine_with_real_db(db: DatabaseManager) -> LiveTradingEngine:
     """
     strategy = create_ml_basic_strategy()
     mock_data_provider = MagicMock()
+    # The exchange holds exactly the seeded position, so exchange-verified adoption
+    # (#683) accepts it. Explicit values: a bare MagicMock reads as "holds 1.0".
+    exchange = MagicMock()
+    exchange.is_margin_mode = True
+    exchange.get_margin_account_asset.return_value = {"netAsset": "1.0"}
+    exchange.get_symbol_info.return_value = None
 
     with (
         patch("src.engines.live.trading_engine.DatabaseManager"),
         patch("src.engines.live.trading_engine.get_config", return_value={}),
         patch(
             "src.engines.live.trading_engine._create_exchange_provider",
-            return_value=(MagicMock(), "mock"),
+            return_value=(exchange, "mock"),
         ),
     ):
         engine = LiveTradingEngine(
@@ -232,41 +240,41 @@ class TestCleanRestartCarriesOpenPositionForward:
         # The empty-tracker branch must NOT have been taken.
         reconciler_cls.instance.resolve_pending_orders.assert_not_called()
 
-    def test_reassign_called_with_symbol_and_strategy(self, reconciler_cls):
-        """The carry-forward is scoped to the active symbol + strategy so a
-        co-tenant symbol/strategy in the same DB is not pulled in."""
+    def test_candidate_lookup_is_scoped_to_symbol_strategy_and_live_mode(self, reconciler_cls):
+        """Adoption only considers this symbol/strategy/mode so a co-tenant in the same DB is
+        not pulled in."""
         db = DatabaseManager("sqlite:///:memory:")
-        old_session_id, _ = _seed_inactive_session_with_open_position(db)
+        _seed_inactive_session_with_open_position(db)
         engine = _make_live_engine_with_real_db(db)
-        engine.db_manager.reassign_open_positions_to_session = MagicMock(
-            wraps=engine.db_manager.reassign_open_positions_to_session
+        engine.db_manager.get_open_positions_across_sessions = MagicMock(
+            wraps=engine.db_manager.get_open_positions_across_sessions
         )
 
         _run_start_with_mocked_runtime(engine, reconciler_cls)
 
-        engine.db_manager.reassign_open_positions_to_session.assert_called_once()
-        kwargs = engine.db_manager.reassign_open_positions_to_session.call_args.kwargs
-        assert kwargs["old_session_id"] == old_session_id
-        assert kwargs["new_session_id"] == engine.trading_session_id
-        assert kwargs["symbol"] == SYMBOL
-        assert kwargs["strategy_name"] == STRATEGY_NAME
+        engine.db_manager.get_open_positions_across_sessions.assert_called_once_with(
+            symbol=SYMBOL,
+            strategy_name=STRATEGY_NAME,
+            mode=TradeSource.LIVE,
+            current_session_id=engine.trading_session_id,
+        )
 
 
 class TestCleanRestartNoOrphan:
     """When there is no inactive session to recover, the new code is inert and the
     normal boot path is unchanged (regression guard)."""
 
-    def test_no_recovery_does_not_call_reassign(self, reconciler_cls):
+    def test_no_recovery_does_not_adopt_anything(self, reconciler_cls):
         db = DatabaseManager("sqlite:///:memory:")  # empty DB, nothing to recover
         engine = _make_live_engine_with_real_db(db)
-        engine.db_manager.reassign_open_positions_to_session = MagicMock(
-            wraps=engine.db_manager.reassign_open_positions_to_session
+        engine.db_manager.adopt_positions_into_session = MagicMock(
+            wraps=engine.db_manager.adopt_positions_into_session
         )
 
         _run_start_with_mocked_runtime(engine, reconciler_cls)
 
         assert engine._recovered_inactive_session_id is None
-        engine.db_manager.reassign_open_positions_to_session.assert_not_called()
+        engine.db_manager.adopt_positions_into_session.assert_not_called()
         # No positions, so reconciliation takes the empty branch.
         reconciler_cls.instance.resolve_pending_orders.assert_called_once()
         reconciler_cls.instance.reconcile_startup.assert_not_called()

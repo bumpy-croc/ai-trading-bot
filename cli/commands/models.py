@@ -4,6 +4,14 @@ import argparse
 import json
 from pathlib import Path
 
+from src.config.paths import get_project_root
+from src.ml.model_retention import (
+    DEFAULT_KEEP_NEWEST,
+    DEFAULT_REFERENCE_PATHS,
+    RegistryStateError,
+    apply_plan,
+    plan_cleanup,
+)
 from src.prediction.config import PredictionConfig
 from src.prediction.models.registry import PredictionModelRegistry
 
@@ -101,6 +109,55 @@ def _handle_gate(ns: argparse.Namespace) -> int:
     return gate_main([ns.comparison_json])
 
 
+def _format_bytes(n: int) -> str:
+    units = ("B", "KB", "MB", "GB")
+    size, idx = float(n), 0
+    while size >= 1024 and idx < len(units) - 1:
+        size /= 1024
+        idx += 1
+    return f"{n} B" if idx == 0 else f"{size:.1f} {units[idx]}"
+
+
+def _handle_cleanup(ns: argparse.Namespace) -> int:
+    registry = Path(ns.registry or PredictionConfig.from_config_manager().model_registry_path)
+    root = get_project_root()
+    reference_paths = [root / p for p in DEFAULT_REFERENCE_PATHS]
+    reference_paths += [Path(p) for p in ns.reference_path or []]
+
+    try:
+        plan = plan_cleanup(registry, keep_newest=ns.keep, reference_paths=reference_paths)
+    except (RegistryStateError, ValueError) as e:
+        print(f"Error: {e}")
+        return 1
+
+    print(f"Registry: {registry}")
+    print(f"Protected versions: {len(plan.protected)}")
+    if ns.verbose:
+        for key, reasons in sorted(plan.protected.items()):
+            print(f"  keep {key}: {'; '.join(reasons)}")
+    if not plan.candidates:
+        print("Nothing to remove.")
+        return 0
+
+    verb = "Removing" if ns.apply else "Would remove"
+    print(f"{verb} {len(plan.candidates)} version(s):")
+    for mv in plan.candidates:
+        print(f"  {mv.key}  ({_format_bytes(mv.size_bytes)})")
+    freed = "Space freed" if ns.apply else "Space that would be freed"
+    print(f"{freed}: {_format_bytes(plan.bytes_freed)}")
+
+    if not ns.apply:
+        print("Dry run. Re-run with --apply to delete.")
+        return 0
+    try:
+        apply_plan(registry, plan)
+    except RegistryStateError as e:
+        print(f"Error: {e}")
+        return 1
+    print("Done.")
+    return 0
+
+
 def register(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("models", help="Manage ML models")
     sp = p.add_subparsers(dest="models_cmd", required=True)
@@ -122,6 +179,28 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_promote.add_argument("model_type")
     p_promote.add_argument("version")
     p_promote.set_defaults(func=_handle_promote)
+
+    p_cleanup = sp.add_parser(
+        "cleanup",
+        help="Remove old model versions per the retention policy (dry run unless --apply)",
+    )
+    p_cleanup.add_argument(
+        "--keep",
+        type=int,
+        default=DEFAULT_KEEP_NEWEST,
+        help="Newest versions to keep per SYMBOL/TYPE (default: %(default)s)",
+    )
+    p_cleanup.add_argument("--registry", help="Registry directory (default: configured registry)")
+    p_cleanup.add_argument(
+        "--reference-path",
+        action="append",
+        help="Extra file or directory whose text pins versions (repeatable)",
+    )
+    p_cleanup.add_argument("--verbose", action="store_true", help="Also list protected versions")
+    p_cleanup.add_argument(
+        "--apply", action="store_true", help="Delete the listed versions (default: dry run)"
+    )
+    p_cleanup.set_defaults(func=_handle_cleanup)
 
     p_gate = sp.add_parser(
         "gate",

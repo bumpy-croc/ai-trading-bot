@@ -1,14 +1,20 @@
 name: Heartbeat Monitor
 
-# Periodically verifies the live trading bots are still writing account_history
-# snapshots. If a bot's heartbeat goes stale, this job fails and GitHub notifies
-# maintainers — catching a silent outage within ~2.5h (30-min cron + 120-min
-# staleness threshold) instead of the ~12 days it took on 2026-05-19.
+# Periodically verifies the live trading bots are still writing their liveness
+# rows (account_history snapshots and the hourly loop-state row). A quiet stream
+# raises HEARTBEAT_GAP: a critical system_events row plus a webhook page, re-paged
+# on an escalating schedule until writes resume. The job also fails while a gap is
+# open, so GitHub's own notification is a second channel — catching a silent outage
+# within ~2.5h (30-min cron + 120-min threshold) instead of the ~12 days it took on
+# 2026-05-19. See cli/commands/live_watchdog.py.
 #
 # Requires repository secrets:
 #   RAILWAY_STAGING_DATABASE_URL
 #   RAILWAY_PRODUCTION_DATABASE_URL
-# A target is simply skipped if its secret is absent.
+#   ALERT_WEBHOOK_URL (optional — without it only this job's failure notifies)
+# A target is simply skipped if its database secret is absent.
+#
+# Writes: only HEARTBEAT_GAP / HEARTBEAT_GAP_CLEARED rows in system_events.
 
 on:
   schedule:
@@ -37,10 +43,12 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install client
-        run: pip install --no-input psycopg2-binary
-      - name: Check live-bot heartbeats
+        # Only what cli.commands.live_watchdog imports; versions match requirements.txt.
+        run: pip install --no-input sqlalchemy==2.0.23 psycopg2-binary==2.9.9 requests==2.31.0
+      - name: Check live-bot write gaps
         env:
           RAILWAY_STAGING_DATABASE_URL: ${{ secrets.RAILWAY_STAGING_DATABASE_URL }}
           RAILWAY_PRODUCTION_DATABASE_URL: ${{ secrets.RAILWAY_PRODUCTION_DATABASE_URL }}
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
           HEARTBEAT_THRESHOLD_MINUTES: ${{ github.event.inputs.threshold_minutes || '120' }}
-        run: python scripts/check_heartbeat.py
+        run: python -m cli.commands.live_watchdog --env all
