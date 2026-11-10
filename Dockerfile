@@ -46,4 +46,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
 # --max-position 0.20 makes the live cap explicit: HyperGrowth's realized
 # notional lands at ~11-20% of balance, so entries stay legal under 0.20
 # while the engine clamps anything larger on every entry and scale-in path.
-CMD ["sh", "-c", "atb db verify --apply-migrations && FEATURE_ENTRY_PAUSE=true atb live-health hyper_growth --max-position 0.20"]
+CMD ["sh", "-c", "atb db verify --apply-migrations && atb live-health hyper_growth --max-position 0.20"]

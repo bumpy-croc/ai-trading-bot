@@ -252,6 +252,28 @@ def pytest_collection_finish(session):  # noqa: D401
 
 
 @pytest.fixture(autouse=True)
+def _pin_operational_flag_defaults(monkeypatch):
+    """Keep operational switches in feature_flags.json out of the test suite.
+
+    ``entry_pause`` is an operator lever: the repo default can be flipped to
+    pause live trading in every environment. Tests that exercise entries must
+    not change behavior when it is, so the default is pinned to ``False`` here.
+    Tests of the pause itself still set ``FEATURE_ENTRY_PAUSE`` explicitly,
+    which wins over the file default.
+    """
+    from src.config import feature_flags
+
+    real_loader = feature_flags._load_repo_defaults
+
+    def _pinned_defaults():
+        defaults = dict(real_loader())
+        defaults["entry_pause"] = False
+        return defaults
+
+    monkeypatch.setattr(feature_flags, "_load_repo_defaults", _pinned_defaults)
+
+
+@pytest.fixture(autouse=True)
 def _reset_inference_context():
     """Keep the ambient inference context from leaking across tests.
 
