@@ -388,6 +388,7 @@ def _handle(ns: argparse.Namespace) -> int:
             enable_engine_risk_exits=enable_engine_risk_exits,
             enable_dynamic_risk=enable_dynamic_risk,
             drawdown_cap_mode=getattr(ns, "drawdown_cap_mode", "enforce"),
+            model_version=model_version,
         )
 
         # Map provider types to exchange names for symbol conversion

@@ -41,6 +41,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type error.
 
 ### Fixed
+- **Regime switches in a pinned backtest honor the model pin** (#1258). `Backtester` takes a
+  `model_version` (`atb backtest` passes the resolved pin) and hands it to `RegimeHandler`, which
+  threads it through `call_strategy_factory`. A switched-in `ml_basic` scores with the pinned
+  version; an ML target whose factory cannot honor the pin (`ml_adaptive`, `ml_sentiment`,
+  `ensemble_weighted`) is refused with an error log instead of silently resolving `latest`, and
+  the refusal is listed under `failed_switches` in the regime results. `momentum_leverage` and
+  `leveraged_regime` (momentum mode) load no model and switch normally. The CLI does not enable
+  regime switching today, so this applies to programmatic `Backtester(enable_regime_switching=True)`.
 - **Backtest scale-in slices are booked from their own fill price** (#734). The backtest engine
   measured every slice from the first entry, so a scale-in at +3% that then reached +4% was booked
   at +4% instead of ~+0.97%. `ActiveTrade` now carries a quantity-weighted `avg_cost_price`
