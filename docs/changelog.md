@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Developer-tooling guards no longer fail silently** (#1138, #1147, #1136, #1151).
+  The Makefile resolves its interpreter (`$VIRTUAL_ENV`, `.venv`, the primary's `.venv`, then
+  `python3`) instead of invoking bare `python`, so `make hooks` runs in a fresh shell, and fails
+  loudly when none exists. `tools/install_git_hooks.py` installs and checks against
+  `origin/develop` rather than the primary checkout (held on `main`), which used to downgrade a
+  fixed hook and report false drift. New `tools/check_install_state.py` / `make install-check`
+  runs the shim, hook and merge-driver `--check`s together, and `.githooks/pre-push` runs it on
+  every push as a non-blocking warning. The hook also serialises runs behind a per-user lock
+  (stale and dead-owner takeover) and kills its pytest process group when the `git push` that
+  started it is gone, so overlapping pushes no longer pile up orphaned suites.
+  `tools/primary_checkout_guard.py` no longer treats a
+  redirect (`2>/dev/null`) as a relative operand, and now also pins a session by the worktree its
+  calls touch (`cd <worktree>`, a mutating `git -C`, an `Edit` inside one), so a session whose shell cwd
+  resets to the primary on every call is guarded. That inferred pin refuses writes to the primary
+  but leaves `.claude/state/`, standup briefs and the retro agenda writable and skips the
+  relative-read check, because the PM daemon has the same shape.
 - **Account sync no longer warns about the bot's own stop-loss order** (#1259). Protective stops
   are stored on `positions.stop_loss_order_id`, never in `orders`, so the hourly sync logged
   "New order found on exchange" for every resting stop. `_sync_orders` now skips ids that equal an
