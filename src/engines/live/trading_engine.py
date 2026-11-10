@@ -22,6 +22,7 @@ from src.config.constants import (
     DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,
     DEFAULT_CHECK_INTERVAL,
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
+    DEFAULT_DB_OUTAGE_ALERT_SECONDS,
     DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS,
     DEFAULT_DYNAMIC_RISK_ENABLED,
     DEFAULT_END_OF_DAY_FLAT,
@@ -161,6 +162,11 @@ logger = logging.getLogger(__name__)
 # looping condition can't flood the single alert channel (the audit's
 # 714-critical-storm class, now that alerts are wired across every subsystem). #853
 ALERT_DEDUP_COOLDOWN_SECONDS = 300.0
+
+# Minimum spacing between AUDIT_WRITE_FAILED events. A broken audit table fails
+# on every reconciler write; one event per window records that it is happening
+# (with a count of the folded-in failures) without a row per attempt.
+AUDIT_FAILURE_EVENT_INTERVAL_SECONDS = 300.0
 
 # Type aliases for backward compatibility - use shared models
 # Position uses LivePosition which has stop_loss_order_id for server-side stop tracking
@@ -369,6 +375,8 @@ class LiveTradingEngine:
         # max_consecutive_errors (incident 2026-05-19: a Railway internal-DNS
         # outage made Postgres unresolvable and shut the live bot down).
         self.db_unreachable_since: float | None = None
+        # Latch so a continuing outage pages once, not on every retry.
+        self._db_outage_announced = False
         self.error_cooldown = DEFAULT_ERROR_COOLDOWN
         # Episode latch for the consecutive-inference-timeout escalation
         # (#927): page once when the threshold is crossed, re-arm on recovery.
@@ -402,6 +410,11 @@ class LiveTradingEngine:
         # daemon, the WS-health thread and the order-tracker-alert thread.
         self._alert_dedup: dict[str, float] = {}
         self._alert_dedup_lock = threading.Lock()
+        # Rate limit for AUDIT_WRITE_FAILED events: monotonic time of the last
+        # emit and how many failures were folded into it since.
+        self._audit_failure_lock = threading.Lock()
+        self._audit_failure_last_emit: float | None = None
+        self._audit_failures_suppressed = 0
 
         # Optional regime detector (feature-gated)
         self.regime_detector = None
@@ -660,6 +673,7 @@ class LiveTradingEngine:
                 f"❌ Could not connect to the PostgreSQL database: {e}\nThe trading engine cannot start without a database connection. Exiting..."
             )
             raise RuntimeError("Database connection required. Service stopped.") from e
+        self.db_manager.set_audit_failure_sink(self._on_audit_write_failed)
         self.trading_session_id: int | None = None
         # On a clean restart the engine recovers balance from the most recent
         # inactive session but creates a NEW session. This holds that old
@@ -1969,6 +1983,7 @@ class LiveTradingEngine:
                 self._log_status_heartbeat(symbol, current_price)
                 # Reset error counter on successful iteration
                 self.consecutive_errors = 0
+                self._record_db_recovery()
                 self.db_unreachable_since = None
 
                 # Calculate and use adaptive interval for next iteration
@@ -1986,6 +2001,7 @@ class LiveTradingEngine:
                     if self.db_unreachable_since is None:
                         self.db_unreachable_since = time.monotonic()
                     unreachable_for = time.monotonic() - self.db_unreachable_since
+                    self._announce_db_outage(unreachable_for)
                     # Prolonged outage: stop opening new positions (exits and
                     # server-side stop-losses still run) to avoid order churn
                     # while DB writes keep failing. Stays close-only until a
@@ -2049,6 +2065,47 @@ class LiveTradingEngine:
 
         logger.info("Trading loop ended")
         self._finalize_runtime()
+
+    def _announce_db_outage(self, unreachable_for: float) -> None:
+        """Page once when a database outage has lasted ``DEFAULT_DB_OUTAGE_ALERT_SECONDS``.
+
+        The outage's own ``system_events`` row cannot be written while the
+        database is down, so the webhook is the only live channel; the durable
+        record is written on recovery by :meth:`_record_db_recovery`.
+        """
+        if self._db_outage_announced or unreachable_for < DEFAULT_DB_OUTAGE_ALERT_SECONDS:
+            return
+        self._db_outage_announced = True
+        self._record_event(
+            EventType.ALERT,
+            f"Database unreachable for {unreachable_for:.0f}s — the engine keeps retrying; "
+            f"new entries stop after {DEFAULT_DB_OUTAGE_CLOSE_ONLY_SECONDS}s. Exits and "
+            "exchange stop-losses are unaffected.",
+            severity="critical",
+            component="database",
+            error_code="DB_UNREACHABLE",
+            alert=True,
+        )
+
+    def _record_db_recovery(self) -> None:
+        """Write the durable record of a database outage that has just ended.
+
+        No-op unless an outage was in progress. The start of the outage could
+        not be persisted (the database was the thing that was down), so this one
+        row carries its duration.
+        """
+        since = self.db_unreachable_since
+        if since is None:
+            return
+        duration = time.monotonic() - since
+        self._db_outage_announced = False
+        self._record_event(
+            EventType.WARNING,
+            f"Database reachable again after a {duration:.0f}s outage.",
+            severity="warning",
+            component="database",
+            error_code="DB_OUTAGE_RECOVERED",
+        )
 
     def _log_status_heartbeat(self, symbol: str, current_price: float) -> None:
         """Log the periodic status line on a wall-clock cadence.
@@ -2928,6 +2985,47 @@ class LiveTradingEngine:
             create_live_thread(_deliver, name="order-tracker-alert").start()
         except Exception as e:  # pragma: no cover - defensive; never break order handling
             logger.warning("order-tracker alert dispatch failed: %s", e)
+
+    def _on_audit_write_failed(self, severity: str, description: str, error: BaseException) -> None:
+        """Record that a reconciliation audit row could not be written.
+
+        Called from whichever thread wrote the audit, often while it holds a
+        reconciler lock, so this returns immediately: the rate-limit check is a
+        few instructions and the event (and any webhook, up to 10s) is delivered
+        on a short-lived daemon thread. Only a lost CRITICAL row pages — a lost
+        lower-severity row is queryable but not worth waking an operator for.
+        """
+        now = time.monotonic()
+        with self._audit_failure_lock:
+            last = self._audit_failure_last_emit
+            if last is not None and now - last < AUDIT_FAILURE_EVENT_INTERVAL_SECONDS:
+                self._audit_failures_suppressed += 1
+                return
+            self._audit_failure_last_emit = now
+            folded = self._audit_failures_suppressed
+            self._audit_failures_suppressed = 0
+
+        message = (
+            f"Reconciliation audit write failed [{severity}] {description}: "
+            f"{type(error).__name__}: {error}"
+        )
+        if folded:
+            message += f" (+{folded} more failures since the last report)"
+
+        def _deliver() -> None:
+            self._record_event(
+                EventType.ERROR,
+                message,
+                severity="error",
+                component="reconciler",
+                error_code="AUDIT_WRITE_FAILED",
+                alert=severity == "CRITICAL",
+            )
+
+        try:
+            create_live_thread(_deliver, name="audit-failure-event").start()
+        except Exception as e:  # pragma: no cover - defensive; never break reconciliation
+            logger.warning("audit-failure event dispatch failed: %s", e)
 
     def _sleep_with_interrupt(self, seconds: float) -> None:
         """Sleep in small increments to allow for interrupt (delegated to LiveLoopTimingCoordinator)."""

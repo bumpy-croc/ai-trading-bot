@@ -7,7 +7,7 @@ PostgreSQL database manager for handling all database operations
 import logging
 import math
 import os
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -151,6 +151,9 @@ class DatabaseManager:
     - System event logging
     - Centralized database for shared access across services
     """
+
+    # Class-level default so a manager built without __init__ (tests) still has no sink.
+    _audit_failure_sink: Callable[[str, str, BaseException], None] | None = None
 
     def __init__(self, database_url: str | None = None):
         """
@@ -4745,35 +4748,74 @@ class DatabaseManager:
         new_value: str | None,
         reason: str,
         severity: str,
-    ) -> int:
+    ) -> int | None:
         """Record an immutable reconciliation audit event.
 
+        The audit trail is best-effort: a failed write never raises into the
+        caller, because the correction it documents (a balance heal, a position
+        close) must still complete. The failure is logged at ERROR and reported
+        to the sink registered with :meth:`set_audit_failure_sink` so it is
+        observable instead of silently leaving a gap in the trail.
+
         Returns:
-            Audit event ID.
+            Audit event ID, or ``None`` when the write failed.
         """
-        with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
-            event = ReconciliationAuditEvent(
-                session_id=session_id,
-                entity_type=entity_type,
-                entity_id=entity_id,
-                field=field,
-                old_value=old_value,
-                new_value=new_value,
-                reason=reason,
-                severity=severity,
-            )
-            session.add(event)
-            session.commit()
-            logger.info(
-                "Audit event [%s]: %s.%s %s→%s (%s)",
+        try:
+            with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
+                event = ReconciliationAuditEvent(
+                    session_id=session_id,
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    field=field,
+                    old_value=old_value,
+                    new_value=new_value,
+                    reason=reason,
+                    severity=severity,
+                )
+                session.add(event)
+                session.commit()
+                logger.info(
+                    "Audit event [%s]: %s.%s %s→%s (%s)",
+                    severity,
+                    entity_type,
+                    field,
+                    old_value,
+                    new_value,
+                    reason,
+                )
+                return event.id
+        except Exception as e:
+            logger.error(
+                "Failed to write audit event [%s] %s.%s (%s): %s",
                 severity,
                 entity_type,
                 field,
-                old_value,
-                new_value,
                 reason,
+                e,
+                exc_info=True,
             )
-            return event.id
+            self._notify_audit_failure(severity, f"{entity_type}.{field}: {reason}", e)
+            return None
+
+    def set_audit_failure_sink(
+        self, sink: Callable[[str, str, BaseException], None] | None
+    ) -> None:
+        """Register ``sink(severity, description, error)``, called when an audit write fails.
+
+        The live engine registers a sink that records a ``system_events`` row, so a
+        swallowed audit failure still reaches an operator.
+        """
+        self._audit_failure_sink = sink
+
+    def _notify_audit_failure(self, severity: str, description: str, error: BaseException) -> None:
+        """Tell the registered sink an audit write failed; never raises."""
+        sink = self._audit_failure_sink
+        if sink is None:
+            return
+        try:
+            sink(severity, description, error)
+        except Exception as sink_error:
+            logger.warning("audit-failure sink raised: %s", sink_error)
 
     def get_audit_events(
         self, session_id: int, severity: str | None = None, limit: int = 100

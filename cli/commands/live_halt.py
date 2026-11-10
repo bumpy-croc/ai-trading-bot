@@ -29,7 +29,7 @@ from src.database.manager import DatabaseManager, SystemHaltStatus
 from src.database.models import EventType
 
 # Target environment -> env var holding its database URL. The RAILWAY_* vars
-# are the same ones the heartbeat monitor uses (scripts/check_heartbeat.py);
+# are the same ones the heartbeat monitor uses (cli/commands/live_watchdog.py);
 # `development` targets the local DATABASE_URL for drills and tests.
 ENV_DB_URL_VARS = {
     "production": "RAILWAY_PRODUCTION_DATABASE_URL",

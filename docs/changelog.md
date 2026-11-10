@@ -28,6 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   newest-N rule protects, with the bytes each frees. Dry run by default; deletes only with
   `--apply`; aborts on a dangling or out-of-tree symlink; never touches a symlink. Policy documented
   in `docs/prediction.md`.
+- **External write-gap watchdog** (#689, #669). `atb live-control watchdog` (run every 30 minutes
+  by `.github/workflows/heartbeat-monitor.yml`, superseding the account_history-only
+  `scripts/check_heartbeat.py`) pages when
+  `account_history` or the hourly loop-state `system_events` row stops being written. It writes
+  `HEARTBEAT_GAP` / `HEARTBEAT_GAP_CLEARED` rows, pages the webhook, and re-pages on the shared
+  escalating schedule (`src/infrastructure/paging_schedule.py`, now also used by
+  `LatchedConditionMonitor`). See `docs/monitoring.md`.
+- **`AUDIT_WRITE_FAILED`, `DB_UNREACHABLE` and `DB_OUTAGE_RECOVERED` events** (#689, #669).
+  `DatabaseManager.log_audit_event` no longer raises (a failed audit write used to abort the
+  balance heal it documented) and reports failures to the engine; a sustained database outage
+  pages after 5 minutes and leaves a durable recovery row.
 
 ### Fixed
 - **Developer-tooling guards no longer fail silently** (#1138, #1147, #1136, #1151).

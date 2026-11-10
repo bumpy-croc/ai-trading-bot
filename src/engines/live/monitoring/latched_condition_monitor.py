@@ -51,6 +51,11 @@ from src.config.feature_flags import is_enabled
 from src.database.models import EventType
 from src.engines.live.execution.entry_pause import EntryPauseGate
 from src.infrastructure.live_threads import create_live_thread
+from src.infrastructure.paging_schedule import (
+    PAGE_SCHEDULE_SECONDS,
+    PAGE_STEADY_INTERVAL_SECONDS,
+    format_elapsed,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -62,11 +67,6 @@ logger = logging.getLogger(__name__)
 # One state row per hour: cheap, and it bounds how stale a monitor's read of
 # "can the bot trade right now?" can be.
 HEARTBEAT_INTERVAL_SECONDS = 3600.0
-# Escalating re-pages measured from the latch: 1h, 4h, 12h...
-PAGE_SCHEDULE_SECONDS = (3600.0, 14400.0, 43200.0)
-# ...then once a day for as long as it holds. Bound: <=3 re-pages in the first
-# 24h and <=1 per 24h afterwards.
-PAGE_STEADY_INTERVAL_SECONDS = 86400.0
 # Row written when nothing is blocking entries — the positive assertion.
 ENTRIES_ENABLED_CODE = "ENTRIES_ENABLED"
 _HUMAN_CLEARED_CONSEQUENCE = (
@@ -136,19 +136,6 @@ class _LatchRecord:
     next_page_at: float
     started_at: datetime | None = None
     pages_sent: int = 0
-
-
-def format_elapsed(seconds: float) -> str:
-    """Human-readable elapsed time, e.g. ``3d 4h``, ``5h 12m``, ``45m``."""
-    total = max(int(seconds), 0)
-    days, rem = divmod(total, 86400)
-    hours, rem = divmod(rem, 3600)
-    minutes = rem // 60
-    if days:
-        return f"{days}d {hours}h"
-    if hours:
-        return f"{hours}h {minutes}m"
-    return f"{minutes}m"
 
 
 CONDITIONS: tuple[_Condition, ...] = (
