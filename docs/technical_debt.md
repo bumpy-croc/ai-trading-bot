@@ -23,28 +23,10 @@ This document tracks code quality issues, technical debt, and improvement opport
 
 ### Mypy Compliance
 
-**Status**: Many type errors preventing clean mypy runs
-
-**Critical Issues**:
-- Module path confusion: Files found under multiple module names
-  - `performance/metrics.py` found as both `src.performance.metrics` and `performance.metrics`
-  - `dashboards/backtesting/__init__.py` similar issue
-- Missing type stubs: `requests` library (types-requests installed but not recognized in temp mypy environment)
-- SQLAlchemy Base class validation errors
-- Optional parameter issues throughout (implicit Optional deprecated)
-
-**Files with Critical Type Issues**:
-- `src/data_providers/coinbase_provider.py`: 13 type errors (incompatible defaults, wrong types)
-- `src/data_providers/binance_provider.py`: 5 attr-defined errors (None has no attribute)
-- `src/database/models.py`: Base class validation issues
-
-**Action Items**:
-1. Fix mypy runner (`bin/run_mypy.py`) to properly handle module paths
-2. Add explicit `Optional[]` types where parameters can be None
-3. Fix SQLAlchemy Base class type annotations
-4. Add proper type hints to all functions missing return type annotations
-
-**Impact**: Medium-High (doesn't prevent runtime but makes development harder)
+**Status**: Resolved. `mypy` reports no errors over `src/` and `cli/` (358 files), and the
+`type-check` CI job (`.github/workflows/tests.yml`) fails any PR that introduces one. Run it
+locally with `python bin/run_mypy.py` (single mypy run; the runner copies the tree to a temp
+directory because the repository root is a package with a non-identifier name).
 
 ---
 
@@ -435,7 +417,7 @@ Generally good, but some opportunities:
 ## Metrics & Goals
 
 ### Current State (After Phase 3 Steps 3-4 - 2025-11-22)
-- **Mypy compliance**: ~60% (improved type annotations, still work needed)
+- **Mypy compliance**: 100% (0 errors over `src/` and `cli/`; gated in CI)
 - **Ruff compliance**: 100% ✅ (0 errors)
 - **Black compliance**: 100% ✅
 - **Test coverage**: ~85%
