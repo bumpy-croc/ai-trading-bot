@@ -88,7 +88,12 @@ def test_stop_streams_closes_twm_event_loop(mock_config, mock_client):
 
     provider = BinanceProvider()
     loop = asyncio.new_event_loop()
-    provider._twm = Mock()
+    # A stopped TWM: its thread has exited, so teardown may close the loop. A bare
+    # Mock() reports is_alive() truthy, and teardown correctly leaves a live
+    # thread's loop open (#729).
+    twm = Mock(spec=["stop", "join", "is_alive", "ident"])
+    twm.is_alive.return_value = False
+    provider._twm = twm
     provider._twm_loop = loop
 
     provider.stop_streams()

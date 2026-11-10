@@ -196,6 +196,21 @@ def test_paper_mode_stop_preserves_open_positions():
 
 
 @pytest.mark.fast
+def test_stop_ends_session_declaring_carry_forward():
+    """stop() tells the DB the next start re-adopts open paper positions (#668)."""
+    engine = make_engine(enable_live_trading=False)
+    engine.is_running = True
+    engine.trading_session_id = 5
+    engine.current_balance = 950.0
+
+    engine.stop()
+
+    engine.db_manager.end_trading_session.assert_called_once_with(
+        session_id=5, final_balance=950.0, carry_forward_open_positions=True
+    )
+
+
+@pytest.mark.fast
 def test_live_mode_stop_closes_positions():
     """In live trading, stop() must close all positions."""
     engine = make_engine(enable_live_trading=True)

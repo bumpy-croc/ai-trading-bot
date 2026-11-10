@@ -927,7 +927,7 @@ strategy = Strategy(
 For questions or issues:
 
 1. Check this README and the testing framework documentation
-2. Review the exec plan in `docs/execplans/platform_modularization_plan.md`
+2. Review the exec plan in `docs/archive/execplans/platform_modularization_plan.md`
 3. Look at existing tests in `tests/unit/strategies/components/`
 4. Check the main strategy system documentation
 

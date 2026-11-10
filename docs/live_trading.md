@@ -37,7 +37,7 @@ continuous polling, account synchronisation, and resilience features required fo
 | `LiveEntryCoordinator` | `engines/live/execution/entry_coordinator.py` | Entry decision (signal/sizing/SL-TP derivation) + base-asset-locked order execution: duplicate/limit guards, balance+fee accounting, position tracking, risk re-registration, stop-loss placement, emergency-close fallbacks | Serialises each entry on the symbol's base-asset lock (`state._base_asset_locks`) across submit → track → SL placement; the lock lives on the engine and the emergency-close fallback re-acquires it re-entrantly via `state._execute_exit` (#703). Runs on the trading-loop thread; all engine state mutated through the backref as before |
 | `LiveExitCoordinator` | `engines/live/execution/exit_coordinator.py` | Exit decision (`check_exit_conditions`: per-position SL/TP/runtime evaluation + strategy-execution logging) and base-asset-locked close (`execute_exit` → `execute_exit_locked`): resting-stop cancel-before-close (#710), realized-PnL + margin-interest accounting, balance update, trade persistence/CLOSED flip (#657), re-protect on failed close | Serialises each close on the symbol's base-asset lock (`state._base_asset_locks`, #703); the lock lives on the engine and is re-entrant (an entry's failed-SL emergency close routes through the engine's `_execute_exit` wrapper on the same thread). `check_exit_conditions` invokes the close via `state._execute_exit` (the engine wrapper) so engine-level test mocks still intercept. Runs on the trading-loop thread; all engine state mutated through the backref as before |
 | `LiveDynamicRiskCoordinator` | `engines/live/dynamic_risk_coordinator.py` | Per-entry dynamic-risk position-size adjustment (drawdown/peak-aware, via the shared `DynamicRiskHandler`) + its observability/audit logging | None — holds no state of its own. Runs on the trading-loop thread; called by the loop and by `LiveEntryCoordinator` via the engine `_apply_dynamic_risk_adjustment` wrapper |
-| `LiveLoopTimingCoordinator` | `engines/live/loop_timing.py` | Trading-loop cadence + data-freshness helpers: interruptible sleep, activity/time-of-day-aware poll interval, candle-age / WS-buffer freshness gate | None — leaf helpers, no order placement/balance mutation/engine-method calls. Runs on the trading-loop thread; `is_data_fresh` is also reached by `LiveMarketDataCoordinator` via the engine `_is_data_fresh` wrapper. Holds no state of its own |
+| `LiveLoopTimingCoordinator` | `engines/live/loop_timing.py` | Trading-loop cadence + data-freshness helpers: interruptible sleep, activity/time-of-day-aware poll interval, candle-age / WS-buffer freshness gate | None — leaf helpers, no order placement/balance mutation/engine-method calls. Runs on the trading-loop thread; `is_data_fresh` is also reached by `LiveMarketDataCoordinator` via the engine `_is_data_fresh` wrapper. Keeps only the stale-data streak read by `LatchedConditionMonitor` |
 | `LiveMarketDataCoordinator` | `engines/live/execution/market_data_coordinator.py` | Per-candle read path: latest-frame fetch (WS-cache vs REST, resync handling), sentiment enrichment, the strategy-context readiness gate, and correlation-sizing context | None — read path, no order placement/balance mutation (only writes `last_data_update`). Runs on the trading-loop thread; `build_correlation_context` is also called by `StrategyRuntimeCoordinator` via the engine wrapper. Holds no state of its own; defers freshness to the engine's `_is_data_fresh` via `state` |
 | `LiveOrderFillCoordinator` | `engines/live/execution/order_fill_coordinator.py` | The `OrderTracker` callbacks: full fill (queues stop-loss-fill closes), partial fill (critical SL-partial alert), cancel/reject (entry-fee refund for the unfilled fraction + stop-loss-cancel escalation #741), tracking-lost (fail-closed: keep position, escalate) | None — holds no coordinator-local state. Runs on the **OrderTracker poll thread**: a stop-loss fill is handed to the loop via the thread-safe `state._pending_fill_exits` SimpleQueue (never closed inline, #631); position reads/mutations use `LivePositionTracker`'s thread-safe copy + atomic `pop_position`/`set_stop_loss_order_id`; the cancel refund uses `db_manager.atomic_balance_update`. `_record_event`/`_send_alert` invoked via `state` so engine mocks still intercept |
 | `LivePositionTracker` | `engines/live/execution/position_tracker.py` | Position state | Owns `_positions_lock`; `positions` property returns a defensive copy |
@@ -88,8 +88,41 @@ forward only the previous session's positions.
 The live engine enforces `portfolio.max_drawdown_pct` from `src/config/risk-limits.json`
 (0.20, mirrored by `DEFAULT_MAX_DRAWDOWN` / `RiskParameters.max_drawdown`). On every
 trading-loop iteration `MaxDrawdownEnforcer` (`src/engines/live/monitoring/drawdown_guard.py`)
-measures the drawdown of the current balance from the **session peak balance** — the same
-numbers `account_history.drawdown` is derived from.
+measures two drawdown legs and acts on the worse one:
+
+- **Balance leg** (the original guard, unchanged): realized balance vs the session peak
+  balance. It moves only on realized fills.
+- **Equity leg** (#1267): mark-to-market equity (`balance + unrealized P&L`) vs the session
+  peak equity, so an open position running deep underwater trips the cap before it is
+  stopped out. The equity peak is seeded from `max(account_history.equity)` over the same
+  session lineage and floored at the balance peak. It ratchets up only once two consecutive
+  distinct price marks agree, and an equity-leg breach likewise needs two distinct marks (the
+  drawdown is read off the better of the last two), so one bad tick can neither inflate the
+  peak nor latch a halt that only an operator restart clears. The first mark after boot or
+  after a blind spell stands alone, so a restart mid-drawdown re-trips at once. Giving back
+  open profit counts as drawdown, as in the backtest. When the confirmed equity peak rises
+  more than 0.25% above the last persisted one (and live equity is itself at that peak), the
+  loop writes a best-effort `account_history` snapshot so a restart re-seeds it instead of the
+  lower hourly row. A frozen price counts as a new mark after `DRAWDOWN_MARK_MAX_AGE_SECONDS`,
+  and a flat book (equity is realized balance) needs no confirmation.
+
+Breach is `max(balance leg, equity leg) >= cap`, so the guard is never looser than the
+balance-only version. The equity leg is skipped (never guessed) when there is no fresh
+mark — an invalid price, a position recovered from the DB and not yet re-priced, or a mark
+older than `DRAWDOWN_MARK_MAX_AGE_SECONDS`; the guard logs a WARNING and runs on the balance
+leg alone, and pages once (`DRAWDOWN_EQUITY_MARK_UNAVAILABLE`) if it stays blind for that
+long. The cap also runs (balance leg only; marks are not refreshed) on the market-data-gap
+iterations that skip the loop body, so realized losses such as stop fills are still caught
+through a data outage.
+`account_history.drawdown` uses the same worse-of-both basis.
+
+`FEATURE_MAX_DRAWDOWN_RESET_PEAK` re-baselines both peaks to the current balance. It cannot
+clear a halt caused purely by an open position still at or beyond the cap underwater: the
+equity leg re-trips on the first mark, so close the position (or wait for recovery) first.
+
+Before first deploy compare `max(equity)` with `max(balance)` in `account_history` for the
+production session: the equity leg measures from the former, so a large gap means an
+immediate warning or trip.
 
 - **Peak baseline**: the `account_history` session max is **authoritative** — seeded on boot
   from `max(account_history.balance)` for the active session (plus the recovered inactive
@@ -114,7 +147,7 @@ numbers `account_history.drawdown` is derived from.
   (covers the legacy short path and any direct caller), and scale-ins. Exits, partial exits,
   stop-loss management, and reconciliation keep running. Nothing is liquidated.
   A CRITICAL `system_events` row (`error_code=MAX_DRAWDOWN_BREACH`), a structured
-  `risk_event`, and the alert webhook (if configured) fire once. The trip is **latched**: it
+  `risk_event` (carrying both legs), and the alert webhook (if configured) fire once. The trip is **latched**: it
   survives balance recovery below the cap, does not re-spam, and re-trips on restart via the
   boot-time peak recompute.
 - **Same-iteration enforcement**: because the loop-level check runs after entry evaluation,
@@ -402,8 +435,9 @@ Useful flags:
 
 The control surface lives under `atb live-control`:
 
-- `atb live-control train --symbol BTCUSDT --days 365` – runs the standard `atb train` pipeline from the live console and updates the
-  registry’s `latest` symlink automatically so the live engine picks up the new model.
+- `atb live-control train --symbol BTCUSDT --days 365` – runs the standard `atb train` pipeline from the live console. The registry’s
+  `latest` symlink is left alone unless `--auto-deploy` is passed (validation-gated, rolls back on failure); promote a trained
+  bundle later with `deploy-model`.
 - `atb live-control deploy-model --model-path <staging-dir> --close-positions` – promote a staged bundle into the live strategy
   directory.
 - `atb live-control list-models` / `status` – quick operational reads when supervising a running engine.

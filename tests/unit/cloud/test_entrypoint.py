@@ -128,6 +128,8 @@ class TestRunTrainingThreading:
         ctx = mock_run.call_args.args[0]
         assert ctx.config.model_type == "cnn_lstm"
         assert ctx.config.model_variant == "default"
+        # A container's bundle is synced (and promoted) by the orchestrator only.
+        assert ctx.config.set_latest is False
 
     def test_target_type_and_horizon_reach_training_config(self) -> None:
         # Arrange

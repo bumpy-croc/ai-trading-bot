@@ -381,9 +381,39 @@ class TestRunMetaLabelPipeline:
         # under training_params.
         assert metadata.get("timeframe") == "1h"
 
+        assert not (result.artifact_paths.directory.parent / "latest").is_symlink()
+
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_set_latest_points_latest_at_the_new_bundle(
+        self, mock_download, mock_signal_cls, tmp_path
+    ):
+        mock_download.return_value = self._synthetic_price_df()
+        mock_signal_cls.return_value = self._StubPrimarySignalGenerator()
+        ctx = self._make_ctx(tmp_path, set_latest=True)
+
+        result = run_training_pipeline(ctx)
+
+        assert result.success is True
         latest_link = result.artifact_paths.directory.parent / "latest"
         assert latest_link.is_symlink()
         assert latest_link.resolve() == result.artifact_paths.directory.resolve()
+
+    @patch("src.ml.training_pipeline.pipeline.point_latest_at")
+    @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
+    @patch("src.ml.training_pipeline.pipeline.download_price_data")
+    def test_failed_latest_update_fails_the_run_when_requested(
+        self, mock_download, mock_signal_cls, mock_point, tmp_path
+    ):
+        mock_download.return_value = self._synthetic_price_df()
+        mock_signal_cls.return_value = self._StubPrimarySignalGenerator()
+        mock_point.side_effect = RuntimeError("Failed to update 'latest' symlink")
+        ctx = self._make_ctx(tmp_path, set_latest=True)
+
+        result = run_training_pipeline(ctx)
+
+        assert result.success is False
+        assert "latest" in result.metadata["error"]
 
     @patch("src.ml.training_pipeline.pipeline.MLBasicSignalGenerator")
     @patch("src.ml.training_pipeline.pipeline.download_price_data")
@@ -757,6 +787,8 @@ class TestRunTrainingPipeline:
         assert result.metadata["framework"] == "onnx"
         assert result.metadata["feature_strategy"] == "price_only_rolling_minmax"
         assert mocks["save_artifacts"].call_args.args[4] is result.metadata
+        # Training never promotes on its own: `latest` is an explicit opt-in.
+        assert mocks["save_artifacts"].call_args.kwargs["set_latest"] is False
 
     def test_default_path_regresses_raw_close(self, tmp_path):
         """Without force_price_only the existing contract is unchanged.

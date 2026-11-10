@@ -67,7 +67,9 @@ def _seed_inactive_session_with_open_position(
         stop_loss_order_id=stop_loss_order_id,
     )
     # Gracefully end the session (mirrors a clean shutdown): is_active -> False.
-    db.end_trading_session(session_id=session_id, final_balance=1000.0)
+    db.end_trading_session(
+        session_id=session_id, final_balance=1000.0, carry_forward_open_positions=True
+    )
     return session_id, position_id
 
 
