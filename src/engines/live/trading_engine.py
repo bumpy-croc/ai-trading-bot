@@ -1659,8 +1659,11 @@ class LiveTradingEngine:
 
         # End the trading session in database
         if self.trading_session_id:
+            # Paper positions are preserved above; the next start re-adopts them (#668).
             self.db_manager.end_trading_session(
-                session_id=self.trading_session_id, final_balance=self.current_balance
+                session_id=self.trading_session_id,
+                final_balance=self.current_balance,
+                carry_forward_open_positions=True,
             )
 
         logger.info("Trading engine stopped")
@@ -1778,6 +1781,9 @@ class LiveTradingEngine:
                 df = self._get_latest_data(symbol, timeframe)
                 if df is None or df.empty:
                     log_data_event("no_data", reason="empty_frame")
+                    # Feed the stale-data streak: a REST failure or RESYNCING skips
+                    # entries and exits exactly like a stale frame does.
+                    self._is_data_fresh(df)
                     logger.warning("No market data received")
                     self.check_interval = self._calculate_adaptive_interval()
                     self._sleep_with_interrupt(self.check_interval)

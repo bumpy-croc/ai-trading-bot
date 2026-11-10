@@ -144,6 +144,13 @@ def _handle_model(ns: argparse.Namespace) -> int:
         "--target-type meta_label is used (e.g. 'basic'). Required for meta_label, "
         "ignored otherwise.",
     )
+    parser.add_argument(
+        "--set-latest",
+        action="store_true",
+        help="Point {type}/latest at the trained bundle (default: leave latest untouched; "
+        "the registry serves every latest as a production model, so prefer "
+        "`atb live-control deploy-model`, which validates first)",
+    )
 
     # Parse the arguments from ns.args
     args = parser.parse_args(ns.args or [])
@@ -169,6 +176,13 @@ def _handle_price(ns: argparse.Namespace) -> int:
         type=int,
         default=120,
         help="Sequence length for dataset windows",
+    )
+    parser.add_argument(
+        "--set-latest",
+        action="store_true",
+        help="Point {type}/latest at the trained bundle (default: leave latest untouched; "
+        "the registry serves every latest as a production model, so prefer "
+        "`atb live-control deploy-model`, which validates first)",
     )
 
     # Parse the arguments from ns.args

@@ -43,7 +43,7 @@ from src.config.constants import (
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
 from src.infrastructure.timeout import run_with_timeout
 from src.trading.balance_retry import read_free_balance_with_retry
-from src.trading.precision import format_quantity, quantize_to_step
+from src.trading.precision import conform_to_step, format_price, format_quantity, snap_to_step
 from src.trading.symbols.factory import SymbolFactory, base_asset_from_symbol
 
 from .binance_order_types import map_binance_order_type
@@ -1026,8 +1026,96 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return raw
         return self._client.get_account()
 
+    def _conform_order_numerics(
+        self,
+        symbol: str,
+        *,
+        quantity: float | None = None,
+        price: float | None = None,
+        stop_price: float | None = None,
+        symbol_info: dict[str, Any] | None = None,
+    ) -> dict[str, str]:
+        """Last-line guard for every number that leaves for the exchange.
+
+        Upstream sites are supposed to snap with ``snap_to_step`` already; this
+        catches the one that forgot. Float noise on an on-step value is stripped
+        and logged at WARNING so the offending site gets found. A value that is
+        genuinely off-step is sent UNCHANGED and logged at ERROR: silently moving
+        an order's size is worse than letting the exchange reject it. Returns
+        fixed-point strings keyed by Binance parameter name, for the given
+        (non-None) inputs only.
+        """
+        if symbol_info is None:
+            with self._symbol_info_cache_lock:
+                symbol_info = self._symbol_info_cache.get(
+                    SymbolFactory.to_exchange_symbol(symbol, "binance")
+                )
+        if not symbol_info:
+            logger.warning(
+                "No cached symbol info for %s - order numerics are formatted without "
+                "step/tick conformance",
+                symbol,
+            )
+        info = symbol_info or {}
+        fields = (
+            ("quantity", quantity, info.get("step_size"), format_quantity),
+            ("price", price, info.get("tick_size"), format_price),
+            ("stopPrice", stop_price, info.get("tick_size"), format_price),
+        )
+        result: dict[str, str] = {}
+        for field, raw, step_raw, formatter in fields:
+            if raw is None:
+                continue
+            value = float(raw)
+            if not math.isfinite(value):
+                raise ValueError(f"Refusing to send non-finite order {field}: {raw!r}")
+            step = float(step_raw) if isinstance(step_raw, int | float) else None
+            conformed, on_step = conform_to_step(value, step)
+            if not on_step:
+                logger.error(
+                    "Order %s %r for %s is not on the exchange step %s - sending unchanged; "
+                    "the exchange will likely reject it (upstream skipped snap_to_step)",
+                    field,
+                    value,
+                    symbol,
+                    step,
+                    stack_info=True,
+                )
+            elif conformed != value:
+                logger.warning(
+                    "Unquantized order %s %r for %s corrected to %r (step %s) - an upstream "
+                    "site skipped snap_to_step",
+                    field,
+                    value,
+                    symbol,
+                    conformed,
+                    step,
+                    stack_info=True,
+                )
+            # Off-step values keep their own precision: formatting to the step's
+            # decimal count would silently truncate them.
+            result[field] = formatter(conformed, step if on_step else None)
+        return result
+
     def _call_create_order(self, **params) -> dict:
         """Place order via margin or spot API."""
+        # Choke point: python-binance urlencodes a raw float as repr (artifacts,
+        # scientific notation). A caller that bypassed _conform_order_numerics is
+        # serialized fixed-point here, loudly, rather than sent raw.
+        for key, formatter in (
+            ("quantity", format_quantity),
+            ("price", format_price),
+            ("stopPrice", format_price),
+        ):
+            value = params.get(key)
+            if value is not None and not isinstance(value, str):
+                logger.error(
+                    "Order %s %r reached _call_create_order unserialized - formatting it; "
+                    "the caller skipped _conform_order_numerics",
+                    key,
+                    value,
+                )
+                params[key] = formatter(float(value))
         if self._use_margin:
             # Lazy symbol validation on first margin order per side
             symbol = params.get("symbol", "")
@@ -1325,7 +1413,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return False
         try:
             self._client.margin_borrow_repay(
-                asset=asset, amount=str(amount), type="REPAY", isIsolated="FALSE"
+                asset=asset,
+                amount=format(Decimal(str(amount)), "f"),
+                type="REPAY",
+                isIsolated="FALSE",
             )
             logger.info("Margin repay submitted: %s %s", amount, asset)
             return True
@@ -1773,25 +1864,18 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             binance_side = SIDE_BUY if side == OrderSide.BUY else SIDE_SELL
             binance_type = self._convert_to_binance_order_type(order_type)
 
-            # Prepare order parameters
-            # quantity is formatted as a fixed-point string here (not passed as a raw
-            # float) because urlencode() renders small floats in scientific notation
-            # (str(0.00009) == "9e-05"), which Binance rejects with -1100 ("illegal
-            # characters"). Callers are expected to have already quantized the value
-            # to the symbol's LOT_SIZE step (see quantize_to_step); format_quantity
-            # derives the decimal count from that already-clean value.
+            # Final guard on every exchange-bound number: strips float noise left by
+            # an upstream snap (logging loudly) and serializes fixed-point strings,
+            # because urlencode() renders small floats in scientific notation
+            # (str(0.00009) == "9e-05"), which Binance rejects with -1100.
             order_params = {
                 "symbol": symbol,
                 "side": binance_side,
                 "type": binance_type,
-                "quantity": format_quantity(quantity),
+                **self._conform_order_numerics(
+                    symbol, quantity=quantity, price=price, stop_price=stop_price
+                ),
             }
-
-            if price is not None:
-                order_params["price"] = price
-
-            if stop_price is not None:
-                order_params["stopPrice"] = stop_price
 
             if time_in_force != "GTC":
                 order_params["timeInForce"] = time_in_force
@@ -2157,15 +2241,11 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             tick_size = float(tick_size_raw) if isinstance(tick_size_raw, int | float) else 0.01
             error_params["tick_size"] = tick_size
             if tick_size > 0:
-                # `round(x / tick) * tick` in float math leaves artifacts (e.g.
-                # round(1648.82 / 0.01) * 0.01 = 1648.8200000000001) that exceed the
-                # asset's price precision, so Binance rejects the stop-loss with code
-                # -1111 ("price has too much precision"). Quantize to the tick's decimal
-                # count, mirroring the quantity quantize at the LOT_SIZE step below.
-                stop_price = quantize_to_step(round(stop_price / tick_size) * tick_size, tick_size)
-                limit_price = quantize_to_step(
-                    round(limit_price / tick_size) * tick_size, tick_size
-                )
+                # snap_to_step does the tick snap in exact decimal math: the float
+                # form round(1648.82 / 0.01) * 0.01 = 1648.8200000000001 exceeds the
+                # asset's price precision and Binance rejects it with -1111.
+                stop_price = snap_to_step(stop_price, tick_size)
+                limit_price = snap_to_step(limit_price, tick_size)
 
             # Validate step_size is numeric before division to prevent TypeError
             step_size_raw = symbol_info.get("step_size", 0.00001)
@@ -2214,18 +2294,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                         free_base,
                     )
                     quantity = free_base
-                if step_size > 0:
-                    # +epsilon so a size that is mathematically an exact lot multiple but
-                    # stored a hair low (float noise) isn't truncated a whole step down.
-                    quantity = math.floor(quantity / step_size + 1e-9) * step_size
-            elif step_size > 0:
-                quantity = round(quantity / step_size) * step_size
-
-            # `(integer) * step_size` in float math leaves artifacts (e.g.
-            # 40 * 0.0001 = 0.004000000000000001) that exceed the asset's max
-            # precision, so Binance rejects with code 51077. Quantize to the
-            # step's decimal count so the value sent has no excess decimals.
-            quantity = quantize_to_step(quantity, step_size)
+                quantity = snap_to_step(quantity, step_size, "floor")
+            else:
+                quantity = snap_to_step(quantity, step_size)
 
             if quantity <= 0:
                 logger.error(
@@ -2284,14 +2355,13 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 "symbol": symbol,
                 "side": binance_side,
                 "type": "STOP_LOSS_LIMIT",
-                # Formatted as a fixed-point string (not a raw float) for the same
-                # reason stopPrice/price are below: urlencode() renders small floats
-                # in scientific notation (str(0.00009) == "9e-05"), which Binance
-                # rejects with -1100. step_size is already known here, so the decimal
-                # count comes from it directly rather than the value's own precision.
-                "quantity": format_quantity(quantity, step_size),
-                "stopPrice": str(stop_price),
-                "price": str(limit_price),
+                **self._conform_order_numerics(
+                    symbol,
+                    quantity=quantity,
+                    price=limit_price,
+                    stop_price=stop_price,
+                    symbol_info=symbol_info,
+                ),
                 "timeInForce": "GTC",
             }
             if client_order_id:

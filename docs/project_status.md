@@ -113,13 +113,13 @@ warning, per-trade sequence tie-break.
 
 | Plan | Status | Location |
 |------|--------|----------|
-| Training Pipeline Optimization | Completed | `docs/execplans/training_pipeline_optimization.md` |
-| Indicator Refactor | Completed | `docs/execplans/indicator_refactor_plan.md` |
-| Platform Modularization | Completed | `docs/execplans/platform_modularization_plan.md` |
-| Remove Safe Trainer | Completed | `docs/execplans/remove_safe_trainer.md` |
-| Backtesting Engine Audit | Completed | `docs/execplans/backtesting_engine_audit.md` |
-| Shared Engine Consolidation | Completed | `docs/execplans/shared_engine_consolidation.md` |
-| Performance Tracker Integration | Completed | `docs/execplans/performance_tracker_integration.md` |
+| Training Pipeline Optimization | Completed | `docs/archive/execplans/training_pipeline_optimization.md` |
+| Indicator Refactor | Completed | `docs/archive/execplans/indicator_refactor_plan.md` |
+| Platform Modularization | Completed | `docs/archive/execplans/platform_modularization_plan.md` |
+| Remove Safe Trainer | Completed | `docs/archive/execplans/remove_safe_trainer.md` |
+| Backtesting Engine Audit | Completed | `docs/backtest_engine_audit_report.md` |
+| Shared Engine Consolidation | Completed | `docs/archive/execplans/extract_shared_engine_logic.md` |
+| Performance Tracker Integration | Completed | `docs/archive/execplans/performance_tracker_integration.md` |
 
 ---
 

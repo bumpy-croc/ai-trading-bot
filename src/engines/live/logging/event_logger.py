@@ -596,6 +596,7 @@ class LiveEventLogger:
             self.db_manager.end_trading_session(
                 session_id=self.session_id,
                 final_balance=final_balance,
+                carry_forward_open_positions=True,
             )
         except (AttributeError, ValueError, TypeError) as e:
             logger.debug("Failed to end trading session: %s", e)

@@ -321,8 +321,8 @@ class ExecutionEngine:
         notional: float,
         side: str,
         liquidity: str | None = None,
-    ) -> tuple[float, float]:
-        """Calculate fee and slippage for a scale-in order.
+    ) -> tuple[float, float, float]:
+        """Calculate fee, slippage and fill price for a scale-in order.
 
         Scale-ins are additional entries into an existing position and incur
         the same exchange fees and slippage as initial entries.
@@ -334,7 +334,8 @@ class ExecutionEngine:
             liquidity: Liquidity classification for fee/slippage handling.
 
         Returns:
-            Tuple of (entry_fee, slippage_cost).
+            Tuple of (entry_fee, slippage_cost, executed_price). The executed
+            price is the slipped fill the slice is costed from.
         """
         cost_result = self._cost_calculator.calculate_entry_costs(
             price=price,
@@ -342,7 +343,7 @@ class ExecutionEngine:
             side=side,
             liquidity=liquidity,
         )
-        return cost_result.fee, cost_result.slippage_cost
+        return cost_result.fee, cost_result.slippage_cost, cost_result.executed_price
 
     def clear_pending_entry(self) -> dict[str, Any] | None:
         """Clear and return any pending entry (for backtest end warning).
