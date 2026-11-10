@@ -1,3 +1,5 @@
+> **Archived 2026-10-04.** Closed: shipped. Superseded by [Architecture](../../architecture.md).
+
 # Platform Modularization and Trading Shared Cleanup
 
 This ExecPlan is a living document. Maintain Progress, Surprises & Discoveries, Decision Log, and Outcomes & Retrospective per `.agents/PLANS.md`. Treat this file as the sole source of truth for the restructuring effort described below.

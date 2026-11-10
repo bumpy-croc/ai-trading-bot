@@ -91,6 +91,33 @@ except ImportError as e:
 # an in-memory DB for unit tests, or start a Postgres container / use external DB
 
 
+def _docker_daemon_responds(timeout: float = 3.0) -> bool:
+    """Ping the local Docker socket so a hung daemon fails fast instead of hanging setup.
+
+    testcontainers blocks indefinitely on an unresponsive daemon, which no pytest-timeout can
+    interrupt. A non-unix DOCKER_HOST is not probed (the container start reports its own error).
+    """
+    import socket
+
+    host = os.getenv("DOCKER_HOST", "")
+    if host and not host.startswith("unix://"):
+        return True
+    candidates = [host[len("unix://") :]] if host else []
+    candidates += ["/var/run/docker.sock", str(Path.home() / ".docker/run/docker.sock")]
+    for path in dict.fromkeys(os.path.realpath(p) for p in candidates):
+        if not os.path.exists(path):
+            continue
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(timeout)
+                sock.connect(path)
+                sock.sendall(b"GET /_ping HTTP/1.0\r\n\r\n")
+                return sock.recv(16).startswith(b"HTTP/")
+        except OSError:
+            continue
+    return False
+
+
 @pytest.fixture(scope="session", autouse=True)
 def maybe_setup_database(pytestconfig):
     """Configure test database per run mode.
@@ -131,6 +158,9 @@ def maybe_setup_database(pytestconfig):
         # Local development - try to start a container, fallback to SQLite if not available
         try:
             from testcontainers.postgres import PostgresContainer  # type: ignore
+
+            if not _docker_daemon_responds():
+                raise RuntimeError("Docker daemon did not answer a ping within 3s")
 
             print(
                 f"\n[Database Setup] Starting PostgreSQL container at {datetime.now(UTC).strftime('%H:%M:%S')}"
@@ -184,13 +214,11 @@ def maybe_setup_database(pytestconfig):
 
 
 def pytest_collection_modifyitems(config, items):  # noqa: D401
-    """Auto-mark integration and unit tests and record if any are selected.
+    """Auto-mark integration and unit tests by their location.
 
     - Any test under tests/integration is marked as `integration`.
     - Any test under tests/unit is marked as `unit`.
-    - A flag is stored indicating whether any integration tests are part of this run.
     """
-    has_integration = False
     for item in items:
         try:
             node_path = str(item.fspath)
@@ -205,14 +233,22 @@ def pytest_collection_modifyitems(config, items):  # noqa: D401
             # Ensure the unit marker is present
             item.add_marker(pytest.mark.unit)
 
-        if any(m.name == "integration" for m in item.iter_markers()):
-            has_integration = True
 
-    # Stash the presence of integration tests for session-scoped fixtures
+def pytest_collection_finish(session):  # noqa: D401
+    """Record whether any integration test is in the run, for session-scoped fixtures.
+
+    This must look at ``session.items`` (what will actually run), not at the list
+    ``pytest_collection_modifyitems`` sees: that list still contains tests later removed by
+    ``-m``/``-k``, and counting them would start a Postgres container per xdist worker for a
+    run that executes no integration test.
+    """
+    has_integration = any(
+        any(m.name == "integration" for m in item.iter_markers()) for item in session.items
+    )
     try:
-        config.stash[("integration", "selected")] = has_integration
+        session.config.stash[("integration", "selected")] = has_integration
     except Exception:
-        config._has_integration_selected = has_integration
+        session.config._has_integration_selected = has_integration
 
 
 @pytest.fixture(autouse=True)

@@ -20,4 +20,4 @@ When adding new indicators or derived features, place the raw math in
 `src/tech/indicators`, shareable feature builders in `src/tech/features`, and
 interface-specific extraction helpers in `src/tech/adapters`. Each subdirectory
 has its own README with extension guidelines. This structure follows
-`docs/execplans/indicator_refactor_plan.md`.
+`docs/archive/execplans/indicator_refactor_plan.md`.
