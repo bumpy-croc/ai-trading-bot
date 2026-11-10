@@ -82,3 +82,53 @@ Things to know about it before the holdout is read:
 - **Momentum** between coins is weak and unstable across lookbacks. **Reversal** loses at every horizon once fills are delayed a day (and also with same-close fills): the bounce is not there at daily frequency in liquid perps.
 - **Cash-and-carry rotation** earned 10% a year in 2020-22 and about 1% in 2023-24: the same decay #1315 found for BTC/ETH, now shown for the highest-funding coins too. The spot-hedged version of carry is arbitraged out; the unhedged cross-sectional version (XC) is not, because it carries real price risk.
 - **BTC vs alts**, **low-vol** and **short new listings** each worked in one period and not the other.
+
+## Part 2: holdout (2025-01-01 → 2026-10-31), read once, after the shortlist was committed (1c4667d)
+
+Two consecutive runs produced byte-identical `holdout.json`. The fit and validation numbers recomputed on the full data match the discovery file exactly, so nothing shifted when the holdout rows were added.
+
+| Candidate | Sharpe | CAGR | Max DD | Worst day | 2025 | 2026 (Jan-Oct) | Corr. to BTC | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| **XC_3** funding carry across perps | **-1.21** | **-48.4%** | **74.0%** | **-49.2%** | -73.1% | +10.6% | -0.03 | **FAIL** (gates 1, 2, 3, 4) |
+| BTC buy and hold | -0.12 | -9.7% | 53.0% | | | | | |
+| Top-30 equal weight, long | -0.48 | -48.4% | 81.6% | | | | | |
+
+Same-close-fill sensitivity: Sharpe -0.94. The failure is not an execution-timing artefact.
+
+### Verdict against the prereg
+
+**H0 is supported. No candidate clears the holdout gate.** Of 8 families and 21 variants, one reached the holdout and it failed on four of five gates. By section 6 of the prereg this is the "shortlist non-empty, nothing passes" branch: **no build**, and the 2025-01 → 2026-10 exam window is retired for strategies on this price panel (4 candidates used).
+
+### What happened to XC_3
+
+On 2025-09-01 the rule shorted MYX at about 5% of equity: it had the highest 3-day funding in the universe. MYX then went from $1.31 to $13.89 in two days (2025-09-07 and 09-08, a 10.6x move on $6bn of daily volume). An unhedged short with no stop turned a 5% position into a 49% one-day loss, after 9.5% the day before and 28.5% the day after. That is a real event in real data, not a data fault, and it is exactly the short-squeeze tail the prereg listed as a risk.
+
+### Exploratory, post-hoc diagnostics (`explore_tail.py`). These cannot change the verdict.
+
+Every choice below was made after the holdout was read, so none of it is evidence a strategy works. It answers one question: was XC_3 a good strategy with one unlucky day, or had the premium gone?
+
+| Version | Fit Sharpe | Val Sharpe | Holdout Sharpe | Holdout CAGR | Holdout DD | 2025 | 2026 |
+|---|---|---|---|---|---|---|---|
+| As preregistered | 1.23 | 1.09 | -1.21 | -48.4% | 74.0% | -73.1% | +10.6% |
+| Shorts closed at +100% from the rebalance price (what 1x isolated margin does) | 1.16 | 1.00 | -0.51 | -6.1% | 23.9% | -17.0% | +7.3% |
+| Shorts closed at +50% | 1.08 | 1.09 | -0.78 | -9.9% | 27.1% | -22.5% | +6.6% |
+| Shorts closed at +25% | 0.90 | 0.81 | -0.84 | -10.9% | 30.6% | -24.1% | +6.7% |
+
+- With the three MYX days simply deleted, the unlevered holdout Sharpe is 0.13 (rf = 0) and the total return is -10%.
+- A loss cap removes the catastrophe but not the loss. **The premium itself was gone in 2025-26.** Funding was still collected (16-18% a year in the capped versions, more than in 2020-24), but the price leg lost more than that: the high-funding coins kept rising instead of fading.
+- Squeezes became more frequent: shorts hit the +100% cap once or twice a year in 2020-23, never in 2024, and five times in each of 2025 and 2026.
+
+Reading: through 2024, crowded longs paid shorts to take the other side and then usually deflated. In 2025-26 the crowded longs were right more often, or shorts were squeezed before they could collect. Either the trade got crowded from the short side, or the market's microstructure changed (thin-float tokens whose perp volume dwarfs their float). In both readings it is not something to put money on now.
+
+## What this experiment established
+
+1. **Nothing in the eight families survives.** Long/short and market-neutral daily strategies on the full Binance perp universe do not clear a realistic bar once costs, funding, a one-day delay and an out-of-sample period are applied.
+2. **The one real-looking premium (cross-sectional funding carry) decayed and then blew up.** Its 2020-24 record was Sharpe 1.1-1.2 with a correlation to BTC of zero. Anyone who deployed it at the end of 2024 on that evidence would have lost about half their capital in 2025, or 6-11% with loss caps.
+3. **Spot-hedged carry on the highest-funding coins decayed in the same way as BTC/ETH carry** (10% a year in 2020-22, about 1% in 2023-24). This confirms #1315 on a wider set.
+4. **Long/short trend is the nearest miss** (Sharpe 0.86 in fit, 0.52 in validation). It did not qualify and was not run on the holdout.
+5. **Daily reversal and momentum between coins are not there** in liquid perps at these costs.
+6. Method note for future work: any strategy that shorts individual coins must be simulated with an explicit per-position loss cap from the start, and its worst day must be a gate, not a secondary.
+
+## Decision implied by the prereg
+
+No build and no deployment. The bot stays halted. Any further crypto work needs a mechanism that is not in this list, and a clean test for it (new data, a different venue pair, or forward paper trading), not a re-tuned version of these families.
