@@ -36,7 +36,7 @@ NS = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
 DATA_DIR = Path(__file__).resolve().parent / "data"
 START = pd.Timestamp("2019-09-01", tz="UTC")
 END = pd.Timestamp("2026-10-31", tz="UTC")
-WORKERS = 24
+WORKERS = 48
 
 _session = requests.Session()
 _adapter = requests.adapters.HTTPAdapter(pool_connections=WORKERS, pool_maxsize=WORKERS, max_retries=3)
@@ -60,7 +60,13 @@ def _list(prefix: str) -> tuple[list[str], list[str]]:
 
 
 def _zip_keys(prefix: str) -> list[str]:
-    return [k for k in _list(prefix)[1] if k.endswith(".zip")]
+    """Monthly zip files under a prefix, limited to months inside [START, END]."""
+    out = []
+    for k in _list(prefix)[1]:
+        mt = re.search(r"-(\d{4})-(\d{2})\.zip$", k)
+        if mt and START.strftime("%Y-%m") <= f"{mt.group(1)}-{mt.group(2)}" <= END.strftime("%Y-%m"):
+            out.append(k)
+    return out
 
 
 def _read_zip_csv(key: str) -> pd.DataFrame:
@@ -113,6 +119,10 @@ def spot_symbol(perp: str) -> str:
 
 
 def _fetch_symbol(symbol: str) -> dict:
+    """Download one symbol, with a per-symbol cache so an interrupted run resumes."""
+    cache = DATA_DIR / "symbols" / f"{symbol}.pkl"
+    if cache.exists():
+        return pd.read_pickle(cache)
     out = {"symbol": symbol}
     try:
         out["perp"] = _klines(f"data/futures/um/monthly/klines/{symbol}/1d/")
@@ -120,6 +130,8 @@ def _fetch_symbol(symbol: str) -> dict:
         out["spot"] = _klines(f"data/spot/monthly/klines/{spot_symbol(symbol)}/1d/")
     except Exception as exc:  # noqa: BLE001 - recorded and reported, never silently dropped
         out["error"] = repr(exc)
+        return out
+    pd.to_pickle(out, cache)
     return out
 
 
@@ -157,8 +169,13 @@ def build(refresh: bool = False) -> Market:
 
     symbols = list_perp_symbols()
     print(f"{len(symbols)} USDT perp symbols in the archive; downloading...", flush=True)
+    (DATA_DIR / "symbols").mkdir(exist_ok=True)
+    results = []
     with ThreadPoolExecutor(WORKERS) as pool:
-        results = list(pool.map(_fetch_symbol, symbols))
+        for i, r in enumerate(pool.map(_fetch_symbol, symbols), 1):
+            results.append(r)
+            if i % 50 == 0:
+                print(f"  {i}/{len(symbols)}", flush=True)
     errors = {r["symbol"]: r["error"] for r in results if "error" in r}
     if errors:
         raise RuntimeError(f"download failed for {len(errors)} symbols: {dict(list(errors.items())[:5])}")
