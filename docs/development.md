@@ -102,10 +102,10 @@ The regime regression test (`tests/integration/backtesting/test_regime_regressio
 - `atb dev quality` – run Black formatting, Ruff linting, MyPy type checks, and Bandit security scans.
 - `atb dev clean` – remove caches and build artifacts.
 - `black .` and `ruff check . --fix` – apply formatting and lint fixes manually.
-- `python bin/run_mypy.py` – strict type checking without formatting.
+- `python bin/run_mypy.py` – type-check `src/` and `cli/` in a single mypy run (CI runs exactly this as the `type-check` job; add `--targets <files>` to check specific files).
 - `bandit -c pyproject.toml -r src` – security audit focusing on runtime code.
 
-The repository enforces Ruff/Black style in CI, so commit formatted code to avoid failures.
+CI enforces pytest and mypy (`type-check` job in `.github/workflows/tests.yml`). Black, Ruff and Bandit run only locally through `atb dev quality`, so run it before pushing.
 
 ## Git hooks
 
@@ -114,19 +114,33 @@ Hook **sources are tracked in `.githooks/`** and are installed by `make install`
 own:
 
 ```bash
-make hooks          # symlink .githooks/* into the active hooks directory
+make hooks          # copy .githooks/* into the active hooks directory
 make hooks-check    # report drift; non-zero exit if not installed
+make install-check  # the shim, the hooks and the merge driver, all three --checks at once
 ```
+
+Every `make` target here runs the interpreter in `$VIRTUAL_ENV`, else `.venv`, else the primary
+checkout's `.venv`, else `python3` — never bare `python`, which does not exist outside an
+activated venv. If none exists the target fails with an error naming `make PY=/path/to/python`.
+
+`make install-check` runs on a schedule you do not have to remember: the pre-push hook runs it on
+every push and prints a warning (the push still proceeds) when the worktree shim, the installed
+hooks or the merge driver have drifted. A `--check` nobody invokes is documentation; the 2026-08-24
+hook fix sat unapplied for 21 days with its checker already merged (GH #1138, #1147).
 
 The installer respects `core.hooksPath` when set and otherwise targets `$GIT_COMMON_DIR/hooks`,
 which is **shared by every linked worktree** of a checkout — install once per clone, not once
 per worktree. Hooks that this repo does not ship are left untouched.
 
-Hooks are **copied, not symlinked**, and the source is read from the primary checkout when it
-has a `.githooks/`. Both rules exist because the hooks directory is shared while `make install`
-often runs inside an ephemeral agent worktree: a symlink into such a worktree dangles as soon
-as it is pruned, and **git skips a dangling hook silently, exiting 0** — reintroducing GH #1077
-through its own remedy. The cost of copying is drift, which `make hooks-check` detects — comparing **content and
+Hooks are **copied, not symlinked**, and the source is `origin/develop`'s `.githooks/` (the
+primary checkout's, then the invoking checkout's, only if that ref has none — a fresh clone). The
+hooks directory is shared while `make install` often runs inside an ephemeral agent worktree: a
+symlink into such a worktree dangles as soon as it is pruned, and **git skips a dangling hook
+silently, exiting 0** — reintroducing GH #1077 through its own remedy. The primary checkout is
+not a source because it is held on `main`, which trails `develop` between promotes: installing
+from it downgraded a fixed hook, and `--check` reported drift against a copy that matched
+`develop` exactly. The ref is read locally (no fetch), so run `git fetch` first if `develop` has
+moved. The cost of copying is drift, which `make hooks-check` detects — comparing **content and
 the executable bit**, because git ignores a non-executable hook and lets the push through —
 and `make install` repairs.
 
@@ -144,6 +158,17 @@ alone would accept another project's venv and then die in collection — in orde
 worktrees have none of their own), `$VIRTUAL_ENV`, then `python3`/`python` on `PATH`.
 **If no such interpreter exists the push fails** — a check that
 cannot run must not report success (GH #1077).
+
+The hook runs **one suite per user at a time** and never outlives the `git push` that started it.
+With many agents pushing at once, parallel `-n 4` suites overload the machine until every run
+times out, and a timed-out push used to leave its pytest running as an orphan, slowing the next
+runs further. Runs now queue on a lock directory (`/tmp/atb-pre-push-<uid>.lock`; a lock whose
+owner is dead, or that is older than `ATB_PREPUSH_LOCK_STALE_SECONDS`, default 1200, is taken over),
+pytest runs in its own process group, and if the `git` process that started the hook disappears
+the group is killed and the lock released. A run that waits longer than
+`ATB_PREPUSH_LOCK_WAIT_SECONDS` (default 1800) **fails the push** — the tests did not run. Keep
+the connection alive while queued, e.g.
+`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=60"`.
 
 To skip deliberately, use git's own escape hatch:
 
