@@ -1,3 +1,5 @@
+> **Archived 2026-10-04.** Completed November 2025 milestone. Superseded by [Prediction & models](../prediction.md) (training CLI, `--model-type`/`--model-variant`).
+
 # Phase 1: Model Architecture Integration - Complete
 
 **Date:** November 2025

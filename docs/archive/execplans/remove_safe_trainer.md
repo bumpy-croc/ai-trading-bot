@@ -1,3 +1,5 @@
+> **Archived 2026-10-04.** Closed: shipped. Superseded by [Prediction & models](../../prediction.md).
+
 # Remove Safe Model Trainer and Legacy Keras Artifacts
 
 ## Purpose / Big Picture

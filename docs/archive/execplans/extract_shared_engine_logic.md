@@ -1,3 +1,5 @@
+> **Archived 2026-10-04.** Closed: shipped (#454); shared logic lives in `src/engines/shared/`. Superseded by [Architecture](../../architecture.md).
+
 # ExecPlan: Extract Shared Logic Between Backtest and Live Engines
 
 **Issue**: #454

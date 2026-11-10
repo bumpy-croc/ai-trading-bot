@@ -1,3 +1,5 @@
+> **Archived 2026-10-04.** Closed: the modular pipeline shipped (`src/ml/training_pipeline/`), but the baseline-vs-after timing validation listed below was never recorded. Superseded by [Prediction & models](../../prediction.md).
+
 # Training Pipeline Optimization (ONNX Retained)
 
 ## Purpose / Big Picture

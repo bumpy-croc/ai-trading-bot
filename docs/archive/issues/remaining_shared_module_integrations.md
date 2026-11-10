@@ -1,3 +1,5 @@
+> **Archived 2026-10-04.** Closed: the remaining item (shared models) shipped via the shared-models-consolidation ExecPlan in `../execplans/`. Superseded by [Architecture](../../architecture.md).
+
 # GitHub Issue: Remaining Shared Module Integrations
 
 **Title:** Complete integration of remaining shared engine modules

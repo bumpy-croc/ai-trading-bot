@@ -33,7 +33,7 @@ The AI trading bot project **already implements many PSB best practices**, parti
    - Tech Stack: Explicitly defined (Python 3.11+, PostgreSQL, TensorFlow/ONNX, etc.)
    - Architecture: Well-documented data flow and component boundaries
 
-2. **Milestone-Based Thinking** - ExecPlans in `docs/execplans/` follow milestone-driven development
+2. **Milestone-Based Thinking** - ExecPlans (now archived in `docs/archive/execplans/`) follow milestone-driven development
 
 3. **Technical Requirements** - Architecture, database schema, and ML pipeline are well-documented
 
@@ -110,7 +110,7 @@ The AI trading bot project **already implements many PSB best practices**, parti
 - ❌ No `changelog.md`
 - ❌ No `project_status.md`
 - ✅ Architecture info exists but scattered across multiple docs
-- ⚠️ Feature docs exist in `docs/execplans/` but follow ExecPlan format (verbose for quick reference)
+- ⚠️ Feature docs existed in `docs/execplans/` (now `docs/archive/execplans/`) but follow ExecPlan format (verbose for quick reference)
 
 **Recommendation:** Create these files:
 

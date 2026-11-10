@@ -1,3 +1,5 @@
+> **Archived 2026-10-04.** Closed: shipped. Superseded by `src/engines/shared/partial_operations_manager.py` and [Architecture](../../architecture.md).
+
 # PartialOperationsManager Integration - Implementation Report
 
 **Status:** ✅ COMPLETED

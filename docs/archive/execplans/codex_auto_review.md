@@ -1,3 +1,5 @@
+> **Archived 2026-10-04.** Closed: shipped as `atb codex` (`cli/commands/codex.py`). Superseded by [Development workflow](../../development.md).
+
 # Automated Codex Review Loop
 
 This ExecPlan is a living document. The sections `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work proceeds.

@@ -1,3 +1,5 @@
+> **Archived 2026-10-04.** Closed: shipped. Superseded by [Technical indicators](../../tech_indicators.md) and `src/tech/README.md`.
+
 # Indicator Tech Stack Consolidation
 
 This ExecPlan is a living document. The sections `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` must stay current as work proceeds. Maintain this plan per `.agents/PLANS.md` and keep it self-contained for future contributors.
