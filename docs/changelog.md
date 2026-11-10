@@ -41,6 +41,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type error.
 
 ### Fixed
+- **All exchange-bound numerics go through one precision module** (#789).
+  `snap_to_step` (exact decimal) replaces every `round(x / step) * step` / `math.floor(x / step)
+  * step` site (stop/limit price, SL quantity, entry/close lot normalization, close sizing).
+  `BinanceProvider.place_order` and `place_stop_loss_order` pass quantity, `price` and `stopPrice`
+  through a final guard that strips float noise (WARNING with the corrected value), logs an
+  off-step value at ERROR without moving it, and serializes fixed-point strings. Previously
+  `place_order` sent raw floats for `price`/`stopPrice` and `place_stop_loss_order` used
+  `str(float)` (scientific notation below 1e-4). Margin repay amounts and Coinbase order bodies
+  are fixed-point too. `test_exchange_numeric_guard.py` fails on any new raw step-snap.
 - **An ended trading session no longer leaves OPEN position rows silently** (#1044, #1232).
   `DatabaseManager.end_trading_session` now handles the session's OPEN rows in the same
   transaction: PAPER sessions the engine stops keep them for restart carry-forward (listed on the
