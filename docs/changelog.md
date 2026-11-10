@@ -87,6 +87,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged: the handler clamp already bound the cap there. The admin `is_safe_redirect_url` is a module-level allow-list check (single
   leading `/`, no backslash or control characters, no `//`, also after percent-decoding), so
   `/\evil.com` and encoded variants fall back to the admin index.
+- **All exchange-bound numerics go through one precision module** (#789).
+  `snap_to_step` (exact decimal) replaces every `round(x / step) * step` / `math.floor(x / step)
+  * step` site (stop/limit price, SL quantity, entry/close lot normalization, close sizing).
+  `BinanceProvider.place_order` and `place_stop_loss_order` pass quantity, `price` and `stopPrice`
+  through a final guard that strips float noise (WARNING with the corrected value), logs an
+  off-step value at ERROR without moving it, and serializes fixed-point strings. Previously
+  `place_order` sent raw floats for `price`/`stopPrice` and `place_stop_loss_order` used
+  `str(float)` (scientific notation below 1e-4). Margin repay amounts and Coinbase order bodies
+  are fixed-point too. `test_exchange_numeric_guard.py` fails on any new raw step-snap.
 - **Regime-switched strategies now use the run's timeframe and symbol** (#1256).
   `RegimeHandler._load_strategy` builds strategies through `call_strategy_factory`, so a switch in
   a 4h run selects a 4h model bundle; a missing bundle aborts the switch instead of using 1h.
