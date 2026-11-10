@@ -41,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type error.
 
 ### Fixed
+- **Drained positions no longer read back as full size in the DB** (#734). `apply_partial_exit_update`
+  and `apply_scale_in_update` used `position.current_size or position.size`, so a `current_size` of
+  0.0 (fully consumed by partial exits) was treated as the full `size` on the next update. They now
+  fall back to `size` only when the column is NULL.
 - **Developer-tooling guards no longer fail silently** (#1138, #1147, #1136, #1151).
   The Makefile resolves its interpreter (`$VIRTUAL_ENV`, `.venv`, the primary's `.venv`, then
   `python3`) instead of invoking bare `python`, so `make hooks` runs in a fresh shell, and fails
