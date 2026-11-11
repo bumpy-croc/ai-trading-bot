@@ -1,0 +1,708 @@
+{
+ "tag": "exam",
+ "run": {
+  "tag": "exam",
+  "timerange": "20250101-20261101",
+  "pairs": 40,
+  "fee": 0.001,
+  "exit_code": 0,
+  "minutes": 124.5,
+  "peak_memory_gb": 34.3,
+  "note": "Written by hand. The wrapper script (nfi_run.py backtest) was stopped at 19:22 UTC so that the freqtrade process would not be cut off by a 2-hour tool time limit; freqtrade itself ran untouched from 18:45:33 to 20:50:03 UTC and wrote its result files and summary normally. Exit code inferred from that. Peak memory is resident set plus swap read from /proc while it ran."
+ },
+ "nfi_commit": "e5b345a8d81e4559572cc0806d86d9178d0719e1",
+ "window": [
+  "2025-01-01",
+  "2026-10-31"
+ ],
+ "freqtrade": {
+  "total_trades": 168,
+  "profit_total": 0.336740115539,
+  "profit_total_abs": 3367.40115539,
+  "final_balance": 13367.40115539,
+  "max_drawdown_account": 0.14201365654451895,
+  "profit_factor": 2.521942135137428,
+  "winrate": 0.9821428571428571,
+  "holding_avg": "11 days, 19:38:00",
+  "cagr": 0.17185256880085653,
+  "sharpe": 0.7401361206361788,
+  "trade_count_long": 168,
+  "max_open_trades": 6
+ },
+ "reconstruction_check": {
+  "final_equity_rebuilt": 13367.401155470317,
+  "final_balance_freqtrade": 13367.40115539
+ },
+ "mark_to_market": {
+  "total_return": 0.33674011554703176,
+  "cagr": 0.17157481505840377,
+  "max_drawdown": 0.5360211730815874,
+  "sharpe_excess": 0.5041796857936315,
+  "worst_day": -0.16241330169035284
+ },
+ "by_period": {
+  "2025": 0.016958489265981758,
+  "2026_jan_oct": 0.31444904551793584
+ },
+ "avg_share_of_equity_in_positions": 0.5992956209480023,
+ "avg_pairs_held": 2.955223880597015,
+ "benchmarks": {
+  "idle_usdt_4pct": {
+   "total_return": 0.07453362665890917,
+   "cagr": 0.040000000000000036
+  },
+  "btc_buy_and_hold": {
+   "total_return": -0.17091968025989568,
+   "cagr": -0.09720927815419922,
+   "max_drawdown": 0.5297176591351062,
+   "sharpe_excess": -0.1166359617528634,
+   "worst_day": -0.14017431361060217
+  },
+  "equal_weight_basket_of_same_pairs": {
+   "total_return": -0.6818317882378493,
+   "cagr": -0.4646296678360864,
+   "max_drawdown": 0.7874058071853731,
+   "sharpe_excess": -0.6651692195988397,
+   "worst_day": -0.20686489906067063
+  }
+ },
+ "trades": {
+  "count": 168,
+  "win_rate": 0.9821428571428571,
+  "median_profit_ratio": 0.015180391797656206,
+  "median_days_held": 0.04513888888888889,
+  "max_days_held": 386.11805555555554,
+  "worst_10": [
+   {
+    "pair": "FIL/USDT",
+    "open": "2025-11-09 02:40:00+00:00",
+    "close": "2026-10-31 23:55:00+00:00",
+    "profit_abs": -1374.8645333100003,
+    "profit_ratio": -0.02954680285908225,
+    "exit_reason": "force_exit"
+   },
+   {
+    "pair": "ARB/USDT",
+    "open": "2025-10-10 21:05:00+00:00",
+    "close": "2026-10-31 23:55:00+00:00",
+    "profit_abs": -810.7745918199993,
+    "profit_ratio": -0.019670130125329845,
+    "exit_reason": "force_exit"
+   },
+   {
+    "pair": "RUNE/USDT",
+    "open": "2026-10-31 21:55:00+00:00",
+    "close": "2026-10-31 23:55:00+00:00",
+    "profit_abs": -26.9293278,
+    "profit_ratio": -0.011325123474656185,
+    "exit_reason": "force_exit"
+   },
+   {
+    "pair": "NEIRO/USDT",
+    "open": "2026-08-21 18:50:00+00:00",
+    "close": "2026-08-21 20:20:00+00:00",
+    "profit_abs": 0.00633182,
+    "profit_ratio": 0.005408855725665905,
+    "exit_reason": "exit_long_normal_d_0_101 ( 6 )"
+   },
+   {
+    "pair": "ACT/USDT",
+    "open": "2026-06-30 03:10:00+00:00",
+    "close": "2026-06-30 03:15:00+00:00",
+    "profit_abs": 0.01206461,
+    "profit_ratio": 0.010421580149206607,
+    "exit_reason": "exit_long_normal_u_1 ( 5 )"
+   },
+   {
+    "pair": "WLD/USDT",
+    "open": "2026-06-04 10:10:00+00:00",
+    "close": "2026-06-04 13:00:00+00:00",
+    "profit_abs": 0.31736446,
+    "profit_ratio": 0.0030690268301966114,
+    "exit_reason": "exit_long_normal_w_0_9 ( 6 )"
+   },
+   {
+    "pair": "PNUT/USDT",
+    "open": "2026-06-04 02:05:00+00:00",
+    "close": "2026-06-04 02:10:00+00:00",
+    "profit_abs": 0.32802408,
+    "profit_ratio": 0.014173326673326674,
+    "exit_reason": "exit_long_rapid_u_1 ( 101 )"
+   },
+   {
+    "pair": "DOGE/USDT",
+    "open": "2026-02-05 15:25:00+00:00",
+    "close": "2026-02-06 13:20:00+00:00",
+    "profit_abs": 0.35186624,
+    "profit_ratio": 0.0030916809497344984,
+    "exit_reason": "exit_long_tc_d_0_50 ( 142 )"
+   },
+   {
+    "pair": "PEPE/USDT",
+    "open": "2025-02-03 00:50:00+00:00",
+    "close": "2025-02-03 07:50:00+00:00",
+    "profit_abs": 0.4160092499999992,
+    "profit_ratio": 0.0010327863545980828,
+    "exit_reason": "exit_long_rapid_d_0_52 ( 101 )"
+   },
+   {
+    "pair": "WLD/USDT",
+    "open": "2026-06-06 03:00:00+00:00",
+    "close": "2026-06-06 06:20:00+00:00",
+    "profit_abs": 0.51529608,
+    "profit_ratio": 0.010856565153700398,
+    "exit_reason": "exit_long_quick_d_1_109 ( 43 101 )"
+   }
+  ],
+  "by_exit_reason": {
+   "exit_long_grind_g ( 120 )": {
+    "count": 7,
+    "sum": 583.35
+   },
+   "exit_long_normal_1_1_1 ( 6 142 )": {
+    "count": 1,
+    "sum": 1.11
+   },
+   "exit_long_normal_2_1_1 ( 6 )": {
+    "count": 1,
+    "sum": 59.88
+   },
+   "exit_long_normal_8_1_1 ( 3 )": {
+    "count": 1,
+    "sum": 48.95
+   },
+   "exit_long_normal_d_0_101 ( 6 )": {
+    "count": 1,
+    "sum": 0.01
+   },
+   "exit_long_normal_d_0_3 ( 6 )": {
+    "count": 1,
+    "sum": 9.84
+   },
+   "exit_long_normal_d_0_79 ( 6 )": {
+    "count": 1,
+    "sum": 1.5
+   },
+   "exit_long_normal_d_1_13 ( 6 )": {
+    "count": 1,
+    "sum": 24.77
+   },
+   "exit_long_normal_d_1_20 ( 1 )": {
+    "count": 1,
+    "sum": 17.86
+   },
+   "exit_long_normal_d_1_20 ( 6 )": {
+    "count": 2,
+    "sum": 48.66
+   },
+   "exit_long_normal_d_1_35 ( 6 141 )": {
+    "count": 1,
+    "sum": 25.45
+   },
+   "exit_long_normal_d_1_4 ( 6 )": {
+    "count": 1,
+    "sum": 28.89
+   },
+   "exit_long_normal_d_1_46 ( 6 42 101 142 )": {
+    "count": 1,
+    "sum": 10.93
+   },
+   "exit_long_normal_d_1_49 ( 6 )": {
+    "count": 1,
+    "sum": 21.65
+   },
+   "exit_long_normal_d_1_52 ( 1 )": {
+    "count": 1,
+    "sum": 23.51
+   },
+   "exit_long_normal_d_1_53 ( 6 )": {
+    "count": 1,
+    "sum": 21.56
+   },
+   "exit_long_normal_d_1_65 ( 6 120 141 )": {
+    "count": 1,
+    "sum": 30.07
+   },
+   "exit_long_normal_d_1_73 ( 6 )": {
+    "count": 1,
+    "sum": 26.83
+   },
+   "exit_long_normal_d_1_77 ( 5 )": {
+    "count": 1,
+    "sum": 24.66
+   },
+   "exit_long_normal_d_1_78 ( 6 )": {
+    "count": 1,
+    "sum": 4.82
+   },
+   "exit_long_normal_d_1_81 ( 6 )": {
+    "count": 1,
+    "sum": 33.08
+   },
+   "exit_long_normal_d_1_95 ( 6 )": {
+    "count": 1,
+    "sum": 27.74
+   },
+   "exit_long_normal_d_2_2 ( 6 )": {
+    "count": 2,
+    "sum": 95.49
+   },
+   "exit_long_normal_d_2_35 ( 6 101 )": {
+    "count": 1,
+    "sum": 43.85
+   },
+   "exit_long_normal_d_2_50 ( 6 141 )": {
+    "count": 1,
+    "sum": 48.38
+   },
+   "exit_long_normal_d_2_65 ( 6 )": {
+    "count": 1,
+    "sum": 24.1
+   },
+   "exit_long_normal_d_2_71 ( 6 )": {
+    "count": 1,
+    "sum": 1.78
+   },
+   "exit_long_normal_d_2_81 ( 6 )": {
+    "count": 1,
+    "sum": 52.82
+   },
+   "exit_long_normal_d_2_91 ( 2 3 6 101 )": {
+    "count": 1,
+    "sum": 53.73
+   },
+   "exit_long_normal_d_3_42 ( 6 )": {
+    "count": 1,
+    "sum": 80.37
+   },
+   "exit_long_normal_d_3_45 ( 5 )": {
+    "count": 1,
+    "sum": 9.52
+   },
+   "exit_long_normal_d_3_71 ( 6 )": {
+    "count": 1,
+    "sum": 17.91
+   },
+   "exit_long_normal_d_3_73 ( 6 )": {
+    "count": 1,
+    "sum": 73.63
+   },
+   "exit_long_normal_d_3_78 ( 6 )": {
+    "count": 1,
+    "sum": 59.48
+   },
+   "exit_long_normal_d_4_55 ( 6 )": {
+    "count": 1,
+    "sum": 64.95
+   },
+   "exit_long_normal_d_4_65 ( 6 142 )": {
+    "count": 1,
+    "sum": 17.47
+   },
+   "exit_long_normal_d_4_84 ( 6 )": {
+    "count": 1,
+    "sum": 90.7
+   },
+   "exit_long_normal_d_5_45 ( 6 )": {
+    "count": 1,
+    "sum": 100.29
+   },
+   "exit_long_normal_d_5_88 ( 3 )": {
+    "count": 1,
+    "sum": 113.52
+   },
+   "exit_long_normal_d_6_95 ( 2 )": {
+    "count": 1,
+    "sum": 2.79
+   },
+   "exit_long_normal_u_1 ( 1 )": {
+    "count": 2,
+    "sum": 38.74
+   },
+   "exit_long_normal_u_1 ( 3 )": {
+    "count": 3,
+    "sum": 72.93
+   },
+   "exit_long_normal_u_1 ( 4 6 101 )": {
+    "count": 1,
+    "sum": 38.97
+   },
+   "exit_long_normal_u_1 ( 5 )": {
+    "count": 1,
+    "sum": 0.01
+   },
+   "exit_long_normal_u_1 ( 6 )": {
+    "count": 9,
+    "sum": 236.62
+   },
+   "exit_long_normal_u_1 ( 6 101 )": {
+    "count": 1,
+    "sum": 25.11
+   },
+   "exit_long_normal_u_2 ( 3 101 )": {
+    "count": 1,
+    "sum": 31.33
+   },
+   "exit_long_normal_u_2 ( 4 101 )": {
+    "count": 1,
+    "sum": 45.12
+   },
+   "exit_long_normal_w_0_1 ( 6 )": {
+    "count": 1,
+    "sum": 6.95
+   },
+   "exit_long_normal_w_0_10 ( 6 )": {
+    "count": 1,
+    "sum": 2.23
+   },
+   "exit_long_normal_w_0_2 ( 6 101 )": {
+    "count": 1,
+    "sum": 1.1
+   },
+   "exit_long_normal_w_0_9 ( 6 )": {
+    "count": 1,
+    "sum": 0.32
+   },
+   "exit_long_normal_w_1_1 ( 2 )": {
+    "count": 1,
+    "sum": 28.65
+   },
+   "exit_long_normal_w_1_1 ( 6 )": {
+    "count": 1,
+    "sum": 37.64
+   },
+   "exit_long_normal_w_1_11 ( 6 )": {
+    "count": 1,
+    "sum": 17.36
+   },
+   "exit_long_normal_w_2_10 ( 6 )": {
+    "count": 1,
+    "sum": 10.15
+   },
+   "exit_long_normal_w_3_10 ( 6 142 )": {
+    "count": 1,
+    "sum": 49.25
+   },
+   "exit_long_normal_w_3_2 ( 1 )": {
+    "count": 1,
+    "sum": 54.04
+   },
+   "exit_long_normal_w_3_9 ( 6 )": {
+    "count": 1,
+    "sum": 77.79
+   },
+   "exit_long_quick_d_1_109 ( 43 101 )": {
+    "count": 1,
+    "sum": 0.52
+   },
+   "exit_long_quick_d_1_52 ( 41 )": {
+    "count": 1,
+    "sum": 31.65
+   },
+   "exit_long_quick_d_1_78 ( 42 )": {
+    "count": 1,
+    "sum": 1.56
+   },
+   "exit_long_quick_d_2_11 ( 43 )": {
+    "count": 1,
+    "sum": 53.64
+   },
+   "exit_long_quick_d_2_70 ( 42 )": {
+    "count": 1,
+    "sum": 51.07
+   },
+   "exit_long_quick_d_2_77 ( 42 )": {
+    "count": 1,
+    "sum": 1.13
+   },
+   "exit_long_quick_d_3_20 ( 41 )": {
+    "count": 1,
+    "sum": 67.0
+   },
+   "exit_long_quick_d_3_3 ( 42 )": {
+    "count": 1,
+    "sum": 47.51
+   },
+   "exit_long_quick_q_7 ( 42 )": {
+    "count": 1,
+    "sum": 51.54
+   },
+   "exit_long_rapid_4_1_1 ( 101 )": {
+    "count": 1,
+    "sum": 90.93
+   },
+   "exit_long_rapid_d_0_48 ( 101 )": {
+    "count": 1,
+    "sum": 0.75
+   },
+   "exit_long_rapid_d_0_52 ( 101 )": {
+    "count": 1,
+    "sum": 0.42
+   },
+   "exit_long_rapid_d_1_20 ( 101 )": {
+    "count": 3,
+    "sum": 47.92
+   },
+   "exit_long_rapid_d_1_53 ( 101 )": {
+    "count": 1,
+    "sum": 17.98
+   },
+   "exit_long_rapid_d_1_70 ( 101 )": {
+    "count": 1,
+    "sum": 27.26
+   },
+   "exit_long_rapid_d_1_78 ( 101 )": {
+    "count": 1,
+    "sum": 2.63
+   },
+   "exit_long_rapid_d_2_3 ( 101 )": {
+    "count": 1,
+    "sum": 2.03
+   },
+   "exit_long_rapid_d_2_96 ( 101 )": {
+    "count": 1,
+    "sum": 3.52
+   },
+   "exit_long_rapid_d_3_97 ( 101 )": {
+    "count": 1,
+    "sum": 50.24
+   },
+   "exit_long_rapid_d_4_70 ( 101 120 )": {
+    "count": 1,
+    "sum": 4.55
+   },
+   "exit_long_rapid_rpd_2 ( 101 )": {
+    "count": 3,
+    "sum": 122.62
+   },
+   "exit_long_rapid_rpd_6 ( 101 )": {
+    "count": 2,
+    "sum": 27.94
+   },
+   "exit_long_rapid_rpd_7 ( 101 )": {
+    "count": 1,
+    "sum": 9.59
+   },
+   "exit_long_rapid_u_1 ( 101 )": {
+    "count": 12,
+    "sum": 216.4
+   },
+   "exit_long_rapid_u_11 ( 101 )": {
+    "count": 1,
+    "sum": 255.04
+   },
+   "exit_long_rapid_u_2 ( 101 )": {
+    "count": 2,
+    "sum": 62.68
+   },
+   "exit_long_rapid_u_4 ( 101 )": {
+    "count": 1,
+    "sum": 61.5
+   },
+   "exit_long_rapid_u_7 ( 101 )": {
+    "count": 1,
+    "sum": 104.51
+   },
+   "exit_long_rapid_w_0_6 ( 101 )": {
+    "count": 1,
+    "sum": 5.47
+   },
+   "exit_long_rapid_w_6_4 ( 101 )": {
+    "count": 1,
+    "sum": 116.11
+   },
+   "exit_long_rapid_w_8_2 ( 101 )": {
+    "count": 1,
+    "sum": 1.6
+   },
+   "exit_long_tc_d_0_20 ( 142 )": {
+    "count": 1,
+    "sum": 7.0
+   },
+   "exit_long_tc_d_0_50 ( 142 )": {
+    "count": 1,
+    "sum": 0.35
+   },
+   "exit_long_tc_d_1_108 ( 141 )": {
+    "count": 1,
+    "sum": 19.77
+   },
+   "exit_long_tc_d_1_20 ( 142 )": {
+    "count": 2,
+    "sum": 59.36
+   },
+   "exit_long_tc_d_1_39 ( 142 )": {
+    "count": 2,
+    "sum": 61.51
+   },
+   "exit_long_tc_d_1_42 ( 142 )": {
+    "count": 1,
+    "sum": 22.0
+   },
+   "exit_long_tc_d_1_64 ( 142 )": {
+    "count": 1,
+    "sum": 23.27
+   },
+   "exit_long_tc_d_1_65 ( 101 141 )": {
+    "count": 1,
+    "sum": 2.3
+   },
+   "exit_long_tc_d_1_77 ( 142 )": {
+    "count": 1,
+    "sum": 25.6
+   },
+   "exit_long_tc_d_1_84 ( 142 )": {
+    "count": 1,
+    "sum": 35.26
+   },
+   "exit_long_tc_d_1_96 ( 141 142 )": {
+    "count": 1,
+    "sum": 25.63
+   },
+   "exit_long_tc_d_2_108 ( 142 )": {
+    "count": 1,
+    "sum": 30.44
+   },
+   "exit_long_tc_d_2_39 ( 142 )": {
+    "count": 1,
+    "sum": 46.41
+   },
+   "exit_long_tc_d_2_43 ( 142 )": {
+    "count": 1,
+    "sum": 53.79
+   },
+   "exit_long_tc_d_2_45 ( 142 )": {
+    "count": 1,
+    "sum": 41.76
+   },
+   "exit_long_tc_d_2_66 ( 142 )": {
+    "count": 1,
+    "sum": 39.2
+   },
+   "exit_long_tc_d_2_71 ( 142 )": {
+    "count": 1,
+    "sum": 43.75
+   },
+   "exit_long_tc_d_3_100 ( 142 )": {
+    "count": 1,
+    "sum": 58.39
+   },
+   "exit_long_tc_d_3_40 ( 142 )": {
+    "count": 1,
+    "sum": 62.28
+   },
+   "exit_long_tc_d_4_20 ( 141 142 )": {
+    "count": 1,
+    "sum": 93.23
+   },
+   "exit_long_tc_d_5_95 ( 141 )": {
+    "count": 1,
+    "sum": 94.23
+   },
+   "exit_long_tc_u_1 ( 101 142 )": {
+    "count": 1,
+    "sum": 32.86
+   },
+   "exit_long_tc_u_1 ( 141 )": {
+    "count": 1,
+    "sum": 25.72
+   },
+   "exit_long_tc_u_1 ( 141 142 )": {
+    "count": 1,
+    "sum": 23.26
+   },
+   "exit_long_tc_u_1 ( 142 )": {
+    "count": 2,
+    "sum": 50.97
+   },
+   "exit_long_tc_u_2 ( 101 141 )": {
+    "count": 1,
+    "sum": 37.19
+   },
+   "exit_long_tc_w_1_11 ( 141 )": {
+    "count": 1,
+    "sum": 29.4
+   },
+   "exit_long_tc_w_1_11 ( 142 )": {
+    "count": 1,
+    "sum": 40.58
+   },
+   "exit_long_tc_w_1_11 ( 143 )": {
+    "count": 1,
+    "sum": 19.19
+   },
+   "exit_long_tc_w_1_16 ( 141 142 )": {
+    "count": 1,
+    "sum": 16.86
+   },
+   "exit_long_tc_w_2_1 ( 142 )": {
+    "count": 1,
+    "sum": 4.08
+   },
+   "exit_long_tc_w_2_11 ( 143 )": {
+    "count": 1,
+    "sum": 40.76
+   },
+   "exit_long_tc_w_3_3 ( 142 )": {
+    "count": 1,
+    "sum": 55.4
+   },
+   "exit_profit_long_normal_t_0_1_m ( 6 )": {
+    "count": 1,
+    "sum": 3.8
+   },
+   "exit_profit_long_rapid_t_0_1_m ( 101 )": {
+    "count": 2,
+    "sum": 16.88
+   },
+   "force_exit": {
+    "count": 3,
+    "sum": -2212.57
+   }
+  },
+  "profit_by_pair_worst_5": {
+   "FIL/USDT": -1298.42,
+   "ARB/USDT": -764.15,
+   "AVAX/USDT": 1.5,
+   "WLD/USDT": 9.32,
+   "GALA/USDT": 19.67
+  },
+  "profit_by_pair_best_5": {
+   "NEIRO/USDT": 530.21,
+   "USUAL/USDT": 482.21,
+   "ACT/USDT": 402.52,
+   "SUI/USDT": 376.17,
+   "DOGE/USDT": 370.79
+  },
+  "profit_by_month": {
+   "2025-01": 676.93,
+   "2025-02": 405.97,
+   "2025-03": 509.44,
+   "2025-04": 82.16,
+   "2025-05": 615.45,
+   "2025-06": 289.52,
+   "2025-07": 115.96,
+   "2025-08": 173.55,
+   "2025-09": 294.41,
+   "2025-10": 757.85,
+   "2025-11": 782.93,
+   "2025-12": 1.1,
+   "2026-01": 21.86,
+   "2026-02": 1.55,
+   "2026-04": 2.3,
+   "2026-05": 2.03,
+   "2026-06": 16.35,
+   "2026-08": 0.01,
+   "2026-09": 154.64,
+   "2026-10": -1536.6
+  }
+ },
+ "gates": {
+  "1_cagr_at_least_10pct": true,
+  "2_max_drawdown_at_most_30pct": false,
+  "3_positive_in_both_periods": true,
+  "4_sharpe_at_least_0_8": false,
+  "5_at_least_100_trades": true
+ },
+ "gates_1_to_5_pass": false
+}

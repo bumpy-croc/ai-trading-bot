@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Out-of-sample test of the most used public freqtrade strategy** (research;
+  `docs/research/experiments/2026-11-11_nfi-frozen-oos-*.md`). NostalgiaForInfinity as it stood on
+  30 December 2024, unmodified, run once on 2025-01 to 2026-10 (`experiments/strategy_search/nfi_data.py`,
+  `nfi_run.py`). It ended +33.7% but fails the preregistered gates: a 53.6% drawdown marked to market
+  (freqtrade's own report shows 14.2%, counting closed trades only) and a Sharpe ratio of 0.50. No trial.
+  No live or staging change.
 - **Slow many-coin trend paper trader** (research;
   `docs/research/experiments/2026-11-11_slow-adaptive-trend-*.md`). Stage A tested four pre-specified
   changes to the Phase 1b slow trend book on 2020-24 data (`experiments/strategy_search/adaptive.py`):

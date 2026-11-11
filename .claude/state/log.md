@@ -4869,3 +4869,16 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 **Reversal.** Disable the `Paper Trend Recorder` workflow; delete the `data/paper-trend-recorder` branch.
 
 **Addendum, same day ~19:45 UTC.** A code review of the recorder and scoring code (before any record exists) found no leak in Stage A and four gaps in Stage B: new stock or commodity perps could enter the universe, a half-published archive day could be recorded, the scoring dropped contracts settled during the test, and the week 26 and 52 bars were judged on the run date. All four are fixed and written into Amendment 2 of the prereg; 32 unit tests.
+
+## [D-2026-11-11-04] 2026-11-11 ~21:00 UTC · track-record · quant research (Claude, project thread "Find a profitable crypto strategy mix")
+
+**Authority.** Alex, 2026-11-11 18:26 UTC, project thread: chose "Both, freqtrade test first". This entry is the first half: the most used public freqtrade strategy, frozen before 2025, run once on 2025-26.
+
+**Result.** Prereg `docs/research/experiments/2026-11-11_nfi-frozen-oos-prereg.md` (commit `51088db`, before the strategy had been run on anything; Amendment 1 fixed 40 pairs before the exam run). NostalgiaForInfinityX5 v15.1.312 (30 Dec 2024), unmodified, freqtrade 2024.11, Binance spot, 5-minute candles, 40 pairs, fee 0.10% a side, 2025-01-01 to 2026-10-31. Verdict: **H0 supported; fails gate 2 and gate 4.** Net +33.7% (17.2%/yr), but maximum drawdown 53.6% marked to market daily (limit 30%) and Sharpe 0.50 (needed 0.8). 168 trades, 165 winners. From October 2025 all capital sat in ARB, FET and FIL, bought on the way down; equity fell from 13,163 to 6,108 by 19 Aug 2026 and was rescued by a rally in September 2026. freqtrade's own report shows a 14.2% drawdown, because it only counts closed trades. Benchmarks: idle dollars +7.5%, BTC -17.1%, the same 40 coins held -68.2%. Gates 6 and 7 not run. Results: `docs/research/experiments/2026-11-11_nfi-frozen-oos-results.md`.
+
+**Exam-window accounting.** The 2025-01 to 2026-10 window has now faced nine candidates and is closed.
+
+**Run note.** The wrapper script was stopped mid-run so a two-hour tool limit would not cut the single run off; the freqtrade process itself ran untouched to completion and `run_meta.json` was written by hand. Details in the results file.
+
+**Recommendation.** No trial of this strategy. The lesson for our own work: judge any strategy on equity marked to market daily, never on closed trades, and treat a win rate near 100% as a sign of hidden tail risk.
+- ΔP: none. ΔR: none taken. C: research only. E: the results file above.
