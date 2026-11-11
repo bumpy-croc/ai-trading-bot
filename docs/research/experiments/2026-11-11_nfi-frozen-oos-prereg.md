@@ -80,3 +80,19 @@ Secondaries, reported and never decisive: freqtrade's own summary (profit factor
 - **False fail from version skew.** The strategy is run on the engine it was written for. The one substituted package is named above.
 - **Survivorship**: none in the pair choice. The list is built from December 2024 data and includes pairs that were later delisted.
 - **Determinism**: the same run on December 2024 data is executed twice and must produce identical trades before the exam run is trusted. The exam itself is run once.
+
+## Amendment 1 (2026-11-11, written before the exam run): the run uses the top 40 pairs
+
+Nothing in the exam window has been run. This section records the memory measurement that section 3 called for and what it decides.
+
+- **Measurement** (November-December 2024, before the exam window): 40 pairs over 59 days peaked at 3.33 GB, about 0.037 GB per pair per month. The strategy keeps roughly 500 indicator columns per 5-minute candle for every pair for the whole run.
+- **What that implies for 22 months**: 80 pairs need about 65 GB, 60 pairs about 49 GB, 40 pairs about 33 GB.
+- **What the container has**: 15 GB of memory, plus a 26 GB swap file added for this run, 41 GB in all.
+- **Decision by the ladder in section 3**: the exam runs on the **top 40 pairs** of `nfi_pairs.json` (the first 40 entries). 40 is the lower end of the strategy's recommended 40 to 80. The engine is unmodified freqtrade 2024.11.
+- **If the 40-pair run is killed for memory**: inconclusive, per section 6. No smaller list and no splitting of the window.
+
+Setup checks done on the same pre-window data:
+
+- **Determinism**: 10 pairs over December 2024 run twice gave the same 20 trades, order for order.
+- **Scoring code**: the equity rebuilt from exported orders ends at 13,065.0042 USDT against freqtrade's own final balance of 13,065.0042.
+- **What the setup produces on the strategy's own tuning history** (5 November to 31 December 2024, 40 pairs; this is in-sample and is not evidence of anything): +30.7% in eight weeks, 67 trades, every one a winner, no drawdown. This is the kind of backtest the repository publishes, which confirms the frozen code runs as its authors intended.
