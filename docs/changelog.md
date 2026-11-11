@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Polymarket forward recorder** (research;
+  `docs/research/experiments/2026-11-11_polymarket-forward-underdogs-prereg.md`).
+  `tools/polymarket_recorder.py`, run every 6 hours by `.github/workflows/polymarket-recorder.yml`,
+  saves the bid, ask, volume so far and fee rate of every open Polymarket market with at least $100k
+  traded to the `data/polymarket-recorder` branch. `experiments/polymarket_forward_score.py` scores
+  the preregistered underdog test from those snapshots on 2027-02-08. Public listing only: no
+  account, no orders, no money. No live or staging change.
 - **Other-markets bake-off** (research; `docs/research/experiments/2026-11-10_other-markets-bakeoff-*.md`).
   Preregistered test of the bot's prediction method on forex and ETFs, plus nine published rule-based
   strategies (FX carry and trend, multi-asset trend, dual momentum, sector rotation, RSI-2, turn of
@@ -23,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   buying favourites on 14,630 resolved Polymarket markets and holding to resolution. All 3 candidates
   fail: favourites won less often than their price implied. Script:
   `experiments/polymarket_favourites.py`. No live or staging change.
+- **Wide strategy search and cross-venue funding arbitrage research** (#1324). `experiments/strategy_search/`
+  downloads every Binance USDT perp that ever listed (public archive, delisted coins included), and
+  backtests eight long/short and market-neutral families (21 variants) plus a Binance-vs-Hyperliquid
+  same-coin funding arbitrage, each against a preregistered holdout. All fail the 2025-26 holdout:
+  see `docs/research/experiments/2026-11-10_strategy-search-results.md` and
+  `2026-11-10_cross-venue-funding-arb-results.md`. No live or staging change.
 - **Funding-rate watcher** (log.md D-2026-11-10-02). `tools/funding_watch.py`, run daily by
   `.github/workflows/funding-watch.yml`, alerts (one `funding-watch` issue plus the alert webhook)
   when the trailing 7-day BTC or ETH perp funding goes above 10%/yr, the point where the funding

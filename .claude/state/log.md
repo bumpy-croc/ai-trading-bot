@@ -4815,3 +4815,16 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 **Evidence.** `experiments/markets_results/polymarket_favourites.json`; analysis run twice with byte-identical output.
 
 **Recommendation.** Nothing to trade. Board to decide whether a no-money forward recorder of Polymarket order books is worth building.
+
+## [D-2026-11-10-03] 2026-11-10 ~23:40 UTC · track-record · quant research (Claude, project thread)
+
+**Context.** After [D-2026-11-10-02] the Board (Alex) said the bake-off outcome was not good enough and asked for a wider search for a mix that earns in all market conditions. Two preregistered experiments followed. Nothing was deployed; both environments stay halted.
+
+**Phase 1b, wide long/short search (#1324).** Hypothesis: a long/short or market-neutral family on the full Binance perp universe (918 symbols, 166 delisted, point-in-time top-30 by volume) earns a premium that survives costs, funding, one-day-delayed fills and the 2025-26 holdout. Verdict: **H0 supported.** 8 families, 21 variants. Seven families failed fit or validation (trend L/S, cross-sectional momentum, reversal, cash-and-carry rotation, BTC vs alts, low-vol/lottery, short new listings). One reached the holdout: cross-sectional funding carry (XC_3; fit Sharpe 1.23, validation 1.09, correlation to BTC zero). Holdout: Sharpe -1.21, CAGR -48%, max drawdown 74%, worst day -49% (short MYX through a 10.6x two-day squeeze, 2025-09-07/08). Post-hoc diagnostics, not a gate: with per-position loss caps it still loses 6-11%/yr, so the premium had gone, not only the tail. Evidence: `docs/research/experiments/2026-11-10_strategy-search-results.md`, `experiments/strategy_search/results/`.
+
+**Phase 1c, cross-venue funding arbitrage, Binance vs Hyperliquid.** Hypothesis: the same-coin funding gap between venues pays more than twice idle USDT after costs. Verdict: **H0 supported.** 2023-07 → 2024-12: +10.7%/yr net, 0.7% drawdown (real funding income, no basis artefact). Holdout 2025-26: -2.8%/yr; funding earned 2.2%/yr against 5.4%/yr costs. The mean gap fell from 9.8% to 6.0%, the median absolute gap from 13.0% to 5.5%. Evidence: `docs/research/experiments/2026-11-10_cross-venue-funding-arb-results.md`.
+
+**Exam-window accounting.** The 2025-01 → 2026-10 window has now faced 5 crypto candidates (S1-S3, XC_3, cross-venue arb). It is closed for crypto strategies; further work needs data after 2026-10-31 or forward paper trading.
+
+**Recommendation.** No build. Every premium found in this programme (BTC/ETH carry, hedged alt carry, cross-sectional carry, cross-venue gap) is a funding premium that paid in 2020-24 and pays nothing or less than nothing in the 2025-26 regime. Keep the halt, keep the funding watcher, and consider widening it to the cross-venue gap and cross-coin funding dispersion so a return of the premium is seen. Method lesson: any strategy that shorts single coins must be simulated with a per-position loss cap and gated on worst-day loss.
+- ΔP: none available now. ΔR: none taken. C: research only. E: the two results files above.
