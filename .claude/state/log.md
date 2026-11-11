@@ -4792,6 +4792,30 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 
 **Watch.** `tools/funding_watch.py` + `.github/workflows/funding-watch.yml` check BTC/ETH perp funding daily (trailing 7-day mean, sources Binance → OKX → Hyperliquid). When either goes above **10%/yr** it opens one `funding-watch` issue and posts to `ALERT_WEBHOOK_URL`. That issue is the trigger to rerun the S1 bake-off on fresh data (with the risk-free-rate fix to the Sharpe gate) before any build. A job that cannot reach any source fails, so a blind watcher is visible.
 
+## 2026-11-10 ~22:00 UTC · track-record · research (Claude, project thread "Test the bot on forex and other markets")
+
+**Asked by.** Alex, 2026-11-10 21:29 UTC, project chat: test the bot on markets other than crypto, starting with forex ("more stable and can be predicted a bit easier?"), other ideas welcome.
+
+**Hypotheses → verdicts.** Prereg `docs/research/experiments/2026-11-10_other-markets-bakeoff-prereg.md` (commit `8adb4dc`, before any script existed); results `2026-11-10_other-markets-bakeoff-results.md`.
+- H1, forex direction is predictable enough to beat retail costs with the bot's kind of model: **falsified** at 1h and 1d. Daily out-of-sample accuracy 49.9% (25,158 bars). Hourly 51.6-52.5% (596,415 bars), worth under 1 bp per trade against a 1.8 bp round trip, and 68% of the gross edge sits in the bid-only quotes around the 17:00 New York rollover. Net -3.5% to -9.5%/yr. The same pipeline on BTC/ETH scores 53-54% and loses 60-70%/yr.
+- H2, a published rule-based strategy still adds something over passive holding after retail costs: **not supported**. Nine rules, 2015-01 to 2026-10 holdout: Sharpe -0.19 to 0.42 (gate 0.5), best alpha t vs 60/40 = 0.62 (gate 1.65). Controls: SPY 13.5%/yr (34% DD), 60/40 8.7%/yr (22% DD), T-bills 2.1%/yr.
+- 15 gated candidates, 15 FAIL. Candidate count on the 2015-2026 holdout: 15.
+
+**Evidence.** `experiments/markets_results/*.json`; each script run twice with byte-identical output.
+
+**Recommendation.** Do not port the prediction model to forex or ETFs. No paper trial, no account, no live or staging change. Entries stay halted per [D-2026-11-10-02].
+
+## 2026-11-10 ~22:50 UTC · track-record · research (Claude, project thread "Test the bot on forex and other markets")
+
+**Hypothesis → verdict.** Prereg `docs/research/experiments/2026-11-10_prediction-market-favourites-prereg.md` (commit `09b285b`, before any price history was downloaded); results `2026-11-10_prediction-market-favourites-results.md`.
+- H1, Polymarket favourites are priced too low, so buying them and holding to resolution beats cash after the spread: **falsified**. 14,630 resolved no-fee markets (final volume >= $250k, 2022-01 to 2026-09). Favourite at 0.90-0.97: 5,727 bets, win rate 90.9% against an average fill of 0.922, excess return -3.4% per bet (t by event -7.4). Bands 0.97-0.99 and 0.70-0.90 also negative, in every year, at every cost level tested.
+- 3 gated candidates, 3 FAIL. Thread total: 18 candidates, 18 FAIL.
+- Post-hoc, not actionable: the underdog side won about 2 points more than its price. The universe is selected on final volume, which favours markets with upsets, and the shortfall grows with final volume (-1.5 pts under $1M, -5.3 pts at $5M+), so this is most likely selection. Only a forward recording can test it.
+
+**Evidence.** `experiments/markets_results/polymarket_favourites.json`; analysis run twice with byte-identical output.
+
+**Recommendation.** Nothing to trade. Board to decide whether a no-money forward recorder of Polymarket order books is worth building.
+
 ## [D-2026-11-10-03] 2026-11-10 ~23:40 UTC · track-record · quant research (Claude, project thread)
 
 **Context.** After [D-2026-11-10-02] the Board (Alex) said the bake-off outcome was not good enough and asked for a wider search for a mix that earns in all market conditions. Two preregistered experiments followed. Nothing was deployed; both environments stay halted.
@@ -4804,3 +4828,15 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 
 **Recommendation.** No build. Every premium found in this programme (BTC/ETH carry, hedged alt carry, cross-sectional carry, cross-venue gap) is a funding premium that paid in 2020-24 and pays nothing or less than nothing in the 2025-26 regime. Keep the halt, keep the funding watcher, and consider widening it to the cross-venue gap and cross-coin funding dispersion so a return of the premium is seen. Method lesson: any strategy that shorts single coins must be simulated with a per-position loss cap and gated on worst-day loss.
 - ΔP: none available now. ΔR: none taken. C: research only. E: the two results files above.
+
+## [D-2026-11-11-01] 2026-11-11 ~12:20 UTC · decision · board-directed (Claude, project thread "Test the bot on forex and other markets")
+
+**Authority.** Alex, 2026-11-11 12:10 UTC, project thread: chose "Record Polymarket prices forward" when asked what to do after 18 preregistered candidates failed.
+
+**Decision.** Record Polymarket quotes forward and score the underdog pattern once, on a fixed date. Prereg `docs/research/experiments/2026-11-11_polymarket-forward-underdogs-prereg.md` (commit `3d195af`, before the first snapshot). Recorder `tools/polymarket_recorder.py`, scheduled every 6 hours by `.github/workflows/polymarket-recorder.yml`, writing to the `data/polymarket-recorder` branch. Scorer `experiments/polymarket_forward_score.py`.
+
+**Rubric.** ΔP: unknown, most likely zero (the backtest pattern is probably final-volume selection); the value is a clean yes or no. ΔR: none. Reads a public listing; no account, no orders, no money, no `src/` change, nothing deployed. C: about 1 minute of Actions time a day and roughly 30 MB on a data branch over 12 weeks. E: three candidates (underdog price 0.03-0.10, 0.10-0.30, 0.30-0.50), gate t >= 2.82 for 21 candidates in this line of work.
+
+**Pre-committed outcomes.** Score on 2027-02-08. PASS or PROVISIONAL: report to the Board; any trial needs a Board decision on a venue account and on legality where they live. INCONCLUSIVE: one extension, scored 2027-05-10. FAIL, or INCONCLUSIVE at the extension: disable the workflow and close the line of work.
+
+**Reversal.** Disable the `Polymarket Recorder` workflow; delete the `data/polymarket-recorder` branch.
