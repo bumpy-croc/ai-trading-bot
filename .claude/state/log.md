@@ -4828,3 +4828,15 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 
 **Recommendation.** No build. Every premium found in this programme (BTC/ETH carry, hedged alt carry, cross-sectional carry, cross-venue gap) is a funding premium that paid in 2020-24 and pays nothing or less than nothing in the 2025-26 regime. Keep the halt, keep the funding watcher, and consider widening it to the cross-venue gap and cross-coin funding dispersion so a return of the premium is seen. Method lesson: any strategy that shorts single coins must be simulated with a per-position loss cap and gated on worst-day loss.
 - ΔP: none available now. ΔR: none taken. C: research only. E: the two results files above.
+
+## [D-2026-11-11-01] 2026-11-11 ~12:40 UTC · decision · board-directed (Claude, project thread "Test the bot on forex and other markets")
+
+**Authority.** Alex, 2026-11-11 12:10 UTC, project thread: chose "Record Polymarket prices forward" when asked what to do after 18 preregistered candidates failed.
+
+**Decision.** Record Polymarket quotes forward and score the underdog pattern once, on a fixed date. Prereg `docs/research/experiments/2026-11-11_polymarket-forward-underdogs-prereg.md` (commit `3d195af`, before the first snapshot). Recorder `tools/polymarket_recorder.py`, scheduled every 6 hours by `.github/workflows/polymarket-recorder.yml`, writing to the `data/polymarket-recorder` branch. Scorer `experiments/polymarket_forward_score.py`.
+
+**Rubric.** ΔP: unknown, most likely zero (the backtest pattern is probably final-volume selection); the value is a clean yes or no. ΔR: none. Reads a public listing; no account, no orders, no money, no `src/` change, nothing deployed. C: about 1 minute of Actions time a day and roughly 30 MB on a data branch over 12 weeks. E: three candidates (underdog price 0.03-0.10, 0.10-0.30, 0.30-0.50), gate t >= 2.82 for 21 candidates in this line of work.
+
+**Pre-committed outcomes.** Score on 2027-02-08. PASS or PROVISIONAL: report to the Board; any trial needs a Board decision on a venue account and on legality where they live. INCONCLUSIVE: one extension, scored 2027-05-10. FAIL, or INCONCLUSIVE at the extension: disable the workflow and close the line of work.
+
+**Reversal.** Disable the `Polymarket Recorder` workflow; delete the `data/polymarket-recorder` branch.
