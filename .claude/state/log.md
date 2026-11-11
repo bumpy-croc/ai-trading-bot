@@ -4829,7 +4829,7 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 **Recommendation.** No build. Every premium found in this programme (BTC/ETH carry, hedged alt carry, cross-sectional carry, cross-venue gap) is a funding premium that paid in 2020-24 and pays nothing or less than nothing in the 2025-26 regime. Keep the halt, keep the funding watcher, and consider widening it to the cross-venue gap and cross-coin funding dispersion so a return of the premium is seen. Method lesson: any strategy that shorts single coins must be simulated with a per-position loss cap and gated on worst-day loss.
 - ΔP: none available now. ΔR: none taken. C: research only. E: the two results files above.
 
-## [D-2026-11-11-01] 2026-11-11 ~12:40 UTC · decision · board-directed (Claude, project thread "Test the bot on forex and other markets")
+## [D-2026-11-11-01] 2026-11-11 ~12:20 UTC · decision · board-directed (Claude, project thread "Test the bot on forex and other markets")
 
 **Authority.** Alex, 2026-11-11 12:10 UTC, project thread: chose "Record Polymarket prices forward" when asked what to do after 18 preregistered candidates failed.
 
