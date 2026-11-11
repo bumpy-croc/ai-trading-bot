@@ -95,3 +95,12 @@ Stage A is finished (results in `2026-11-11_slow-adaptive-trend-results.md`): no
 - **What counts as a record.** A signal-day record counts only if its `recorded_at` is before the close of the next UTC day. A Monday with no such record leaves the book holding the previous week's weights, as a failed job would leave a real trader. Records are never rewritten. A late or missing day counts toward the "no more than 3 missed days" check at week 8.
 - **Delisted contracts.** The archive keeps printing flat, zero-volume candles for settled contracts. The recorder cuts each series after its last day with volume, the same rule the research cache used.
 - **Window the recorder sees.** 420 days of candles. A unit test checks that the weights equal those from a longer history.
+
+## Amendment 2 (2026-11-11, after a code review, before any forward record exists)
+
+A review of the recorder and scoring code found four gaps. None touches Stage A. The fixes, fixed here before recording starts:
+
+- **New listings.** Section 2 says "crypto-asset perps only". The list of tokenised stocks, metals and index products was made on 2026-11-10 and would have gone stale. Each day the recorder now asks the exchange for its contract list. If it answers, anything it classes as not a crypto-asset perpetual is excluded. If it does not answer (GitHub's runners are blocked from some Binance hosts), every contract listed after 2026-11-10 is kept out of the universe that day, which also keeps new coins out. Each record says which of the two happened and which symbols were excluded, and the job shows a warning on fallback days. If the first week of records shows the fallback is permanent, that is a plumbing fault to fix, and it is reported at week 8 at the latest.
+- **Half-published days.** The archive publishes a day symbol by symbol. A day with fewer than 95% of the previous day's perps is treated as not yet published: early runs wait, the last run of the day fails loudly. Nothing is recorded from a partial day.
+- **Settled contracts in the scoring.** The scoring keeps contracts that were settled during the test, so a recorded position in a coin that is later delisted is still scored (at its last price, as in Phase 1b).
+- **Checkpoints are dates.** The week 26 and week 52 bars are judged on returns up to day 0 plus 26 or 52 weeks, whenever the scoring script is run. The 20% drawdown stop applies at any time.

@@ -15,7 +15,7 @@ signal days (Mondays); other days get a heartbeat record, so a missed day is vis
 
 Exit codes: 0 = record written, already present, or the day's candles are not published yet and
 it is still early; 2 = blind (candles still missing late in the day, the archive is unreachable,
-or fewer than 100 perps returned data).
+fewer than 100 perps returned data, or the day is only partly published).
 """
 
 from __future__ import annotations
@@ -43,6 +43,9 @@ DESIGN_FILE = REPO / "experiments" / "strategy_search" / "results" / "adaptive_d
 # volatility scale, whose weights need 120-day trends, on coins that need 60 days of history to qualify.
 HISTORY_DAYS = 420
 MIN_PERPS = 100
+MIN_SHARE_OF_PREVIOUS_DAY = (
+    0.95  # fewer perps than this share of yesterday's means the day is half published
+)
 GIVE_UP_HOUR_UTC = (
     15  # the archive publishes at about 09:00 UTC; after this hour a missing day is a failure
 )
@@ -94,6 +97,15 @@ def build_record(
     return record
 
 
+def _not_ready(reason: str, early: bool) -> int:
+    """Early in the day a missing or half-published day is expected: a later run records it."""
+    if early:
+        print(f"not recording yet: {reason}; a later run will try again")
+        return EXIT_OK
+    print(f"BLIND: {reason}; not writing a record", file=sys.stderr)
+    return EXIT_BLIND
+
+
 def main(argv: Sequence[str] | None = None, now: datetime | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out-dir", type=Path, required=True, help="checkout of the data branch")
@@ -117,26 +129,32 @@ def main(argv: Sequence[str] | None = None, now: datetime | None = None) -> int:
     if path.exists():
         print(f"{day:%Y-%m-%d} is already recorded; leaving {path} as it is")
         return EXIT_OK
+    early = args.day is None and now.hour < GIVE_UP_HOUR_UTC
     try:
         if not forward_data.day_published(day):
-            if args.day is None and now.hour < GIVE_UP_HOUR_UTC:
-                print(
-                    f"candles for {day:%Y-%m-%d} are not published yet; a later run will record them"
-                )
-                return EXIT_OK
-            print(f"BLIND: no candles for {day:%Y-%m-%d} in the archive", file=sys.stderr)
-            return EXIT_BLIND
+            return _not_ready(f"no candles for {day:%Y-%m-%d} in the archive yet", early)
         market, info = forward_data.fetch_market(day, HISTORY_DAYS)
+        extra, source = forward_data.extra_exclusions(list(market.close.columns))
     except RuntimeError as exc:
-        print(f"BLIND: {exc}", file=sys.stderr)
-        return EXIT_BLIND
-    if info["perps_with_data"] < MIN_PERPS:
-        print(
-            f"BLIND: only {info['perps_with_data']} perps returned data (expected at least {MIN_PERPS}); "
-            "not writing a record",
-            file=sys.stderr,
+        return _not_ready(str(exc), early=False)
+    perps, previous = info["perps_with_data"], info["perps_previous_day"]
+    if perps < MIN_PERPS:
+        return _not_ready(
+            f"only {perps} perps returned data (expected at least {MIN_PERPS})", False
         )
-        return EXIT_BLIND
+    if perps < MIN_SHARE_OF_PREVIOUS_DAY * previous:
+        # the archive publishes a day symbol by symbol; a record built half-way through would be wrong for good
+        return _not_ready(
+            f"{perps} perps have a candle for {day:%Y-%m-%d} against {previous} the day before",
+            early,
+        )
+    eng.EXCLUDE.update(extra)
+    info["universe_filter"] = {"source": source, "excluded_beyond_committed_list": extra}
+    if source == "fallback":
+        print(
+            "::warning::the exchange's contract list was unreachable; contracts listed after "
+            f"2026-11-10 are kept out of the universe today ({len(extra)} of them)"
+        )
 
     books = args.books or forward_books()
     record = build_record(market, info, day, books, now)

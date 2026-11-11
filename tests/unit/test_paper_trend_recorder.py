@@ -83,7 +83,21 @@ def _market(
     return data_mod.Market(close, close, close, close, qvol, close * 0.0, close * np.nan)
 
 
-INFO = {"symbols_in_archive": 40, "perps_with_data": 150, "missing_candles_carried_forward": 0}
+INFO = {
+    "symbols_in_archive": 40,
+    "perps_with_data": 150,
+    "perps_previous_day": 150,
+    "missing_candles_carried_forward": 0,
+}
+
+
+@pytest.fixture
+def exclusions():
+    """The recorder adds to the simulator's exclusion set in place; put it back afterwards."""
+    before = set(eng.EXCLUDE)
+    yield
+    eng.EXCLUDE.clear()
+    eng.EXCLUDE.update(before)
 
 
 class TestBuildRecord:
@@ -138,6 +152,7 @@ class TestMain:
 
         monkeypatch.setattr(fd, "day_published", lambda day: published)
         monkeypatch.setattr(fd, "fetch_market", fetch)
+        monkeypatch.setattr(fd, "extra_exclusions", lambda symbols: ([], "exchange"))
         monkeypatch.setattr(rec, "forward_books", lambda: ["B0"])
         return calls
 
@@ -169,6 +184,29 @@ class TestMain:
         self._patch(monkeypatch, perps=rec.MIN_PERPS - 1)
         assert rec.main(["--out-dir", str(tmp_path)], now=NOW) == rec.EXIT_BLIND
         assert not (tmp_path / "records").exists()
+
+    def test_a_half_published_day_is_not_recorded(self, tmp_path, monkeypatch):
+        self._patch(monkeypatch, perps=140)  # 150 the day before: the archive is still filling in
+        assert rec.main(["--out-dir", str(tmp_path)], now=NOW) == rec.EXIT_OK
+        assert not (tmp_path / "records").exists()
+        late = NOW.replace(hour=rec.GIVE_UP_HOUR_UTC, minute=23)
+        assert rec.main(["--out-dir", str(tmp_path)], now=late) == rec.EXIT_BLIND
+        assert not (tmp_path / "records").exists()
+
+    def test_unclassified_new_listings_are_kept_out_and_recorded(
+        self, tmp_path, monkeypatch, exclusions
+    ):
+        self._patch(monkeypatch)
+        everyone = rec.build_record(_market(MONDAY), INFO, MONDAY, ["B0"], NOW)["books"]["B0"]
+        out = sorted(everyone["weights"])[:2]
+        monkeypatch.setattr(fd, "extra_exclusions", lambda symbols: (out, "fallback"))
+        assert rec.main(["--out-dir", str(tmp_path)], now=NOW) == rec.EXIT_OK
+        record = json.loads(rec.record_path(tmp_path, MONDAY).read_text())
+        assert record["universe_filter"] == {
+            "source": "fallback",
+            "excluded_beyond_committed_list": out,
+        }
+        assert not set(out) & record["books"]["B0"]["weights"].keys()
 
     def test_fails_when_the_archive_is_unreachable(self, tmp_path, monkeypatch):
         def down(day):
@@ -211,9 +249,43 @@ class TestForwardData:
         )  # complete months come from monthly files
         assert sum("2026-10" in k for k in daily) == 31 and sum("2026-11" in k for k in daily) == 3
 
-    def test_fetch_symbol_is_empty_for_a_symbol_with_no_candle_on_the_day(self, monkeypatch):
+    def test_fetch_symbol_is_empty_for_a_symbol_with_no_candles_at_all(self, monkeypatch):
         monkeypatch.setattr(fd, "_candles", lambda key: None)
         assert fd.fetch_symbol("XUSDT", MONDAY, 90).empty
+
+    def test_fetch_symbol_keeps_a_contract_settled_inside_the_window(self, monkeypatch):
+        def candles(key: str):
+            if "/monthly/" in key and key.endswith("XUSDT-1d-2026-09.zip"):
+                days = pd.date_range("2026-09-01", periods=30, freq="D", tz="UTC")
+                return pd.concat([_candle(d) for d in days])
+            return None  # nothing since: the archive stopped printing it
+
+        monkeypatch.setattr(fd, "_candles", candles)
+        out = fd.fetch_symbol("XUSDT", MONDAY, 90)
+        assert len(out) == 30 and out.index[-1] == pd.Timestamp("2026-09-30", tz="UTC")
+
+    def test_new_listings_are_classified_by_the_exchange_or_kept_out(self, monkeypatch):
+        symbols = ["BTCUSDT", "NEWCOINUSDT", "NEWSTOCKUSDT", "GONEUSDT"]
+        coin = {"quoteAsset": "USDT", "contractType": "PERPETUAL", "underlyingType": "COIN"}
+        stock = {
+            "quoteAsset": "USDT",
+            "contractType": "TRADIFI_PERPETUAL",
+            "underlyingType": "EQUITY",
+        }
+        info = {
+            "symbols": [
+                {"symbol": "BTCUSDT", **coin},
+                {"symbol": "NEWCOINUSDT", **coin},
+                {"symbol": "NEWSTOCKUSDT", **stock},
+            ]
+        }
+        monkeypatch.setattr(fd, "_exchange_info", lambda: info)
+        assert fd.extra_exclusions(symbols) == (["GONEUSDT", "NEWSTOCKUSDT"], "exchange")
+        monkeypatch.setattr(fd, "_exchange_info", lambda: None)
+        assert fd.extra_exclusions(symbols) == (
+            ["GONEUSDT", "NEWCOINUSDT", "NEWSTOCKUSDT"],
+            "fallback",
+        )
 
     def test_fetch_market_cuts_delisted_tails_and_carries_short_gaps(self, monkeypatch):
         days = pd.date_range(end=MONDAY, periods=10, freq="D")
@@ -236,6 +308,7 @@ class TestForwardData:
         assert info == {
             "symbols_in_archive": 3,
             "perps_with_data": 2,
+            "perps_previous_day": 2,
             "missing_candles_carried_forward": 1,
         }
         assert (market.funding.fillna(0.0) == 0.0).all().all()
@@ -286,6 +359,17 @@ class TestScoring:
             weeks, {"net_return": ret, "max_drawdown": dd}, idle=0.04, plumbing_ok=plumbing
         )
         assert expect in text
+
+    def test_stop_rule_applies_after_a_checkpoint_date_too(self):
+        at_week_26 = {"net_return": 0.08, "max_drawdown": 0.05}
+        assert "STOP" in score.checkpoint(30, at_week_26, 0.02, True, drawdown_to_date=0.22)
+
+    def test_bars_are_judged_at_the_fixed_checkpoint_date(self):
+        day0 = pd.Timestamp("2026-11-16", tz="UTC")
+        returns = pd.Series(0.001, index=pd.date_range(day0, periods=400, freq="D"))
+        assert score.at_checkpoint(returns, day0, 10).index[-1] == returns.index[-1]
+        assert score.at_checkpoint(returns, day0, 30).index[-1] == day0 + pd.Timedelta(weeks=26)
+        assert score.at_checkpoint(returns, day0, 57).index[-1] == day0 + pd.Timedelta(weeks=52)
 
     def test_summarise_measures_drawdown_from_the_starting_capital(self):
         stats = score.summarise(pd.Series([-0.10, 0.05, 0.02]))

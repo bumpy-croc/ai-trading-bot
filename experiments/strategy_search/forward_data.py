@@ -10,6 +10,7 @@ Used by tools/paper_trend_recorder.py (candles only) and paper_score.py (candles
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 import time
@@ -28,6 +29,8 @@ DAILY = "data/futures/um/daily/klines"
 MONTHLY = "data/futures/um/monthly/klines"
 FUNDING_MONTHLY = "data/futures/um/monthly/fundingRate"
 PROBE_SYMBOL = "BTCUSDT"
+EXCHANGE_INFO = ("https://www.binance.com/fapi/v1/exchangeInfo", "https://fapi.binance.com/fapi/v1/exchangeInfo")
+KNOWN_FILE = Path(__file__).resolve().parent / "known_symbols.json"  # every USDT perp in the archive on 2026-11-10
 ATTEMPTS = 4
 FIELDS = ("open", "high", "low", "close", "quote_volume")
 
@@ -84,13 +87,11 @@ def list_symbols() -> list[str]:
 
 
 def fetch_symbol(symbol: str, day: pd.Timestamp, history_days: int) -> pd.DataFrame:
-    """Daily candles for the `history_days` up to and including `day`. Empty if the symbol has no
-    candle on `day` itself: it is then not a live perp and cannot be traded at the next close."""
+    """Daily candles for the `history_days` up to and including `day`. A contract that was settled inside
+    the window is kept up to its last file, so past universes and past positions can still be rebuilt."""
     latest = _candles(f"{DAILY}/{symbol}/1d/{symbol}-1d-{day:%Y-%m-%d}.zip")
-    if latest is None:
-        return pd.DataFrame(columns=list(FIELDS))
     start = day - pd.Timedelta(days=history_days)
-    frames = [latest]
+    frames = [] if latest is None else [latest]
     months = _months(start, day)
     recent = months[-2:]  # the month in progress, and the one before it (its monthly file may not be out yet)
     for month in months:
@@ -109,6 +110,8 @@ def fetch_symbol(symbol: str, day: pd.Timestamp, history_days: int) -> pd.DataFr
             one = _candles(f"{DAILY}/{symbol}/1d/{symbol}-1d-{d:%Y-%m-%d}.zip")
             if one is not None:
                 frames.append(one)
+    if not frames:
+        return pd.DataFrame(columns=list(FIELDS))
     out = pd.concat(frames)
     out = out[~out.index.duplicated()].sort_index()
     return out.loc[start:day]
@@ -116,8 +119,8 @@ def fetch_symbol(symbol: str, day: pd.Timestamp, history_days: int) -> pd.DataFr
 
 def fetch_market(day: pd.Timestamp, history_days: int, symbols: list[str] | None = None,
                  workers: int = data_mod.WORKERS) -> tuple[data_mod.Market, dict]:
-    """Wide daily frames for every perp with a candle on `day`. Funding is set to zero and there is no spot
-    leg: callers that need funding add it with fetch_funding()."""
+    """Wide daily frames for every perp with a candle in the window. Funding is set to zero and there is no
+    spot leg: callers that need funding add it with fetch_funding()."""
     symbols = symbols if symbols is not None else list_symbols()
     with ThreadPoolExecutor(workers) as pool:
         got = list(pool.map(lambda s: fetch_symbol(s, day, history_days), symbols))
@@ -138,11 +141,48 @@ def fetch_market(day: pd.Timestamp, history_days: int, symbols: list[str] | None
     info = {
         "symbols_in_archive": len(symbols),
         "perps_with_data": int(close.loc[day].notna().sum()),
-        "missing_candles_carried_forward": int(gap.sum().sum()),
+        "perps_previous_day": int(close.loc[day - pd.Timedelta(days=1)].notna().sum()),
+        "missing_candles_carried_forward": int((gap & close.notna()).sum().sum()),
     }
     market = data_mod.Market(frames["open"], frames["high"], frames["low"], close, frames["quote_volume"],
                              close * 0.0, close * np.nan)
     return market, info
+
+
+def _exchange_info() -> dict | None:
+    """The exchange's own contract list, or None when no host answers (GitHub's runners are geo-blocked
+    from some of them)."""
+    for url in EXCHANGE_INFO:
+        try:
+            resp = data_mod._session.get(url, timeout=30)
+        except requests.RequestException:
+            continue
+        if resp.status_code == 200:
+            body = resp.json()
+            if isinstance(body, dict) and len(body.get("symbols", [])) > 100:
+                return body
+    return None
+
+
+def extra_exclusions(symbols: list[str]) -> tuple[list[str], str]:
+    """Symbols to keep out of the universe on top of the committed non-crypto list, and where the answer
+    came from. The committed list (tokenised stocks, metals, index products) was made on 2026-11-10.
+
+    "exchange": the exchange's contract list was reachable; anything it classifies as not a crypto-asset
+    perpetual is excluded, and so is a contract listed after 2026-11-10 that it no longer lists.
+    "fallback": it was not reachable, so every contract listed after 2026-11-10 stays out until it can be
+    classified. That keeps new stock and commodity perps out at the price of also keeping new coins out."""
+    committed = set(json.loads(data_mod.NON_CRYPTO_FILE.read_text()))
+    known = set(json.loads(KNOWN_FILE.read_text()))
+    new = {s for s in symbols if s not in known}
+    info = _exchange_info()
+    if info is None:
+        return sorted(new), "fallback"
+    listed = {x["symbol"] for x in info["symbols"]}
+    non_crypto = {x["symbol"] for x in info["symbols"] if x.get("quoteAsset") == "USDT"
+                  and (x.get("contractType") != "PERPETUAL" or x.get("underlyingType") != "COIN")}
+    extra = (non_crypto - committed) | (new - listed)
+    return sorted(extra & set(symbols)), "exchange"
 
 
 def _funding_rest(symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:

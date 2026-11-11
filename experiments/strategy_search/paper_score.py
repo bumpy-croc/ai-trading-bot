@@ -79,9 +79,18 @@ def summarise(returns: pd.Series) -> dict:
             "days": int(len(returns))}
 
 
-def checkpoint(weeks: int, stats: dict, idle: float, plumbing_ok: bool) -> str:
-    if stats["max_drawdown"] > STOP_DRAWDOWN:
-        return f"STOP: drawdown {stats['max_drawdown']:.1%} is above {STOP_DRAWDOWN:.0%}. The book is recorded as failed."
+def at_checkpoint(returns: pd.Series, day0: pd.Timestamp, weeks: int) -> pd.Series:
+    """The checkpoints are fixed dates. Past week 26 (or 52) the bar is judged on returns up to that date,
+    not up to whenever the script happens to be run."""
+    week = 52 if weeks >= 52 else 26 if weeks >= 26 else None
+    return returns if week is None else returns.loc[: day0 + pd.Timedelta(weeks=week)]
+
+
+def checkpoint(weeks: int, stats: dict, idle: float, plumbing_ok: bool, drawdown_to_date: float = 0.0) -> str:
+    """`stats` and `idle` are measured at the fixed checkpoint date; the stop rule applies at any time."""
+    worst = max(stats["max_drawdown"], drawdown_to_date)
+    if worst > STOP_DRAWDOWN:
+        return f"STOP: drawdown {worst:.1%} is above {STOP_DRAWDOWN:.0%}. The book is recorded as failed."
     if weeks < 8:
         return f"week {weeks}: before the first checkpoint (week 8, plumbing only)."
     if weeks < 26:
@@ -114,6 +123,13 @@ def score(records_dir: Path, as_of: str | None, accept_late: bool) -> dict:
     books = sorted({b for r in signals for b in r["books"]})
 
     market, info = forward_data.fetch_market(end, HISTORY_DAYS + (end - day0).days)
+    # Same universe filter as the recorder: the committed non-crypto list, plus what the exchange's own
+    # contract list added on the days the recorder could reach it, plus what it says today.
+    fresh, source = forward_data.extra_exclusions(list(market.close.columns))
+    recorded_filters = [r["universe_filter"] for r in records if "universe_filter" in r]
+    extra = {s for f in recorded_filters if f["source"] == "exchange" for s in f["excluded_beyond_committed_list"]}
+    extra |= set(fresh) if source == "exchange" else set()
+    eng.EXCLUDE.update(extra)
     rank = eng.liquidity_rank(market.close, market.qvol)
     held = sorted({s for r in signals for b in r["books"].values() for s in b["weights"]})
     ranked = rank.loc[day0 - pd.Timedelta(days=120):].le(adaptive.BROAD_N).any()
@@ -144,13 +160,21 @@ def score(records_dir: Path, as_of: str | None, accept_late: bool) -> dict:
         "records": {"total": len(records), "signal_days_scored": len(signals), "missed_days": missed, "late_records": late},
         "data": {**info, **fund_info, "funding_missing_coin_days_held": 0},
         "idle_dollars": idle,
+        "universe_filter": {
+            "excluded_beyond_committed_list": sorted(extra), "source_today": source,
+            "days_recorded_on_fallback": [r["data_day"] for r in records
+                                          if r.get("universe_filter", {}).get("source") == "fallback"],
+        },
         "benchmarks": {k: summarise(v.loc[after]) for k, v in bench.items() if len(v.loc[after])},
         "books": {},
     }
     for book in books:
         targets = recorded_targets(signals, book, market.close.index, market.close.columns)
         res = eng.simulate(market.close, market.funding, rank, targets)
-        stats = summarise(res.returns.loc[day0:]) if len(res.returns.loc[day0:]) else {}
+        forward = res.returns.loc[day0:]
+        stats = summarise(forward)
+        fixed = at_checkpoint(forward, day0, weeks)
+        idle_fixed = float((1.0 + eng.RF_ANNUAL) ** ((fixed.index[-1] - day0).days / eng.ANN) - 1.0)
         diffs = {}
         for rec in signals:
             if book not in rec["books"]:
@@ -171,7 +195,8 @@ def score(records_dir: Path, as_of: str | None, accept_late: bool) -> dict:
             "avg_gross": float(res.gross.loc[day0:].mean()),
             "weight_difference_vs_recomputed": {"mean": mean_diff, "max": float(max(diffs.values())), "by_day": diffs},
             "plumbing_ok": plumbing_ok,
-            "checkpoint": checkpoint(weeks, stats, idle, plumbing_ok),
+            "at_checkpoint_date": {"date": f"{fixed.index[-1]:%Y-%m-%d}", **summarise(fixed)},
+            "checkpoint": checkpoint(weeks, summarise(fixed), idle_fixed, plumbing_ok, stats["max_drawdown"]),
         }
     RESULTS.mkdir(exist_ok=True)
     name = f"paper_score_{end:%Y-%m-%d}{'_dryrun' if accept_late else ''}.json"
