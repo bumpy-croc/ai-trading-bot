@@ -51,3 +51,7 @@ cache/*
 .gemini-reviews/
 .agent-active
 scripts/research/.cache/
+
+# Research data caches (re-downloadable)
+experiments/bakeoff_data/
+experiments/markets_data/

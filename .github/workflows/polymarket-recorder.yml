@@ -1,0 +1,78 @@
+name: Polymarket Recorder
+
+# Saves a point-in-time snapshot of every open Polymarket market with at least
+# $100k traded (quotes, volume so far, fee rate) every 6 hours, and commits it to
+# the `data/polymarket-recorder` branch. Read-only against a public listing: no
+# account, no orders, no money.
+#
+# Why: docs/research/experiments/2026-11-11_polymarket-forward-underdogs-prereg.md.
+# A backtest hinted that underdogs are underpriced, but it could only pick markets
+# by final volume. This recording lets the question be scored cleanly on
+# 2027-02-08 with experiments/polymarket_forward_score.py.
+#
+# If the listing is unreachable or implausibly small the job fails, so a blind
+# recorder is visible. Disable this workflow once the test is scored.
+
+on:
+  schedule:
+    - cron: "23 */6 * * *" # every 6 hours at :23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write # pushes snapshots to the data branch only
+
+concurrency:
+  group: polymarket-recorder
+  cancel-in-progress: false
+
+env:
+  DATA_BRANCH: data/polymarket-recorder
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install client
+        run: pip install --no-input requests==2.31.0
+      - name: Record snapshot
+        run: python tools/polymarket_recorder.py --out-dir "$RUNNER_TEMP/pm/snapshots"
+      - name: Commit snapshot to the data branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          work="$RUNNER_TEMP/pm-data"
+          if git ls-remote --exit-code --heads origin "$DATA_BRANCH" >/dev/null; then
+            git fetch --depth 1 origin "$DATA_BRANCH"
+            git worktree add --detach "$work" FETCH_HEAD
+          else
+            git worktree add --detach "$work"
+            git -C "$work" switch --orphan "$DATA_BRANCH"
+            printf '%s\n' \
+              '# Polymarket recorder data' \
+              '' \
+              'Snapshots written by `.github/workflows/polymarket-recorder.yml` on the default branch.' \
+              'See `docs/research/experiments/2026-11-11_polymarket-forward-underdogs-prereg.md` there.' \
+              'Do not edit by hand: the forward test is scored from these files as recorded.' \
+              > "$work/README.md"
+          fi
+          mkdir -p "$work/snapshots"
+          cp -R "$RUNNER_TEMP/pm/snapshots/." "$work/snapshots/"
+          git -C "$work" add README.md snapshots
+          git -C "$work" commit --quiet -m "snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
+          git -C "$work" push --quiet origin "HEAD:refs/heads/$DATA_BRANCH"
+      - name: Alert on failure
+        if: failure()
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: |
+          if [ -n "$ALERT_WEBHOOK_URL" ]; then
+            curl -sS -m 10 -X POST -H 'Content-Type: application/json' \
+              -d "{\"text\":\"🤖 Trading Bot: Polymarket recorder run failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+              "$ALERT_WEBHOOK_URL" || echo "::warning::webhook POST failed"
+          fi
