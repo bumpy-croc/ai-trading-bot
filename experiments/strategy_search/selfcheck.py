@@ -64,10 +64,9 @@ def check_delisting() -> None:
     assert res.gross.iloc[4] == 0.0 and res.returns.iloc[5] == 0.0
 
 
-def check_no_lookahead_on_noise() -> None:
-    """On i.i.d. returns every family must earn ~0 before costs; a future-peeking signal would not."""
-    rng = np.random.default_rng(7)
-    n_days, n_coins = 1500, 40
+def _noise_market(seed: int = 7, n_days: int = 1500, n_coins: int = 40) -> Market:
+    """i.i.d. daily returns, staggered listings, random volume and funding: nothing here is predictable."""
+    rng = np.random.default_rng(seed)
     idx = pd.date_range("2020-01-01", periods=n_days, freq="D", tz="UTC")
     cols = ["BTCUSDT"] + [f"C{i}USDT" for i in range(n_coins - 1)]
     rets = rng.normal(0.0, 0.04, size=(n_days, n_coins))
@@ -76,7 +75,17 @@ def check_no_lookahead_on_noise() -> None:
         close.iloc[: int(rng.integers(100, n_days - 200)), j] = np.nan
     qvol = pd.DataFrame(rng.uniform(1e6, 1e8, size=(n_days, n_coins)), index=idx, columns=cols)
     fund = pd.DataFrame(rng.normal(0.0, 0.0003, size=(n_days, n_coins)), index=idx, columns=cols)
-    m = Market(close, close, close, close, qvol, fund, close)
+    return Market(close, close, close, close, qvol, fund, close)
+
+
+def _t_stat(g: pd.Series) -> float:
+    return float(g.mean() / g.std() * np.sqrt(len(g)))
+
+
+def check_no_lookahead_on_noise() -> None:
+    """On i.i.d. returns every family must earn ~0 before costs; a future-peeking signal would not."""
+    m = _noise_market()
+    close, fund = m.close, m.funding
     rank, univ = strat.prepare(m)
     zero_fund = fund * 0.0
     worst = 0.0
@@ -173,7 +182,68 @@ def check_events() -> None:
     assert all(t["entry"] >= idx[301] for t in ev.trades_e23("X", hourly, none, rank, direction=-1))
 
 
+def check_adaptive_books() -> None:
+    """The slow adaptive books (adaptive.py): selectivity, the regime switch's timing, and the ML ranker's
+    training cut. On pure noise the ranker must earn nothing; given features dated a week ahead it must
+    earn a great deal, which shows the noise test would catch a leak."""
+    import adaptive as ad
+
+    m = _noise_market()
+    close = m.close
+    rank, univ = strat.prepare(m)
+    zero_fund = m.funding * 0.0
+
+    # V1 holds a coin only when the 30-, 60- and 120-day returns agree
+    sig = ad.trend_signal(m)
+    v1 = ad.selective_targets(m, univ)
+    day = v1.dropna(how="all").index[-1]
+    held = v1.loc[day] != 0
+    assert held.any() and (sig.loc[day][held].abs() > 0.99).all()
+    assert (v1.loc[day][univ.loc[day] & (sig.loc[day].abs() < 0.99)] == 0).all()
+    assert np.isclose(v1.loc[day].abs().sum(), 1.0)
+
+    # V3: the switch on day t must not move when day t's own value or any later value changes the median
+    er = ad.trendiness(m, univ)
+    on = ad.regime_on(er)
+    assert not on.iloc[: ad.ER_WINDOW + ad.ER_MIN_HISTORY].any()  # off until there is enough history
+    assert 0.3 < on.iloc[600:].mean() < 0.7
+    k = 900
+    future = er.copy()
+    future.iloc[k + 1:] = 0.99
+    assert ad.regime_on(future).iloc[: k + 1].equals(on.iloc[: k + 1])
+    past_median = er.expanding(min_periods=ad.ER_MIN_HISTORY).median()
+    assert bool(on.iloc[k]) == bool(er.iloc[k] > past_median.iloc[k - 1])
+    # the switched book carries the un-switched book's leverage and is flat while the switch is off
+    base = ad.run_book(m, rank, strat.trend(m, univ, ad.LOOKBACKS))
+    gated = ad.run_book(m, rank, strat.trend(m, univ, ad.LOOKBACKS), gate=on)
+    signal_days = base.weights.dropna(how="all").index
+    off_days = signal_days[~on.loc[signal_days].to_numpy()]
+    on_days = signal_days[on.loc[signal_days].to_numpy()]
+    assert (gated.weights.loc[off_days].abs().sum(axis=1) == 0).all()
+    assert np.allclose(gated.weights.loc[on_days].fillna(0.0), base.weights.loc[on_days].fillna(0.0))
+
+    try:
+        import sklearn  # noqa: F401
+    except ImportError:
+        print("adaptive books: V1 and V3 OK; ML ranker check SKIPPED (scikit-learn is not installed)")
+        return
+    scores, info = ad.ml_scores(m, rank, univ)
+    assert len(info["refits"]) >= 8 and info["first_prediction"] is not None
+    start = pd.Timestamp(info["first_prediction"], tz="UTC")
+    res = eng.simulate(close, zero_fund, rank, ad.ml_targets(m, univ, scores))
+    t_noise = _t_stat(res.gross_returns.loc[start:])
+    assert abs(t_noise) < 3.5, f"ML ranker: gross t-stat {t_noise:.2f} on pure noise (leak?)"
+    peek, _ = ad.ml_scores(m, rank, univ, peek_days=ad.ML_LABEL_LAG)
+    res = eng.simulate(close, zero_fund, rank, ad.ml_targets(m, univ, peek))
+    t_peek = _t_stat(res.gross_returns.loc[start:])
+    assert t_peek > 10, f"ML ranker leak control failed to show an edge (t = {t_peek:.2f})"
+    again, _ = ad.ml_scores(m, rank, univ)
+    assert again.equals(scores), "ML ranker is not deterministic"
+    print(f"adaptive books OK: ML ranker t = {t_noise:.2f} on noise, {t_peek:.1f} with features dated a week ahead")
+
+
 if __name__ == "__main__":
+    check_adaptive_books()
     check_events()
     check_cross_venue()
     check_timing_and_costs()

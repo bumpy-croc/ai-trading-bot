@@ -84,3 +84,14 @@ Any live trial needs Alex's decision, a futures executor that does not exist yet
 - **Recorder failure**: a blind recorder must be visible. The job fails loudly if fewer than 100 perps return data, and posts to the alert webhook.
 - **Venue**: Binance perps for both design and recording, so there is no venue mismatch. Execution on a live account would differ (slippage in size, liquidation rules) and is out of scope.
 - **Determinism**: Stage A is run twice; outputs must match.
+
+## Amendment 1 (2026-11-11, after Stage A, before any forward record exists): how Stage B runs
+
+Stage A is finished (results in `2026-11-11_slow-adaptive-trend-results.md`): no change qualified, so **B0 is the only book recorded**. Nothing has been recorded yet. This section fixes the operating details that sections 5 and 6 left open, and corrects one statement.
+
+- **Correction to section 5, timing.** Binance's API is blocked from GitHub's runners, so the recorder reads the public archive, which publishes a day's candles at about 09:00 UTC the next morning. The job runs at 10:23, 12:23 and 15:23 UTC; the first run that finds the candles writes the record. A Monday close's weights are therefore written 9 to 14 hours before the Tuesday close they are filled at, not "about a day" before. They still pre-date the fill price.
+- **Candles only.** The recorder sets funding to zero when it computes the volatility scale. Measured on 2026-10-26 against the full research cache with actual funding, this changes the weights by 0.14% of gross exposure. The scoring uses actual funding for returns and reports this difference every time (the week 8 limit is 1%).
+- **Day 0** is the first Monday whose record is written before its fill price exists. The scheduled job only runs once the workflow file is on `develop`.
+- **What counts as a record.** A signal-day record counts only if its `recorded_at` is before the close of the next UTC day. A Monday with no such record leaves the book holding the previous week's weights, as a failed job would leave a real trader. Records are never rewritten. A late or missing day counts toward the "no more than 3 missed days" check at week 8.
+- **Delisted contracts.** The archive keeps printing flat, zero-volume candles for settled contracts. The recorder cuts each series after its last day with volume, the same rule the research cache used.
+- **Window the recorder sees.** 420 days of candles. A unit test checks that the weights equal those from a longer history.

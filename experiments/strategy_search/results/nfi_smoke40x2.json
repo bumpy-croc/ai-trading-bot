@@ -1,0 +1,425 @@
+{
+ "tag": "smoke40x2",
+ "run": {
+  "tag": "smoke40x2",
+  "timerange": "20241105-20250101",
+  "pairs": 40,
+  "fee": 0.001,
+  "exit_code": 0,
+  "minutes": 1.2,
+  "peak_memory_gb": 3.33
+ },
+ "nfi_commit": "e5b345a8d81e4559572cc0806d86d9178d0719e1",
+ "window": [
+  "2024-11-05",
+  "2024-12-31"
+ ],
+ "freqtrade": {
+  "total_trades": 67,
+  "profit_total": 0.306500416665,
+  "profit_total_abs": 3065.00416665,
+  "final_balance": 13065.00416665,
+  "max_drawdown_account": 0.0,
+  "profit_factor": 0.0,
+  "winrate": 1.0,
+  "holding_avg": "14:01:00",
+  "cagr": 4.539984356185548,
+  "sharpe": 35.875931274838656,
+  "trade_count_long": 67,
+  "max_open_trades": 6
+ },
+ "reconstruction_check": {
+  "final_equity_rebuilt": 13065.004166617178,
+  "final_balance_freqtrade": 13065.00416665
+ },
+ "mark_to_market": {
+  "total_return": 0.3065004166617178,
+  "cagr": 4.539984356096426,
+  "max_drawdown": 0.0002370220634795306,
+  "sharpe_excess": 8.73582303744881,
+  "worst_day": -0.0002370220634795306
+ },
+ "by_period": {},
+ "avg_share_of_equity_in_positions": 0.04691330240073879,
+ "avg_pairs_held": 0.7413793103448276,
+ "benchmarks": {
+  "idle_usdt_4pct": {
+   "total_return": 0.006143673914335013,
+   "cagr": 0.04000000000000048,
+   "max_drawdown": -0.0,
+   "sharpe_excess": -402897141173.73846,
+   "worst_day": 0.00010745978202764128
+  },
+  "btc_buy_and_hold": {
+   "total_return": 0.379159708303654,
+   "cagr": 6.834712518294188,
+   "max_drawdown": 0.1257063964767472,
+   "sharpe_excess": 3.932174703178951,
+   "worst_day": -0.0558703575319216
+  },
+  "equal_weight_basket_of_same_pairs": {
+   "total_return": 1.018929555005883,
+   "cagr": 88.91788043148144,
+   "max_drawdown": 0.28878661531960925,
+   "sharpe_excess": 5.024277622112649,
+   "worst_day": -0.13600593634413227
+  }
+ },
+ "trades": {
+  "count": 67,
+  "win_rate": 1.0,
+  "median_profit_ratio": 0.017690687322812603,
+  "median_days_held": 0.034722222222222224,
+  "max_days_held": 10.76388888888889,
+  "worst_10": [
+   {
+    "pair": "AAVE/USDT",
+    "open": "2024-12-18 20:10:00+00:00",
+    "close": "2024-12-18 21:20:00+00:00",
+    "profit_abs": 6.37871088,
+    "profit_ratio": 0.003168679805914124,
+    "exit_reason": "exit_profit_long_tc_t_0_1_m ( 141 142 )"
+   },
+   {
+    "pair": "ARB/USDT",
+    "open": "2024-12-20 08:40:00+00:00",
+    "close": "2024-12-20 14:40:00+00:00",
+    "profit_abs": 11.58490315,
+    "profit_ratio": 0.005251202352988785,
+    "exit_reason": "exit_long_tc_d_0_26 ( 142 )"
+   },
+   {
+    "pair": "CRV/USDT",
+    "open": "2024-12-20 08:40:00+00:00",
+    "close": "2024-12-20 15:30:00+00:00",
+    "profit_abs": 12.323182800000001,
+    "profit_ratio": 0.006156715791331088,
+    "exit_reason": "exit_long_rapid_rpd_6 ( 101 )"
+   },
+   {
+    "pair": "PNUT/USDT",
+    "open": "2024-12-09 20:50:00+00:00",
+    "close": "2024-12-09 23:30:00+00:00",
+    "profit_abs": 13.572793500000001,
+    "profit_ratio": 0.008414322199696464,
+    "exit_reason": "exit_long_rapid_rpd_6 ( 101 )"
+   },
+   {
+    "pair": "NEIRO/USDT",
+    "open": "2024-12-10 15:40:00+00:00",
+    "close": "2024-12-11 00:45:00+00:00",
+    "profit_abs": 14.294326839999998,
+    "profit_ratio": 0.005531390933715566,
+    "exit_reason": "exit_profit_long_normal_t_0_1_m ( 6 )"
+   },
+   {
+    "pair": "WIF/USDT",
+    "open": "2024-12-09 20:50:00+00:00",
+    "close": "2024-12-09 20:55:00+00:00",
+    "profit_abs": 16.5972669,
+    "profit_ratio": 0.011730112497866818,
+    "exit_reason": "exit_long_rapid_u_1 ( 101 )"
+   },
+   {
+    "pair": "DOGE/USDT",
+    "open": "2024-12-19 18:00:00+00:00",
+    "close": "2024-12-20 02:40:00+00:00",
+    "profit_abs": 17.74319172,
+    "profit_ratio": 0.00968593169594315,
+    "exit_reason": "exit_long_rapid_d_1_5 ( 101 )"
+   },
+   {
+    "pair": "PNUT/USDT",
+    "open": "2024-12-09 09:25:00+00:00",
+    "close": "2024-12-09 09:50:00+00:00",
+    "profit_abs": 18.8858196,
+    "profit_ratio": 0.010055351283490253,
+    "exit_reason": "exit_long_normal_d_1_20 ( 6 )"
+   },
+   {
+    "pair": "PEPE/USDT",
+    "open": "2024-12-10 16:15:00+00:00",
+    "close": "2024-12-10 16:25:00+00:00",
+    "profit_abs": 19.90045424,
+    "profit_ratio": 0.010167455532894205,
+    "exit_reason": "exit_long_normal_d_1_70 ( 5 )"
+   },
+   {
+    "pair": "DOGE/USDT",
+    "open": "2024-11-17 02:15:00+00:00",
+    "close": "2024-11-17 02:25:00+00:00",
+    "profit_abs": 20.4417452,
+    "profit_ratio": 0.011885464074657221,
+    "exit_reason": "exit_long_tc_u_1 ( 141 142 )"
+   }
+  ],
+  "by_exit_reason": {
+   "exit_long_grind_g ( 120 )": {
+    "count": 5,
+    "sum": 457.75
+   },
+   "exit_long_normal_d_1_13 ( 6 )": {
+    "count": 1,
+    "sum": 22.96
+   },
+   "exit_long_normal_d_1_20 ( 6 )": {
+    "count": 1,
+    "sum": 18.89
+   },
+   "exit_long_normal_d_1_26 ( 6 )": {
+    "count": 1,
+    "sum": 22.64
+   },
+   "exit_long_normal_d_1_53 ( 6 )": {
+    "count": 1,
+    "sum": 22.12
+   },
+   "exit_long_normal_d_1_65 ( 2 3 101 )": {
+    "count": 1,
+    "sum": 31.51
+   },
+   "exit_long_normal_d_1_65 ( 6 )": {
+    "count": 1,
+    "sum": 29.96
+   },
+   "exit_long_normal_d_1_70 ( 5 )": {
+    "count": 1,
+    "sum": 19.9
+   },
+   "exit_long_normal_d_1_99 ( 2 6 101 )": {
+    "count": 1,
+    "sum": 25.94
+   },
+   "exit_long_normal_d_2_101 ( 6 )": {
+    "count": 1,
+    "sum": 38.99
+   },
+   "exit_long_normal_d_2_20 ( 6 )": {
+    "count": 1,
+    "sum": 46.97
+   },
+   "exit_long_normal_d_2_26 ( 6 )": {
+    "count": 1,
+    "sum": 58.6
+   },
+   "exit_long_normal_d_2_40 ( 6 )": {
+    "count": 1,
+    "sum": 54.87
+   },
+   "exit_long_normal_d_2_78 ( 6 )": {
+    "count": 1,
+    "sum": 60.81
+   },
+   "exit_long_normal_d_2_93 ( 6 )": {
+    "count": 1,
+    "sum": 35.95
+   },
+   "exit_long_normal_d_2_95 ( 6 101 )": {
+    "count": 1,
+    "sum": 34.16
+   },
+   "exit_long_normal_d_3_108 ( 6 )": {
+    "count": 1,
+    "sum": 56.88
+   },
+   "exit_long_normal_d_3_5 ( 6 )": {
+    "count": 1,
+    "sum": 66.09
+   },
+   "exit_long_normal_d_4_77 ( 6 )": {
+    "count": 1,
+    "sum": 71.13
+   },
+   "exit_long_normal_d_5_26 ( 6 )": {
+    "count": 1,
+    "sum": 110.89
+   },
+   "exit_long_normal_u_1 ( 3 )": {
+    "count": 1,
+    "sum": 26.32
+   },
+   "exit_long_normal_u_1 ( 3 101 )": {
+    "count": 1,
+    "sum": 22.45
+   },
+   "exit_long_normal_u_1 ( 6 )": {
+    "count": 1,
+    "sum": 25.47
+   },
+   "exit_long_normal_w_1_11 ( 6 )": {
+    "count": 1,
+    "sum": 33.25
+   },
+   "exit_long_normal_w_2_11 ( 1 )": {
+    "count": 1,
+    "sum": 39.97
+   },
+   "exit_long_normal_w_5_3 ( 6 )": {
+    "count": 1,
+    "sum": 103.22
+   },
+   "exit_long_quick_d_1_77 ( 42 )": {
+    "count": 1,
+    "sum": 23.27
+   },
+   "exit_long_rapid_d_1_5 ( 101 )": {
+    "count": 1,
+    "sum": 17.74
+   },
+   "exit_long_rapid_d_2_46 ( 101 )": {
+    "count": 1,
+    "sum": 41.04
+   },
+   "exit_long_rapid_d_2_65 ( 101 )": {
+    "count": 1,
+    "sum": 32.66
+   },
+   "exit_long_rapid_d_2_70 ( 101 )": {
+    "count": 1,
+    "sum": 37.35
+   },
+   "exit_long_rapid_d_3_70 ( 101 )": {
+    "count": 1,
+    "sum": 45.46
+   },
+   "exit_long_rapid_d_5_70 ( 101 )": {
+    "count": 1,
+    "sum": 72.21
+   },
+   "exit_long_rapid_rpd_6 ( 101 )": {
+    "count": 2,
+    "sum": 25.9
+   },
+   "exit_long_rapid_u_1 ( 101 )": {
+    "count": 2,
+    "sum": 37.75
+   },
+   "exit_long_rapid_u_2 ( 101 )": {
+    "count": 2,
+    "sum": 64.54
+   },
+   "exit_long_rapid_u_4 ( 101 )": {
+    "count": 1,
+    "sum": 63.48
+   },
+   "exit_long_tc_d_0_26 ( 142 )": {
+    "count": 1,
+    "sum": 11.58
+   },
+   "exit_long_tc_d_1_109 ( 141 142 )": {
+    "count": 1,
+    "sum": 22.8
+   },
+   "exit_long_tc_d_1_20 ( 142 )": {
+    "count": 1,
+    "sum": 32.44
+   },
+   "exit_long_tc_d_1_20 ( 143 )": {
+    "count": 1,
+    "sum": 23.49
+   },
+   "exit_long_tc_d_1_3 ( 141 142 )": {
+    "count": 1,
+    "sum": 32.72
+   },
+   "exit_long_tc_d_1_39 ( 142 )": {
+    "count": 1,
+    "sum": 30.53
+   },
+   "exit_long_tc_d_1_42 ( 142 )": {
+    "count": 1,
+    "sum": 28.65
+   },
+   "exit_long_tc_d_1_46 ( 143 )": {
+    "count": 1,
+    "sum": 38.26
+   },
+   "exit_long_tc_d_1_71 ( 142 )": {
+    "count": 1,
+    "sum": 22.34
+   },
+   "exit_long_tc_d_1_78 ( 143 )": {
+    "count": 1,
+    "sum": 21.78
+   },
+   "exit_long_tc_d_1_96 ( 141 142 )": {
+    "count": 1,
+    "sum": 23.87
+   },
+   "exit_long_tc_d_3_65 ( 101 141 )": {
+    "count": 1,
+    "sum": 63.35
+   },
+   "exit_long_tc_d_4_77 ( 142 )": {
+    "count": 1,
+    "sum": 77.81
+   },
+   "exit_long_tc_d_5_71 ( 142 )": {
+    "count": 1,
+    "sum": 94.69
+   },
+   "exit_long_tc_d_5_99 ( 142 )": {
+    "count": 1,
+    "sum": 87.98
+   },
+   "exit_long_tc_d_6_55 ( 142 )": {
+    "count": 1,
+    "sum": 113.45
+   },
+   "exit_long_tc_u_1 ( 141 142 )": {
+    "count": 1,
+    "sum": 20.44
+   },
+   "exit_long_tc_w_2_14 ( 143 )": {
+    "count": 1,
+    "sum": 44.06
+   },
+   "exit_long_tc_w_4_3 ( 142 )": {
+    "count": 1,
+    "sum": 90.29
+   },
+   "exit_long_tc_w_4_3 ( 143 )": {
+    "count": 1,
+    "sum": 74.27
+   },
+   "exit_profit_long_normal_t_0_1_m ( 6 )": {
+    "count": 1,
+    "sum": 14.29
+   },
+   "exit_profit_long_normal_t_5_1_m ( 6 )": {
+    "count": 1,
+    "sum": 90.46
+   },
+   "exit_profit_long_tc_t_0_1_m ( 141 142 )": {
+    "count": 1,
+    "sum": 6.38
+   }
+  },
+  "profit_by_pair_worst_5": {
+   "AAVE/USDT": 6.38,
+   "UNI/USDT": 23.49,
+   "TRX/USDT": 28.65,
+   "PNUT/USDT": 32.46,
+   "AVAX/USDT": 33.25
+  },
+  "profit_by_pair_best_5": {
+   "XLM/USDT": 280.55,
+   "XRP/USDT": 260.35,
+   "NEIRO/USDT": 251.47,
+   "DOGE/USDT": 150.72,
+   "FTM/USDT": 143.55
+  },
+  "profit_by_month": {
+   "2024-11": 690.96,
+   "2024-12": 2374.05
+  }
+ },
+ "gates": {
+  "1_cagr_at_least_10pct": true,
+  "2_max_drawdown_at_most_30pct": true,
+  "3_positive_in_both_periods": false,
+  "4_sharpe_at_least_0_8": true,
+  "5_at_least_100_trades": false
+ },
+ "gates_1_to_5_pass": false
+}

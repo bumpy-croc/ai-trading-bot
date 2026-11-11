@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Slow many-coin trend paper trader** (research;
+  `docs/research/experiments/2026-11-11_slow-adaptive-trend-*.md`). Stage A tested four pre-specified
+  changes to the Phase 1b slow trend book on 2020-24 data (`experiments/strategy_search/adaptive.py`):
+  holding only coins whose trends all agree, a wider universe, a market-type switch and a
+  gradient-boosted ranker. None beat the plain book, so the plain book alone is recorded forward.
+  `tools/paper_trend_recorder.py`, run each morning by `.github/workflows/paper-trend-recorder.yml`,
+  writes the book's target weights to the `data/paper-trend-recorder` branch before the prices they
+  are filled at exist; `experiments/strategy_search/paper_score.py` scores them at weeks 8, 26 and 52.
+  Public archive data only: no account, no orders, no money. No live or staging change.
 - **Event-driven intraday research** (Phase 1d). `experiments/strategy_search/events.py` tests three
   preregistered hourly event trades across the Binance perp universe (funding-settlement capture, buying
   capitulation, following volume breakouts); `yields.py` records what passive dollar yields actually paid

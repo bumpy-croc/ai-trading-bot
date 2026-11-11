@@ -1,0 +1,5 @@
+# Libraries for the forward paper test (tools/paper_trend_recorder.py, experiments/strategy_search/paper_score.py).
+# These are the versions the Stage A design run used, so the recorder computes what the design run judged.
+numpy==2.5.3
+pandas==3.0.5
+requests==2.34.2
