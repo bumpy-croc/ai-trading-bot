@@ -1,0 +1,89 @@
+name: Paper Trend Recorder
+
+# Writes down, every morning, the target weights of the slow many-coin trend books
+# for the UTC day that has just closed, and commits them to the
+# `data/paper-trend-recorder` branch. Read-only against the public Binance archive:
+# no account, no orders, no money. The live bot is not touched.
+#
+# Why: docs/research/experiments/2026-11-11_slow-adaptive-trend-prereg.md (Stage B).
+# The books were designed on 2020-24 data and the 2025-26 window is used up, so the
+# only clean test left is forward. A Monday close's weights are filled at Tuesday's
+# close in the scoring (experiments/strategy_search/paper_score.py), which is still
+# in the future when this job records them.
+#
+# The archive publishes a day's candles at about 09:00 UTC. The job runs three times:
+# the first run that finds the candles writes the record, later runs see it and do
+# nothing. If the candles are still missing at the last run, or fewer than 100 perps
+# return data, the job fails, so a blind recorder is visible.
+
+on:
+  schedule:
+    - cron: "23 10 * * *"
+    - cron: "23 12 * * *"
+    - cron: "23 15 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write # pushes records to the data branch only
+
+concurrency:
+  group: paper-trend-recorder
+  cancel-in-progress: false
+
+env:
+  DATA_BRANCH: data/paper-trend-recorder
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install the libraries the design run used
+        run: pip install --no-input -r experiments/strategy_search/requirements-forward.txt
+      - name: Check out the data branch
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/paper-data"
+          if git ls-remote --exit-code --heads origin "$DATA_BRANCH" >/dev/null; then
+            git fetch --depth 1 origin "$DATA_BRANCH"
+            git worktree add --detach "$work" FETCH_HEAD
+          else
+            git worktree add --detach "$work"
+            git -C "$work" switch --orphan "$DATA_BRANCH"
+            printf '%s\n' \
+              '# Paper trend recorder data' \
+              '' \
+              'Daily records written by `.github/workflows/paper-trend-recorder.yml` on the default branch.' \
+              'See `docs/research/experiments/2026-11-11_slow-adaptive-trend-prereg.md` there.' \
+              'Do not edit by hand: the forward test is scored from these files as recorded.' \
+              > "$work/README.md"
+          fi
+      - name: Record
+        run: python tools/paper_trend_recorder.py --out-dir "$RUNNER_TEMP/paper-data"
+      - name: Commit the record to the data branch
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/paper-data"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$work" add README.md records 2>/dev/null || git -C "$work" add README.md
+          if git -C "$work" diff --cached --quiet; then
+            echo "Nothing new to commit."
+          else
+            git -C "$work" commit --quiet -m "record $(date -u +%Y-%m-%dT%H:%MZ)"
+            git -C "$work" push --quiet origin "HEAD:refs/heads/$DATA_BRANCH"
+          fi
+      - name: Alert on failure
+        if: failure()
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: |
+          if [ -n "$ALERT_WEBHOOK_URL" ]; then
+            curl -sS -m 10 -X POST -H 'Content-Type: application/json' \
+              -d "{\"text\":\"🤖 Trading Bot: paper trend recorder run failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+              "$ALERT_WEBHOOK_URL" || echo "::warning::webhook POST failed"
+          fi

@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Out-of-sample test of the most used public freqtrade strategy** (research;
+  `docs/research/experiments/2026-11-11_nfi-frozen-oos-*.md`). NostalgiaForInfinity as it stood on
+  30 December 2024, unmodified, run once on 2025-01 to 2026-10 (`experiments/strategy_search/nfi_data.py`,
+  `nfi_run.py`). It ended +33.7% but fails the preregistered gates: a 53.6% drawdown marked to market
+  (freqtrade's own report shows 14.2%, counting closed trades only) and a Sharpe ratio of 0.50. No trial.
+  No live or staging change.
+- **Slow many-coin trend paper trader** (research;
+  `docs/research/experiments/2026-11-11_slow-adaptive-trend-*.md`). Stage A tested four pre-specified
+  changes to the Phase 1b slow trend book on 2020-24 data (`experiments/strategy_search/adaptive.py`):
+  holding only coins whose trends all agree, a wider universe, a market-type switch and a
+  gradient-boosted ranker. None beat the plain book, so the plain book alone is recorded forward.
+  `tools/paper_trend_recorder.py`, run each morning by `.github/workflows/paper-trend-recorder.yml`,
+  writes the book's target weights to the `data/paper-trend-recorder` branch before the prices they
+  are filled at exist; `experiments/strategy_search/paper_score.py` scores them at weeks 8, 26 and 52.
+  Public archive data only: no account, no orders, no money. No live or staging change.
+- **Event-driven intraday research** (Phase 1d). `experiments/strategy_search/events.py` tests three
+  preregistered hourly event trades across the Binance perp universe (funding-settlement capture, buying
+  capitulation, following volume breakouts); `yields.py` records what passive dollar yields actually paid
+  (Hyperliquid HLP vault, Aave, sUSDe). All three trades fail after costs: see
+  `docs/research/experiments/2026-11-11_event-driven-intraday-results.md`. No live or staging change.
 - **Polymarket forward recorder** (research;
   `docs/research/experiments/2026-11-11_polymarket-forward-underdogs-prereg.md`).
   `tools/polymarket_recorder.py`, run every 6 hours by `.github/workflows/polymarket-recorder.yml`,

@@ -4840,3 +4840,45 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 **Pre-committed outcomes.** Score on 2027-02-08. PASS or PROVISIONAL: report to the Board; any trial needs a Board decision on a venue account and on legality where they live. INCONCLUSIVE: one extension, scored 2027-05-10. FAIL, or INCONCLUSIVE at the extension: disable the workflow and close the line of work.
 
 **Reversal.** Disable the `Polymarket Recorder` workflow; delete the `data/polymarket-recorder` branch.
+
+## [D-2026-11-11-02] 2026-11-11 ~12:20 UTC · track-record · quant research (Claude, project thread)
+
+**Authority.** Alex, 2026-11-11, project thread: merged #1326 and chose "Keep searching new ideas" (intraday and event-driven) over staying paused.
+
+**Phase 1d, event-driven intraday trades.** Three preregistered ideas, one configuration each, full history 2020-2026, hourly bars, 408 symbols. Verdict: **H0 supported for all three.** E1 funding-settlement capture: 2,023 trades, -143 bp net per trade (funding +71 bp, price -172 bp; longs in collapsing coins). E2 buy capitulation: 5,828 trades, +43 bp gross rebound, -16 bp net after costs, decaying (+34 / -23 / -73 bp by sub-period). E3 follow a volume breakout: 6,383 trades, -52 bp net (t -4.5). Each fails four of five gates. Evidence: `docs/research/experiments/2026-11-11_event-driven-intraday-results.md`, `experiments/strategy_search/results/events.json`.
+
+**Exam-window note.** [D-2026-11-10-03] said the 2025-01 → 2026-10 window was closed for crypto strategies. This experiment reused it openly (prereg section 6) because the Board asked for the search to continue and no later data exists; there was no selection step, and the bar was a multi-period t-test. Nothing passed, so nothing rests on that reuse.
+
+**Descriptive finding (realised, not a backtest).** Hyperliquid's HLP market-making vault returned +13% (2023 from June), +63% (2024), +17% (2025), +8% (2026 to October); worst two-week interval -5.2%. Aave USDT lending paid 3.6%/yr over 2025-26, so the 4% hurdle used in Phases 1b-1d was about right.
+
+**Recommendation.** No build. Across Phases 1-1d (28 crypto candidates) and #1325 (15 non-crypto), no taker-fee strategy on public bar data clears costs out of sample; gross effects are 10-50 bp per trade against 30-60 bp of round-trip cost. What earned in 2025-26 was market making and dollar lending. Further search along the same lines (more signals on the same bars at the same fees) has a low prior; the levers that could change the answer are lower costs (maker execution), capital scale, or forward paper tests of the two weak positives (long/short trend; capitulation rebound in the ten most liquid coins).
+- ΔP: none available now. ΔR: none taken. C: research only. E: the results file above.
+
+## [D-2026-11-11-03] 2026-11-11 ~19:30 UTC · track-record + decision · board-directed (Claude, project thread "Find a profitable crypto strategy mix")
+
+**Authority.** Alex, 2026-11-11 18:26 UTC, project thread: after the research report on public bot claims, chose "Both, freqtrade test first" (run NostalgiaForInfinity once on 2025-26, then build the slow adaptive many-coin system as a paper trader). This entry covers the second half. The freqtrade test gets its own entry when its run finishes.
+
+**Stage A, design on 2020-24 (track record).** Prereg `docs/research/experiments/2026-11-11_slow-adaptive-trend-prereg.md` (commit `4bceb53`, before any run). Four pre-specified changes to the Phase 1b slow trend book, one configuration each, data cut at 2024-12-31. Verdict: **H0 supported, none qualifies.** Sharpe fit / validation: B0 baseline 0.86 / 0.52; V1 selective 0.74 / 0.34; V2 top 50 0.67 / 0.26; V3 regime switch -0.14 / -0.65; V4 gradient-boosted ranker 0.15 / 0.73 (needed 0.7 in both). The "trade trend only when the market is trending" switch was on in the wrong weeks: B0 earned almost all of its return while the switch was off. Run twice, byte-identical. Results: `docs/research/experiments/2026-11-11_slow-adaptive-trend-results.md`.
+
+**Decision.** Record B0 forward, alone, as the preregistration fixes for this outcome. Recorder `tools/paper_trend_recorder.py`, scheduled by `.github/workflows/paper-trend-recorder.yml` (10:23, 12:23, 15:23 UTC; first run that finds the day's candles writes the record), writing to the `data/paper-trend-recorder` branch. Scoring `experiments/strategy_search/paper_score.py`. Operating details in Amendment 1 of the prereg.
+
+**Rubric.** ΔP: unknown; B0's validation Sharpe is 0.52 and the forward test cannot prove an edge in under a few years, it can only catch a failure and supply a minimum bar for a small trial. ΔR: none. Reads the public Binance archive; no account, no orders, no money, no `src/` change, nothing deployed; the bot stays paused. C: about 5 minutes of Actions time a day. E: Stage A results file; recorder dry run for 2026-10-26 matches the full research cache to 0.14% of gross; 26 unit tests.
+
+**Pre-committed outcomes.** Day 0 is the first Monday recorded before its fill price exists (the job runs once the workflow is on `develop`). Any time: drawdown above 20% stops the book, recorded as failed. Week 8: plumbing only. Week 26: at least +5% net with drawdown at most 15% leads to a proposal to the Board for a small live trial; below zero is reported as leaning against. Week 52: at least +10% with drawdown at most 20% leads to a proposal for a live allocation; below idle dollars stops it. Any live trial needs a Board decision, a futures executor and a risk review.
+
+**Reversal.** Disable the `Paper Trend Recorder` workflow; delete the `data/paper-trend-recorder` branch.
+
+**Addendum, same day ~19:45 UTC.** A code review of the recorder and scoring code (before any record exists) found no leak in Stage A and four gaps in Stage B: new stock or commodity perps could enter the universe, a half-published archive day could be recorded, the scoring dropped contracts settled during the test, and the week 26 and 52 bars were judged on the run date. All four are fixed and written into Amendment 2 of the prereg; 32 unit tests.
+
+## [D-2026-11-11-04] 2026-11-11 ~21:00 UTC · track-record · quant research (Claude, project thread "Find a profitable crypto strategy mix")
+
+**Authority.** Alex, 2026-11-11 18:26 UTC, project thread: chose "Both, freqtrade test first". This entry is the first half: the most used public freqtrade strategy, frozen before 2025, run once on 2025-26.
+
+**Result.** Prereg `docs/research/experiments/2026-11-11_nfi-frozen-oos-prereg.md` (commit `51088db`, before the strategy had been run on anything; Amendment 1 fixed 40 pairs before the exam run). NostalgiaForInfinityX5 v15.1.312 (30 Dec 2024), unmodified, freqtrade 2024.11, Binance spot, 5-minute candles, 40 pairs, fee 0.10% a side, 2025-01-01 to 2026-10-31. Verdict: **H0 supported; fails gate 2 and gate 4.** Net +33.7% (17.2%/yr), but maximum drawdown 53.6% marked to market daily (limit 30%) and Sharpe 0.50 (needed 0.8). 168 trades, 165 winners. From October 2025 all capital sat in ARB, FET and FIL, bought on the way down; equity fell from 13,163 to 6,108 by 19 Aug 2026 and was rescued by a rally in September 2026. freqtrade's own report shows a 14.2% drawdown, because it only counts closed trades. Benchmarks: idle dollars +7.5%, BTC -17.1%, the same 40 coins held -68.2%. Gates 6 and 7 not run. Results: `docs/research/experiments/2026-11-11_nfi-frozen-oos-results.md`.
+
+**Exam-window accounting.** The 2025-01 to 2026-10 window has now faced nine candidates and is closed.
+
+**Run note.** The wrapper script was stopped mid-run so a two-hour tool limit would not cut the single run off; the freqtrade process itself ran untouched to completion and `run_meta.json` was written by hand. Details in the results file.
+
+**Recommendation.** No trial of this strategy. The lesson for our own work: judge any strategy on equity marked to market daily, never on closed trades, and treat a win rate near 100% as a sign of hidden tail risk.
+- ΔP: none. ΔR: none taken. C: research only. E: the results file above.
