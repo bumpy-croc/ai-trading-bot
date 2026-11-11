@@ -125,7 +125,56 @@ def check_cross_venue() -> None:
     assert np.allclose(res2.returns.iloc[8:], notional * 0.001)
 
 
+def check_events() -> None:
+    import events as ev
+
+    # E1: flat price, 8-hourly settlements; the trade must use the PREVIOUS print to decide and book the actual one
+    idx = pd.date_range("2024-03-01", periods=80, freq="h", tz="UTC")
+    hourly = pd.DataFrame({"open": 100.0, "close": 100.0, "qvol": 1e6}, index=idx)
+    times = pd.DatetimeIndex([idx[8], idx[16], idx[24], idx[32], idx[40]])
+    funding = pd.Series([0.001, 0.01, 0.01, 0.0001, 0.0001], index=times)
+    rank = pd.Series(1.0, index=pd.date_range("2024-02-28", periods=10, freq="D", tz="UTC"))
+    tr = ev.trades_e1("X", hourly, funding, rank)
+    assert [t["entry"] for t in tr] == [idx[23], idx[31]], [t["entry"] for t in tr]
+    cost = 2 * (eng.PERP_FEE + 0.0005)
+    assert np.isclose(tr[0]["net"], 0.01 - cost) and tr[0]["side"] == -1.0
+    assert np.isclose(tr[1]["net"], 0.0001 - cost)
+    # negative previous print -> long, and a sign flip at settlement costs the long
+    tr = ev.trades_e1("X", hourly, pd.Series([-0.01, 0.002], index=times[:2]), rank)
+    assert tr[0]["side"] == 1.0 and np.isclose(tr[0]["funding"], -0.002)
+    assert ev.trades_e1("X", hourly, funding, rank * 500) == []  # illiquid coin: no trade
+
+    # E2 / E3: one -5% hour on 5x volume, then +1% for four hours
+    rng = np.random.default_rng(11)
+    n = 400
+    idx = pd.date_range("2024-03-01", periods=n, freq="h", tz="UTC")
+    r = rng.normal(0, 0.002, n)
+    r[300] = -0.05
+    r[301:305] = 0.01
+    close = 100 * np.cumprod(1 + r)
+    qvol = np.full(n, 1e6)
+    qvol[300] = 5e6
+    hourly = pd.DataFrame({"open": np.r_[100.0, close[:-1]], "close": close, "qvol": qvol}, index=idx)
+    rank = pd.Series(1.0, index=pd.date_range("2024-02-28", periods=30, freq="D", tz="UTC"))
+    none = pd.Series(dtype=float)
+    tr = ev.trades_e23("X", hourly, none, rank, direction=-1)
+    assert len(tr) == 1 and tr[0]["entry"] == idx[301] and tr[0]["exit"] == idx[305]
+    assert np.isclose(tr[0]["price_ret"], 1.01**4 - 1.0)
+    assert np.isclose(tr[0]["cost"], 2 * (eng.PERP_FEE + 2 * 0.0005))
+    assert ev.trades_e23("X", hourly, none, rank, direction=+1) == []
+    # a volume spike is required
+    quiet = hourly.assign(qvol=1e6)
+    assert ev.trades_e23("X", quiet, none, rank, direction=-1) == []
+    # funding inside the hold is charged to the long
+    fund = pd.Series([0.003], index=[idx[303]])
+    tr = ev.trades_e23("X", hourly, fund, rank, direction=-1)
+    assert np.isclose(tr[0]["net"], 1.01**4 - 1.0 - 0.003 - tr[0]["cost"])
+    # on pure noise with fat tails removed, no trigger fires before the event (no look-ahead into the event hour's sigma)
+    assert all(t["entry"] >= idx[301] for t in ev.trades_e23("X", hourly, none, rank, direction=-1))
+
+
 if __name__ == "__main__":
+    check_events()
     check_cross_venue()
     check_timing_and_costs()
     check_funding_and_short()
