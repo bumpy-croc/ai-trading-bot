@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Event-driven intraday research** (Phase 1d). `experiments/strategy_search/events.py` tests three
+  preregistered hourly event trades across the Binance perp universe (funding-settlement capture, buying
+  capitulation, following volume breakouts); `yields.py` records what passive dollar yields actually paid
+  (Hyperliquid HLP vault, Aave, sUSDe). All three trades fail after costs: see
+  `docs/research/experiments/2026-11-11_event-driven-intraday-results.md`. No live or staging change.
 - **Wide strategy search and cross-venue funding arbitrage research** (#1324). `experiments/strategy_search/`
   downloads every Binance USDT perp that ever listed (public archive, delisted coins included), and
   backtests eight long/short and market-neutral families (21 variants) plus a Binance-vs-Hyperliquid
