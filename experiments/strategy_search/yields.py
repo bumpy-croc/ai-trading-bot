@@ -5,7 +5,8 @@ Realised track records, not backtests:
   - Hyperliquid's HLP vault, from its account-value and cumulative-P&L history (Hyperliquid API)
   - stablecoin supply rates from DefiLlama's yield history (Aave v3 USDT / USDC on Ethereum, Ethena sUSDe)
 
-Usage: python experiments/strategy_search/yields.py
+Usage: python experiments/strategy_search/yields.py            (vault and lending survey)
+       python experiments/strategy_search/yields.py hedged     (staking with a hedge, prereg 2026-11-23)
 """
 
 from __future__ import annotations
@@ -88,8 +89,71 @@ def llama() -> dict:
     return out
 
 
+HEDGED = {
+    "ETH": {"pool": "747c1d2a-c668-4682-b9f9-296708a3dd90", "perp": "ETHUSDT", "token": "Lido stETH"},
+    "SOL": {"pool": "0e7d0722-9054-4907-8593-567b353c0900", "perp": "SOLUSDT", "token": "Jito JitoSOL"},
+}
+HEDGE_COST_PER_YEAR = 2 * (0.0010 + 0.0005)  # one round trip a year on both legs at taker fees
+MARGIN = 0.25  # idle dollars per hedged dollar in the "separate margin" version
+
+
+def hedged_staking() -> dict:
+    """Staking token long, same coin's Binance perp short: realised yield by year.
+    Definitions: docs/research/experiments/2026-11-23_hedged-staking-yield-prereg.md."""
+    import data as data_mod
+
+    m = data_mod.build()
+    out: dict = {}
+    for coin, spec in HEDGED.items():
+        chart = requests.get(f"https://yields.llama.fi/chart/{spec['pool']}", timeout=60).json()["data"]
+        apy = pd.Series({pd.Timestamp(r["timestamp"]).normalize(): r["apy"] / 100.0 for r in chart if r["apy"] is not None})
+        apy.index = apy.index.tz_convert("UTC") if apy.index.tz is not None else apy.index.tz_localize("UTC")
+        apy = apy[~apy.index.duplicated(keep="last")].sort_index()
+        perp, spot, funding = m.close[spec["perp"]], m.spot_close[spec["perp"]], m.funding[spec["perp"]]
+        df = pd.DataFrame({
+            "staking": apy.reindex(perp.index).ffill(limit=7) / 365.0,
+            "funding": funding,
+            "basis": spot.pct_change(fill_method=None) - perp.pct_change(fill_method=None),
+        }).loc[:END].dropna()
+        first_year = df.index[0].year if df.index[0].dayofyear == 1 else df.index[0].year + 1
+        df = df.loc[f"{first_year}-01-01":]
+        df["net"] = df["staking"] + df["funding"] + df["basis"] - HEDGE_COST_PER_YEAR / 365.0
+        years = {}
+        for y, g in df.groupby(df.index.year):
+            ann = 365.0 / len(g)
+            years[int(y)] = {
+                "days": int(len(g)),
+                "staking": float(g["staking"].sum() * ann), "funding": float(g["funding"].sum() * ann),
+                "basis_change": float(g["basis"].sum() * ann), "cost": HEDGE_COST_PER_YEAR,
+                "net_token_as_collateral": float(((1 + g["net"]).prod() - 1) * ann),
+                "net_separate_margin": float(((1 + g["net"] / (1 + MARGIN)).prod() - 1) * ann),
+                "share_of_days_funding_negative": float((g["funding"] < 0).mean()),
+            }
+        recent = df.loc["2025-01-01":]
+        curve = (1 + recent["net"] / (1 + MARGIN)).cumprod()
+        gate = {
+            "2025 at least 7%": years.get(2025, {}).get("net_separate_margin", -1) >= 0.07,
+            "2026 at least 7%": years.get(2026, {}).get("net_separate_margin", -1) >= 0.07,
+            "drawdown 2025-26 at most 5%": float(-(curve / curve.cummax() - 1).min()) <= 0.05,
+        }
+        out[coin] = {
+            "token": spec["token"], "perp": spec["perp"], "first_day": str(df.index[0].date()), "last_day": str(df.index[-1].date()),
+            "latest_staking_apy": float(apy.iloc[-1]), "years": years,
+            "max_drawdown_2025_26_separate_margin": float(-(curve / curve.cummax() - 1).min()),
+            "worst_day_2025_26": float((recent["net"] / (1 + MARGIN)).min()),
+            "gate": gate, "h1_supported": all(gate.values()),
+        }
+    return out
+
+
 if __name__ == "__main__":
-    report = {"hlp": hlp(), "stablecoin_lending": llama()}
+    import sys
+
     RESULTS.mkdir(exist_ok=True)
-    (RESULTS / "yields.json").write_text(json.dumps(report, indent=1, default=float, sort_keys=True))
+    if sys.argv[1:] == ["hedged"]:
+        report = hedged_staking()
+        (RESULTS / "hedged_staking.json").write_text(json.dumps(report, indent=1, default=float, sort_keys=True))
+    else:
+        report = {"hlp": hlp(), "stablecoin_lending": llama()}
+        (RESULTS / "yields.json").write_text(json.dumps(report, indent=1, default=float, sort_keys=True))
     print(json.dumps(report, indent=1, default=float))
