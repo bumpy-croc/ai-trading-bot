@@ -1,0 +1,425 @@
+{
+ "baseline_matches_phase_1b": true,
+ "benchmarks": {
+  "BTC buy and hold": {
+   "fit": {
+    "avg_gross": 1.0,
+    "avg_net": 1.0,
+    "cagr": 0.2672517621568615,
+    "cost_per_year": 0.0,
+    "days": 914,
+    "funding_per_year": 0.0,
+    "max_dd": 0.766695618320954,
+    "sharpe": 0.6325927459305462,
+    "sharpe_rf0": 0.6886167498458142,
+    "turnover_per_year": 0.0,
+    "vol": 0.7001074128777283,
+    "worst_day": -0.1540841793809078
+   },
+   "validation": {
+    "avg_gross": 1.0,
+    "avg_net": 1.0,
+    "cagr": 1.375572831503658,
+    "cost_per_year": 0.0,
+    "days": 731,
+    "funding_per_year": 0.0,
+    "max_dd": 0.2625533998107423,
+    "sharpe": 1.9341764643284918,
+    "sharpe_rf0": 2.0144729369042937,
+    "turnover_per_year": 0.0,
+    "vol": 0.4884750124377229,
+    "worst_day": -0.0840363582618977
+   }
+  }
+ },
+ "books": {
+  "B0": {
+   "btc_correlation": 0.1429941442335318,
+   "fit": {
+    "avg_gross": 0.24564194980801657,
+    "avg_net": 0.013032654861090686,
+    "cagr": 0.19725628135983686,
+    "cost_per_year": 0.010675922604324647,
+    "days": 914,
+    "funding_per_year": 0.038630663334948065,
+    "max_dd": 0.15124857138504832,
+    "sharpe": 0.86244792898414,
+    "sharpe_rf0": 1.0773063970448438,
+    "turnover_per_year": 7.6261108453055835,
+    "vol": 0.18255189471558803,
+    "worst_day": -0.05125882328423259
+   },
+   "same_close_fill_sharpe": {
+    "fit": 0.7497363914368259,
+    "validation": 0.45215925144016517
+   },
+   "total_return_fit_plus_validation": 0.9776446556454752,
+   "validation": {
+    "avg_gross": 0.3681688386767043,
+    "avg_net": 0.024889919522510944,
+    "cagr": 0.12230506041095857,
+    "cost_per_year": 0.01783629807288697,
+    "days": 731,
+    "funding_per_year": 0.0061690185601287065,
+    "max_dd": 0.1749294584554968,
+    "sharpe": 0.523638537782895,
+    "sharpe_rf0": 0.7483010677572718,
+    "turnover_per_year": 12.427957237744312,
+    "vol": 0.1745855013946632,
+    "worst_day": -0.046737993939106715
+   },
+   "years": {
+    "2019": 0.0,
+    "2020": 0.3130399282319525,
+    "2021": 0.21395464849511736,
+    "2022": 0.0241283619255801,
+    "2023": 0.19873613748783714,
+    "2024": 0.05107942438153823
+   }
+  },
+  "V1": {
+   "btc_correlation": 0.16646348777733794,
+   "fit": {
+    "avg_gross": 0.20897233717106783,
+    "avg_net": 0.014912401441292453,
+    "cagr": 0.16697183286799078,
+    "cost_per_year": 0.011814465106850618,
+    "days": 914,
+    "funding_per_year": 0.03511571404588995,
+    "max_dd": 0.205752473772858,
+    "sharpe": 0.7387099331316798,
+    "sharpe_rf0": 0.9602293183720111,
+    "turnover_per_year": 8.630184100598036,
+    "vol": 0.17706269994211285,
+    "worst_day": -0.046941824931777454
+   },
+   "same_close_fill_sharpe": {
+    "fit": 0.6666799789046532,
+    "validation": 0.32283136422052355
+   },
+   "total_return_fit_plus_validation": 0.7327436680787032,
+   "validation": {
+    "avg_gross": 0.30266947427281304,
+    "avg_net": 0.043381943205950256,
+    "cagr": 0.08481446074280896,
+    "cost_per_year": 0.01922454343646251,
+    "days": 731,
+    "funding_per_year": 0.004417400831807089,
+    "max_dd": 0.19031184700780535,
+    "sharpe": 0.33617965388316434,
+    "sharpe_rf0": 0.5712304396510969,
+    "turnover_per_year": 13.902224035871445,
+    "vol": 0.16686955677270146,
+    "worst_day": -0.039314508304587825
+   },
+   "years": {
+    "2019": 0.0,
+    "2020": 0.3117853485904729,
+    "2021": 0.13549754940230185,
+    "2022": 0.013118773979532206,
+    "2023": 0.15968782288561956,
+    "2024": 0.015001534651072124
+   }
+  },
+  "V2": {
+   "btc_correlation": 0.11645273205947511,
+   "fit": {
+    "avg_gross": 0.25197828552197077,
+    "avg_net": -0.0011596121125758603,
+    "cagr": 0.15318082766568653,
+    "cost_per_year": 0.013928176060205735,
+    "days": 914,
+    "funding_per_year": 0.037011777291005674,
+    "max_dd": 0.14426885165126857,
+    "sharpe": 0.6711376302657813,
+    "sharpe_rf0": 0.8921174445013536,
+    "turnover_per_year": 7.797592411267306,
+    "vol": 0.17749503761622867,
+    "worst_day": -0.06582555137437285
+   },
+   "same_close_fill_sharpe": {
+    "fit": 0.6439955651769574,
+    "validation": 0.2993925564039376
+   },
+   "total_return_fit_plus_validation": 0.6443815100602472,
+   "validation": {
+    "avg_gross": 0.36003374208149025,
+    "avg_net": 0.01470448157579535,
+    "cagr": 0.0726563605726942,
+    "cost_per_year": 0.021327290227095775,
+    "days": 731,
+    "funding_per_year": 0.011239653253029542,
+    "max_dd": 0.14365571721725245,
+    "sharpe": 0.2620375790221926,
+    "sharpe_rf0": 0.48076726658607455,
+    "turnover_per_year": 11.538232377616877,
+    "vol": 0.17932097319306384,
+    "worst_day": -0.05377457011803599
+   },
+   "years": {
+    "2019": 0.0,
+    "2020": 0.14023376363373985,
+    "2021": 0.25115229303369224,
+    "2022": 0.04169239739164943,
+    "2023": 0.12593043806492443,
+    "2024": 0.022099365225531686
+   }
+  },
+  "V3": {
+   "btc_correlation": 0.15960666901482673,
+   "fit": {
+    "avg_gross": 0.08410573398695927,
+    "avg_net": 0.004435315820104776,
+    "cagr": 0.016386927099406146,
+    "cost_per_year": 0.00601341298018028,
+    "days": 914,
+    "funding_per_year": 0.023638673040488,
+    "max_dd": 0.20102293051499076,
+    "sharpe": -0.1403888179556719,
+    "sharpe_rf0": 0.19834057616810793,
+    "turnover_per_year": 4.3838532178562275,
+    "vol": 0.11579396745780246,
+    "worst_day": -0.04321351896176362
+   },
+   "same_close_fill_sharpe": {
+    "fit": -0.3744699964545955,
+    "validation": -1.0044466764897095
+   },
+   "switch": {
+    "first_day_it_can_be_on": "2020-10-26",
+    "share_of_weeks_on": {
+     "fit": 0.3923076923076923,
+     "validation": 0.4380952380952381
+    }
+   },
+   "total_return_fit_plus_validation": -0.07738818418276394,
+   "validation": {
+    "avg_gross": 0.16579396474657704,
+    "avg_net": 0.039567615130148504,
+    "cagr": -0.058745250383075764,
+    "cost_per_year": 0.012141718036471745,
+    "days": 731,
+    "funding_per_year": 0.007683655338427155,
+    "max_dd": 0.24572613944549992,
+    "sharpe": -0.6463737885436164,
+    "sharpe_rf0": -0.3648053539650472,
+    "turnover_per_year": 8.67501063677553,
+    "vol": 0.13930119865487034,
+    "worst_day": -0.046737993939106715
+   },
+   "years": {
+    "2019": 0.0,
+    "2020": -0.0521965626483496,
+    "2021": 0.26082639044769795,
+    "2022": -0.1284283081956581,
+    "2023": 0.11391641138813058,
+    "2024": -0.20477555120037028
+   }
+  },
+  "V4": {
+   "btc_correlation": -0.11398812248673229,
+   "fit": {
+    "avg_gross": 0.564188789856395,
+    "avg_net": -0.00025123305399597925,
+    "cagr": 0.05071414321192713,
+    "cost_per_year": 0.05681985243220535,
+    "days": 657,
+    "funding_per_year": -0.01033356214939019,
+    "max_dd": 0.23763078270108529,
+    "sharpe": 0.14771426325487338,
+    "sharpe_rf0": 0.3574823237473038,
+    "turnover_per_year": 41.42153165498659,
+    "vol": 0.18698185199450557,
+    "worst_day": -0.04982428626668045
+   },
+   "model": {
+    "first_prediction": "2021-03-15",
+    "fit": {
+     "long_beat_short_share": 0.5,
+     "rank_correlation": 0.028854755875322453,
+     "weeks": 94
+    },
+    "fit_sharpe_from_first_exposure": 0.1511907404516516,
+    "refits": [
+     {
+      "date": "2021-03-15",
+      "rows": 1350,
+      "weeks": 52
+     },
+     {
+      "date": "2021-06-14",
+      "rows": 1740,
+      "weeks": 65
+     },
+     {
+      "date": "2021-09-13",
+      "rows": 2130,
+      "weeks": 78
+     },
+     {
+      "date": "2021-12-13",
+      "rows": 2520,
+      "weeks": 91
+     },
+     {
+      "date": "2022-03-14",
+      "rows": 2910,
+      "weeks": 104
+     },
+     {
+      "date": "2022-06-13",
+      "rows": 3300,
+      "weeks": 117
+     },
+     {
+      "date": "2022-09-12",
+      "rows": 3690,
+      "weeks": 130
+     },
+     {
+      "date": "2022-12-12",
+      "rows": 4080,
+      "weeks": 143
+     },
+     {
+      "date": "2023-03-13",
+      "rows": 4470,
+      "weeks": 156
+     },
+     {
+      "date": "2023-06-12",
+      "rows": 4860,
+      "weeks": 169
+     },
+     {
+      "date": "2023-09-11",
+      "rows": 5250,
+      "weeks": 182
+     },
+     {
+      "date": "2023-12-11",
+      "rows": 5640,
+      "weeks": 195
+     },
+     {
+      "date": "2024-03-11",
+      "rows": 6030,
+      "weeks": 208
+     },
+     {
+      "date": "2024-06-10",
+      "rows": 6420,
+      "weeks": 221
+     },
+     {
+      "date": "2024-09-09",
+      "rows": 6810,
+      "weeks": 234
+     },
+     {
+      "date": "2024-12-09",
+      "rows": 7200,
+      "weeks": 247
+     }
+    ],
+    "validation": {
+     "long_beat_short_share": 0.5576923076923077,
+     "rank_correlation": 0.06526910242149396,
+     "weeks": 104
+    }
+   },
+   "same_close_fill_sharpe": {
+    "fit": 0.14485996620632227,
+    "validation": 0.7817351515409545
+   },
+   "total_return_fit_plus_validation": 0.47055869342584766,
+   "validation": {
+    "avg_gross": 0.6043924927379632,
+    "avg_net": 0.0025859611378322924,
+    "cagr": 0.15962336077650252,
+    "cost_per_year": 0.060972520728693844,
+    "days": 731,
+    "funding_per_year": -0.02730297467375102,
+    "max_dd": 0.1228458307065502,
+    "sharpe": 0.730348508385047,
+    "sharpe_rf0": 0.963062666643451,
+    "turnover_per_year": 43.70817978869549,
+    "vol": 0.1685450543005526,
+    "worst_day": -0.046060398467061336
+   },
+   "years": {
+    "2019": 0.0,
+    "2020": 0.0,
+    "2021": 0.06943240482834212,
+    "2022": 0.022160045609304735,
+    "2023": 0.17482562430540338,
+    "2024": 0.14508232676971788
+   }
+  }
+ },
+ "daily_returns_sha256": "d0b0b6fe6b040a6ce59971fb778ea5e4834a6bc1e011a8d9a8aeb356635d6d3f",
+ "ml_params": {
+  "early_stopping": false,
+  "learning_rate": 0.05,
+  "max_depth": 3,
+  "max_iter": 200,
+  "min_samples_leaf": 50,
+  "random_state": 0
+ },
+ "selection": {
+  "V4": {
+   "checks": {
+    "beats B0 validation Sharpe": true,
+    "fit Sharpe above 0.7": false,
+    "positive over both windows together": true,
+    "validation Sharpe above 0.7": true,
+    "validation drawdown under 25%": true
+   },
+   "qualifies": false
+  },
+  "forward_books": [
+   "B0"
+  ],
+  "tweaks": {
+   "V1": {
+    "checks": {
+     "fit Sharpe beats B0 by 0.15": false,
+     "validation Sharpe beats B0 by 0.15": false,
+     "validation drawdown at most 20%": true
+    },
+    "qualifies": false
+   },
+   "V2": {
+    "checks": {
+     "fit Sharpe beats B0 by 0.15": false,
+     "validation Sharpe beats B0 by 0.15": false,
+     "validation drawdown at most 20%": true
+    },
+    "qualifies": false
+   },
+   "V3": {
+    "checks": {
+     "fit Sharpe beats B0 by 0.15": false,
+     "validation Sharpe beats B0 by 0.15": false,
+     "validation drawdown at most 20%": false
+    },
+    "qualifies": false
+   }
+  }
+ },
+ "sklearn": "1.9.1",
+ "windows": {
+  "V4_fit": [
+   "2021-03-15",
+   "2022-12-31"
+  ],
+  "fit": [
+   "2020-07-01",
+   "2022-12-31"
+  ],
+  "validation": [
+   "2023-01-01",
+   "2024-12-31"
+  ]
+ }
+}
