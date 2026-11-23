@@ -1,0 +1,24 @@
+{
+ "gates": {
+  "1 pooled mean net > 0 with t >= 2.5": false,
+  "2 net positive in each coin": true,
+  "3 average net return >= 10% a year": true,
+  "4 worst trade >= -5% and drawdown <= 15% in each": true,
+  "5 at least 100 trades in each": false
+ },
+ "group": "candidate",
+ "pooled": {
+  "average_net_return_per_year": 0.12529579640226268,
+  "gross_mean_bp": 20.487953129793446,
+  "net_mean_bp": 12.487953129793453,
+  "net_t_by_day": 2.026192422376759,
+  "sets_net_positive": 3,
+  "trades": 301
+ },
+ "sets": [
+  "ETHUSDT",
+  "SOLUSDT",
+  "XRPUSDT"
+ ],
+ "verdict": "H0 supported"
+}

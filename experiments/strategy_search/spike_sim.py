@@ -30,6 +30,13 @@ SETS = {  # name: (directory under --dir, distance in bp, role, months)
     "ETHUSDT": ("npy_ETHUSDT", 43.0, "candidate", ("2025-11", "2026-10")),
     "SOLUSDT": ("npy_SOLUSDT", 50.0, "candidate", ("2025-11", "2026-10")),
     "XRPUSDT": ("npy_XRPUSDT", 55.0, "candidate", ("2025-11", "2026-10")),
+    # replication (docs/research/experiments/2026-11-23_spike-fade-replication-prereg.md)
+    "ETHUSDT_prev": ("npy_ETHUSDT_prev", 30.0, "replication", ("2024-11", "2025-10")),
+    "SOLUSDT_prev": ("npy_SOLUSDT_prev", 44.0, "replication", ("2024-11", "2025-10")),
+    "XRPUSDT_prev": ("npy_XRPUSDT_prev", 30.0, "replication", ("2024-11", "2025-10")),
+    "DOGEUSDT": ("npy_DOGEUSDT", 59.0, "replication", ("2025-11", "2026-10")),
+    "1000PEPEUSDT": ("npy_1000PEPEUSDT", 70.0, "replication", ("2025-11", "2026-10")),
+    "SUIUSDT": ("npy_SUIUSDT", 61.0, "replication", ("2025-11", "2026-10")),
 }
 FRESH = "2026-11"
 CLOCK_MS = 100
@@ -177,7 +184,7 @@ def run(directory: Path, name: str) -> None:
     for label, trades in frames.items():
         report["variants"][label] = stats(trades, months)
         fresh = trades[trades["month"] == FRESH]
-        if role == "candidate":
+        if FRESH > months[1] and len(fresh):
             report["variants"][label]["fresh_slice"] = {"trades": int(len(fresh)), "net_mean_bp": float(fresh["net"].mean() * 1e4) if len(fresh) else None,
                                                         "net_sum": float(fresh["net"].sum())}
     RESULTS.mkdir(exist_ok=True)
@@ -192,33 +199,49 @@ def run(directory: Path, name: str) -> None:
                   f"net/yr {s['net_return_per_year'] * 100:+6.1f}% worst {s['worst_trade'] * 100:+5.2f}% DD {s['max_drawdown'] * 100:4.1f}%")
 
 
-def report() -> None:
-    """Pool the three candidates' primary trades and apply the gates."""
-    per, pooled_net, pooled_gross = {}, [], []
-    for name, (_, _, role, months) in SETS.items():
-        r = json.loads((RESULTS / f"spike_{name}.json").read_text())
-        per[name] = r["variants"]["primary"]
-        if role == "candidate":
-            tr = pd.read_csv(RESULTS / f"spike_{name}_trades.csv")
-            tr["net"] = tr["gross"] - COST
-            tr["month"] = pd.to_datetime(tr["entry_ms"], unit="ms", utc=True).dt.strftime("%Y-%m")
-            tr = tr[(tr["month"] >= months[0]) & (tr["month"] <= months[1])]
-            pooled_net.append(daily_sums(tr, "net", months))
-            pooled_gross.append(tr)
-    cands = [n for n, s in SETS.items() if s[2] == "candidate"]
-    daily = sum(pooled_net)
-    alltr = pd.concat(pooled_gross)
-    gates = {
-        "1 pooled mean net > 0 with t >= 2.5": bool(alltr["net"].mean() > 0 and (day_t(daily) or 0) >= 2.5),
-        "2 net positive in each coin": all(per[n].get("net_mean_bp", -1) > 0 for n in cands),
-        "3 average net return >= 10% a year": float(np.mean([per[n].get("net_return_per_year", 0) for n in cands])) >= 0.10,
-        "4 worst trade >= -5% and drawdown <= 15% in each": all(per[n].get("worst_trade", -1) >= -0.05 and per[n].get("max_drawdown", 1) <= 0.15 for n in cands),
-        "5 at least 100 trades in each": all(per[n].get("trades", 0) >= 100 for n in cands),
-    }
-    out = {"pooled": {"trades": int(len(alltr)), "net_mean_bp": float(alltr["net"].mean() * 1e4), "gross_mean_bp": float(alltr["gross"].mean() * 1e4),
-                      "net_t_by_day": day_t(daily)}, "gates": gates,
-           "verdict": "H1 supported" if all(gates.values()) else ("mixed" if gates["1 pooled mean net > 0 with t >= 2.5"] and gates["2 net positive in each coin"] else "H0 supported")}
-    (RESULTS / "spike_pooled.json").write_text(json.dumps(out, indent=1, default=float, sort_keys=True))
+def report(group: str = "candidate") -> None:
+    """Pool one group's primary trades and apply that group's preregistered gates."""
+    per, daily_parts, trades = {}, [], []
+    names = [n for n, s in SETS.items() if s[2] == group]
+    for name in names:
+        months = SETS[name][3]
+        per[name] = json.loads((RESULTS / f"spike_{name}.json").read_text())["variants"]["primary"]
+        tr = pd.read_csv(RESULTS / f"spike_{name}_trades.csv")
+        tr["net"] = tr["gross"] - COST
+        tr["month"] = pd.to_datetime(tr["entry_ms"], unit="ms", utc=True).dt.strftime("%Y-%m")
+        tr = tr[(tr["month"] >= months[0]) & (tr["month"] <= months[1])]
+        daily_parts.append(daily_sums(tr, "net", months))
+        trades.append(tr)
+    daily = pd.concat(daily_parts, axis=1).fillna(0.0).sum(axis=1)  # one row per calendar day across all sets
+    alltr = pd.concat(trades)
+    t_stat = day_t(daily) or 0.0
+    positive = sum(per[n].get("net_mean_bp", -1) > 0 for n in names)
+    avg_year = float(np.mean([per[n].get("net_return_per_year", 0) for n in names]))
+    risk_ok = all(per[n].get("worst_trade", -1) >= -0.05 and per[n].get("max_drawdown", 1) <= 0.15 for n in names)
+    if group == "candidate":
+        gates = {
+            "1 pooled mean net > 0 with t >= 2.5": bool(alltr["net"].mean() > 0 and t_stat >= 2.5),
+            "2 net positive in each coin": positive == len(names),
+            "3 average net return >= 10% a year": avg_year >= 0.10,
+            "4 worst trade >= -5% and drawdown <= 15% in each": risk_ok,
+            "5 at least 100 trades in each": all(per[n].get("trades", 0) >= 100 for n in names),
+        }
+        first_two = list(gates.values())[:2]
+    else:
+        gates = {
+            "1 pooled mean net > 0 with t >= 2.0": bool(alltr["net"].mean() > 0 and t_stat >= 2.0),
+            "2 net positive in at least 4 of 6 sets": positive >= 4,
+            "3 average net return >= 10% a year": avg_year >= 0.10,
+            "4 worst trade >= -5% and drawdown <= 15% in each": risk_ok,
+            "5 at least 300 trades pooled": len(alltr) >= 300,
+        }
+        first_two = list(gates.values())[:2]
+    out = {"group": group, "sets": names,
+           "pooled": {"trades": int(len(alltr)), "net_mean_bp": float(alltr["net"].mean() * 1e4), "gross_mean_bp": float(alltr["gross"].mean() * 1e4),
+                      "net_t_by_day": t_stat, "sets_net_positive": int(positive), "average_net_return_per_year": avg_year},
+           "gates": gates,
+           "verdict": "H1 supported" if all(gates.values()) else ("mixed" if all(first_two) else "H0 supported")}
+    (RESULTS / ("spike_pooled.json" if group == "candidate" else f"spike_pooled_{group}.json")).write_text(json.dumps(out, indent=1, default=float, sort_keys=True))
     print(json.dumps(out, indent=1, default=float))
 
 
@@ -250,10 +273,11 @@ if __name__ == "__main__":
     ap.add_argument("mode", choices=["selftest", "run", "report"])
     ap.add_argument("--dir", type=Path)
     ap.add_argument("--set", choices=list(SETS))
+    ap.add_argument("--group", default="candidate", choices=["candidate", "replication"])
     args = ap.parse_args()
     if args.mode == "selftest":
         selftest()
     elif args.mode == "run":
         run(args.dir, args.set)
     else:
-        report()
+        report(args.group)

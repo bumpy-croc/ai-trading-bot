@@ -1,0 +1,142 @@
+{
+ "cost": 0.0008,
+ "distance_bp": 55.0,
+ "months": [
+  "2025-11",
+  "2026-10"
+ ],
+ "role": "candidate",
+ "set": "XRPUSDT",
+ "variants": {
+  "age1000": {
+   "best_trade": 0.050236793967744296,
+   "days_with_trades": 57,
+   "fresh_slice": {
+    "net_mean_bp": 12.374428157840699,
+    "net_sum": 0.00371232844735221,
+    "trades": 3
+   },
+   "gross_mean_bp": 25.901303015991758,
+   "gross_return_per_year": 0.2149808150327316,
+   "gross_t_by_day": 2.5981632174470577,
+   "long_share": 0.6626506024096386,
+   "max_drawdown": 0.09308514820447601,
+   "months_with_trades": 11,
+   "net_mean_bp": 17.901303015991765,
+   "net_mean_bp_first_half": 37.45334181698352,
+   "net_mean_bp_longs": 21.605324384288142,
+   "net_mean_bp_maker_exit": 21.901303015991754,
+   "net_mean_bp_second_half": 5.633357101643983,
+   "net_mean_bp_shorts": 10.62554675683815,
+   "net_return_per_year": 0.14858081503273166,
+   "net_t_by_day": 1.8062095762679602,
+   "trades": 83,
+   "win_rate_net": 0.6746987951807228,
+   "worst_trade": -0.10778163378888136
+  },
+  "age50": {
+   "best_trade": 0.030624490325931644,
+   "days_with_trades": 32,
+   "fresh_slice": {
+    "net_mean_bp": 18.80539217674693,
+    "net_sum": 0.0037610784353493865,
+    "trades": 2
+   },
+   "gross_mean_bp": 51.864584498978644,
+   "gross_return_per_year": 0.2178312548957103,
+   "gross_t_by_day": 2.4436210526497844,
+   "long_share": 0.5952380952380952,
+   "max_drawdown": 0.029641766969593246,
+   "months_with_trades": 11,
+   "net_mean_bp": 43.86458449897864,
+   "net_mean_bp_first_half": 13.268369789565542,
+   "net_mean_bp_longs": 54.4068798460129,
+   "net_mean_bp_maker_exit": 47.864584498978644,
+   "net_mean_bp_second_half": 66.81174553103848,
+   "net_mean_bp_shorts": 28.36120898863416,
+   "net_return_per_year": 0.1842312548957103,
+   "net_t_by_day": 2.143959554428256,
+   "trades": 42,
+   "win_rate_net": 0.7380952380952381,
+   "worst_trade": -0.01630279329608939
+  },
+  "hold1800": {
+   "best_trade": 0.04065242176093444,
+   "days_with_trades": 44,
+   "fresh_slice": {
+    "net_mean_bp": 6.599012368667338,
+    "net_sum": 0.0013198024737334675,
+    "trades": 2
+   },
+   "gross_mean_bp": 41.20761116982974,
+   "gross_return_per_year": 0.2225211003170806,
+   "gross_t_by_day": 2.5309752491855457,
+   "long_share": 0.6481481481481481,
+   "max_drawdown": 0.053770866161818254,
+   "months_with_trades": 11,
+   "net_mean_bp": 33.20761116982974,
+   "net_mean_bp_first_half": 18.63704080246111,
+   "net_mean_bp_longs": 39.22139727282301,
+   "net_mean_bp_maker_exit": 37.20761116982974,
+   "net_mean_bp_second_half": 43.22487829739567,
+   "net_mean_bp_shorts": 22.129584138000034,
+   "net_return_per_year": 0.17932110031708062,
+   "net_t_by_day": 2.1003793223335414,
+   "trades": 54,
+   "win_rate_net": 0.7037037037037037,
+   "worst_trade": -0.04073855606758823
+  },
+  "hold60": {
+   "best_trade": 0.05861725385640828,
+   "days_with_trades": 44,
+   "fresh_slice": {
+    "net_mean_bp": -22.06377639747103,
+    "net_sum": -0.004412755279494206,
+    "trades": 2
+   },
+   "gross_mean_bp": 46.66155808108111,
+   "gross_return_per_year": 0.32196475075945963,
+   "gross_t_by_day": 1.8489866433111202,
+   "long_share": 0.6521739130434783,
+   "max_drawdown": 0.03970269652078913,
+   "months_with_trades": 11,
+   "net_mean_bp": 38.6615580810811,
+   "net_mean_bp_first_half": 11.06862886588829,
+   "net_mean_bp_longs": 37.64351819683782,
+   "net_mean_bp_maker_exit": 42.661558081081104,
+   "net_mean_bp_second_half": 55.34565481584885,
+   "net_mean_bp_shorts": 40.570382864037285,
+   "net_return_per_year": 0.2667647507594596,
+   "net_t_by_day": 1.6130472447238566,
+   "trades": 69,
+   "win_rate_net": 0.7101449275362319,
+   "worst_trade": -0.02311816672201925
+  },
+  "primary": {
+   "best_trade": 0.03191149112579352,
+   "days_with_trades": 44,
+   "fresh_slice": {
+    "net_mean_bp": -1.270609955097198,
+    "net_sum": -0.00025412199101943964,
+    "trades": 2
+   },
+   "gross_mean_bp": 53.76528358080201,
+   "gross_return_per_year": 0.3225917014848121,
+   "gross_t_by_day": 2.457516233802633,
+   "long_share": 0.6333333333333333,
+   "max_drawdown": 0.021321776942424087,
+   "months_with_trades": 11,
+   "net_mean_bp": 45.765283580802006,
+   "net_mean_bp_first_half": 32.11583713352719,
+   "net_mean_bp_longs": 46.60956985362665,
+   "net_mean_bp_maker_exit": 49.76528358080201,
+   "net_mean_bp_second_half": 54.86491454565191,
+   "net_mean_bp_shorts": 44.306970927741276,
+   "net_return_per_year": 0.27459170148481205,
+   "net_t_by_day": 2.1726946452883547,
+   "trades": 60,
+   "win_rate_net": 0.7,
+   "worst_trade": -0.026819587779564367
+  }
+ }
+}

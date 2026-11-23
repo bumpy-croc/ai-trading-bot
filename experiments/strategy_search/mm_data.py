@@ -28,7 +28,8 @@ MONTHS = ["2025-11", "2025-12", "2026-01", "2026-02", "2026-03", "2026-04",
           "2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10"]
 FRESH_DAYS = [f"2026-11-{d:02d}" for d in range(1, 22)]
 TICK = 0.1
-TICKS = {"BTCUSDT": 0.1, "ETHUSDT": 0.01, "SOLUSDT": 0.01, "XRPUSDT": 0.0001}  # exchange tick sizes, November 2026
+TICKS = {"BTCUSDT": 0.1, "ETHUSDT": 0.01, "SOLUSDT": 0.01, "XRPUSDT": 0.0001,
+         "DOGEUSDT": 0.00001, "1000PEPEUSDT": 0.0000001, "SUIUSDT": 0.0001}  # exchange tick sizes, November 2026
 COLUMNS = ["agg_trade_id", "price", "quantity", "first_trade_id", "last_trade_id", "transact_time", "is_buyer_maker"]
 
 
