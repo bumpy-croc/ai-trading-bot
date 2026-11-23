@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Hedged staking yield measurement** (research;
+  `docs/research/experiments/2026-11-23_hedged-staking-yield-*.md`, `experiments/strategy_search/yields.py hedged`).
+  A staking token held against a short in the same coin's perp paid 10-14% a year on ETH in 2023-24,
+  6.1% in 2025 and 3.4% in 2026; SOL paid 3.7% in 2026. No better than lending now. No build.
 - **Backtest of the naive "quote around the last trade" market maker** (research;
   `docs/research/experiments/2026-11-23_naive-market-maker-*.md`). A tick-level simulator
   (`experiments/strategy_search/mm_data.py`, `mm_sim.py`) run on a year of BTCUSDT perp trades

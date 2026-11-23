@@ -4893,3 +4893,14 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 
 **Recommendation.** No build. A quoting bot of our own at the standard fee tier is not a route to profit on a liquid market; the bot stays paused.
 - ΔP: none. ΔR: none taken. C: research only. E: the results file above.
+
+## [D-2026-11-23-02] 2026-11-23 ~18:30 UTC · track-record + action · quant research (Claude, project thread "Find a profitable crypto strategy mix")
+
+**Authority.** Alex, 2026-11-23 18:15 UTC, project thread: "merge the pr and carry on finding a profitable strategy".
+
+**Action.** PR #1327 merged to `develop` (squash `3c4509c`). That puts `.github/workflows/paper-trend-recorder.yml` on the default branch, so the forward paper test of the slow trend book B0 (D-2026-11-11-03) starts: day 0 is Monday 2026-11-23, recorded on 2026-11-24 before its fill price exists. A manual first run was dispatched on 2026-11-23 to prove the plumbing on a heartbeat day.
+
+**Result.** Prereg `docs/research/experiments/2026-11-23_hedged-staking-yield-prereg.md` (commit `18b9c96`). Staking token long, same coin's Binance perp short, net of 0.30% a year in costs, on total capital with 25% extra margin: ETH 10.2% (2023), 13.5% (2024), 6.1% (2025), 3.4% (2026 to October, annualised); SOL 3.7% (2026; the JitoSOL series starts 2025-03-26). Gate was 7% in both 2025 and 2026. **H0 supported, no build.** Results: `docs/research/experiments/2026-11-23_hedged-staking-yield-results.md`.
+
+**Recommendation.** Nothing to build from the passive yields at current funding. In 2026 only the Hyperliquid vault (about 8%) paid clearly more than idle dollars.
+- ΔP: none. ΔR: none taken. C: research only. E: the results file above.
