@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Backtest of the naive "quote around the last trade" market maker** (research;
+  `docs/research/experiments/2026-11-23_naive-market-maker-*.md`). A tick-level simulator
+  (`experiments/strategy_search/mm_data.py`, `mm_sim.py`) run on a year of BTCUSDT perp trades
+  (580 million) over 25 preregistered settings. It loses at the standard maker fee in 24 of 25:
+  quoting 5 bp away and refreshing every second lost 198% of the account, and anything within 2 bp
+  lost about 1 bp per dollar traded before fees. No build. No live or staging change.
 - **Out-of-sample test of the most used public freqtrade strategy** (research;
   `docs/research/experiments/2026-11-11_nfi-frozen-oos-*.md`). NostalgiaForInfinity as it stood on
   30 December 2024, unmodified, run once on 2025-01 to 2026-10 (`experiments/strategy_search/nfi_data.py`,

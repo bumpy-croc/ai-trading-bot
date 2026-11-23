@@ -4882,3 +4882,14 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 
 **Recommendation.** No trial of this strategy. The lesson for our own work: judge any strategy on equity marked to market daily, never on closed trades, and treat a win rate near 100% as a sign of hidden tail risk.
 - ΔP: none. ΔR: none taken. C: research only. E: the results file above.
+
+## [D-2026-11-23-01] 2026-11-23 ~18:00 UTC · track-record · quant research (Claude, project thread "Find a profitable crypto strategy mix")
+
+**Authority.** Alex, 2026-11-23 17:33 UTC, project thread: "Can we backtest this strategy and tell me what it returns?", linking an X post that retells a contest story about a 51-line market-making bot (quote just below and above the last trade, refresh on every trade) and suggests running it on BTC-USDT.
+
+**Result.** Prereg `docs/research/experiments/2026-11-23_naive-market-maker-prereg.md` (commit `e439d75`, before the simulator saw market data). Binance BTCUSDT perp, every aggregated trade 2025-11-01 to 2026-10-31 (580 million), 25 preregistered cells (distance 0.25 to 25 bp or volatility-scaled; refresh 100 ms, 1 s, 15 s), 10,000 USDT account, 1,000 USDT orders, limit ±5,000, maker fee 0.02%, 50 ms latency, conservative fills. Verdict: **H0 supported.** Primary cell (5 bp, 1 s): -198% of the account, at zero on 2026-02-20. Every cell quoting within 2 bp lost 0.76 to 1.00 bp per dollar traded before fees (adverse selection: one second after a fill the price is about 0.7 bp on the wrong side). One cell of 25 passed (10 bp, 100 ms: +24.5%), against the 5 required, and lost 9.0% in the fresh slice 2026-11-01..21, where all 25 cells lost. Results: `docs/research/experiments/2026-11-23_naive-market-maker-results.md`. Simulator cross-checked against an independent implementation on one day (exact match in five cells); two runs byte-identical.
+
+**Window note.** The test overlaps the daily-bar exam window declared closed in D-2026-11-11-04. It was run because Alex asked for this rule specifically, on tick data no earlier test used, with the whole grid reported and no selection. That closure still stands for new daily-bar candidates.
+
+**Recommendation.** No build. A quoting bot of our own at the standard fee tier is not a route to profit on a liquid market; the bot stays paused.
+- ΔP: none. ΔR: none taken. C: research only. E: the results file above.
