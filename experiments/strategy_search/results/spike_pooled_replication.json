@@ -1,0 +1,27 @@
+{
+ "gates": {
+  "1 pooled mean net > 0 with t >= 2.0": false,
+  "2 net positive in at least 4 of 6 sets": true,
+  "3 average net return >= 10% a year": false,
+  "4 worst trade >= -5% and drawdown <= 15% in each": false,
+  "5 at least 300 trades pooled": true
+ },
+ "group": "replication",
+ "pooled": {
+  "average_net_return_per_year": -0.12754377472475706,
+  "gross_mean_bp": 5.763697696234458,
+  "net_mean_bp": -2.2363023037655414,
+  "net_t_by_day": -0.944672274389432,
+  "sets_net_positive": 5,
+  "trades": 3422
+ },
+ "sets": [
+  "ETHUSDT_prev",
+  "SOLUSDT_prev",
+  "XRPUSDT_prev",
+  "DOGEUSDT",
+  "1000PEPEUSDT",
+  "SUIUSDT"
+ ],
+ "verdict": "H0 supported"
+}

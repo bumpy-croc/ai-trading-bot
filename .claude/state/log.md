@@ -4904,3 +4904,14 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 
 **Recommendation.** Nothing to build from the passive yields at current funding. In 2026 only the Hyperliquid vault (about 8%) paid clearly more than idle dollars.
 - ΔP: none. ΔR: none taken. C: research only. E: the results file above.
+
+## [D-2026-11-23-03] 2026-11-23 ~19:30 UTC · track-record · quant research (Claude, project thread "Find a profitable crypto strategy mix")
+
+**Authority.** Alex, 2026-11-23 18:15 UTC, project thread: "merge the pr and carry on finding a profitable strategy".
+
+**Result 1 (spike fade, first test).** Prereg `docs/research/experiments/2026-11-23_spike-fade-prereg.md` (commit `c6dd8c0`), which discloses the post-hoc BTC exploration that led to it. Rule: bid and ask a volatility-scaled distance from the last trade, refreshed every 100 ms and live 250 ms later, filled only by a trade through them, one position at a time, exit after 300 s, 8 bp round-trip cost. ETH, SOL, XRP perps 2025-11..2026-10: +12.5 bp per trade net over 301 trades, positive in each coin, 12.5% a year on average, but pooled t = 2.03 (2.5 required) and XRP had 60 trades (100 required). **H0 by the gates.** Results: `2026-11-23_spike-fade-results.md`.
+
+**Result 2 (replication, unchanged rule, six untouched sets).** Prereg `2026-11-23_spike-fade-replication-prereg.md` (commit `c8d3bd3`). ETH, SOL, XRP 2024-11..2025-10 and DOGE, 1000PEPE, SUI 2025-11..2026-10: pooled −2.2 bp per trade net over 3,422 trades (t = −0.94); 5 of 6 sets positive; XRP 2024-25 lost 206% of its account (distance set from a quiet year; 53.5% lost on 10 Oct 2025 alone); SOL lost 15.4% on 2 Mar 2025. **H0: gates 1, 3 and 4 fail. The idea is closed on historical data.** Results: `2026-11-23_spike-fade-replication-results.md`.
+
+**Recommendation.** No build. The before-cost reversal after a spike is real in nine of ten sets, and after costs it behaves like selling insurance. Any adaptive version can only be judged on future data with the rule fixed first, on Alex's decision.
+- ΔP: none. ΔR: none taken. C: research only. E: the two results files above.

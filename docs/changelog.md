@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Spike-fade test and its replication** (research;
+  `docs/research/experiments/2026-11-23_spike-fade-*.md`, `experiments/strategy_search/spike_sim.py`).
+  Far resting orders that fill only in sudden jumps, closed after five minutes. Positive after costs on
+  ETH, SOL and XRP in 2025-26 (+12.5 bp a trade, 301 trades) but short of its evidence bar; the unchanged
+  rule then lost 2.2 bp a trade over 3,422 trades on six further sets, with one account wiped out in
+  the year that contained real liquidation cascades. Closed. No build.
 - **Hedged staking yield measurement** (research;
   `docs/research/experiments/2026-11-23_hedged-staking-yield-*.md`, `experiments/strategy_search/yields.py hedged`).
   A staking token held against a short in the same coin's perp paid 10-14% a year on ETH in 2023-24,
