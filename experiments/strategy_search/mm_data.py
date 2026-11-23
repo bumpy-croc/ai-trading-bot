@@ -8,6 +8,7 @@ the buyer was the maker (bool, i.e. the aggressor was a seller). Zips are kept u
 unless --delete-zips is given.
 
 Needs pyarrow. Usage: python mm_data.py --dir /path/with/30GB
+       python mm_data.py --dir D --symbol ETHUSDT --months 2025-11 2026-10 --out npy_ETHUSDT
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ MONTHS = ["2025-11", "2025-12", "2026-01", "2026-02", "2026-03", "2026-04",
           "2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10"]
 FRESH_DAYS = [f"2026-11-{d:02d}" for d in range(1, 22)]
 TICK = 0.1
+TICKS = {"BTCUSDT": 0.1, "ETHUSDT": 0.01, "SOLUSDT": 0.01, "XRPUSDT": 0.0001}  # exchange tick sizes, November 2026
 COLUMNS = ["agg_trade_id", "price", "quantity", "first_trade_id", "last_trade_id", "transact_time", "is_buyer_maker"]
 
 
@@ -45,7 +47,7 @@ def fetch(url: str, dest: Path) -> bool:
     raise RuntimeError(f"could not download {url}: {out.stderr.strip()}")
 
 
-def read_zip(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def read_zip(path: Path, tick: float = TICK) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(time ms, price ticks, buyer-is-maker) from one archive zip. Handles files with and without a header."""
     with zipfile.ZipFile(path) as zf:
         name = zf.namelist()[0]
@@ -63,15 +65,15 @@ def read_zip(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             ts, px, bm = [], [], []
             for batch in reader:
                 ts.append(batch.column("transact_time").to_numpy())
-                px.append(np.rint(batch.column("price").to_numpy() / TICK).astype(np.int32))
+                px.append(np.rint(batch.column("price").to_numpy() / tick).astype(np.int32))
                 bm.append(batch.column("is_buyer_maker").to_numpy(zero_copy_only=False))
     return np.concatenate(ts), np.concatenate(px), np.concatenate(bm)
 
 
-def pack(chunk: str, zips: list[Path], out: Path) -> None:
+def pack(chunk: str, zips: list[Path], out: Path, tick: float = TICK) -> None:
     if (out / f"{chunk}_ts.npy").exists():
         return
-    parts = [read_zip(z) for z in zips]
+    parts = [read_zip(z, tick) for z in zips]
     ts, px, bm = (np.concatenate([p[i] for p in parts]) for i in range(3))
     if not (np.diff(ts) >= 0).all():
         order = np.argsort(ts, kind="stable")
@@ -80,7 +82,16 @@ def pack(chunk: str, zips: list[Path], out: Path) -> None:
     np.save(out / f"{chunk}_px.npy", px)
     np.save(out / f"{chunk}_bm.npy", bm)
     np.save(out / f"{chunk}_ts.npy", ts)  # written last: its presence marks the chunk complete
-    print(f"{chunk}: {len(ts):,} trades, price {px.min() * TICK:,.1f} to {px.max() * TICK:,.1f}", flush=True)
+    print(f"{chunk}: {len(ts):,} trades, price {px.min() * tick:,.4f} to {px.max() * tick:,.4f}", flush=True)
+
+
+def month_range(first: str, last: str) -> list[str]:
+    (y, m), (y1, m1) = (tuple(int(x) for x in s.split("-")) for s in (first, last))
+    out = []
+    while (y, m) <= (y1, m1):
+        out.append(f"{y}-{m:02d}")
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return out
 
 
 def main() -> None:
@@ -88,26 +99,35 @@ def main() -> None:
     ap.add_argument("--dir", type=Path, required=True)
     ap.add_argument("--delete-zips", action="store_true")
     ap.add_argument("--only", nargs="+", help="chunks to build (default: all)")
+    ap.add_argument("--symbol", default=SYMBOL)
+    ap.add_argument("--months", nargs=2, metavar=("FIRST", "LAST"), help="month range, e.g. 2024-11 2025-10 (default: the market-maker window)")
+    ap.add_argument("--out", default="npy", help="sub-directory for the packed arrays")
+    ap.add_argument("--no-fresh", action="store_true", help="skip the November 2026 daily files")
     args = ap.parse_args()
-    zips, out = args.dir / "zips", args.dir / "npy"
-    for month in MONTHS:
+    symbol, tick = args.symbol, TICKS[args.symbol]
+    months = month_range(*args.months) if args.months else MONTHS
+    zips, out = args.dir / "zips", args.dir / args.out
+    for month in months:
         if args.only and month not in args.only:
             continue
-        z = zips / f"{SYMBOL}-aggTrades-{month}.zip"
+        z = zips / f"{symbol}-aggTrades-{month}.zip"
         if not (out / f"{month}_ts.npy").exists():
-            if not fetch(f"{BASE}/monthly/aggTrades/{SYMBOL}/{z.name}", z):
+            if not fetch(f"{BASE}/monthly/aggTrades/{symbol}/{z.name}", z):
                 raise RuntimeError(f"{z.name} is not in the archive")
-        pack(month, [z], out)
+        pack(month, [z], out, tick)
         if args.delete_zips and z.exists():
             z.unlink()
-    if not args.only or "2026-11" in args.only:
+    if not args.no_fresh and (not args.only or "2026-11" in args.only):
         days = []
         for day in FRESH_DAYS:
-            z = zips / f"{SYMBOL}-aggTrades-{day}.zip"
-            if fetch(f"{BASE}/daily/aggTrades/{SYMBOL}/{z.name}", z):
+            z = zips / f"{symbol}-aggTrades-{day}.zip"
+            if fetch(f"{BASE}/daily/aggTrades/{symbol}/{z.name}", z):
                 days.append(z)
         print(f"2026-11: {len(days)} of {len(FRESH_DAYS)} daily files found")
-        pack("2026-11", days, out)
+        pack("2026-11", days, out, tick)
+        if args.delete_zips:
+            for z in days:
+                z.unlink()
 
 
 if __name__ == "__main__":
