@@ -47,7 +47,7 @@ What the table says:
 | XRP | +45.8 (60) | +43.9 (42) | +17.9 (83) | +38.7 (69) | +33.2 (54) | +49.8 |
 | BTC control | +0.2 (278) | +1.5 (240) | −1.0 (370) | +0.0 (329) | −0.1 (221) | +4.2 |
 
-Older orders do worse in three of four sets, as in the exploration. Nothing here is used to change the rule.
+Orders about a second old do worse than the rule in all four sets, as in the exploration. Nothing here is used to change the rule.
 
 ## Fresh slice, 1 to 21 November 2026
 
