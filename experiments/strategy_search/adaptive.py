@@ -6,6 +6,13 @@
       (V1 selective, V2 broad, V3 regime switch, V4 ML ranker), applies the selection rule and
       writes results/adaptive_design.json.
 
+  python experiments/strategy_search/adaptive.py quiet-design
+      Data truncated at 2024-12-31. Prints B0 and Q1 (B0 switched on only in quiet markets) on 2020-24.
+
+  python experiments/strategy_search/adaptive.py exam
+      The one-off look at 2025-01-01 to 2026-10-31 for B0 and Q1
+      (docs/research/experiments/2026-11-24_trend-book-2025-26-exam-prereg.md). Writes results/trend_exam.json.
+
 The functions here are also what the forward recorder (tools/paper_trend_recorder.py) calls, so the
 weights it records are produced by the same code that was judged in Stage A.
 """
@@ -46,6 +53,11 @@ ML_REFIT_WEEKS = 13
 ML_MIN_COINS = 6  # a week needs this many labelled coins to count (same floor as the quintile legs)
 ML_PARAMS = {"max_depth": 3, "max_iter": 200, "learning_rate": 0.05, "min_samples_leaf": 50,
              "random_state": 0, "early_stopping": False}
+
+EXAM = ("2025-01-01", "2026-10-31")
+EXAM_T = 2.61  # one-sided 5% shared over the 11 candidates this window has now faced (normal quantile of 1 - 0.05/11)
+EXAM_CONSISTENT_SHARPE = 0.5  # B0's validation Sharpe, rounded down
+EXAM_MIN_ACTIVE = 0.8  # B0 only; Q1 is flat about half the time by construction
 
 EDGE = 0.15  # V1-V3 must beat B0's Sharpe by this much in both windows
 TWEAK_MAX_DD = 0.20
@@ -89,6 +101,13 @@ def regime_on(er: pd.Series) -> pd.Series:
     """True when today's trendiness is above the median of all its PAST values (today excluded)."""
     past_median = er.expanding(min_periods=ER_MIN_HISTORY).median().shift(1)
     return er > past_median  # False while either side is unknown
+
+
+def quiet_on(er: pd.Series) -> pd.Series:
+    """Q1's switch, the mirror of regime_on: True when today's trendiness is at or below the median of
+    all its PAST values. False while either side is unknown, so the book is flat until there is history."""
+    past_median = er.expanding(min_periods=ER_MIN_HISTORY).median().shift(1)
+    return er <= past_median
 
 
 def run_book(m: data_mod.Market, rank: pd.DataFrame, targets: pd.DataFrame, gate: pd.Series | None = None,
@@ -216,6 +235,11 @@ def build_books(m: data_mod.Market, names: tuple[str, ...] = ("B0", "V1", "V2", 
         on = regime_on(er)
         books["V3"] = run_book(m, rank, base_targets, gate=on, lag=lag)
         books["V3"].info = {"trendiness": er, "on": on}
+    if "Q1" in names:
+        er = trendiness(m, univ)
+        on = quiet_on(er)
+        books["Q1"] = run_book(m, rank, base_targets, gate=on, lag=lag)
+        books["Q1"].info = {"trendiness": er, "on": on}
     if "V4" in names:
         scores, info = ml_scores(m, rank, univ)
         books["V4"] = run_book(m, rank, ml_targets(m, univ, scores), lag=lag)
@@ -310,6 +334,86 @@ def design() -> dict:
     return report
 
 
+def quiet_design() -> None:
+    m = data_mod.build().truncate(DESIGN_CUTOFF)
+    assert m.close.index.max() <= pd.Timestamp(DESIGN_CUTOFF, tz="UTC")
+    books = build_books(m, names=("B0", "Q1"))
+    mondays = eng.weekly_days(m.close.index)
+    for name, book in books.items():
+        print(name, "fit", json.dumps(eng.metrics(book.result, *FIT), default=float))
+        print(name, "validation", json.dumps(eng.metrics(book.result, *VAL), default=float))
+        print(name, "years", eng.yearly(book.result))
+    on = books["Q1"].info["on"]
+    print("Q1 share of weeks on:", {k: float(eng.window(on.loc[mondays], *w).mean()) for k, w in (("fit", FIT), ("validation", VAL))})
+
+
+def exam() -> dict:
+    """B0 and Q1 on the 2025-26 window, once. Gates and verdicts as preregistered on 2026-11-24."""
+    m = data_mod.build()
+    assert m.close.index.max() >= pd.Timestamp(EXAM[1], tz="UTC")
+    rank, univ = strat.prepare(m)
+    books = build_books(m, names=("B0", "Q1"))
+    same_close = build_books(m, names=("B0", "Q1"), lag=0)
+    r_all = m.close.pct_change(fill_method=None)
+    btc = r_all["BTCUSDT"].fillna(0.0)
+    top30 = r_all.where(univ.shift(1, fill_value=False)).mean(axis=1).fillna(0.0)
+    mondays = eng.weekly_days(m.close.index)
+    report: dict = {"window": EXAM, "books": {}}
+    for name, book in books.items():
+        res = book.result
+        mt = eng.metrics(res, *EXAM)
+        r = eng.window(res.returns, *EXAM)
+        ex = r - eng.RF_DAILY
+        t_stat = float(ex.mean() / ex.std() * np.sqrt(len(ex)))
+        total = _total_return(res, *EXAM)
+        idle = float((1.0 + eng.RF_DAILY) ** len(r) - 1.0)
+        years = {y: v for y, v in eng.yearly(res).items() if y >= 2025}
+        active = float((eng.window(res.gross, *EXAM) > 0).mean())
+        gates = {
+            f"t-statistic of daily excess return at least {EXAM_T}": t_stat >= EXAM_T,
+            "return at least 10% a year": mt["cagr"] >= 0.10,
+            "drawdown at most 20%": mt["max_dd"] <= 0.20,
+            "2025 and 2026 both positive": years.get(2025, 0) > 0 and years.get(2026, 0) > 0,
+        }
+        if name == "B0":
+            gates[f"active on at least {EXAM_MIN_ACTIVE:.0%} of days"] = active >= EXAM_MIN_ACTIVE
+        consistent = {
+            f"Sharpe at least {EXAM_CONSISTENT_SHARPE}": mt["sharpe"] >= EXAM_CONSISTENT_SHARPE,
+            "total return above idle dollars": total > idle,
+            "drawdown at most 20%": mt["max_dd"] <= 0.20,
+        }
+        verdict = "PASS" if all(gates.values()) else "CONSISTENT" if all(consistent.values()) else "FAIL"
+        report["books"][name] = {
+            "exam": mt, "t_stat": t_stat, "total_return": total, "idle_total_return": idle, "years": years,
+            "active_share": active, "btc_correlation": float(r.corr(eng.window(btc, *EXAM))),
+            "same_close_fill_sharpe": eng.metrics(same_close[name].result, *EXAM).get("sharpe"),
+            "fit": eng.metrics(res, *FIT), "validation": eng.metrics(res, *VAL),
+            "gates": gates, "consistent_checks": consistent, "verdict": verdict,
+        }
+    on = books["Q1"].info["on"]
+    report["books"]["Q1"]["share_of_weeks_on"] = float(eng.window(on.loc[mondays], *EXAM).mean())
+    q, b = report["books"]["Q1"], report["books"]["B0"]
+    report["Q1_goes_forward"] = bool(q["verdict"] in ("PASS", "CONSISTENT") and q["exam"]["sharpe"] >= b["exam"]["sharpe"] + EDGE)
+    report["benchmarks"] = {"BTC buy and hold": _series_metrics(btc, *EXAM), "Top-30 equal weight": _series_metrics(top30, *EXAM)}
+    daily = pd.DataFrame({n: bk.result.returns for n, bk in books.items()})
+    report["daily_returns_sha256"] = hashlib.sha256(daily.round(12).to_csv().encode()).hexdigest()
+    RESULTS.mkdir(exist_ok=True)
+    (RESULTS / "trend_exam.json").write_text(json.dumps(report, indent=1, default=float, sort_keys=True))
+    eng.window_frame(daily, *EXAM).to_csv(RESULTS / "trend_exam_daily_returns.csv")
+    pct = lambda x: f"{x * 100:6.1f}%"  # noqa: E731
+    for name, v in report["books"].items():
+        e = v["exam"]
+        print(f"{name}: Sharpe {e['sharpe']:.2f} t {v['t_stat']:.2f} return/yr {pct(e['cagr'])} total {pct(v['total_return'])} "
+              f"DD {pct(e['max_dd'])} worst day {pct(e['worst_day'])} years {({y: pct(x) for y, x in v['years'].items()})} "
+              f"active {pct(v['active_share'])} corrBTC {v['btc_correlation']:.2f} same-close Sharpe {v['same_close_fill_sharpe']:.2f} -> {v['verdict']}")
+        print("   failed gates:", [k for k, ok in v["gates"].items() if not ok])
+    print("Q1 share of weeks on:", report["books"]["Q1"]["share_of_weeks_on"], "| Q1 goes forward:", report["Q1_goes_forward"])
+    for k, bm in report["benchmarks"].items():
+        print(f"{k}: Sharpe {bm['sharpe']:.2f} return/yr {pct(bm['cagr'])} DD {pct(bm['max_dd'])}")
+    print("daily returns sha256:", report["daily_returns_sha256"])
+    return report
+
+
 def _series_metrics(r: pd.Series, start: str, end: str) -> dict:
     return eng.metrics(eng.Result(r, r, r * 0, r * 0, r * 0, r * 0 + 1, r * 0 + 1), start, end)
 
@@ -334,6 +438,6 @@ def _print(report: dict) -> None:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["design"])
-    ap.parse_args()
-    design()
+    ap.add_argument("mode", choices=["design", "quiet-design", "exam"])
+    mode = ap.parse_args().mode
+    {"design": design, "quiet-design": quiet_design, "exam": exam}[mode]()
