@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Plain portfolios in pounds, 1997-2026** (research; `docs/research/experiments/2026-11-24_gbp-portfolios-10pct-*.md`,
+  `experiments/gbp_portfolios.py`). Alex asked what returns 10% a year outside crypto. Seven portfolios a UK
+  account can hold: US stocks 10.6% a year (5.9% then 15.7% by half, a 52% fall and 11.5 years to recover),
+  world stocks 9.2%, 60/40 7.7%, a ten-month trend filter 9.9% with a 21% fall, 2x versions 13.6% to 14.5%
+  with falls of 44% to 86%. None reaches 10% in both halves without a fall of more than 40%. A record, not a
+  forecast; nothing built.
 - **Dollar yields on-chain** (research; `docs/research/experiments/2026-11-24_dollar-yield-*.md`,
   `yields.py dollar`). 200 large stablecoin pools, five monthly rules, 2025-26, survivors only (an upper
   bound). Every large pool equal weight: 3.1% / 2.5%. Lending top three: 5.2% / 5.4%. Any pool top three:

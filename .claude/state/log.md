@@ -4946,3 +4946,12 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 
 **Recommendation.** No build. Across the programme (about 43 candidates), what paid more than idle dollars in 2026 was the Hyperliquid vault (about 8%), hedged LINK staking (7.5%, hindsight pick, forward check fixed) and new synthetic-dollar tokens (7-8%, unmeasured risk). The forward tests already running (trend book, LINK, Polymarket) and the funding watcher are what remains.
 - ΔP: none. ΔR: none taken. C: research only. E: the results file above.
+
+## [D-2026-11-24-04] 2026-11-24 ~13:20 UTC · track-record · quant research (Claude, project thread "Find strategies returning 10% a year")
+
+**Authority.** Alex, 2026-11-24 12:47 UTC, project thread: "Let's expand the scope a bit outside crypto. Let's say I have £5000 in crypto at the moment. Can you find some good investments or trading strategies that can be profitable with 10% + returns a year? I've heard forex can be great for this as there are quite predictable patterns".
+
+**Result.** Prereg `docs/research/experiments/2026-11-24_gbp-portfolios-10pct-prereg.md` (commit `33c77b1`, before the script existed). A measurement, not a search: seven plain portfolios in pounds, 1997-01 → 2026-10, bar = 10%/yr over the window and in both halves with a largest fall ≤ 40%. US stocks 10.6%/yr (5.9% / 15.7% by half, fall 51.6%, 11.5 years under water); world stocks 9.2% (fall 50.8%); 60/40 7.7% (24.7%); US stocks with a ten-month trend filter 9.9% (9.0% / 10.8%, fall 20.7%); 2x US stocks 13.9% (2.9% / 26.2%, fall 86.4%); 2x with the filter 14.5% (12.7% / 16.4%, fall 44.1%); 2x stocks and long bonds 13.6% (10.5% / 16.8%, fall 53.2%); pound cash 2.8%. **No portfolio MEETS; two MEET WITH DEEP LOSSES (both leveraged). H0.** The 2x model runs about 0.7 points a year above a real 2x fund since 2006. US stocks since 1871 (dollars): 9.2%/yr, 39% of ten-year periods at 10%/yr or more. The forex part of the question was already answered by the 2026-11-10 bake-off (no rerun).
+
+**Recommendation.** Nothing to build; no money moved; bot stays paused. Reported to Alex as a record of the past, not a forecast or personal advice.
+- ΔP: none. ΔR: none taken. C: research only. E: `docs/research/experiments/2026-11-24_gbp-portfolios-10pct-results.md`.
