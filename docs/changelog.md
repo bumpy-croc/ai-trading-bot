@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Slow forex patterns** (research; `docs/research/experiments/2026-11-24_fx-slow-patterns-*.md`,
+  `experiments/fx_slow_patterns.py`). Alex asked for patterns over weeks, months and years. 31 candidates
+  (weekly reversal, 1 to 12 month momentum, calendar seasonality, five-year value, a carry/momentum/value
+  blend) scanned on nine major pairs over 1987-2014 only. Best Sharpe after retail costs 0.28 (0.63 before);
+  none reaches the 0.40 needed to go to the 2015-2026 exam, which was not run. Seasonal and weekday averages
+  beyond two standard errors match the number chance gives. No build.
 - **Plain portfolios in pounds, 1997-2026** (research; `docs/research/experiments/2026-11-24_gbp-portfolios-10pct-*.md`,
   `experiments/gbp_portfolios.py`). Alex asked what returns 10% a year outside crypto. Seven portfolios a UK
   account can hold: US stocks 10.6% a year (5.9% then 15.7% by half, a 52% fall and 11.5 years to recover),

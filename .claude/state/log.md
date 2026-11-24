@@ -4955,3 +4955,12 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 
 **Recommendation.** Nothing to build; no money moved; bot stays paused. Reported to Alex as a record of the past, not a forecast or personal advice.
 - ΔP: none. ΔR: none taken. C: research only. E: `docs/research/experiments/2026-11-24_gbp-portfolios-10pct-results.md`.
+
+## [D-2026-11-24-05] 2026-11-24 ~21:50 UTC · track-record · quant research (Claude, project thread "Find strategies returning 10% a year")
+
+**Authority.** Alex, 2026-11-24 21:17 UTC, project thread: "Can you investigate Forex some more. Can you spot any patterns over weeks/months/years that would make consistent profitable trades".
+
+**Result.** Prereg `docs/research/experiments/2026-11-24_fx-slow-patterns-prereg.md` (commit `be5c1b3`, before the script existed). Two stages with a wall: scan 31 candidates (15 published slow rules and their opposites, one blend) on nine major pairs over 1987-01 → 2014-12 only; at most five with Sharpe ≥ 0.40 after retail costs and both halves positive go once to 2015-2026. Best after costs: blend of carry, 3-month winners and cheapness 0.28 (0.63 before costs, 1.2%/yr over cash), five-year reversal 0.27 (0.50 before). **None qualifies; Stage B not run; the 2015-2026 window stays at fifteen candidates. H0.** Descriptive: 5 of 108 calendar-month averages beyond two standard errors (4.9 expected by chance), 0 of 45 weekday averages, return autocorrelation inside the no-pattern band at 1 week, 1, 3 and 12 months. Reference: the 2026-11-10 carry rule shows Sharpe 0.37 after costs on 1987-2014 against its known 0.04 on 2015-2026.
+
+**Recommendation.** No build, no account. No further forex patterns at these horizons on price and interest-rate history.
+- ΔP: none. ΔR: none taken. C: research only. E: `docs/research/experiments/2026-11-24_fx-slow-patterns-results.md`.

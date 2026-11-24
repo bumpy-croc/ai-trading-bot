@@ -1,0 +1,1314 @@
+{
+ "candidates": {
+  "K1+": {
+   "ann_excess": 0.011551,
+   "first_half": {
+    "ann_excess": 0.015043,
+    "sharpe": 0.368426
+   },
+   "max_dd": 0.146135,
+   "name": "carry + 3-month winners + cheapness, one third each",
+   "rule": "K1",
+   "second_half": {
+    "ann_excess": 0.00808,
+    "sharpe": 0.198464
+   },
+   "sharpe": 0.28058,
+   "sharpe_before_costs": 0.625804,
+   "sign": "+",
+   "starts": "1975-05-02",
+   "tstat": 1.484543,
+   "turnover_per_year": 6.72,
+   "vol": 0.044455
+  },
+  "S1+": {
+   "ann_excess": -0.036112,
+   "first_half": {
+    "ann_excess": -0.024378,
+    "sharpe": -0.264014
+   },
+   "max_dd": 0.665368,
+   "name": "best against worst currencies for the coming calendar month",
+   "rule": "S1",
+   "second_half": {
+    "ann_excess": -0.04773,
+    "sharpe": -0.60546
+   },
+   "sharpe": -0.428972,
+   "sharpe_before_costs": -0.139829,
+   "sign": "+",
+   "starts": "1985-02-04",
+   "tstat": -2.269683,
+   "turnover_per_year": 27.63,
+   "vol": 0.078548
+  },
+  "S1-": {
+   "ann_excess": -0.014705,
+   "first_half": {
+    "ann_excess": -0.036642,
+    "sharpe": -0.419599
+   },
+   "max_dd": 0.553601,
+   "name": "best against worst currencies for the coming calendar month (reversed)",
+   "rule": "S1",
+   "second_half": {
+    "ann_excess": 0.007717,
+    "sharpe": 0.139083
+   },
+   "sharpe": -0.149014,
+   "sharpe_before_costs": 0.139829,
+   "sign": "-",
+   "starts": "1985-02-04",
+   "tstat": -0.788433,
+   "turnover_per_year": 27.63,
+   "vol": 0.07864
+  },
+  "S2+": {
+   "ann_excess": -0.003976,
+   "first_half": {
+    "ann_excess": -0.002346,
+    "sharpe": -0.000981
+   },
+   "max_dd": 0.3651,
+   "name": "all currencies against the dollar by calendar month",
+   "rule": "S2",
+   "second_half": {
+    "ann_excess": -0.005607,
+    "sharpe": -0.02139
+   },
+   "sharpe": -0.012358,
+   "sharpe_before_costs": 0.258481,
+   "sign": "+",
+   "starts": "1985-02-04",
+   "tstat": -0.065385,
+   "turnover_per_year": 13.43,
+   "vol": 0.077755
+  },
+  "S2-": {
+   "ann_excess": -0.043225,
+   "first_half": {
+    "ann_excess": -0.053088,
+    "sharpe": -0.772444
+   },
+   "max_dd": 0.755141,
+   "name": "all currencies against the dollar by calendar month (reversed)",
+   "rule": "S2",
+   "second_half": {
+    "ann_excess": -0.033293,
+    "sharpe": -0.346909
+   },
+   "sharpe": -0.529198,
+   "sharpe_before_costs": -0.258481,
+   "sign": "-",
+   "starts": "1985-02-04",
+   "tstat": -2.799981,
+   "turnover_per_year": 13.43,
+   "vol": 0.077775
+  },
+  "T1+": {
+   "ann_excess": -0.003138,
+   "first_half": {
+    "ann_excess": -0.00422,
+    "sharpe": -0.047624
+   },
+   "max_dd": 0.256113,
+   "name": "each pair, direction of last month",
+   "rule": "T1",
+   "second_half": {
+    "ann_excess": -0.002058,
+    "sharpe": 0.005697
+   },
+   "sharpe": -0.017845,
+   "sharpe_before_costs": 0.310184,
+   "sign": "+",
+   "starts": "1975-03-04",
+   "tstat": -0.094416,
+   "turnover_per_year": 11.62,
+   "vol": 0.063416
+  },
+  "T1-": {
+   "ann_excess": -0.0416,
+   "first_half": {
+    "ann_excess": -0.049344,
+    "sharpe": -0.875502
+   },
+   "max_dd": 0.712761,
+   "name": "each pair, direction of last month (reversed)",
+   "rule": "T1",
+   "second_half": {
+    "ann_excess": -0.033827,
+    "sharpe": -0.455717
+   },
+   "sharpe": -0.638016,
+   "sharpe_before_costs": -0.310184,
+   "sign": "-",
+   "starts": "1975-03-04",
+   "tstat": -3.375732,
+   "turnover_per_year": 11.62,
+   "vol": 0.063439
+  },
+  "T12+": {
+   "ann_excess": -0.004421,
+   "first_half": {
+    "ann_excess": -0.001634,
+    "sharpe": 0.000466
+   },
+   "max_dd": 0.406257,
+   "name": "each pair, direction of last 12 months",
+   "rule": "T12",
+   "second_half": {
+    "ann_excess": -0.007204,
+    "sharpe": -0.055769
+   },
+   "sharpe": -0.031335,
+   "sharpe_before_costs": 0.259441,
+   "sign": "+",
+   "starts": "1976-02-03",
+   "tstat": -0.165794,
+   "turnover_per_year": 2.72,
+   "vol": 0.06786
+  },
+  "T12-": {
+   "ann_excess": -0.03888,
+   "first_half": {
+    "ann_excess": -0.049929,
+    "sharpe": -0.858308
+   },
+   "max_dd": 0.755823,
+   "name": "each pair, direction of last 12 months (reversed)",
+   "rule": "T12",
+   "second_half": {
+    "ann_excess": -0.027734,
+    "sharpe": -0.327944
+   },
+   "sharpe": -0.549944,
+   "sharpe_before_costs": -0.259441,
+   "sign": "-",
+   "starts": "1976-02-03",
+   "tstat": -2.909744,
+   "turnover_per_year": 2.72,
+   "vol": 0.067913
+  },
+  "T3+": {
+   "ann_excess": 0.003126,
+   "first_half": {
+    "ann_excess": -0.006053,
+    "sharpe": -0.076655
+   },
+   "max_dd": 0.238831,
+   "name": "each pair, direction of last 3 months",
+   "rule": "T3",
+   "second_half": {
+    "ann_excess": 0.012391,
+    "sharpe": 0.204868
+   },
+   "sharpe": 0.080345,
+   "sharpe_before_costs": 0.385784,
+   "sign": "+",
+   "starts": "1975-05-02",
+   "tstat": 0.425106,
+   "turnover_per_year": 5.93,
+   "vol": 0.065833
+  },
+  "T3-": {
+   "ann_excess": -0.046573,
+   "first_half": {
+    "ann_excess": -0.046494,
+    "sharpe": -0.796213
+   },
+   "max_dd": 0.740193,
+   "name": "each pair, direction of last 3 months (reversed)",
+   "rule": "T3",
+   "second_half": {
+    "ann_excess": -0.046689,
+    "sharpe": -0.616688
+   },
+   "sharpe": -0.690914,
+   "sharpe_before_costs": -0.385784,
+   "sign": "-",
+   "starts": "1975-05-02",
+   "tstat": -3.655618,
+   "turnover_per_year": 5.93,
+   "vol": 0.065882
+  },
+  "T6+": {
+   "ann_excess": -0.003308,
+   "first_half": {
+    "ann_excess": -0.012723,
+    "sharpe": -0.195098
+   },
+   "max_dd": 0.310396,
+   "name": "each pair, direction of last 6 months",
+   "rule": "T6",
+   "second_half": {
+    "ann_excess": 0.006193,
+    "sharpe": 0.119861
+   },
+   "sharpe": -0.016298,
+   "sharpe_before_costs": 0.281953,
+   "sign": "+",
+   "starts": "1975-08-04",
+   "tstat": -0.086233,
+   "turnover_per_year": 4.24,
+   "vol": 0.066694
+  },
+  "T6-": {
+   "ann_excess": -0.040102,
+   "first_half": {
+    "ann_excess": -0.039558,
+    "sharpe": -0.675539
+   },
+   "max_dd": 0.692606,
+   "name": "each pair, direction of last 6 months (reversed)",
+   "rule": "T6",
+   "second_half": {
+    "ann_excess": -0.040677,
+    "sharpe": -0.516246
+   },
+   "sharpe": -0.580013,
+   "sharpe_before_costs": -0.281953,
+   "sign": "-",
+   "starts": "1975-08-04",
+   "tstat": -3.068843,
+   "turnover_per_year": 4.24,
+   "vol": 0.066725
+  },
+  "V1+": {
+   "ann_excess": -0.019324,
+   "first_half": {
+    "ann_excess": -0.006206,
+    "sharpe": -0.041889
+   },
+   "max_dd": 0.469059,
+   "name": "cheap against dear on real exchange rates",
+   "rule": "V1",
+   "second_half": {
+    "ann_excess": -0.032281,
+    "sharpe": -0.348102
+   },
+   "sharpe": -0.201234,
+   "sharpe_before_costs": 0.044197,
+   "sign": "+",
+   "starts": "1975-02-04",
+   "tstat": -1.064727,
+   "turnover_per_year": 3.74,
+   "vol": 0.080781
+  },
+  "V1-": {
+   "ann_excess": -0.026307,
+   "first_half": {
+    "ann_excess": -0.048334,
+    "sharpe": -0.602683
+   },
+   "max_dd": 0.63088,
+   "name": "cheap against dear on real exchange rates (reversed)",
+   "rule": "V1",
+   "second_half": {
+    "ann_excess": -0.003795,
+    "sharpe": -0.003085
+   },
+   "sharpe": -0.289808,
+   "sharpe_before_costs": -0.044197,
+   "sign": "-",
+   "starts": "1975-02-04",
+   "tstat": -1.53337,
+   "turnover_per_year": 3.74,
+   "vol": 0.08072
+  },
+  "V2+": {
+   "ann_excess": 0.02011,
+   "first_half": {
+    "ann_excess": 0.033226,
+    "sharpe": 0.410994
+   },
+   "max_dd": 0.235616,
+   "name": "five-year losers against five-year winners",
+   "rule": "V2",
+   "second_half": {
+    "ann_excess": 0.007178,
+    "sharpe": 0.126307
+   },
+   "sharpe": 0.271504,
+   "sharpe_before_costs": 0.500583,
+   "sign": "+",
+   "starts": "1980-02-04",
+   "tstat": 1.436523,
+   "turnover_per_year": 5.25,
+   "vol": 0.087394
+  },
+  "V2-": {
+   "ann_excess": -0.065373,
+   "first_half": {
+    "ann_excess": -0.086603,
+    "sharpe": -0.970065
+   },
+   "max_dd": 0.870774,
+   "name": "five-year losers against five-year winners (reversed)",
+   "rule": "V2",
+   "second_half": {
+    "ann_excess": -0.043704,
+    "sharpe": -0.479397
+   },
+   "sharpe": -0.729542,
+   "sharpe_before_costs": -0.500583,
+   "sign": "-",
+   "starts": "1980-02-04",
+   "tstat": -3.859995,
+   "turnover_per_year": 5.25,
+   "vol": 0.087418
+  },
+  "W1+": {
+   "ann_excess": -0.073329,
+   "first_half": {
+    "ann_excess": -0.072589,
+    "sharpe": -0.806024
+   },
+   "max_dd": 0.887944,
+   "name": "last week's winners against losers",
+   "rule": "W1",
+   "second_half": {
+    "ann_excess": -0.074123,
+    "sharpe": -0.784481
+   },
+   "sharpe": -0.794712,
+   "sharpe_before_costs": -0.405656,
+   "sign": "+",
+   "starts": "1975-01-14",
+   "tstat": -4.204808,
+   "turnover_per_year": 129.67,
+   "vol": 0.090636
+  },
+  "W1-": {
+   "ann_excess": -0.002648,
+   "first_half": {
+    "ann_excess": -0.011915,
+    "sharpe": -0.091168
+   },
+   "max_dd": 0.370807,
+   "name": "last week's winners against losers (reversed)",
+   "rule": "W1",
+   "second_half": {
+    "ann_excess": 0.006702,
+    "sharpe": 0.118328
+   },
+   "sharpe": 0.015907,
+   "sharpe_before_costs": 0.405656,
+   "sign": "-",
+   "starts": "1975-01-14",
+   "tstat": 0.084161,
+   "turnover_per_year": 129.67,
+   "vol": 0.090527
+  },
+  "W4+": {
+   "ann_excess": -0.035315,
+   "first_half": {
+    "ann_excess": -0.02405,
+    "sharpe": -0.213093
+   },
+   "max_dd": 0.695765,
+   "name": "last four weeks' winners against losers",
+   "rule": "W4",
+   "second_half": {
+    "ann_excess": -0.046476,
+    "sharpe": -0.463029
+   },
+   "sharpe": -0.337838,
+   "sharpe_before_costs": -0.043749,
+   "sign": "+",
+   "starts": "1975-02-04",
+   "tstat": -1.787493,
+   "turnover_per_year": 65.48,
+   "vol": 0.093475
+  },
+  "W4-": {
+   "ann_excess": -0.027388,
+   "first_half": {
+    "ann_excess": -0.047506,
+    "sharpe": -0.472896
+   },
+   "max_dd": 0.677969,
+   "name": "last four weeks' winners against losers (reversed)",
+   "rule": "W4",
+   "second_half": {
+    "ann_excess": -0.006871,
+    "sharpe": -0.027133
+   },
+   "sharpe": -0.250253,
+   "sharpe_before_costs": 0.043749,
+   "sign": "-",
+   "starts": "1975-02-04",
+   "tstat": -1.324084,
+   "turnover_per_year": 65.48,
+   "vol": 0.093505
+  },
+  "X1+": {
+   "ann_excess": -0.018035,
+   "first_half": {
+    "ann_excess": -0.014519,
+    "sharpe": -0.113169
+   },
+   "max_dd": 0.499238,
+   "name": "last month's winners against losers",
+   "rule": "X1",
+   "second_half": {
+    "ann_excess": -0.021551,
+    "sharpe": -0.192496
+   },
+   "sharpe": -0.152727,
+   "sharpe_before_costs": 0.098279,
+   "sign": "+",
+   "starts": "1975-03-04",
+   "tstat": -0.808075,
+   "turnover_per_year": 29.68,
+   "vol": 0.091651
+  },
+  "X1-": {
+   "ann_excess": -0.035569,
+   "first_half": {
+    "ann_excess": -0.048351,
+    "sharpe": -0.493244
+   },
+   "max_dd": 0.696538,
+   "name": "last month's winners against losers (reversed)",
+   "rule": "X1",
+   "second_half": {
+    "ann_excess": -0.022646,
+    "sharpe": -0.204614
+   },
+   "sharpe": -0.349203,
+   "sharpe_before_costs": -0.098279,
+   "sign": "-",
+   "starts": "1975-03-04",
+   "tstat": -1.847628,
+   "turnover_per_year": 29.68,
+   "vol": 0.091673
+  },
+  "X12+": {
+   "ann_excess": -0.016564,
+   "first_half": {
+    "ann_excess": -0.014696,
+    "sharpe": -0.107499
+   },
+   "max_dd": 0.449048,
+   "name": "last 12 months' winners against losers",
+   "rule": "X12",
+   "second_half": {
+    "ann_excess": -0.018441,
+    "sharpe": -0.143829
+   },
+   "sharpe": -0.125788,
+   "sharpe_before_costs": 0.087757,
+   "sign": "+",
+   "starts": "1976-02-03",
+   "tstat": -0.665545,
+   "turnover_per_year": 8.94,
+   "vol": 0.096087
+  },
+  "X12-": {
+   "ann_excess": -0.033022,
+   "first_half": {
+    "ann_excess": -0.044182,
+    "sharpe": -0.425886
+   },
+   "max_dd": 0.710425,
+   "name": "last 12 months' winners against losers (reversed)",
+   "rule": "X12",
+   "second_half": {
+    "ann_excess": -0.02176,
+    "sharpe": -0.178514
+   },
+   "sharpe": -0.301196,
+   "sharpe_before_costs": -0.087757,
+   "sign": "-",
+   "starts": "1976-02-03",
+   "tstat": -1.593624,
+   "turnover_per_year": 8.94,
+   "vol": 0.096131
+  },
+  "X3+": {
+   "ann_excess": -0.000383,
+   "first_half": {
+    "ann_excess": -0.002681,
+    "sharpe": 0.019813
+   },
+   "max_dd": 0.24562,
+   "name": "last 3 months' winners against losers",
+   "rule": "X3",
+   "second_half": {
+    "ann_excess": 0.00192,
+    "sharpe": 0.068209
+   },
+   "sharpe": 0.044148,
+   "sharpe_before_costs": 0.266982,
+   "sign": "+",
+   "starts": "1975-05-02",
+   "tstat": 0.233584,
+   "turnover_per_year": 16.8,
+   "vol": 0.096193
+  },
+  "X3-": {
+   "ann_excess": -0.050452,
+   "first_half": {
+    "ann_excess": -0.057656,
+    "sharpe": -0.57217
+   },
+   "max_dd": 0.774343,
+   "name": "last 3 months' winners against losers (reversed)",
+   "rule": "X3",
+   "second_half": {
+    "ann_excess": -0.043233,
+    "sharpe": -0.408107
+   },
+   "sharpe": -0.489615,
+   "sharpe_before_costs": -0.266982,
+   "sign": "-",
+   "starts": "1975-05-02",
+   "tstat": -2.590547,
+   "turnover_per_year": 16.8,
+   "vol": 0.096264
+  },
+  "X6+": {
+   "ann_excess": -0.020211,
+   "first_half": {
+    "ann_excess": -0.013279,
+    "sharpe": -0.090811
+   },
+   "max_dd": 0.52167,
+   "name": "last 6 months' winners against losers",
+   "rule": "X6",
+   "second_half": {
+    "ann_excess": -0.027109,
+    "sharpe": -0.253138
+   },
+   "sharpe": -0.170058,
+   "sharpe_before_costs": 0.053894,
+   "sign": "+",
+   "starts": "1975-08-04",
+   "tstat": -0.899772,
+   "turnover_per_year": 13.21,
+   "vol": 0.094034
+  },
+  "X6-": {
+   "ann_excess": -0.030092,
+   "first_half": {
+    "ann_excess": -0.046842,
+    "sharpe": -0.450282
+   },
+   "max_dd": 0.663211,
+   "name": "last 6 months' winners against losers (reversed)",
+   "rule": "X6",
+   "second_half": {
+    "ann_excess": -0.013075,
+    "sharpe": -0.097248
+   },
+   "sharpe": -0.277697,
+   "sharpe_before_costs": -0.053894,
+   "sign": "-",
+   "starts": "1975-08-04",
+   "tstat": -1.46929,
+   "turnover_per_year": 13.21,
+   "vol": 0.094094
+  }
+ },
+ "data_cut_at": "2014-12-31",
+ "descriptive": {
+  "autocorrelation": {
+   "12m": {
+    "by_pair": {
+     "AUD": -0.1386,
+     "CAD": -0.2019,
+     "CHF": -0.1247,
+     "EUR": -0.102,
+     "GBP": -0.1406,
+     "JPY": 0.1816,
+     "NOK": -0.2904,
+     "NZD": -0.1049,
+     "SEK": 0.0013
+    },
+    "mean": -0.1023,
+    "n": 27,
+    "two_se": 0.3849
+   },
+   "1m": {
+    "by_pair": {
+     "AUD": 0.04,
+     "CAD": -0.0554,
+     "CHF": 0.0313,
+     "EUR": 0.0683,
+     "GBP": 0.1079,
+     "JPY": 0.0461,
+     "NOK": 0.0566,
+     "NZD": -0.0225,
+     "SEK": 0.121
+    },
+    "mean": 0.0437,
+    "n": 335,
+    "two_se": 0.1093
+   },
+   "1w": {
+    "by_pair": {
+     "AUD": -0.0565,
+     "CAD": -0.038,
+     "CHF": -0.0093,
+     "EUR": 0.0121,
+     "GBP": -0.0004,
+     "JPY": -0.0483,
+     "NOK": -0.0307,
+     "NZD": -0.051,
+     "SEK": -0.0086
+    },
+    "mean": -0.0256,
+    "n": 1461,
+    "two_se": 0.0523
+   },
+   "3m": {
+    "by_pair": {
+     "AUD": 0.0621,
+     "CAD": 0.0619,
+     "CHF": -0.0259,
+     "EUR": -0.0476,
+     "GBP": -0.0085,
+     "JPY": 0.0082,
+     "NOK": -0.0134,
+     "NZD": 0.2274,
+     "SEK": 0.103
+    },
+    "mean": 0.0408,
+    "n": 111,
+    "two_se": 0.1898
+   }
+  },
+  "calendar_month": {
+   "beyond_2": 5,
+   "cells": {
+    "AUD-01": {
+     "mean": -0.00108,
+     "t": -0.18
+    },
+    "AUD-02": {
+     "mean": 0.0026,
+     "t": 0.46
+    },
+    "AUD-03": {
+     "mean": 0.00441,
+     "t": 0.73
+    },
+    "AUD-04": {
+     "mean": 0.01019,
+     "t": 1.85
+    },
+    "AUD-05": {
+     "mean": -0.00687,
+     "t": -0.89
+    },
+    "AUD-06": {
+     "mean": 0.00212,
+     "t": 0.49
+    },
+    "AUD-07": {
+     "mean": 0.00102,
+     "t": 0.19
+    },
+    "AUD-08": {
+     "mean": -0.00697,
+     "t": -1.35
+    },
+    "AUD-09": {
+     "mean": 0.00115,
+     "t": 0.14
+    },
+    "AUD-10": {
+     "mean": 0.00235,
+     "t": 0.26
+    },
+    "AUD-11": {
+     "mean": 0.00261,
+     "t": 0.49
+    },
+    "AUD-12": {
+     "mean": 0.00279,
+     "t": 0.48
+    },
+    "CAD-01": {
+     "mean": -0.0051,
+     "t": -1.43
+    },
+    "CAD-02": {
+     "mean": 0.00375,
+     "t": 1.27
+    },
+    "CAD-03": {
+     "mean": 0.00128,
+     "t": 0.37
+    },
+    "CAD-04": {
+     "mean": 0.00789,
+     "t": 1.75
+    },
+    "CAD-05": {
+     "mean": 0.00091,
+     "t": 0.19
+    },
+    "CAD-06": {
+     "mean": 0.00143,
+     "t": 0.47
+    },
+    "CAD-07": {
+     "mean": 0.00048,
+     "t": 0.12
+    },
+    "CAD-08": {
+     "mean": -0.00132,
+     "t": -0.37
+    },
+    "CAD-09": {
+     "mean": 0.00415,
+     "t": 0.83
+    },
+    "CAD-10": {
+     "mean": -0.00152,
+     "t": -0.27
+    },
+    "CAD-11": {
+     "mean": -0.00391,
+     "t": -1.17
+    },
+    "CAD-12": {
+     "mean": -0.00037,
+     "t": -0.15
+    },
+    "CHF-01": {
+     "mean": -0.01578,
+     "t": -2.5
+    },
+    "CHF-02": {
+     "mean": -0.0012,
+     "t": -0.27
+    },
+    "CHF-03": {
+     "mean": 0.0011,
+     "t": 0.17
+    },
+    "CHF-04": {
+     "mean": 0.0001,
+     "t": 0.02
+    },
+    "CHF-05": {
+     "mean": -0.00104,
+     "t": -0.16
+    },
+    "CHF-06": {
+     "mean": 0.00267,
+     "t": 0.42
+    },
+    "CHF-07": {
+     "mean": 0.00751,
+     "t": 1.35
+    },
+    "CHF-08": {
+     "mean": 0.00148,
+     "t": 0.29
+    },
+    "CHF-09": {
+     "mean": 0.01105,
+     "t": 1.57
+    },
+    "CHF-10": {
+     "mean": 0.00267,
+     "t": 0.41
+    },
+    "CHF-11": {
+     "mean": -0.00158,
+     "t": -0.26
+    },
+    "CHF-12": {
+     "mean": 0.01471,
+     "t": 1.9
+    },
+    "EUR-01": {
+     "mean": -0.01544,
+     "t": -2.61
+    },
+    "EUR-02": {
+     "mean": -0.00092,
+     "t": -0.24
+    },
+    "EUR-03": {
+     "mean": 0.00025,
+     "t": 0.04
+    },
+    "EUR-04": {
+     "mean": 0.00119,
+     "t": 0.27
+    },
+    "EUR-05": {
+     "mean": -0.00595,
+     "t": -0.95
+    },
+    "EUR-06": {
+     "mean": 0.00045,
+     "t": 0.08
+    },
+    "EUR-07": {
+     "mean": 0.00486,
+     "t": 0.89
+    },
+    "EUR-08": {
+     "mean": -0.00178,
+     "t": -0.35
+    },
+    "EUR-09": {
+     "mean": 0.01096,
+     "t": 1.7
+    },
+    "EUR-10": {
+     "mean": 0.00316,
+     "t": 0.48
+    },
+    "EUR-11": {
+     "mean": -0.00067,
+     "t": -0.12
+    },
+    "EUR-12": {
+     "mean": 0.01342,
+     "t": 2.02
+    },
+    "GBP-01": {
+     "mean": -0.0055,
+     "t": -1.08
+    },
+    "GBP-02": {
+     "mean": -0.00632,
+     "t": -1.56
+    },
+    "GBP-03": {
+     "mean": -3e-05,
+     "t": -0.0
+    },
+    "GBP-04": {
+     "mean": 0.00936,
+     "t": 2.46
+    },
+    "GBP-05": {
+     "mean": -0.00527,
+     "t": -0.84
+    },
+    "GBP-06": {
+     "mean": 0.00165,
+     "t": 0.32
+    },
+    "GBP-07": {
+     "mean": 0.00814,
+     "t": 1.77
+    },
+    "GBP-08": {
+     "mean": -0.00523,
+     "t": -1.14
+    },
+    "GBP-09": {
+     "mean": 0.00408,
+     "t": 0.69
+    },
+    "GBP-10": {
+     "mean": 0.00317,
+     "t": 0.44
+    },
+    "GBP-11": {
+     "mean": -0.00388,
+     "t": -0.74
+    },
+    "GBP-12": {
+     "mean": 0.00539,
+     "t": 1.1
+    },
+    "JPY-01": {
+     "mean": -0.00566,
+     "t": -1.05
+    },
+    "JPY-02": {
+     "mean": -0.0018,
+     "t": -0.33
+    },
+    "JPY-03": {
+     "mean": -0.00291,
+     "t": -0.36
+    },
+    "JPY-04": {
+     "mean": 0.00251,
+     "t": 0.49
+    },
+    "JPY-05": {
+     "mean": 0.00281,
+     "t": 0.44
+    },
+    "JPY-06": {
+     "mean": -0.00119,
+     "t": -0.26
+    },
+    "JPY-07": {
+     "mean": 0.00289,
+     "t": 0.57
+    },
+    "JPY-08": {
+     "mean": 0.00513,
+     "t": 0.85
+    },
+    "JPY-09": {
+     "mean": 0.00608,
+     "t": 1.25
+    },
+    "JPY-10": {
+     "mean": 0.01195,
+     "t": 1.41
+    },
+    "JPY-11": {
+     "mean": -0.00387,
+     "t": -0.67
+    },
+    "JPY-12": {
+     "mean": -0.00093,
+     "t": -0.13
+    },
+    "NOK-01": {
+     "mean": -0.00867,
+     "t": -1.97
+    },
+    "NOK-02": {
+     "mean": 0.00077,
+     "t": 0.15
+    },
+    "NOK-03": {
+     "mean": 0.00242,
+     "t": 0.44
+    },
+    "NOK-04": {
+     "mean": 0.00689,
+     "t": 1.3
+    },
+    "NOK-05": {
+     "mean": -0.00478,
+     "t": -0.84
+    },
+    "NOK-06": {
+     "mean": -0.00523,
+     "t": -0.81
+    },
+    "NOK-07": {
+     "mean": 0.00645,
+     "t": 1.26
+    },
+    "NOK-08": {
+     "mean": -0.00335,
+     "t": -0.63
+    },
+    "NOK-09": {
+     "mean": 0.0106,
+     "t": 1.34
+    },
+    "NOK-10": {
+     "mean": -0.0003,
+     "t": -0.04
+    },
+    "NOK-11": {
+     "mean": -0.00678,
+     "t": -1.2
+    },
+    "NOK-12": {
+     "mean": 0.0056,
+     "t": 0.93
+    },
+    "NZD-01": {
+     "mean": -0.00258,
+     "t": -0.37
+    },
+    "NZD-02": {
+     "mean": 0.00374,
+     "t": 0.92
+    },
+    "NZD-03": {
+     "mean": 0.00023,
+     "t": 0.03
+    },
+    "NZD-04": {
+     "mean": 0.01145,
+     "t": 2.49
+    },
+    "NZD-05": {
+     "mean": -0.0068,
+     "t": -0.83
+    },
+    "NZD-06": {
+     "mean": 0.00236,
+     "t": 0.48
+    },
+    "NZD-07": {
+     "mean": 0.0001,
+     "t": 0.02
+    },
+    "NZD-08": {
+     "mean": -0.00565,
+     "t": -0.77
+    },
+    "NZD-09": {
+     "mean": 0.00296,
+     "t": 0.36
+    },
+    "NZD-10": {
+     "mean": 0.00121,
+     "t": 0.17
+    },
+    "NZD-11": {
+     "mean": 0.00499,
+     "t": 0.88
+    },
+    "NZD-12": {
+     "mean": 0.00805,
+     "t": 1.36
+    },
+    "SEK-01": {
+     "mean": -0.00971,
+     "t": -1.58
+    },
+    "SEK-02": {
+     "mean": -0.00317,
+     "t": -0.55
+    },
+    "SEK-03": {
+     "mean": 6e-05,
+     "t": 0.01
+    },
+    "SEK-04": {
+     "mean": 0.00756,
+     "t": 1.59
+    },
+    "SEK-05": {
+     "mean": -0.00727,
+     "t": -1.11
+    },
+    "SEK-06": {
+     "mean": -0.00268,
+     "t": -0.46
+    },
+    "SEK-07": {
+     "mean": 0.00541,
+     "t": 0.87
+    },
+    "SEK-08": {
+     "mean": -0.00253,
+     "t": -0.58
+    },
+    "SEK-09": {
+     "mean": 0.0109,
+     "t": 1.41
+    },
+    "SEK-10": {
+     "mean": 0.00025,
+     "t": 0.04
+    },
+    "SEK-11": {
+     "mean": -0.00871,
+     "t": -1.15
+    },
+    "SEK-12": {
+     "mean": 0.00988,
+     "t": 1.84
+    }
+   },
+   "expected_by_chance": 4.9
+  },
+  "weekday": {
+   "beyond_2": 0,
+   "cells": {
+    "AUD-0": {
+     "mean_bp": -0.59,
+     "t": -0.28
+    },
+    "AUD-1": {
+     "mean_bp": 0.04,
+     "t": 0.02
+    },
+    "AUD-2": {
+     "mean_bp": -0.15,
+     "t": -0.07
+    },
+    "AUD-3": {
+     "mean_bp": 2.69,
+     "t": 1.37
+    },
+    "AUD-4": {
+     "mean_bp": 0.78,
+     "t": 0.39
+    },
+    "CAD-0": {
+     "mean_bp": -0.18,
+     "t": -0.13
+    },
+    "CAD-1": {
+     "mean_bp": -0.07,
+     "t": -0.06
+    },
+    "CAD-2": {
+     "mean_bp": 0.8,
+     "t": 0.62
+    },
+    "CAD-3": {
+     "mean_bp": 1.28,
+     "t": 0.98
+    },
+    "CAD-4": {
+     "mean_bp": -0.07,
+     "t": -0.06
+    },
+    "CHF-0": {
+     "mean_bp": 0.95,
+     "t": 0.49
+    },
+    "CHF-1": {
+     "mean_bp": 1.14,
+     "t": 0.6
+    },
+    "CHF-2": {
+     "mean_bp": 1.43,
+     "t": 0.82
+    },
+    "CHF-3": {
+     "mean_bp": 1.53,
+     "t": 0.86
+    },
+    "CHF-4": {
+     "mean_bp": -0.4,
+     "t": -0.2
+    },
+    "EUR-0": {
+     "mean_bp": -0.08,
+     "t": -0.04
+    },
+    "EUR-1": {
+     "mean_bp": 1.32,
+     "t": 0.81
+    },
+    "EUR-2": {
+     "mean_bp": 0.42,
+     "t": 0.26
+    },
+    "EUR-3": {
+     "mean_bp": 1.43,
+     "t": 0.87
+    },
+    "EUR-4": {
+     "mean_bp": -0.88,
+     "t": -0.48
+    },
+    "GBP-0": {
+     "mean_bp": -1.42,
+     "t": -0.79
+    },
+    "GBP-1": {
+     "mean_bp": 2.23,
+     "t": 1.44
+    },
+    "GBP-2": {
+     "mean_bp": 0.32,
+     "t": 0.21
+    },
+    "GBP-3": {
+     "mean_bp": 1.41,
+     "t": 0.95
+    },
+    "GBP-4": {
+     "mean_bp": -1.51,
+     "t": -0.93
+    },
+    "JPY-0": {
+     "mean_bp": 0.59,
+     "t": 0.31
+    },
+    "JPY-1": {
+     "mean_bp": 1.55,
+     "t": 0.88
+    },
+    "JPY-2": {
+     "mean_bp": 0.15,
+     "t": 0.08
+    },
+    "JPY-3": {
+     "mean_bp": 2.16,
+     "t": 1.2
+    },
+    "JPY-4": {
+     "mean_bp": -1.32,
+     "t": -0.7
+    },
+    "NOK-0": {
+     "mean_bp": -0.48,
+     "t": -0.24
+    },
+    "NOK-1": {
+     "mean_bp": -0.85,
+     "t": -0.48
+    },
+    "NOK-2": {
+     "mean_bp": 1.79,
+     "t": 0.99
+    },
+    "NOK-3": {
+     "mean_bp": -1.64,
+     "t": -0.88
+    },
+    "NOK-4": {
+     "mean_bp": 2.31,
+     "t": 1.19
+    },
+    "NZD-0": {
+     "mean_bp": 0.06,
+     "t": 0.03
+    },
+    "NZD-1": {
+     "mean_bp": 1.15,
+     "t": 0.6
+    },
+    "NZD-2": {
+     "mean_bp": -1.55,
+     "t": -0.72
+    },
+    "NZD-3": {
+     "mean_bp": 2.19,
+     "t": 1.05
+    },
+    "NZD-4": {
+     "mean_bp": 2.39,
+     "t": 1.23
+    },
+    "SEK-0": {
+     "mean_bp": -1.58,
+     "t": -0.76
+    },
+    "SEK-1": {
+     "mean_bp": -0.09,
+     "t": -0.05
+    },
+    "SEK-2": {
+     "mean_bp": 2.0,
+     "t": 1.11
+    },
+    "SEK-3": {
+     "mean_bp": -1.92,
+     "t": -1.01
+    },
+    "SEK-4": {
+     "mean_bp": 1.76,
+     "t": 0.94
+    }
+   },
+   "expected_by_chance": 2.0
+  }
+ },
+ "prereg": "docs/research/experiments/2026-11-24_fx-slow-patterns-prereg.md",
+ "price_rows": 7077,
+ "qualifies": [],
+ "shortlist": [],
+ "window": [
+  "1987-01-01",
+  "2014-12-31"
+ ]
+}
