@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Paper portfolio managed by Claude** (research; `docs/research/experiments/2026-11-24_paper-portfolio-prereg.md`,
+  `experiments/paper_portfolio.py`, `docs/research/paper_portfolio/`). Alex chose a six-month paper test of
+  discretionary management: £5,000, 18 ordinary London-listed funds, weekly reviews, every decision pushed
+  before the close it fills at, scored against a world index fund on 2027-05-26. Opening decision recorded
+  2026-11-24. No money.
 - **Slow forex patterns** (research; `docs/research/experiments/2026-11-24_fx-slow-patterns-*.md`,
   `experiments/fx_slow_patterns.py`). Alex asked for patterns over weeks, months and years. 31 candidates
   (weekly reversal, 1 to 12 month momentum, calendar seasonality, five-year value, a carry/momentum/value

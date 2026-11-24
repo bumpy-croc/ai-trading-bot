@@ -4964,3 +4964,12 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 
 **Recommendation.** No build, no account. No further forex patterns at these horizons on price and interest-rate history.
 - ΔP: none. ΔR: none taken. C: research only. E: `docs/research/experiments/2026-11-24_fx-slow-patterns-results.md`.
+
+## [D-2026-11-24-06] 2026-11-24 ~22:35 UTC · track-record · quant research (Claude, project thread "Find strategies returning 10% a year")
+
+**Authority.** Alex, 2026-11-24 22:25 UTC, project thread: "What if I get you to actively manage a portfolio?"; 22:27 UTC, chose "Paper portfolio vs the index" on the decision card "Choose how I should manage a portfolio for you, if at all?" (£5,000 on paper, six months, each decision logged first, scored against a world index fund, no money).
+
+**Action.** Prereg `docs/research/experiments/2026-11-24_paper-portfolio-prereg.md` (commit `86a0286`, before the opening portfolio was chosen): 18 London-listed funds allowed, long only, 35% cap per fund, 0.10% per pound traded, benchmark VWRP bought once, weekly reviews on Monday before the London open, each decision pushed before the close it fills at, scored at the close of 2027-05-26 (AHEAD at +3 points with a fall no more than 3 points deeper; BEHIND at −3; otherwise NO CLEAR DIFFERENCE). Opening decision 001 pushed 22:33 UTC (commit `ac3d2af`), filling at the 2026-11-25 close: S&P 500 25%, world quality 15%, FTSE 100 15%, world value 8%, Europe ex UK 7%, cash fund 15%, short gilts 10%, US Treasuries 5%. Scorer `experiments/paper_portfolio.py` (standard library; `selftest` passes). A weekly scheduled task runs the reviews.
+
+**Stated expectation.** No better than the index after costs. A 3-point lead in six months happens by luck about one time in four or five; money is only discussed after two consecutive AHEAD periods.
+- ΔP: none. ΔR: none taken (paper). C: one short session a week. E: `docs/research/paper_portfolio/`.
