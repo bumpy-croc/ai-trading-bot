@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Dollar yields on-chain** (research; `docs/research/experiments/2026-11-24_dollar-yield-*.md`,
+  `yields.py dollar`). 200 large stablecoin pools, five monthly rules, 2025-26, survivors only (an upper
+  bound). Every large pool equal weight: 3.1% / 2.5%. Lending top three: 5.2% / 5.4%. Any pool top three:
+  6.6% / 8.2%, reached by holding new synthetic-dollar tokens. Exchange pools about 0%. None reaches 7% in
+  both years; established lending pays 3 to 4%. No build.
 - **Token-unlock short** (research; `docs/research/experiments/2026-11-24_token-unlock-short-*.md`,
   `experiments/strategy_search/unlocks.py`). Short a coin around large team and investor unlocks (877
   events on 76 coins from DefiLlama's schedules), hedged with a basket of similar coins. On 2022-24 no

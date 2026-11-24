@@ -4937,3 +4937,12 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 
 **Recommendation.** No build. No further unlock-short variants on this data.
 - ΔP: none. ΔR: none taken. C: research only. E: the results file above.
+
+## [D-2026-11-24-03] 2026-11-24 ~12:00 UTC · track-record · quant research (Claude, project thread "Find a profitable crypto strategy mix")
+
+**Authority.** Alex, 2026-11-24 11:28 UTC, project thread: chose "Test dollar-yield ideas next" on the decision card "Choose where the search for a profitable strategy goes next?".
+
+**Result.** Prereg `docs/research/experiments/2026-11-24_dollar-yield-prereg.md` (commit `5c384bd`). Hypothesis: a simple rule over large on-chain dollar pools earned at least 7% a year after switching costs in both 2025 and January-October 2026. 200 DefiLlama stablecoin pools (today's survivors, so an upper bound), each counted while above 50 million dollars, base yield only. D1 every pool equal weight 3.1% / 2.5%; D2 lending top three by trailing yield 5.2% / 5.4%; D3 any pool top three 6.6% / 8.2%; D4 exchange pools 0.0% / −0.2%; D5 yield tokens 3.3% / 3.9%. **H0 for all five, no build.** Established lending (Aave, Sky, Morpho, Fluid) paid 3 to 4%; D3's 2026 figure came from rotating through new synthetic-dollar tokens with unmeasured principal risk. Results: `2026-11-24_dollar-yield-results.md`.
+
+**Recommendation.** No build. Across the programme (about 43 candidates), what paid more than idle dollars in 2026 was the Hyperliquid vault (about 8%), hedged LINK staking (7.5%, hindsight pick, forward check fixed) and new synthetic-dollar tokens (7-8%, unmeasured risk). The forward tests already running (trend book, LINK, Polymarket) and the funding watcher are what remains.
+- ΔP: none. ΔR: none taken. C: research only. E: the results file above.
