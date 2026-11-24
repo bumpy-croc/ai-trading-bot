@@ -1,0 +1,72 @@
+{
+ "books": {
+  "B0": {
+   "gross": 0.37802877,
+   "leverage": 0.37802877,
+   "net": -0.36690045,
+   "weights": {
+    "1000PEPEUSDT": -0.00501047,
+    "AAVEUSDT": -0.01768718,
+    "ADAUSDT": -0.02181692,
+    "AKEUSDT": -0.00114704,
+    "AVAXUSDT": -0.00639869,
+    "BCHUSDT": -0.02340198,
+    "BNBUSDT": -0.02806244,
+    "BTCUSDT": -0.03355005,
+    "BTWUSDT": -0.00163246,
+    "DOGEUSDT": -0.0242337,
+    "ENAUSDT": -0.00472838,
+    "ETHUSDT": -0.02388558,
+    "EVAAUSDT": 0.00247566,
+    "FILUSDT": -0.01895687,
+    "HYPEUSDT": -0.00642422,
+    "IDOLUSDT": 0.0030885,
+    "INJUSDT": -0.00495889,
+    "JCTUSDT": -0.00136195,
+    "LINKUSDT": -0.00686292,
+    "LITUSDT": -0.00460158,
+    "NEARUSDT": -0.00492992,
+    "PUMPUSDT": -0.00474557,
+    "SOLUSDT": -0.02460979,
+    "SUIUSDT": -0.01958085,
+    "TAOUSDT": -0.01900698,
+    "TRUMPUSDT": -0.01437467,
+    "UNIUSDT": -0.00465201,
+    "WLDUSDT": -0.01673176,
+    "XRPUSDT": -0.02419437,
+    "ZECUSDT": -0.00491738
+   }
+  }
+ },
+ "code": {
+  "git_sha": "3c4509c53c4e806b802973b57bf18e06f88e4227",
+  "numpy": "2.5.3",
+  "pandas": "3.0.5"
+ },
+ "data_day": "2026-11-23",
+ "fill": "the close of the next UTC day",
+ "history_days": 420,
+ "missing_candles_carried_forward": 5,
+ "perps_previous_day": 762,
+ "perps_with_data": 762,
+ "recorded_at": "2026-11-24T12:46:53Z",
+ "signal_day": true,
+ "symbols_in_archive": 928,
+ "universe_filter": {
+  "excluded_beyond_committed_list": [
+   "AMDLUSDT",
+   "ANTUSDT",
+   "ARTYUSDT",
+   "CCJUSDT",
+   "ETNUSDT",
+   "FRHCUSDT",
+   "IBITUSDT",
+   "IGVUSDT",
+   "JNJUSDT",
+   "NIOUSDT",
+   "NUUSDT",
+   "SOXXUSDT"
+  ],
+  "source": "exchange"
+ }
+}
