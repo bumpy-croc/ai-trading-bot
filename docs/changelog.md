@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Trend book on 2025-26, one-off exam** (research;
+  `docs/research/experiments/2026-11-24_trend-book-2025-26-exam-*.md`, `adaptive.py exam`). After Alex
+  allowed one look per candidate at the used 2025-26 window with a stricter bar: the plain trend book B0
+  made 4.6% a year (Sharpe 0.12 above idle dollars, drawdown 14.1%) while the coins it trades fell 70%;
+  its quiet-market version Q1 made 7.9% a year and lost 5.4% in 2025. Both fail; Q1 is closed; B0's forward
+  paper recording continues unchanged.
+- **Hedged staking on 16 coins and two mixes** (research;
+  `docs/research/experiments/2026-11-24_hedged-staking-wide-*.md`, `yields.py hedged-wide`). Equal weight
+  across all coins: +2.6% (2025), −4.2% (2026). Top three by last month's yield: +8.5% (2025), +0.2% (2026).
+  High staking yields are offset by funding paid by the short (APT, ICP, BERA). Only LINK cleared 7% in
+  both years, seen in hindsight. No build.
 - **Spike-fade test and its replication** (research;
   `docs/research/experiments/2026-11-23_spike-fade-*.md`, `experiments/strategy_search/spike_sim.py`).
   Far resting orders that fill only in sudden jumps, closed after five minutes. Positive after costs on

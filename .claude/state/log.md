@@ -4915,3 +4915,16 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 
 **Recommendation.** No build. The before-cost reversal after a spike is real in nine of ten sets, and after costs it behaves like selling insurance. Any adaptive version can only be judged on future data with the rule fixed first, on Alex's decision.
 - ΔP: none. ΔR: none taken. C: research only. E: the two results files above.
+
+## [D-2026-11-24-01] 2026-11-24 ~11:30 UTC · track-record · quant research (Claude, project thread "Find a profitable crypto strategy mix")
+
+**Authority.** Alex, 2026-11-24 10:44 UTC, project thread: chose "Yes, stricter bar, paper first" on the decision card "Allow one-off tests on the 2025-26 period I had declared used up?" (the option: one look per candidate, written down first, a pass must still paper trade before any money). And Alex, 10:46 UTC, on hedged staking: "Maybe we can also try it with other coins or a mix until we find something even more profitable?"
+
+**Window note.** This supersedes the closure of the 2025-01 → 2026-10 window in [D-2026-11-11-04] for one preregistered look per candidate, with a multiplicity-corrected bar (t ≥ 2.61 for eleven candidates). The earlier entry is not edited.
+
+**Result 1 (trend book exam).** Prereg `docs/research/experiments/2026-11-24_trend-book-2025-26-exam-prereg.md` (commit `9d3b792`, before either book saw a day after 2024-12-31). B0 (the book in the forward paper test): +4.6%/yr, Sharpe 0.12 above idle dollars, t 0.16, drawdown 14.1%, 2025 +4.2%, 2026 +4.3%; BTC −17% and the equal-weight top 30 −70% over the same window. Q1 (B0 only in quiet markets, a post-hoc rule from the 2026-11-11 design split): +7.9%/yr, Sharpe 0.36, 2025 −5.4%, 2026 +21.5%. **Both FAIL. H0 supported.** Q1 closed. B0's forward recording continues to its fixed checkpoints; no executor work. Results: `2026-11-24_trend-book-2025-26-exam-results.md`.
+
+**Result 2 (hedged staking, 16 coins, two mixes).** Prereg `2026-11-24_hedged-staking-wide-prereg.md` (commit `cd2d628`). On total capital after costs: M1 equal weight +2.6% (2025), −4.2% (2026), drawdown 7.3%; M2 top three by trailing 30-day yield +8.5% (2025), +0.2% (2026), drawdown 2.8%. Gate was 7% in both years. **H0 supported, no build.** Staking yields of 8-13% (APT, ICP, DOT, MON) were offset by funding paid by the short; BERA's short paid 46-66% a year. LINK alone cleared 7% in both years (8.2%, 7.5%), one of sixteen in hindsight, not a pass. Results: `2026-11-24_hedged-staking-wide-results.md`.
+
+**Recommendation.** No build. The 2025-26 window has now faced eleven trading candidates and two yield mixes; none passed.
+- ΔP: none. ΔR: none taken. C: research only. E: the two results files above.
