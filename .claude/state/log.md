@@ -4928,3 +4928,12 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 
 **Recommendation.** No build. The 2025-26 window has now faced eleven trading candidates and two yield mixes; none passed.
 - ΔP: none. ΔR: none taken. C: research only. E: the two results files above.
+
+## [D-2026-11-24-02] 2026-11-24 ~12:15 UTC · track-record · quant research (Claude, project thread "Find a profitable crypto strategy mix")
+
+**Authority.** Alex, 2026-11-23 18:15 UTC, project thread: "carry on finding a profitable strategy"; and the 2026-11-24 decision recorded in [D-2026-11-24-01].
+
+**Result.** Prereg `docs/research/experiments/2026-11-24_token-unlock-short-prereg.md` (commit `2acd983`, before the simulator saw a price). Hypothesis: a coin with a large team or investor cliff unlock coming underperforms similar coins by more than the cost of the short. 877 events on 76 coins (DefiLlama emission files matched to Binance perps); short the coin, long the equal-weight basket of liquidity ranks 31-100; three windows (14 days before to the day; 7 before to 7 after; 30 before to 14 after); 1.0% round trip, actual funding, 30% intraday stop. Design on data cut at 2024-12-31 (fit 2022-23, validation 2024): portfolio Sharpe −0.76 / −0.11, −0.60 / −0.57, −1.02 / +0.82. **No window qualifies. H0 at Stage A; Stage B did not run and the 2025-26 window was not touched.** With a BTC hedge the same windows show 51-100% for 2024, which is small coins falling against BTC and not an unlock effect. Results: `2026-11-24_token-unlock-short-results.md`.
+
+**Recommendation.** No build. No further unlock-short variants on this data.
+- ΔP: none. ΔR: none taken. C: research only. E: the results file above.

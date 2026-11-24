@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Token-unlock short** (research; `docs/research/experiments/2026-11-24_token-unlock-short-*.md`,
+  `experiments/strategy_search/unlocks.py`). Short a coin around large team and investor unlocks (877
+  events on 76 coins from DefiLlama's schedules), hedged with a basket of similar coins. On 2022-24 no
+  window qualifies: a small median gain is wiped out by squeezes (one position in twelve hits the 30%
+  stop). The apparent 50-100% in 2024 with a BTC hedge is small coins falling against BTC. Stopped at the
+  design stage; the 2025-26 window was not touched.
 - **Trend book on 2025-26, one-off exam** (research;
   `docs/research/experiments/2026-11-24_trend-book-2025-26-exam-*.md`, `adaptive.py exam`). After Alex
   allowed one look per candidate at the used 2025-26 window with a stricter bar: the plain trend book B0
