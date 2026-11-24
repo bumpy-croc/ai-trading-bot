@@ -24,7 +24,7 @@ The shortlist needed a Sharpe above 0.7 in both periods, drawdown under 25% in b
 
 ## Reading it
 
-- **There is a small drift, and the squeezes eat it.** In the two short windows a little over half of the positions win and the median position makes about 1%, before the losers are counted. Then one position in twelve hits the 30% stop. A coin with a known unlock coming is a crowded short, and crowded shorts get squeezed. The mean is negative or near zero.
+- **There is a small drift, and the squeezes eat it.** In the two short windows a little over half of the positions win and the median position makes about 1%, before the losers are counted. Then about one position in fifteen hits the 30% stop in the two short windows, and one in three in the long one. A coin with a known unlock coming is a crowded short, and crowded shorts get squeezed. The mean is negative or near zero.
 - **Against BTC the same trade looks excellent in 2024, and that is the trap.** With a BTC hedge the three windows show 51%, 58% and 100% for 2024. With the basket hedge they show −1%, −11% and +22%. The difference is small coins falling against BTC that year, unlock or no unlock. A study that compares unlock coins with BTC, or with their own earlier price, measures that drift and calls it an unlock effect. In 2022-23 the BTC-hedged versions made nothing either (−5%, 0%, −7% a year).
 - **Costs are a third of the story.** Before the 1.0% round trip, the mean position in U1 was −0.7% (2022-23) and +1.9% (2024), and in U2 +0.2% and +0.6%. Even the gross numbers do not show an effect that holds in both periods.
 
