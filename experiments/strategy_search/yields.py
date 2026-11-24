@@ -7,6 +7,7 @@ Realised track records, not backtests:
 
 Usage: python experiments/strategy_search/yields.py            (vault and lending survey)
        python experiments/strategy_search/yields.py hedged     (staking with a hedge, prereg 2026-11-23)
+       python experiments/strategy_search/yields.py hedged-wide  (16 coins and two mixes, prereg 2026-11-24)
 """
 
 from __future__ import annotations
@@ -146,6 +147,127 @@ def hedged_staking() -> dict:
     return out
 
 
+# Wider measurement (docs/research/experiments/2026-11-24_hedged-staking-wide-prereg.md). One DefiLlama
+# liquid staking pool per coin: the largest by value locked on 2026-11-23 whose coin has a Binance USDT perp
+# and at least 180 days of yield history inside 2025-01-01..2026-10-31. ETH and SOL keep the pools above.
+WIDE = {
+    "ETH": ("747c1d2a-c668-4682-b9f9-296708a3dd90", "Lido stETH"),
+    "SOL": ("0e7d0722-9054-4907-8593-567b353c0900", "Jito JitoSOL"),
+    "HYPE": ("9f25a954-db87-4bb2-a8b2-4be0b843a44c", "Kinetiq kHYPE"),
+    "BNB": ("50bb5f69-85ea-4f70-81da-3661a1633fc4", "Lista slisBNB"),
+    "AVAX": ("3790c3e5-8644-4f6b-8feb-12434d8b99f9", "Benqi sAVAX"),
+    "LINK": ("4f5deb26-5f61-45a3-8f61-0edca3a86809", "stake.link stLINK"),
+    "FIL": ("53048f5b-7b0a-4917-b283-c49bef77e580", "GLIF iFIL"),
+    "TON": ("691a2aaa-cef5-4a6a-a3f3-86170fada8f4", "Hipo hTON"),
+    "DOT": ("ff05ab26-971e-4e68-b1c6-c61a4c12c364", "Bifrost vDOT"),
+    "BERA": ("2b9e97cd-15f2-406c-8e18-a426e451d09d", "Infrared iBERA"),
+    "ICP": ("4450335c-bad3-4293-947b-64896b893a5b", "WaterNeuron nICP"),
+    "STRK": ("1ce1d44a-0bff-48ef-80c9-f8b6bd78bd17", "Endur xSTRK"),
+    "MON": ("ee40513c-9356-4c53-9f26-446b484a8ae2", "shMonad shMON"),
+    "FLOW": ("f1246ee7-9797-46b6-bd87-f9b90bc37e36", "Ankr ankrFLOW"),
+    "POL": ("5b1fe146-7cbd-448d-bf53-8df9c3501016", "Stader MaticX"),
+    "APT": ("490006e3-284b-4107-9bb9-99906b7880b2", "Amnis amAPT"),
+}
+WIDE_WINDOW = ("2025-01-01", "2026-10-31")
+APY_CAP = 0.25  # published yields above this are treated as reporting artefacts
+APY_MEDIAN_DAYS = 7
+LIQ_MOVE = 0.20  # a one-day rise this large against a short with 25% margin is treated as a liquidation
+LIQ_PENALTY = 0.015
+SWITCH_COST = 0.0025  # per dollar moved in or out of a hedged position: spot 0.10% + perp 0.05% + staking token swap 0.10%
+MIX_TOP = 3
+MIX_LOOKBACK = 30
+MIX_MIN_HISTORY = 25  # days of the lookback a coin needs to be eligible
+IDLE = 0.04
+GATE_YIELD = 0.07
+GATE_DD = 0.05
+
+
+def _wide_carry(m, coin: str, pool: str) -> pd.DataFrame:
+    """Daily pieces of one hedged dollar for a coin: staking, funding, basis change, liquidation penalty."""
+    chart = requests.get(f"https://yields.llama.fi/chart/{pool}", timeout=60).json()["data"]
+    apy = pd.Series({pd.Timestamp(r["timestamp"]).normalize(): r["apy"] / 100.0 for r in chart if r["apy"] is not None})
+    apy.index = apy.index.tz_convert("UTC") if apy.index.tz is not None else apy.index.tz_localize("UTC")
+    apy = apy[~apy.index.duplicated(keep="last")].sort_index()
+    perp = coin + "USDT"
+    close, spot = m.close[perp], m.spot_close[perp]
+    staking = apy.reindex(close.index).ffill(limit=7).rolling(APY_MEDIAN_DAYS, min_periods=1).median().clip(0.0, APY_CAP) / 365.0
+    basis = (spot.pct_change(fill_method=None) - close.pct_change(fill_method=None)) if spot.notna().any() else close * 0.0
+    liq = (m.high[perp] / close.shift(1) - 1.0 >= LIQ_MOVE).astype(float) * LIQ_PENALTY
+    df = pd.DataFrame({"staking": staking, "funding": m.funding[perp], "basis": basis.fillna(0.0), "liq": liq})
+    df = df[close.notna()].dropna(subset=["staking", "funding"]).loc[:END]
+    df["carry"] = df["staking"] + df["funding"] + df["basis"] - df["liq"]
+    return df
+
+
+def _year_table(r: pd.Series) -> dict:
+    return {int(y): {"days": int(len(g)), "net": float(((1 + g).prod() - 1) * 365.0 / len(g))} for y, g in r.groupby(r.index.year)}
+
+
+def _mix(carry: pd.DataFrame, rotate: bool) -> tuple[pd.Series, dict]:
+    """Monthly mixes on total capital. `carry` holds each coin's daily return per hedged dollar (NaN before
+    its series starts). Equal weight over every eligible coin, or the top MIX_TOP by trailing carry with
+    idle dollars in any slot that would not beat them."""
+    days = carry.loc[WIDE_WINDOW[0]:WIDE_WINDOW[1]].index
+    month_starts = [d for d in days if d.day == 1]
+    weights = pd.DataFrame(0.0, index=days, columns=carry.columns)
+    prev = pd.Series(0.0, index=carry.columns)
+    cost = pd.Series(0.0, index=days)
+    held_log = {}
+    for i, start in enumerate(month_starts):
+        end = month_starts[i + 1] if i + 1 < len(month_starts) else days[-1] + pd.Timedelta(days=1)
+        hist = carry.loc[start - pd.Timedelta(days=MIX_LOOKBACK): start - pd.Timedelta(days=1)]
+        eligible = [c for c in carry.columns if hist[c].notna().sum() >= MIX_MIN_HISTORY and pd.notna(carry.at[start, c])]
+        w = pd.Series(0.0, index=carry.columns)
+        if rotate:
+            trailing = (hist[eligible].mean() * 365.0 / (1 + MARGIN)).sort_values(ascending=False)
+            picks = [c for c in trailing.index[:MIX_TOP] if trailing[c] > IDLE]
+            w[picks] = 1.0 / MIX_TOP
+        elif eligible:
+            w[eligible] = 1.0 / len(eligible)
+        weights.loc[start: end - pd.Timedelta(days=1)] = w.values
+        cost[start] = float((w - prev).abs().sum()) * SWITCH_COST
+        held_log[str(start.date())] = sorted(w[w > 0].index)
+        prev = w
+    c = carry.reindex(days)
+    hedged = (weights * c.fillna(0.0)).sum(axis=1) / (1 + MARGIN)
+    idle = (1.0 - weights.sum(axis=1)) * ((1 + IDLE) ** (1 / 365.0) - 1)
+    return hedged + idle - cost, {"holdings_by_month": held_log, "switch_cost_total": float(cost.sum()),
+                                 "average_share_hedged": float(weights.sum(axis=1).mean())}
+
+
+def hedged_staking_wide() -> dict:
+    import data as data_mod
+
+    m = data_mod.build()
+    pieces = {coin: _wide_carry(m, coin, pool) for coin, (pool, _) in WIDE.items()}
+    out: dict = {"coins": {}, "mixes": {}}
+    for coin, df in pieces.items():
+        w = df.loc[WIDE_WINDOW[0]:WIDE_WINDOW[1]]
+        net = (w["carry"] - HEDGE_COST_PER_YEAR / 365.0) / (1 + MARGIN)
+        curve = (1 + net).cumprod()
+        years = {}
+        for y, g in w.groupby(w.index.year):
+            ann = 365.0 / len(g)
+            years[int(y)] = {"days": int(len(g)), "staking": float(g["staking"].sum() * ann), "funding": float(g["funding"].sum() * ann),
+                             "basis_change": float(g["basis"].sum() * ann), "liquidation_days": int((g["liq"] > 0).sum()),
+                             "net_on_total_capital": float(((1 + net.loc[g.index]).prod() - 1) * ann)}
+        both = all(years.get(y, {}).get("days", 0) >= 180 and years[y]["net_on_total_capital"] >= GATE_YIELD for y in (2025, 2026))
+        out["coins"][coin] = {"token": WIDE[coin][1], "first_day": str(w.index[0].date()), "days": int(len(w)), "years": years,
+                              "max_drawdown": float(-(curve / curve.cummax() - 1).min()), "worst_day": float(net.min()),
+                              "at_least_7pct_in_both_years": bool(both)}
+    carry = pd.DataFrame({c: df["carry"] for c, df in pieces.items()})
+    for name, rotate in (("M1 equal weight", False), ("M2 top three by trailing yield", True)):
+        r, info = _mix(carry, rotate)
+        curve = (1 + r).cumprod()
+        years = _year_table(r)
+        dd = float(-(curve / curve.cummax() - 1).min())
+        gate = {"2025 at least 7%": years[2025]["net"] >= GATE_YIELD, "2026 at least 7%": years[2026]["net"] >= GATE_YIELD,
+                "drawdown at most 5%": dd <= GATE_DD}
+        out["mixes"][name] = {"years": years, "total_return": float(curve.iloc[-1] - 1), "max_drawdown": dd, "worst_day": float(r.min()),
+                              "gate": gate, "h1_supported": all(gate.values()), **info}
+    return out
+
+
 if __name__ == "__main__":
     import sys
 
@@ -153,6 +275,9 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["hedged"]:
         report = hedged_staking()
         (RESULTS / "hedged_staking.json").write_text(json.dumps(report, indent=1, default=float, sort_keys=True))
+    elif sys.argv[1:] == ["hedged-wide"]:
+        report = hedged_staking_wide()
+        (RESULTS / "hedged_staking_wide.json").write_text(json.dumps(report, indent=1, default=float, sort_keys=True))
     else:
         report = {"hlp": hlp(), "stablecoin_lending": llama()}
         (RESULTS / "yields.json").write_text(json.dumps(report, indent=1, default=float, sort_keys=True))

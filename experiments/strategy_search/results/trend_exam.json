@@ -1,0 +1,174 @@
+{
+ "Q1_goes_forward": false,
+ "benchmarks": {
+  "BTC buy and hold": {
+   "avg_gross": 1.0,
+   "avg_net": 1.0,
+   "cagr": -0.09744397249109604,
+   "cost_per_year": 0.0,
+   "days": 669,
+   "funding_per_year": 0.0,
+   "max_dd": 0.5297592444745771,
+   "sharpe": -0.11510199388675701,
+   "sharpe_rf0": -0.023844179220381602,
+   "turnover_per_year": 0.0,
+   "vol": 0.4298023197636579,
+   "worst_day": -0.14041106191907282
+  },
+  "Top-30 equal weight": {
+   "avg_gross": 1.0,
+   "avg_net": 1.0,
+   "cagr": -0.4844710746919194,
+   "cost_per_year": 0.0,
+   "days": 669,
+   "funding_per_year": 0.0,
+   "max_dd": 0.8160361043907234,
+   "sharpe": -0.48492737014279164,
+   "sharpe_rf0": -0.43547737666236486,
+   "turnover_per_year": 0.0,
+   "vol": 0.7931815088245687,
+   "worst_day": -0.23905683221380236
+  }
+ },
+ "books": {
+  "B0": {
+   "active_share": 1.0,
+   "btc_correlation": -0.3532073573854467,
+   "consistent_checks": {
+    "Sharpe at least 0.5": false,
+    "drawdown at most 20%": true,
+    "total return above idle dollars": true
+   },
+   "exam": {
+    "avg_gross": 0.3123794039723466,
+    "avg_net": -0.04404807652733764,
+    "cagr": 0.046087458799441317,
+    "cost_per_year": 0.014318367277036607,
+    "days": 669,
+    "funding_per_year": -0.007902343243631413,
+    "max_dd": 0.14127979732585805,
+    "sharpe": 0.11866450137211067,
+    "sharpe_rf0": 0.3527251528307919,
+    "turnover_per_year": 10.114635688754644,
+    "vol": 0.1675754561722824,
+    "worst_day": -0.05328484718720028
+   },
+   "fit": {
+    "avg_gross": 0.24564194980801657,
+    "avg_net": 0.013032654861090686,
+    "cagr": 0.19725628135983686,
+    "cost_per_year": 0.010675922604324647,
+    "days": 914,
+    "funding_per_year": 0.038630663334948065,
+    "max_dd": 0.15124857138504832,
+    "sharpe": 0.86244792898414,
+    "sharpe_rf0": 1.0773063970448438,
+    "turnover_per_year": 7.6261108453055835,
+    "vol": 0.18255189471558803,
+    "worst_day": -0.05125882328423259
+   },
+   "gates": {
+    "2025 and 2026 both positive": true,
+    "active on at least 80% of days": true,
+    "drawdown at most 20%": true,
+    "return at least 10% a year": false,
+    "t-statistic of daily excess return at least 2.61": false
+   },
+   "idle_total_return": 0.07453362665888097,
+   "same_close_fill_sharpe": 0.13383169442676685,
+   "t_stat": 0.16065248412834113,
+   "total_return": 0.08608977058642453,
+   "validation": {
+    "avg_gross": 0.3681688386767043,
+    "avg_net": 0.024889919522510944,
+    "cagr": 0.12230506041095857,
+    "cost_per_year": 0.01783629807288697,
+    "days": 731,
+    "funding_per_year": 0.0061690185601287065,
+    "max_dd": 0.1749294584554968,
+    "sharpe": 0.523638537782895,
+    "sharpe_rf0": 0.7483010677572718,
+    "turnover_per_year": 12.427957237744312,
+    "vol": 0.1745855013946632,
+    "worst_day": -0.046737993939106715
+   },
+   "verdict": "FAIL",
+   "years": {
+    "2025": 0.04164304565325527,
+    "2026": 0.042669823524138284
+   }
+  },
+  "Q1": {
+   "active_share": 0.5814648729446936,
+   "btc_correlation": -0.007359300752821636,
+   "consistent_checks": {
+    "Sharpe at least 0.5": false,
+    "drawdown at most 20%": true,
+    "total return above idle dollars": true
+   },
+   "exam": {
+    "avg_gross": 0.18220408702013988,
+    "avg_net": 0.015533709802884875,
+    "cagr": 0.07853354993938333,
+    "cost_per_year": 0.010916090569402617,
+    "days": 669,
+    "funding_per_year": -0.0015854831428413008,
+    "max_dd": 0.12916712822221588,
+    "sharpe": 0.3559676041304622,
+    "sharpe_rf0": 0.6730110723355802,
+    "turnover_per_year": 7.9166054470866065,
+    "vol": 0.12371433060022564,
+    "worst_day": -0.0475807713526053
+   },
+   "fit": {
+    "avg_gross": 0.11949765932372286,
+    "avg_net": -0.013539352346205518,
+    "cagr": 0.13575832880510763,
+    "cost_per_year": 0.00877131337037079,
+    "days": 914,
+    "funding_per_year": 0.005424685932834203,
+    "max_dd": 0.08760234209679274,
+    "sharpe": 0.7793785843211972,
+    "sharpe_rf0": 1.0994422723837056,
+    "turnover_per_year": 6.370879217256505,
+    "vol": 0.12254692395005432,
+    "worst_day": -0.05125882328423259
+   },
+   "gates": {
+    "2025 and 2026 both positive": false,
+    "drawdown at most 20%": true,
+    "return at least 10% a year": false,
+    "t-statistic of daily excess return at least 2.61": false
+   },
+   "idle_total_return": 0.07453362665888097,
+   "same_close_fill_sharpe": 0.2732039028837685,
+   "share_of_weeks_on": 0.5789473684210527,
+   "t_stat": 0.48192238800586396,
+   "total_return": 0.1486297206659999,
+   "validation": {
+    "avg_gross": 0.2023748739301272,
+    "avg_net": -0.014677695607637568,
+    "cagr": 0.18097395320301635,
+    "cost_per_year": 0.015277881066655166,
+    "days": 731,
+    "funding_per_year": -0.00151463677829845,
+    "max_dd": 0.07094347208332563,
+    "sharpe": 1.2615489840986216,
+    "sharpe_rf0": 1.6345347470423388,
+    "turnover_per_year": 11.074780926952373,
+    "vol": 0.10515902840529807,
+    "worst_day": -0.03419779125148248
+   },
+   "verdict": "FAIL",
+   "years": {
+    "2025": -0.05424558581215677,
+    "2026": 0.21451161467998214
+   }
+  }
+ },
+ "daily_returns_sha256": "73161316da20e22eeac535ead7585a573a69d9b4bd0634ef6a1b2791df2319a0",
+ "window": [
+  "2025-01-01",
+  "2026-10-31"
+ ]
+}
