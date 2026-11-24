@@ -1,0 +1,28 @@
+{
+ "id": 1,
+ "type": "opening",
+ "logged_at": "2026-11-24T22:33:15Z",
+ "weights": {
+  "VUAG": 0.25,
+  "IWFQ": 0.15,
+  "VUKG": 0.15,
+  "IWFV": 0.08,
+  "VERG": 0.07,
+  "CSH2": 0.15,
+  "IGLS": 0.10,
+  "IBTM": 0.05
+ },
+ "rationale": "Shares are about 8% below their highs in a sell-off led by AI and momentum names (Nasdaq 100 -16%, world momentum -23% from highs) while the Fed is expected to raise rates in December and the Bank of England has just raised to 4.00%. The S&P 500's forward P/E is near a three-year low (about 18), but that rests on earnings estimates that have risen by a third this year on AI spending. I hold 70% in shares instead of 100%, lean towards companies with steady profits (world quality) and the cheaper, less AI-dependent UK large caps, keep the US at roughly 38% against roughly 60% in the index, and hold no direct emerging-market, Japan, Nasdaq or momentum fund. The other 30% is in cash and short gilts yielding about 4%, plus a small holding of US Treasuries that has risen when shares fell this month. No gold: it is 31% off its high and still falling as rates rise.",
+ "differences_from_index": "About 30 points less in shares; about 22 points less in the US; about 13 points more in the UK; nothing direct in emerging markets or Japan; 30% in cash and bonds where the index has none.",
+ "would_change_my_mind": "Add shares if US inflation data or the Fed point to a pause, or if the world index recovers above its ten-month average. Cut the US underweight if the large AI companies' results and guidance hold up through the December reporting. Go more defensive if credit tied to AI borrowing shows stress. Reconsider gold once it stops falling against rising rates.",
+ "expectation": "I do not expect this to beat the index after costs; if shares rebound quickly the cash will cost about 0.3 points for every 1% the index gains.",
+ "evidence": [
+  "experiments/paper_portfolio.py funds (returns to the close of 2026-11-24)",
+  "https://insight.factset.com/lowest-forward-12-month-p/e-ratio-for-the-sp-500-in-more-than-3-years",
+  "https://www.bankofengland.co.uk/markets/market-intelligence/survey-results/2026/market-participants-survey-results-november-2026",
+  "https://investinglive.com/central-banks/icymi-fitch-sees-fed-hiking-to-4-25-in-december-says-us-credit-outlook-still-benign/",
+  "https://kpmg.com/us/en/articles/2026/november-2026-economic-compass.html",
+  "https://www.khaleejtimes.com/wall-st-week-ahead-as-tech-swoon-roils-market-us-inflation-data-on-tap-3",
+  "https://www.kitco.com/news/article/2026-11-03/gold-demand-remains-near-record-highs-central-bank-buying-surges-42-wgc"
+ ]
+}
