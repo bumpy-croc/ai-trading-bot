@@ -82,3 +82,14 @@ Either way the bot stays paused.
 - DefiLlama's yields are what the protocols publish, including any reward tokens they fold into the base figure. Some series are short or flat for long stretches (FLOW prints the same value every day).
 - Moving margin between the two legs after large moves is represented only by the liquidation penalty.
 - Funding is Binance's.
+
+## Amendment 1 (2026-11-24, after the results): a forward check of LINK
+
+The results left one coin above 7% in both years, LINK (stLINK long, LINKUSDT perp short), picked in hindsight from sixteen. A hindsight pick can only be judged on data that did not exist when it was picked, so this section fixes a forward check. It costs nothing to run: the inputs are published daily and the calculation is `yields.py hedged-wide`, unchanged.
+
+- **Definition**: the per-coin LINK series exactly as in section 3 (7-day median yield, funding, basis, liquidation penalty, 0.30% a year in costs, 25% margin).
+- **Window**: from 2026-11-01, the first day after the data used above.
+- **Check dates**: 2027-01-20 (with the trend paper trader's week 8 check) and 2027-05-26 (with its week 26 check).
+- **Bar at the second date** (about seven months of new data): at least 7% a year on total capital, annualised, and a drawdown of at most 2%. If met, propose a small trial to Alex with the unmeasured risks listed (stLINK trading below LINK, the staking contract, the exchange). If not, closed.
+- The first date is a progress reading only. No decision is taken on two and a half months.
+- No money and nothing deployed in either case.
