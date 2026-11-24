@@ -8,6 +8,7 @@ Realised track records, not backtests:
 Usage: python experiments/strategy_search/yields.py            (vault and lending survey)
        python experiments/strategy_search/yields.py hedged     (staking with a hedge, prereg 2026-11-23)
        python experiments/strategy_search/yields.py hedged-wide  (16 coins and two mixes, prereg 2026-11-24)
+       python experiments/strategy_search/yields.py dollar       (dollar-yield pools and rotations, prereg 2026-11-24)
 """
 
 from __future__ import annotations
@@ -268,6 +269,104 @@ def hedged_staking_wide() -> dict:
     return out
 
 
+# Dollar yields (docs/research/experiments/2026-11-24_dollar-yield-prereg.md). Universe: every pool DefiLlama
+# flags as stablecoin with no impermanent-loss risk and at least 20 million dollars locked on 2026-11-23
+# (results/dollar_yield_universe.json). Histories are cached under data/llama_stable/.
+DOLLAR_MIN_TVL = 50e6  # point in time, the day before a month starts
+DOLLAR_SWITCH_COST = 0.0010  # per dollar moved between pools
+DOLLAR_TOP = 3
+DOLLAR_GROUPS = {
+    "lending": {"Lending", "CDP", "Uncollateralized Lending"},
+    "exchange pools": {"Dexs"},
+    "yield tokens": {"Basis Trading", "RWA", "Yield", "Onchain Capital Allocator", "Risk Curators"},
+}
+
+
+def _dollar_series() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
+    universe = json.loads((RESULTS / "dollar_yield_universe.json").read_text())
+    cache = Path(__file__).resolve().parent / "data" / "llama_stable"
+    cache.mkdir(parents=True, exist_ok=True)
+    base, total, tvl = {}, {}, {}
+    for p in universe:
+        f = cache / f"{p['pool']}.json"
+        if not f.exists():
+            f.write_text(json.dumps(requests.get(f"https://yields.llama.fi/chart/{p['pool']}", timeout=60).json()))
+        df = pd.DataFrame(json.loads(f.read_text())["data"])
+        day = pd.to_datetime(df["timestamp"], utc=True).dt.normalize()
+        df = df.assign(day=day).drop_duplicates("day", keep="last").set_index("day").sort_index().loc[:END]
+        apy = df["apy"].astype(float)
+        reward = df["apyReward"].astype(float).fillna(0.0)
+        b = df["apyBase"].astype(float).where(df["apyBase"].notna(), apy - reward)
+        base[p["pool"]], total[p["pool"]], tvl[p["pool"]] = b / 100.0, apy / 100.0, df["tvlUsd"].astype(float)
+    idx = pd.date_range("2024-11-01", "2026-10-31", freq="D", tz="UTC")
+    smooth = lambda d: pd.DataFrame(d).reindex(idx).ffill(limit=7).rolling(APY_MEDIAN_DAYS, min_periods=1).median().clip(0.0, APY_CAP)  # noqa: E731
+    return smooth(base), smooth(total), pd.DataFrame(tvl).reindex(idx).ffill(limit=7), {p["pool"]: p for p in universe}
+
+
+def _dollar_mix(y: pd.DataFrame, tvl: pd.DataFrame, pools: list[str], top: int | None) -> tuple[pd.Series, dict]:
+    """Monthly: equal weight over eligible pools, or the `top` by trailing 30-day yield. Idle dollars when none."""
+    days = y.loc[WIDE_WINDOW[0]:WIDE_WINDOW[1]].index
+    starts = [d for d in days if d.day == 1]
+    weights = pd.DataFrame(0.0, index=days, columns=y.columns)
+    prev = pd.Series(0.0, index=y.columns)
+    cost = pd.Series(0.0, index=days)
+    log = {}
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else days[-1] + pd.Timedelta(days=1)
+        hist = y.loc[start - pd.Timedelta(days=MIX_LOOKBACK): start - pd.Timedelta(days=1)]
+        size = tvl.loc[start - pd.Timedelta(days=1)]
+        eligible = [c for c in pools if hist[c].notna().sum() >= MIX_MIN_HISTORY and size.get(c, 0) >= DOLLAR_MIN_TVL]
+        w = pd.Series(0.0, index=y.columns)
+        if eligible:
+            picks = list(hist[eligible].mean().sort_values(ascending=False).index[:top]) if top else eligible
+            w[picks] = 1.0 / len(picks)
+        weights.loc[start: end - pd.Timedelta(days=1)] = w.values
+        cost[start] = float((w - prev).abs().sum()) * DOLLAR_SWITCH_COST
+        log[str(start.date())] = sorted(w[w > 0].index)
+        prev = w
+    held = (weights * ((1.0 + y.reindex(days).fillna(0.0)) ** (1 / 365.0) - 1.0)).sum(axis=1)  # APY to a daily rate
+    idle = (1.0 - weights.sum(axis=1)) * ((1 + IDLE) ** (1 / 365.0) - 1)
+    return held + idle - cost, {"holdings_by_month": log, "switch_cost_total": float(cost.sum()),
+                               "pools_eligible_first_and_last_month": [len(log[str(starts[0].date())]) if not top else None,
+                                                                       len(log[str(starts[-1].date())]) if not top else None]}
+
+
+def dollar_yields() -> dict:
+    base, total, tvl, meta = _dollar_series()
+    groups = {"all": list(base.columns)}
+    for name, cats in DOLLAR_GROUPS.items():
+        groups[name] = [c for c in base.columns if meta[c]["category"] in cats]
+    candidates = {
+        "D1 all large pools, equal weight": ("all", None),
+        "D2 lending, top three by trailing yield": ("lending", DOLLAR_TOP),
+        "D3 any pool, top three by trailing yield": ("all", DOLLAR_TOP),
+        "D4 exchange pools, equal weight": ("exchange pools", None),
+        "D5 yield tokens, equal weight": ("yield tokens", None),
+    }
+    label = lambda c: f"{meta[c]['project']} {meta[c]['symbol']} ({meta[c]['chain']})"  # noqa: E731
+    out: dict = {"candidates": {}, "pools_in_universe": len(meta), "pools_by_group": {k: len(v) for k, v in groups.items()}}
+    for name, (group, top) in candidates.items():
+        r, info = _dollar_mix(base, tvl, groups[group], top)
+        r_total, _ = _dollar_mix(total, tvl, groups[group], top)
+        years = _year_table(r)
+        gate = {"2025 at least 7%": years[2025]["net"] >= GATE_YIELD, "2026 at least 7%": years[2026]["net"] >= GATE_YIELD}
+        info["holdings_by_month"] = {k: [label(c) for c in v] for k, v in info["holdings_by_month"].items()}
+        out["candidates"][name] = {"years": years, "years_including_reward_tokens": _year_table(r_total),
+                                   "total_return": float((1 + r).prod() - 1), "worst_day": float(r.min()),
+                                   "gate": gate, "h1_supported": all(gate.values()), **info}
+    window = base.loc[WIDE_WINDOW[0]:WIDE_WINDOW[1]]
+    big = tvl.loc[WIDE_WINDOW[0]:WIDE_WINDOW[1]] >= DOLLAR_MIN_TVL
+    per_pool = []
+    for c in base.columns:
+        w = window[c].where(big[c]).dropna()
+        if len(w) >= 300:
+            per_pool.append({"pool": label(c), "category": meta[c]["category"], "days_large": int(len(w)),
+                             "mean_base_yield_2025": float(w.loc[:"2025-12-31"].mean()) if len(w.loc[:"2025-12-31"]) >= 150 else None,
+                             "mean_base_yield_2026": float(w.loc["2026-01-01":].mean()) if len(w.loc["2026-01-01":]) >= 150 else None})
+    out["pools_large_for_300_days"] = sorted(per_pool, key=lambda x: -(x["mean_base_yield_2026"] or 0))
+    return out
+
+
 if __name__ == "__main__":
     import sys
 
@@ -275,6 +374,9 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["hedged"]:
         report = hedged_staking()
         (RESULTS / "hedged_staking.json").write_text(json.dumps(report, indent=1, default=float, sort_keys=True))
+    elif sys.argv[1:] == ["dollar"]:
+        report = dollar_yields()
+        (RESULTS / "dollar_yields.json").write_text(json.dumps(report, indent=1, default=float, sort_keys=True))
     elif sys.argv[1:] == ["hedged-wide"]:
         report = hedged_staking_wide()
         (RESULTS / "hedged_staking_wide.json").write_text(json.dumps(report, indent=1, default=float, sort_keys=True))
