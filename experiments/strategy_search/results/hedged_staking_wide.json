@@ -1,0 +1,877 @@
+{
+ "coins": {
+  "APT": {
+   "at_least_7pct_in_both_years": false,
+   "days": 621,
+   "first_day": "2025-01-01",
+   "max_drawdown": 0.10847494135617564,
+   "token": "Amnis amAPT",
+   "worst_day": -0.011658635465577792,
+   "years": {
+    "2025": {
+     "basis_change": -0.003979134029459375,
+     "days": 365,
+     "funding": -0.12686084999999997,
+     "liquidation_days": 1,
+     "net_on_total_capital": -0.039572377039784334,
+     "staking": 0.09869462246575342
+    },
+    "2026": {
+     "basis_change": 0.0004924972719585032,
+     "days": 256,
+     "funding": -0.0541765080078125,
+     "liquidation_days": 2,
+     "net_on_total_capital": -0.012509283244884971,
+     "staking": 0.0841242263671875
+    }
+   }
+  },
+  "AVAX": {
+   "at_least_7pct_in_both_years": false,
+   "days": 669,
+   "first_day": "2025-01-01",
+   "max_drawdown": 0.011616464546921335,
+   "token": "Benqi sAVAX",
+   "worst_day": -0.01161646454692125,
+   "years": {
+    "2025": {
+     "basis_change": -0.0028292085793499844,
+     "days": 365,
+     "funding": 0.0006720200000000015,
+     "liquidation_days": 0,
+     "net_on_total_capital": 0.038559770456020104,
+     "staking": 0.05250390054794521
+    },
+    "2026": {
+     "basis_change": -0.001153159639640007,
+     "days": 304,
+     "funding": 0.013352696546052634,
+     "liquidation_days": 1,
+     "net_on_total_capital": 0.027088749118862242,
+     "staking": 0.04245573815789473
+    }
+   }
+  },
+  "BERA": {
+   "at_least_7pct_in_both_years": false,
+   "days": 458,
+   "first_day": "2025-07-31",
+   "max_drawdown": 0.49269256399520533,
+   "token": "Infrared iBERA",
+   "worst_day": -0.0463850011833143,
+   "years": {
+    "2025": {
+     "basis_change": -0.004691403447339902,
+     "days": 154,
+     "funding": -0.45713171201298713,
+     "liquidation_days": 1,
+     "net_on_total_capital": -0.3483929646704404,
+     "staking": 0.030253892857142858
+    },
+    "2026": {
+     "basis_change": -0.0017552318973167095,
+     "days": 304,
+     "funding": -0.6558550886513157,
+     "liquidation_days": 7,
+     "net_on_total_capital": -0.48041205673001713,
+     "staking": 0.028687363486842105
+    }
+   }
+  },
+  "BNB": {
+   "at_least_7pct_in_both_years": false,
+   "days": 527,
+   "first_day": "2025-05-23",
+   "max_drawdown": 0.0008114212346325145,
+   "token": "Lista slisBNB",
+   "worst_day": -0.000740077064721736,
+   "years": {
+    "2025": {
+     "basis_change": -0.0017936010547056015,
+     "days": 223,
+     "funding": 0.006421970403587444,
+     "liquidation_days": 0,
+     "net_on_total_capital": 0.11452068815556612,
+     "staking": 0.1367815246636771
+    },
+    "2026": {
+     "basis_change": -0.0003876148651508416,
+     "days": 304,
+     "funding": 0.02808617368421052,
+     "liquidation_days": 0,
+     "net_on_total_capital": 0.049192814352182965,
+     "staking": 0.035580879276315786
+    }
+   }
+  },
+  "DOT": {
+   "at_least_7pct_in_both_years": false,
+   "days": 640,
+   "first_day": "2025-01-01",
+   "max_drawdown": 0.049863665670068946,
+   "token": "Bifrost vDOT",
+   "worst_day": -0.013311526334776452,
+   "years": {
+    "2025": {
+     "basis_change": -0.003676511263016824,
+     "days": 365,
+     "funding": 0.011094179999999999,
+     "liquidation_days": 1,
+     "net_on_total_capital": 0.08749608866522829,
+     "staking": 0.11560054794520548
+    },
+    "2026": {
+     "basis_change": -0.002178384009986699,
+     "days": 275,
+     "funding": -0.046301311818181826,
+     "liquidation_days": 2,
+     "net_on_total_capital": -0.030860509834695626,
+     "staking": 0.05271527272727273
+    }
+   }
+  },
+  "ETH": {
+   "at_least_7pct_in_both_years": false,
+   "days": 669,
+   "first_day": "2025-01-01",
+   "max_drawdown": 0.011878237463061048,
+   "token": "Lido stETH",
+   "worst_day": -0.011878237463060938,
+   "years": {
+    "2025": {
+     "basis_change": -0.000488738524335619,
+     "days": 365,
+     "funding": 0.04928719,
+     "liquidation_days": 1,
+     "net_on_total_capital": 0.047558700993189484,
+     "staking": 0.027381342465753425
+    },
+    "2026": {
+     "basis_change": -0.00022968990949592157,
+     "days": 304,
+     "funding": 0.020599615460526313,
+     "liquidation_days": 1,
+     "net_on_total_capital": 0.018299736127650113,
+     "staking": 0.023455560855263156
+    }
+   }
+  },
+  "FIL": {
+   "at_least_7pct_in_both_years": false,
+   "days": 475,
+   "first_day": "2025-07-14",
+   "max_drawdown": 0.0431783310258218,
+   "token": "GLIF iFIL",
+   "worst_day": -0.016079224399290163,
+   "years": {
+    "2025": {
+     "basis_change": 0.0037983230262052673,
+     "days": 171,
+     "funding": -0.0067437271929824665,
+     "liquidation_days": 2,
+     "net_on_total_capital": 0.025259008169445006,
+     "staking": 0.10207518450292398
+    },
+    "2026": {
+     "basis_change": -0.0010037609817947128,
+     "days": 304,
+     "funding": 0.0066751055921052665,
+     "liquidation_days": 4,
+     "net_on_total_capital": -0.009762052228183087,
+     "staking": 0.05774575624999999
+    }
+   }
+  },
+  "FLOW": {
+   "at_least_7pct_in_both_years": false,
+   "days": 182,
+   "first_day": "2026-05-03",
+   "max_drawdown": 0.008341539288001854,
+   "token": "Ankr ankrFLOW",
+   "worst_day": -0.008341539288001788,
+   "years": {
+    "2026": {
+     "basis_change": -0.007100538693060504,
+     "days": 182,
+     "funding": 0.09471098214285714,
+     "liquidation_days": 0,
+     "net_on_total_capital": 0.13486169772345158,
+     "staking": 0.07899999999999997
+    }
+   }
+  },
+  "HYPE": {
+   "at_least_7pct_in_both_years": false,
+   "days": 245,
+   "first_day": "2026-03-01",
+   "max_drawdown": 0.01207812703684763,
+   "token": "Kinetiq kHYPE",
+   "worst_day": -0.011995556527248204,
+   "years": {
+    "2026": {
+     "basis_change": -0.0008738095787705178,
+     "days": 245,
+     "funding": 0.04847416020408163,
+     "liquidation_days": 2,
+     "net_on_total_capital": 0.015239030609681292,
+     "staking": 0.019326696938775513
+    }
+   }
+  },
+  "ICP": {
+   "at_least_7pct_in_both_years": false,
+   "days": 619,
+   "first_day": "2025-01-20",
+   "max_drawdown": 0.12929327623518339,
+   "token": "WaterNeuron nICP",
+   "worst_day": -0.017813421850721562,
+   "years": {
+    "2025": {
+     "basis_change": -0.0010179106026403035,
+     "days": 346,
+     "funding": 0.021818223121387287,
+     "liquidation_days": 6,
+     "net_on_total_capital": 0.04425729687696247,
+     "staking": 0.13219364523121385
+    },
+    "2026": {
+     "basis_change": -0.0021850614886235473,
+     "days": 273,
+     "funding": -0.0669470031135531,
+     "liquidation_days": 5,
+     "net_on_total_capital": -0.040259876363539726,
+     "staking": 0.12206767472527472
+    }
+   }
+  },
+  "LINK": {
+   "at_least_7pct_in_both_years": true,
+   "days": 669,
+   "first_day": "2025-01-01",
+   "max_drawdown": 0.0016626753752951862,
+   "token": "stake.link stLINK",
+   "worst_day": -0.0016626753752952098,
+   "years": {
+    "2025": {
+     "basis_change": -0.001293254604743721,
+     "days": 365,
+     "funding": 0.05140589,
+     "liquidation_days": 0,
+     "net_on_total_capital": 0.08229824900188598,
+     "staking": 0.05180537095890411
+    },
+    "2026": {
+     "basis_change": 0.0002611347637613,
+     "days": 304,
+     "funding": 0.04633565740131579,
+     "liquidation_days": 0,
+     "net_on_total_capital": 0.07477525091635466,
+     "staking": 0.04713949111842105
+    }
+   }
+  },
+  "MON": {
+   "at_least_7pct_in_both_years": false,
+   "days": 334,
+   "first_day": "2025-12-02",
+   "max_drawdown": 0.01406593043570925,
+   "token": "shMonad shMON",
+   "worst_day": -0.011519591232876712,
+   "years": {
+    "2025": {
+     "basis_change": 0.0,
+     "days": 30,
+     "funding": 0.039716988333333335,
+     "liquidation_days": 0,
+     "net_on_total_capital": 0.16041529801774215,
+     "staking": 0.16255233333333333
+    },
+    "2026": {
+     "basis_change": 0.0,
+     "days": 304,
+     "funding": -0.05456748799342105,
+     "liquidation_days": 1,
+     "net_on_total_capital": 0.04914137729458454,
+     "staking": 0.13593508684210526
+    }
+   }
+  },
+  "POL": {
+   "at_least_7pct_in_both_years": false,
+   "days": 669,
+   "first_day": "2025-01-01",
+   "max_drawdown": 0.06680200420617466,
+   "token": "Stader MaticX",
+   "worst_day": -0.011621812572568568,
+   "years": {
+    "2025": {
+     "basis_change": -0.0017068992532656146,
+     "days": 365,
+     "funding": -0.005218909999999997,
+     "liquidation_days": 1,
+     "net_on_total_capital": -0.0027798261034424065,
+     "staking": 0.02158749479452055
+    },
+    "2026": {
+     "basis_change": 0.0017400320216310666,
+     "days": 304,
+     "funding": -0.08605433305921052,
+     "liquidation_days": 1,
+     "net_on_total_capital": -0.06303284872799927,
+     "staking": 0.024558727960526314
+    }
+   }
+  },
+  "SOL": {
+   "at_least_7pct_in_both_years": false,
+   "days": 585,
+   "first_day": "2025-03-26",
+   "max_drawdown": 0.0085531517013544,
+   "token": "Jito JitoSOL",
+   "worst_day": -0.008057866501372336,
+   "years": {
+    "2025": {
+     "basis_change": -0.0017211401745217591,
+     "days": 281,
+     "funding": 0.006108450355871887,
+     "liquidation_days": 0,
+     "net_on_total_capital": 0.058014159941086725,
+     "staking": 0.06960658362989323
+    },
+    "2026": {
+     "basis_change": 0.0007992971418788825,
+     "days": 304,
+     "funding": -0.005992519572368417,
+     "liquidation_days": 0,
+     "net_on_total_capital": 0.03773041993917035,
+     "staking": 0.05475657894736843
+    }
+   }
+  },
+  "STRK": {
+   "at_least_7pct_in_both_years": false,
+   "days": 669,
+   "first_day": "2025-01-01",
+   "max_drawdown": 0.1669372125382944,
+   "token": "Endur xSTRK",
+   "worst_day": -0.015965670696897867,
+   "years": {
+    "2025": {
+     "basis_change": -0.006572027999150798,
+     "days": 365,
+     "funding": -0.011862949999999997,
+     "liquidation_days": 8,
+     "net_on_total_capital": -0.036547208071356585,
+     "staking": 0.0959027287671233
+    },
+    "2026": {
+     "basis_change": -0.0022802784750193994,
+     "days": 304,
+     "funding": 0.005972036348684207,
+     "liquidation_days": 9,
+     "net_on_total_capital": -0.07190157978685152,
+     "staking": 0.07003099342105262
+    }
+   }
+  },
+  "TON": {
+   "at_least_7pct_in_both_years": false,
+   "days": 539,
+   "first_day": "2025-01-01",
+   "max_drawdown": 0.06334537132089468,
+   "token": "Hipo hTON",
+   "worst_day": -0.012180495767869557,
+   "years": {
+    "2025": {
+     "basis_change": -0.0022702795396902786,
+     "days": 365,
+     "funding": 0.041032360000000004,
+     "liquidation_days": 2,
+     "net_on_total_capital": 0.035125399221642484,
+     "staking": 0.03760753068493151
+    },
+    "2026": {
+     "basis_change": -0.01938592855838219,
+     "days": 174,
+     "funding": -0.06027610000000001,
+     "liquidation_days": 5,
+     "net_on_total_capital": -0.11697056859850827,
+     "staking": 0.0905550591954023
+    }
+   }
+  }
+ },
+ "mixes": {
+  "M1 equal weight": {
+   "average_share_hedged": 1.0,
+   "gate": {
+    "2025 at least 7%": false,
+    "2026 at least 7%": false,
+    "drawdown at most 5%": false
+   },
+   "h1_supported": false,
+   "holdings_by_month": {
+    "2025-01-01": [
+     "APT",
+     "AVAX",
+     "DOT",
+     "ETH",
+     "LINK",
+     "POL",
+     "STRK",
+     "TON"
+    ],
+    "2025-02-01": [
+     "APT",
+     "AVAX",
+     "DOT",
+     "ETH",
+     "LINK",
+     "POL",
+     "STRK",
+     "TON"
+    ],
+    "2025-03-01": [
+     "APT",
+     "AVAX",
+     "DOT",
+     "ETH",
+     "ICP",
+     "LINK",
+     "POL",
+     "STRK",
+     "TON"
+    ],
+    "2025-04-01": [
+     "APT",
+     "AVAX",
+     "DOT",
+     "ETH",
+     "ICP",
+     "LINK",
+     "POL",
+     "STRK",
+     "TON"
+    ],
+    "2025-05-01": [
+     "APT",
+     "AVAX",
+     "DOT",
+     "ETH",
+     "ICP",
+     "LINK",
+     "POL",
+     "SOL",
+     "STRK",
+     "TON"
+    ],
+    "2025-06-01": [
+     "APT",
+     "AVAX",
+     "DOT",
+     "ETH",
+     "ICP",
+     "LINK",
+     "POL",
+     "SOL",
+     "STRK",
+     "TON"
+    ],
+    "2025-07-01": [
+     "APT",
+     "AVAX",
+     "BNB",
+     "DOT",
+     "ETH",
+     "ICP",
+     "LINK",
+     "POL",
+     "SOL",
+     "STRK",
+     "TON"
+    ],
+    "2025-08-01": [
+     "APT",
+     "AVAX",
+     "BNB",
+     "DOT",
+     "ETH",
+     "ICP",
+     "LINK",
+     "POL",
+     "SOL",
+     "STRK",
+     "TON"
+    ],
+    "2025-09-01": [
+     "APT",
+     "AVAX",
+     "BERA",
+     "BNB",
+     "DOT",
+     "ETH",
+     "FIL",
+     "ICP",
+     "LINK",
+     "POL",
+     "SOL",
+     "STRK",
+     "TON"
+    ],
+    "2025-10-01": [
+     "APT",
+     "AVAX",
+     "BERA",
+     "BNB",
+     "DOT",
+     "ETH",
+     "FIL",
+     "ICP",
+     "LINK",
+     "POL",
+     "SOL",
+     "STRK",
+     "TON"
+    ],
+    "2025-11-01": [
+     "APT",
+     "AVAX",
+     "BERA",
+     "BNB",
+     "DOT",
+     "ETH",
+     "FIL",
+     "ICP",
+     "LINK",
+     "POL",
+     "SOL",
+     "STRK",
+     "TON"
+    ],
+    "2025-12-01": [
+     "APT",
+     "AVAX",
+     "BERA",
+     "BNB",
+     "DOT",
+     "ETH",
+     "FIL",
+     "ICP",
+     "LINK",
+     "POL",
+     "SOL",
+     "STRK",
+     "TON"
+    ],
+    "2026-01-01": [
+     "APT",
+     "AVAX",
+     "BERA",
+     "BNB",
+     "ETH",
+     "FIL",
+     "ICP",
+     "LINK",
+     "MON",
+     "POL",
+     "SOL",
+     "STRK",
+     "TON"
+    ],
+    "2026-02-01": [
+     "APT",
+     "AVAX",
+     "BERA",
+     "BNB",
+     "ETH",
+     "FIL",
+     "LINK",
+     "MON",
+     "POL",
+     "SOL",
+     "STRK",
+     "TON"
+    ],
+    "2026-03-01": [
+     "APT",
+     "AVAX",
+     "BERA",
+     "BNB",
+     "DOT",
+     "ETH",
+     "FIL",
+     "LINK",
+     "MON",
+     "POL",
+     "SOL",
+     "STRK",
+     "TON"
+    ],
+    "2026-04-01": [
+     "APT",
+     "AVAX",
+     "BERA",
+     "BNB",
+     "DOT",
+     "ETH",
+     "FIL",
+     "HYPE",
+     "ICP",
+     "LINK",
+     "MON",
+     "POL",
+     "SOL",
+     "STRK",
+     "TON"
+    ],
+    "2026-05-01": [
+     "APT",
+     "AVAX",
+     "BERA",
+     "BNB",
+     "DOT",
+     "ETH",
+     "FIL",
+     "HYPE",
+     "ICP",
+     "LINK",
+     "MON",
+     "POL",
+     "SOL",
+     "STRK",
+     "TON"
+    ],
+    "2026-06-01": [
+     "AVAX",
+     "BERA",
+     "BNB",
+     "DOT",
+     "ETH",
+     "FIL",
+     "FLOW",
+     "HYPE",
+     "ICP",
+     "LINK",
+     "MON",
+     "POL",
+     "SOL",
+     "STRK",
+     "TON"
+    ],
+    "2026-07-01": [
+     "AVAX",
+     "BERA",
+     "BNB",
+     "DOT",
+     "ETH",
+     "FIL",
+     "FLOW",
+     "HYPE",
+     "ICP",
+     "LINK",
+     "MON",
+     "POL",
+     "SOL",
+     "STRK"
+    ],
+    "2026-08-01": [
+     "AVAX",
+     "BERA",
+     "BNB",
+     "DOT",
+     "ETH",
+     "FIL",
+     "FLOW",
+     "HYPE",
+     "ICP",
+     "LINK",
+     "MON",
+     "POL",
+     "SOL",
+     "STRK"
+    ],
+    "2026-09-01": [
+     "APT",
+     "AVAX",
+     "BERA",
+     "BNB",
+     "DOT",
+     "ETH",
+     "FIL",
+     "FLOW",
+     "HYPE",
+     "ICP",
+     "LINK",
+     "MON",
+     "POL",
+     "SOL",
+     "STRK"
+    ],
+    "2026-10-01": [
+     "APT",
+     "AVAX",
+     "BERA",
+     "BNB",
+     "DOT",
+     "ETH",
+     "FIL",
+     "FLOW",
+     "HYPE",
+     "ICP",
+     "LINK",
+     "MON",
+     "POL",
+     "SOL",
+     "STRK"
+    ]
+   },
+   "max_drawdown": 0.0727885921432746,
+   "switch_cost_total": 0.007599844599844599,
+   "total_return": -0.010269843432909376,
+   "worst_day": -0.004327980264219058,
+   "years": {
+    "2025": {
+     "days": 365,
+     "net": 0.025991656777353267
+    },
+    "2026": {
+     "days": 304,
+     "net": -0.042434708133207884
+    }
+   }
+  },
+  "M2 top three by trailing yield": {
+   "average_share_hedged": 0.9696063776781266,
+   "gate": {
+    "2025 at least 7%": true,
+    "2026 at least 7%": false,
+    "drawdown at most 5%": true
+   },
+   "h1_supported": false,
+   "holdings_by_month": {
+    "2025-01-01": [
+     "APT",
+     "DOT",
+     "STRK"
+    ],
+    "2025-02-01": [
+     "APT",
+     "DOT",
+     "STRK"
+    ],
+    "2025-03-01": [
+     "DOT",
+     "ICP",
+     "STRK"
+    ],
+    "2025-04-01": [
+     "DOT",
+     "ICP",
+     "STRK"
+    ],
+    "2025-05-01": [
+     "DOT",
+     "ICP",
+     "LINK"
+    ],
+    "2025-06-01": [
+     "APT",
+     "DOT",
+     "ICP"
+    ],
+    "2025-07-01": [
+     "BNB",
+     "DOT",
+     "ICP"
+    ],
+    "2025-08-01": [
+     "BNB",
+     "DOT",
+     "ICP"
+    ],
+    "2025-09-01": [
+     "BNB",
+     "FIL",
+     "ICP"
+    ],
+    "2025-10-01": [
+     "DOT",
+     "FIL",
+     "ICP"
+    ],
+    "2025-11-01": [
+     "BNB",
+     "FIL",
+     "LINK"
+    ],
+    "2025-12-01": [
+     "BNB",
+     "ETH",
+     "LINK"
+    ],
+    "2026-01-01": [
+     "BNB",
+     "ICP",
+     "MON"
+    ],
+    "2026-02-01": [
+     "BNB",
+     "LINK",
+     "MON"
+    ],
+    "2026-03-01": [
+     "BNB",
+     "LINK"
+    ],
+    "2026-04-01": [
+     "HYPE",
+     "LINK"
+    ],
+    "2026-05-01": [
+     "FIL",
+     "MON",
+     "TON"
+    ],
+    "2026-06-01": [
+     "BNB",
+     "FLOW",
+     "LINK"
+    ],
+    "2026-07-01": [
+     "FLOW",
+     "HYPE",
+     "LINK"
+    ],
+    "2026-08-01": [
+     "FLOW",
+     "MON",
+     "STRK"
+    ],
+    "2026-09-01": [
+     "FLOW",
+     "ICP",
+     "STRK"
+    ],
+    "2026-10-01": [
+     "FLOW",
+     "ICP",
+     "MON"
+    ]
+   },
+   "max_drawdown": 0.027516046506615432,
+   "switch_cost_total": 0.042499999999999996,
+   "total_return": 0.08622965992674869,
+   "worst_day": -0.0054326468343315224,
+   "years": {
+    "2025": {
+     "days": 365,
+     "net": 0.08461408459245567
+    },
+    "2026": {
+     "days": 304,
+     "net": 0.0017884271532284588
+    }
+   }
+  }
+ }
+}

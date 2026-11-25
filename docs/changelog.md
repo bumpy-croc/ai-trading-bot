@@ -12,6 +12,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Paper portfolio managed by Claude** (research; `docs/research/experiments/2026-11-24_paper-portfolio-prereg.md`,
+  `experiments/paper_portfolio.py`, `docs/research/paper_portfolio/`). Alex chose a six-month paper test of
+  discretionary management: £5,000, 18 ordinary London-listed funds, weekly reviews, every decision pushed
+  before the close it fills at, scored against a world index fund on 2027-05-26. Opening decision recorded
+  2026-11-24. No money.
+- **Slow forex patterns** (research; `docs/research/experiments/2026-11-24_fx-slow-patterns-*.md`,
+  `experiments/fx_slow_patterns.py`). Alex asked for patterns over weeks, months and years. 31 candidates
+  (weekly reversal, 1 to 12 month momentum, calendar seasonality, five-year value, a carry/momentum/value
+  blend) scanned on nine major pairs over 1987-2014 only. Best Sharpe after retail costs 0.28 (0.63 before);
+  none reaches the 0.40 needed to go to the 2015-2026 exam, which was not run. Seasonal and weekday averages
+  beyond two standard errors match the number chance gives. No build.
+- **Plain portfolios in pounds, 1997-2026** (research; `docs/research/experiments/2026-11-24_gbp-portfolios-10pct-*.md`,
+  `experiments/gbp_portfolios.py`). Alex asked what returns 10% a year outside crypto. Seven portfolios a UK
+  account can hold: US stocks 10.6% a year (5.9% then 15.7% by half, a 52% fall and 11.5 years to recover),
+  world stocks 9.2%, 60/40 7.7%, a ten-month trend filter 9.9% with a 21% fall, 2x versions 13.6% to 14.5%
+  with falls of 44% to 86%. None reaches 10% in both halves without a fall of more than 40%. A record, not a
+  forecast; nothing built.
+- **Dollar yields on-chain** (research; `docs/research/experiments/2026-11-24_dollar-yield-*.md`,
+  `yields.py dollar`). 200 large stablecoin pools, five monthly rules, 2025-26, survivors only (an upper
+  bound). Every large pool equal weight: 3.1% / 2.5%. Lending top three: 5.2% / 5.4%. Any pool top three:
+  6.6% / 8.2%, reached by holding new synthetic-dollar tokens. Exchange pools about 0%. None reaches 7% in
+  both years; established lending pays 3 to 4%. No build.
+- **Token-unlock short** (research; `docs/research/experiments/2026-11-24_token-unlock-short-*.md`,
+  `experiments/strategy_search/unlocks.py`). Short a coin around large team and investor unlocks (877
+  events on 76 coins from DefiLlama's schedules), hedged with a basket of similar coins. On 2022-24 no
+  window qualifies: a small median gain is wiped out by squeezes (about one position in fifteen hits the 30%
+  stop). The apparent 50-100% in 2024 with a BTC hedge is small coins falling against BTC. Stopped at the
+  design stage; the 2025-26 window was not touched.
+- **Trend book on 2025-26, one-off exam** (research;
+  `docs/research/experiments/2026-11-24_trend-book-2025-26-exam-*.md`, `adaptive.py exam`). After Alex
+  allowed one look per candidate at the used 2025-26 window with a stricter bar: the plain trend book B0
+  made 4.6% a year (Sharpe 0.12 above idle dollars, drawdown 14.1%) while the coins it trades fell 70%;
+  its quiet-market version Q1 made 7.9% a year and lost 5.4% in 2025. Both fail; Q1 is closed; B0's forward
+  paper recording continues unchanged.
+- **Hedged staking on 16 coins and two mixes** (research;
+  `docs/research/experiments/2026-11-24_hedged-staking-wide-*.md`, `yields.py hedged-wide`). Equal weight
+  across all coins: +2.6% (2025), −4.2% (2026). Top three by last month's yield: +8.5% (2025), +0.2% (2026).
+  High staking yields are offset by funding paid by the short (APT, ICP, BERA). Only LINK cleared 7% in
+  both years, seen in hindsight. No build.
+- **Spike-fade test and its replication** (research;
+  `docs/research/experiments/2026-11-23_spike-fade-*.md`, `experiments/strategy_search/spike_sim.py`).
+  Far resting orders that fill only in sudden jumps, closed after five minutes. Positive after costs on
+  ETH, SOL and XRP in 2025-26 (+12.5 bp a trade, 301 trades) but short of its evidence bar; the unchanged
+  rule then lost 2.2 bp a trade over 3,422 trades on six further sets, with one account wiped out in
+  the year that contained real liquidation cascades. Closed. No build.
+- **Hedged staking yield measurement** (research;
+  `docs/research/experiments/2026-11-23_hedged-staking-yield-*.md`, `experiments/strategy_search/yields.py hedged`).
+  A staking token held against a short in the same coin's perp paid 10-14% a year on ETH in 2023-24,
+  6.1% in 2025 and 3.4% in 2026; SOL paid 3.7% in 2026. No better than lending now. No build.
 - **Backtest of the naive "quote around the last trade" market maker** (research;
   `docs/research/experiments/2026-11-23_naive-market-maker-*.md`). A tick-level simulator
   (`experiments/strategy_search/mm_data.py`, `mm_sim.py`) run on a year of BTCUSDT perp trades

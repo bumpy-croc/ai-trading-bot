@@ -1,0 +1,63 @@
+{
+ "status": "running",
+ "start_close": "2026-11-25",
+ "as_of_close": "2026-11-25",
+ "end_close": "2027-05-26",
+ "trading_days": 1,
+ "portfolio_value": 4995.0,
+ "benchmark_value": 4995.0,
+ "mix_60_40_value": 4995.0,
+ "cash_fund_value": 4995.0,
+ "portfolio_return": -0.001,
+ "benchmark_return": -0.001,
+ "gap_points": 0.0,
+ "portfolio_largest_fall": 0.0,
+ "benchmark_largest_fall": 0.0,
+ "weekly_gap_tstat": null,
+ "weeks": 0,
+ "stop_rule_hit": false,
+ "trading_costs": 5.0,
+ "decisions": [
+  {
+   "id": 1,
+   "file": "001_2026-11-24.json",
+   "logged_at": "2026-11-24T22:33:15Z",
+   "filled_at_close_of": "2026-11-25",
+   "change": true,
+   "traded": 5000.0,
+   "cost": 5.0,
+   "weights": {
+    "VUAG": 0.25,
+    "IWFQ": 0.15,
+    "VUKG": 0.15,
+    "IWFV": 0.08,
+    "VERG": 0.07,
+    "CSH2": 0.15,
+    "IGLS": 0.1,
+    "IBTM": 0.05
+   }
+  }
+ ],
+ "pending": [],
+ "current_weights": {
+  "CSH2": 0.15,
+  "IBTM": 0.05,
+  "IGLS": 0.1,
+  "IWFQ": 0.15,
+  "IWFV": 0.08,
+  "VERG": 0.07,
+  "VUAG": 0.25,
+  "VUKG": 0.15,
+  "uninvested": 0.0
+ },
+ "verdict": null,
+ "daily": [
+  {
+   "day": "2026-11-25",
+   "portfolio": 4995.0,
+   "benchmark": 4995.0,
+   "mix_60_40": 4995.0,
+   "cash_fund": 4995.0
+  }
+ ]
+}

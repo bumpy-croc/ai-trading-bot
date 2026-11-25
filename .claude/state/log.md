@@ -4893,3 +4893,83 @@ Ref: #1281, #1285, #1270, #1271, #1269, #1286, #1287, #1288, #1289, #1127, #1260
 
 **Recommendation.** No build. A quoting bot of our own at the standard fee tier is not a route to profit on a liquid market; the bot stays paused.
 - ΔP: none. ΔR: none taken. C: research only. E: the results file above.
+
+## [D-2026-11-23-02] 2026-11-23 ~18:30 UTC · track-record + action · quant research (Claude, project thread "Find a profitable crypto strategy mix")
+
+**Authority.** Alex, 2026-11-23 18:15 UTC, project thread: "merge the pr and carry on finding a profitable strategy".
+
+**Action.** PR #1327 merged to `develop` (squash `3c4509c`). That puts `.github/workflows/paper-trend-recorder.yml` on the default branch, so the forward paper test of the slow trend book B0 (D-2026-11-11-03) starts: day 0 is Monday 2026-11-23, recorded on 2026-11-24 before its fill price exists. A manual first run was dispatched on 2026-11-23 to prove the plumbing on a heartbeat day.
+
+**Result.** Prereg `docs/research/experiments/2026-11-23_hedged-staking-yield-prereg.md` (commit `18b9c96`). Staking token long, same coin's Binance perp short, net of 0.30% a year in costs, on total capital with 25% extra margin: ETH 10.2% (2023), 13.5% (2024), 6.1% (2025), 3.4% (2026 to October, annualised); SOL 3.7% (2026; the JitoSOL series starts 2025-03-26). Gate was 7% in both 2025 and 2026. **H0 supported, no build.** Results: `docs/research/experiments/2026-11-23_hedged-staking-yield-results.md`.
+
+**Recommendation.** Nothing to build from the passive yields at current funding. In 2026 only the Hyperliquid vault (about 8%) paid clearly more than idle dollars.
+- ΔP: none. ΔR: none taken. C: research only. E: the results file above.
+
+## [D-2026-11-23-03] 2026-11-23 ~19:30 UTC · track-record · quant research (Claude, project thread "Find a profitable crypto strategy mix")
+
+**Authority.** Alex, 2026-11-23 18:15 UTC, project thread: "merge the pr and carry on finding a profitable strategy".
+
+**Result 1 (spike fade, first test).** Prereg `docs/research/experiments/2026-11-23_spike-fade-prereg.md` (commit `c6dd8c0`), which discloses the post-hoc BTC exploration that led to it. Rule: bid and ask a volatility-scaled distance from the last trade, refreshed every 100 ms and live 250 ms later, filled only by a trade through them, one position at a time, exit after 300 s, 8 bp round-trip cost. ETH, SOL, XRP perps 2025-11..2026-10: +12.5 bp per trade net over 301 trades, positive in each coin, 12.5% a year on average, but pooled t = 2.03 (2.5 required) and XRP had 60 trades (100 required). **H0 by the gates.** Results: `2026-11-23_spike-fade-results.md`.
+
+**Result 2 (replication, unchanged rule, six untouched sets).** Prereg `2026-11-23_spike-fade-replication-prereg.md` (commit `c8d3bd3`). ETH, SOL, XRP 2024-11..2025-10 and DOGE, 1000PEPE, SUI 2025-11..2026-10: pooled −2.2 bp per trade net over 3,422 trades (t = −0.94); 5 of 6 sets positive; XRP 2024-25 lost 206% of its account (distance set from a quiet year; 53.5% lost on 10 Oct 2025 alone); SOL lost 15.4% on 2 Mar 2025. **H0: gates 1, 3 and 4 fail. The idea is closed on historical data.** Results: `2026-11-23_spike-fade-replication-results.md`.
+
+**Recommendation.** No build. The before-cost reversal after a spike is real in nine of ten sets, and after costs it behaves like selling insurance. Any adaptive version can only be judged on future data with the rule fixed first, on Alex's decision.
+- ΔP: none. ΔR: none taken. C: research only. E: the two results files above.
+
+## [D-2026-11-24-01] 2026-11-24 ~11:30 UTC · track-record · quant research (Claude, project thread "Find a profitable crypto strategy mix")
+
+**Authority.** Alex, 2026-11-24 10:44 UTC, project thread: chose "Yes, stricter bar, paper first" on the decision card "Allow one-off tests on the 2025-26 period I had declared used up?" (the option: one look per candidate, written down first, a pass must still paper trade before any money). And Alex, 10:46 UTC, on hedged staking: "Maybe we can also try it with other coins or a mix until we find something even more profitable?"
+
+**Window note.** This supersedes the closure of the 2025-01 → 2026-10 window in [D-2026-11-11-04] for one preregistered look per candidate, with a multiplicity-corrected bar (t ≥ 2.61 for eleven candidates). The earlier entry is not edited.
+
+**Result 1 (trend book exam).** Prereg `docs/research/experiments/2026-11-24_trend-book-2025-26-exam-prereg.md` (commit `9d3b792`, before either book saw a day after 2024-12-31). B0 (the book in the forward paper test): +4.6%/yr, Sharpe 0.12 above idle dollars, t 0.16, drawdown 14.1%, 2025 +4.2%, 2026 +4.3%; BTC −17% and the equal-weight top 30 −70% over the same window. Q1 (B0 only in quiet markets, a post-hoc rule from the 2026-11-11 design split): +7.9%/yr, Sharpe 0.36, 2025 −5.4%, 2026 +21.5%. **Both FAIL. H0 supported.** Q1 closed. B0's forward recording continues to its fixed checkpoints; no executor work. Results: `2026-11-24_trend-book-2025-26-exam-results.md`.
+
+**Result 2 (hedged staking, 16 coins, two mixes).** Prereg `2026-11-24_hedged-staking-wide-prereg.md` (commit `cd2d628`). On total capital after costs: M1 equal weight +2.6% (2025), −4.2% (2026), drawdown 7.3%; M2 top three by trailing 30-day yield +8.5% (2025), +0.2% (2026), drawdown 2.8%. Gate was 7% in both years. **H0 supported, no build.** Staking yields of 8-13% (APT, ICP, DOT, MON) were offset by funding paid by the short; BERA's short paid 46-66% a year. LINK alone cleared 7% in both years (8.2%, 7.5%), one of sixteen in hindsight, not a pass. Results: `2026-11-24_hedged-staking-wide-results.md`.
+
+**Recommendation.** No build. The 2025-26 window has now faced eleven trading candidates and two yield mixes; none passed.
+- ΔP: none. ΔR: none taken. C: research only. E: the two results files above.
+
+## [D-2026-11-24-02] 2026-11-24 ~12:15 UTC · track-record · quant research (Claude, project thread "Find a profitable crypto strategy mix")
+
+**Authority.** Alex, 2026-11-23 18:15 UTC, project thread: "carry on finding a profitable strategy"; and the 2026-11-24 decision recorded in [D-2026-11-24-01].
+
+**Result.** Prereg `docs/research/experiments/2026-11-24_token-unlock-short-prereg.md` (commit `2acd983`, before the simulator saw a price). Hypothesis: a coin with a large team or investor cliff unlock coming underperforms similar coins by more than the cost of the short. 877 events on 76 coins (DefiLlama emission files matched to Binance perps); short the coin, long the equal-weight basket of liquidity ranks 31-100; three windows (14 days before to the day; 7 before to 7 after; 30 before to 14 after); 1.0% round trip, actual funding, 30% intraday stop. Design on data cut at 2024-12-31 (fit 2022-23, validation 2024): portfolio Sharpe −0.76 / −0.11, −0.60 / −0.57, −1.02 / +0.82. **No window qualifies. H0 at Stage A; Stage B did not run and the 2025-26 window was not touched.** With a BTC hedge the same windows show 51-100% for 2024, which is small coins falling against BTC and not an unlock effect. Results: `2026-11-24_token-unlock-short-results.md`.
+
+**Recommendation.** No build. No further unlock-short variants on this data.
+- ΔP: none. ΔR: none taken. C: research only. E: the results file above.
+
+## [D-2026-11-24-03] 2026-11-24 ~12:00 UTC · track-record · quant research (Claude, project thread "Find a profitable crypto strategy mix")
+
+**Authority.** Alex, 2026-11-24 11:28 UTC, project thread: chose "Test dollar-yield ideas next" on the decision card "Choose where the search for a profitable strategy goes next?".
+
+**Result.** Prereg `docs/research/experiments/2026-11-24_dollar-yield-prereg.md` (commit `5c384bd`). Hypothesis: a simple rule over large on-chain dollar pools earned at least 7% a year after switching costs in both 2025 and January-October 2026. 200 DefiLlama stablecoin pools (today's survivors, so an upper bound), each counted while above 50 million dollars, base yield only. D1 every pool equal weight 3.1% / 2.5%; D2 lending top three by trailing yield 5.2% / 5.4%; D3 any pool top three 6.6% / 8.2%; D4 exchange pools 0.0% / −0.2%; D5 yield tokens 3.3% / 3.9%. **H0 for all five, no build.** Established lending (Aave, Sky, Morpho, Fluid) paid 3 to 4%; D3's 2026 figure came from rotating through new synthetic-dollar tokens with unmeasured principal risk. Results: `2026-11-24_dollar-yield-results.md`.
+
+**Recommendation.** No build. Across the programme (about 43 candidates), what paid more than idle dollars in 2026 was the Hyperliquid vault (about 8%), hedged LINK staking (7.5%, hindsight pick, forward check fixed) and new synthetic-dollar tokens (7-8%, unmeasured risk). The forward tests already running (trend book, LINK, Polymarket) and the funding watcher are what remains.
+- ΔP: none. ΔR: none taken. C: research only. E: the results file above.
+
+## [D-2026-11-24-04] 2026-11-24 ~13:20 UTC · track-record · quant research (Claude, project thread "Find strategies returning 10% a year")
+
+**Authority.** Alex, 2026-11-24 12:47 UTC, project thread: "Let's expand the scope a bit outside crypto. Let's say I have £5000 in crypto at the moment. Can you find some good investments or trading strategies that can be profitable with 10% + returns a year? I've heard forex can be great for this as there are quite predictable patterns".
+
+**Result.** Prereg `docs/research/experiments/2026-11-24_gbp-portfolios-10pct-prereg.md` (commit `33c77b1`, before the script existed). A measurement, not a search: seven plain portfolios in pounds, 1997-01 → 2026-10, bar = 10%/yr over the window and in both halves with a largest fall ≤ 40%. US stocks 10.6%/yr (5.9% / 15.7% by half, fall 51.6%, 11.5 years under water); world stocks 9.2% (fall 50.8%); 60/40 7.7% (24.7%); US stocks with a ten-month trend filter 9.9% (9.0% / 10.8%, fall 20.7%); 2x US stocks 13.9% (2.9% / 26.2%, fall 86.4%); 2x with the filter 14.5% (12.7% / 16.4%, fall 44.1%); 2x stocks and long bonds 13.6% (10.5% / 16.8%, fall 53.2%); pound cash 2.8%. **No portfolio MEETS; two MEET WITH DEEP LOSSES (both leveraged). H0.** The 2x model runs about 0.7 points a year above a real 2x fund since 2006. US stocks since 1871 (dollars): 9.2%/yr, 39% of ten-year periods at 10%/yr or more. The forex part of the question was already answered by the 2026-11-10 bake-off (no rerun).
+
+**Recommendation.** Nothing to build; no money moved; bot stays paused. Reported to Alex as a record of the past, not a forecast or personal advice.
+- ΔP: none. ΔR: none taken. C: research only. E: `docs/research/experiments/2026-11-24_gbp-portfolios-10pct-results.md`.
+
+## [D-2026-11-24-05] 2026-11-24 ~21:50 UTC · track-record · quant research (Claude, project thread "Find strategies returning 10% a year")
+
+**Authority.** Alex, 2026-11-24 21:17 UTC, project thread: "Can you investigate Forex some more. Can you spot any patterns over weeks/months/years that would make consistent profitable trades".
+
+**Result.** Prereg `docs/research/experiments/2026-11-24_fx-slow-patterns-prereg.md` (commit `be5c1b3`, before the script existed). Two stages with a wall: scan 31 candidates (15 published slow rules and their opposites, one blend) on nine major pairs over 1987-01 → 2014-12 only; at most five with Sharpe ≥ 0.40 after retail costs and both halves positive go once to 2015-2026. Best after costs: blend of carry, 3-month winners and cheapness 0.28 (0.63 before costs, 1.2%/yr over cash), five-year reversal 0.27 (0.50 before). **None qualifies; Stage B not run; the 2015-2026 window stays at fifteen candidates. H0.** Descriptive: 5 of 108 calendar-month averages beyond two standard errors (4.9 expected by chance), 0 of 45 weekday averages, return autocorrelation inside the no-pattern band at 1 week, 1, 3 and 12 months. Reference: the 2026-11-10 carry rule shows Sharpe 0.37 after costs on 1987-2014 against its known 0.04 on 2015-2026.
+
+**Recommendation.** No build, no account. No further forex patterns at these horizons on price and interest-rate history.
+- ΔP: none. ΔR: none taken. C: research only. E: `docs/research/experiments/2026-11-24_fx-slow-patterns-results.md`.
+
+## [D-2026-11-24-06] 2026-11-24 ~22:35 UTC · track-record · quant research (Claude, project thread "Find strategies returning 10% a year")
+
+**Authority.** Alex, 2026-11-24 22:25 UTC, project thread: "What if I get you to actively manage a portfolio?"; 22:27 UTC, chose "Paper portfolio vs the index" on the decision card "Choose how I should manage a portfolio for you, if at all?" (£5,000 on paper, six months, each decision logged first, scored against a world index fund, no money).
+
+**Action.** Prereg `docs/research/experiments/2026-11-24_paper-portfolio-prereg.md` (commit `86a0286`, before the opening portfolio was chosen): 18 London-listed funds allowed, long only, 35% cap per fund, 0.10% per pound traded, benchmark VWRP bought once, weekly reviews on Monday before the London open, each decision pushed before the close it fills at, scored at the close of 2027-05-26 (AHEAD at +3 points with a fall no more than 3 points deeper; BEHIND at −3; otherwise NO CLEAR DIFFERENCE). Opening decision 001 pushed 22:33 UTC (commit `ac3d2af`), filling at the 2026-11-25 close: S&P 500 25%, world quality 15%, FTSE 100 15%, world value 8%, Europe ex UK 7%, cash fund 15%, short gilts 10%, US Treasuries 5%. Scorer `experiments/paper_portfolio.py` (standard library; `selftest` passes). A weekly scheduled task runs the reviews.
+
+**Stated expectation.** No better than the index after costs. A 3-point lead in six months happens by luck about one time in four or five; money is only discussed after two consecutive AHEAD periods.
+- ΔP: none. ΔR: none taken (paper). C: one short session a week. E: `docs/research/paper_portfolio/`.

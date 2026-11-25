@@ -1,0 +1,86 @@
+{
+ "ETH": {
+  "first_day": "2023-01-01",
+  "gate": {
+   "2025 at least 7%": false,
+   "2026 at least 7%": false,
+   "drawdown 2025-26 at most 5%": true
+  },
+  "h1_supported": false,
+  "last_day": "2026-10-31",
+  "latest_staking_apy": 0.022659099999999998,
+  "max_drawdown_2025_26_separate_margin": 0.0016443391555852616,
+  "perp": "ETHUSDT",
+  "token": "Lido stETH",
+  "worst_day_2025_26": -0.0016305011551025566,
+  "years": {
+   "2023": {
+    "basis_change": -0.0015623042691619293,
+    "cost": 0.003,
+    "days": 365,
+    "funding": 0.08277364999999998,
+    "net_separate_margin": 0.10194725865030407,
+    "net_token_as_collateral": 0.12900993995623056,
+    "share_of_days_funding_negative": 0.0547945205479452,
+    "staking": 0.043167123287671236
+   },
+   "2024": {
+    "basis_change": 0.00040647385850445917,
+    "cost": 0.003,
+    "days": 366,
+    "funding": 0.12943599084699453,
+    "net_separate_margin": 0.13519070428351776,
+    "net_token_as_collateral": 0.17174565308843875,
+    "share_of_days_funding_negative": 0.03278688524590164,
+    "staking": 0.03168172131147541
+   },
+   "2025": {
+    "basis_change": -0.000488738524335619,
+    "cost": 0.003,
+    "days": 365,
+    "funding": 0.04928719,
+    "net_separate_margin": 0.060934040666492884,
+    "net_token_as_collateral": 0.07673562617164764,
+    "share_of_days_funding_negative": 0.08767123287671233,
+    "staking": 0.02815153424657534
+   },
+   "2026": {
+    "basis_change": -0.00022968990949592157,
+    "cost": 0.003,
+    "days": 304,
+    "funding": 0.020599615460526313,
+    "net_separate_margin": 0.03367812158780313,
+    "net_token_as_collateral": 0.042242432596039575,
+    "share_of_days_funding_negative": 0.27631578947368424,
+    "staking": 0.024155083552631577
+   }
+  }
+ },
+ "SOL": {
+  "first_day": "2026-01-01",
+  "gate": {
+   "2025 at least 7%": false,
+   "2026 at least 7%": false,
+   "drawdown 2025-26 at most 5%": true
+  },
+  "h1_supported": false,
+  "last_day": "2026-10-31",
+  "latest_staking_apy": 0.049100000000000005,
+  "max_drawdown_2025_26_separate_margin": 0.008054140473975124,
+  "perp": "SOLUSDT",
+  "token": "Jito JitoSOL",
+  "worst_day_2025_26": -0.008054140473975077,
+  "years": {
+   "2026": {
+    "basis_change": 0.0007992971418788825,
+    "cost": 0.003,
+    "days": 304,
+    "funding": -0.005992519572368417,
+    "net_separate_margin": 0.037436817278821,
+    "net_token_as_collateral": 0.0469442654896208,
+    "share_of_days_funding_negative": 0.45723684210526316,
+    "staking": 0.054400657894736845
+   }
+  }
+ }
+}
