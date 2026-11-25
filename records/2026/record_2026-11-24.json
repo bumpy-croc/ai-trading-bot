@@ -1,0 +1,34 @@
+{
+ "books": {},
+ "code": {
+  "git_sha": "3c4509c53c4e806b802973b57bf18e06f88e4227",
+  "numpy": "2.5.3",
+  "pandas": "3.0.5"
+ },
+ "data_day": "2026-11-24",
+ "fill": "the close of the next UTC day",
+ "history_days": 420,
+ "missing_candles_carried_forward": 5,
+ "perps_previous_day": 762,
+ "perps_with_data": 762,
+ "recorded_at": "2026-11-25T19:59:00Z",
+ "signal_day": false,
+ "symbols_in_archive": 928,
+ "universe_filter": {
+  "excluded_beyond_committed_list": [
+   "AMDLUSDT",
+   "ANTUSDT",
+   "ARTYUSDT",
+   "CCJUSDT",
+   "ETNUSDT",
+   "FRHCUSDT",
+   "IBITUSDT",
+   "IGVUSDT",
+   "JNJUSDT",
+   "NIOUSDT",
+   "NUUSDT",
+   "SOXXUSDT"
+  ],
+  "source": "exchange"
+ }
+}
